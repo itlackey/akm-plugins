@@ -4,16 +4,21 @@ Claude Code plugin for the [Agentikit](https://github.com/itlackey/agentikit) CL
 
 ## Installation
 
-Install as a Claude Code plugin:
+Add the marketplace and install the plugin:
 
 ```sh
-claude plugin add agentikit-claude
+# Add the Agentikit marketplace
+/plugin marketplace add itlackey/agentikit-plugins
+
+# Install the plugin
+/plugin install agentikit
 ```
 
-Or load from a local directory:
+Or via the Claude CLI:
 
 ```sh
-claude --plugin-dir ./node_modules/agentikit-claude
+claude plugin marketplace add itlackey/agentikit-plugins
+claude plugin install agentikit@agentikit-plugins
 ```
 
 ## What's included
