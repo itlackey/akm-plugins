@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 1.2.3). Bumps both packages, publishes to npm, and creates a GitHub release."
+        description: "Version to release (e.g. 1.2.3). Bumps all packages, publishes opencode to npm, and creates a GitHub release."
         required: true
         type: string
 
@@ -49,44 +49,35 @@ jobs:
 
       - name: Bump versions
         run: |
-          cd claude && npm version "${{ inputs.version }}" --no-git-tag-version && cd ..
-          cd opencode && npm version "${{ inputs.version }}" --no-git-tag-version && cd ..
+          VERSION="${{ inputs.version }}"
+
+          # Bump opencode package.json
+          cd opencode && npm version "$VERSION" --no-git-tag-version && cd ..
+
+          # Bump claude package.json
+          cd claude && npm version "$VERSION" --no-git-tag-version && cd ..
+
+          # Bump claude plugin.json version
+          cd claude/.claude-plugin
+          node -e "const f='plugin.json'; const p=JSON.parse(require('fs').readFileSync(f,'utf8')); p.version='$VERSION'; require('fs').writeFileSync(f, JSON.stringify(p, null, 2)+'\n')"
+          cd ../..
+
+          # Bump marketplace.json version
+          cd .claude-plugin
+          node -e "const f='marketplace.json'; const p=JSON.parse(require('fs').readFileSync(f,'utf8')); p.plugins[0].version='$VERSION'; require('fs').writeFileSync(f, JSON.stringify(p, null, 2)+'\n')"
+          cd ..
 
       - name: Commit and tag
         id: tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add claude/package.json opencode/package.json
+          git add claude/package.json opencode/package.json claude/.claude-plugin/plugin.json .claude-plugin/marketplace.json
           git commit -m "chore: bump version to ${{ inputs.version }}"
           git tag "v${{ inputs.version }}"
           git push
           git push origin "v${{ inputs.version }}"
           echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-
-  publish-claude:
-    needs: version
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.version.outputs.tag }}
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      - run: npm install -g npm@latest
-
-      - name: Publish agentikit-claude
-        working-directory: claude
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-opencode:
     needs: version
@@ -113,7 +104,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   github-release:
-    needs: [version, publish-claude, publish-opencode]
+    needs: [version, publish-opencode]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -8,14 +8,21 @@ Platform-specific plugins for the [Agentikit](https://github.com/itlackey/agenti
 
 Claude Code plugin providing a skill and slash commands.
 
+Add the marketplace and install the plugin:
+
 ```sh
-npm install agentikit-claude
+# Add the Agentikit marketplace
+/plugin marketplace add itlackey/agentikit-plugins
+
+# Install the plugin
+/plugin install agentikit
 ```
 
-Install as a Claude Code plugin:
+Or via the Claude CLI:
 
 ```sh
-claude plugin add agentikit-claude
+claude plugin marketplace add itlackey/agentikit-plugins
+claude plugin install agentikit@agentikit-plugins
 ```
 
 Provides:
