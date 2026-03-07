@@ -9,7 +9,24 @@ on:
         type: string
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        working-directory: opencode
+        run: bun install
+
+      - name: Run integration tests
+        run: bun test tests/
+
   version:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
