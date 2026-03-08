@@ -19,6 +19,40 @@ Add to your OpenCode config (`opencode.json`):
 | `agentikit_search` | Search the stash for tools, skills, commands, agents, and knowledge |
 | `agentikit_show` | Show a stash asset by its ref |
 | `agentikit_index` | Build or rebuild the search index |
+| `agentikit_dispatch_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
+| `agentikit_exec_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
+
+## Agent Dispatch
+
+Use `agentikit_dispatch_agent` after retrieving an agent ref from `agentikit_search`.
+
+Inputs:
+- `ref` (optional): stash ref like `agent:coach.md`
+- `query` (optional): resolve best matching stash agent when `ref` is omitted
+- `task_prompt` (required): user task to run
+- `dispatch_agent` (optional): OpenCode agent name (defaults to `general`)
+- `as_subtask` (optional): create child session (defaults to `true`)
+
+At least one of `ref` or `query` is required.
+
+Behavior:
+- Loads the stash agent via `akm show`
+- Uses stash `prompt` verbatim as OpenCode `system`
+- Applies stash `modelHint` when in `provider/model` format
+- Applies stash `toolPolicy` when it maps to boolean tool flags
+
+## Command Execution
+
+Use `agentikit_exec_cmd` to execute stash command templates through the OpenCode SDK.
+
+Inputs:
+- `ref` (optional): stash ref like `command:review.md`
+- `query` (optional): resolve best matching stash command when `ref` is omitted
+- `arguments` (optional): raw command arguments for `$ARGUMENTS`, `$1`, `$2`, etc.
+- `dispatch_agent` (optional): OpenCode agent name (defaults to current agent)
+- `as_subtask` (optional): create child session (defaults to `false`)
+
+At least one of `ref` or `query` is required.
 
 ## Prerequisites
 

@@ -44,10 +44,12 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides three tools:
+Provides four tools:
 - `agentikit_search` — search the stash
 - `agentikit_show` — show a stash asset by ref
 - `agentikit_index` — build/rebuild the search index
+- `agentikit_dispatch_agent` — dispatch stash `agent:*` resources into OpenCode sessions
+- `agentikit_exec_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
 
 ## Stash model
 
