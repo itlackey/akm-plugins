@@ -16,15 +16,15 @@ Add to your OpenCode config (`opencode.json`):
 
 | Tool | Description |
 |------|-------------|
-| `agentikit_search` | Search the stash for tools, skills, commands, agents, and knowledge |
-| `agentikit_show` | Show a stash asset by its ref |
-| `agentikit_index` | Build or rebuild the search index |
-| `agentikit_dispatch_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
-| `agentikit_exec_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
+| `akm_search` | Search the stash for tools, skills, commands, agents, and knowledge |
+| `akm_show` | Show a stash asset by its ref |
+| `akm_index` | Build or rebuild the search index |
+| `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
+| `akm_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
 
 ## Agent Dispatch
 
-Use `agentikit_dispatch_agent` after retrieving an agent ref from `agentikit_search`.
+Use `akm_agent` after retrieving an agent ref from `akm_search`.
 
 Inputs:
 - `ref` (optional): stash ref like `agent:coach.md`
@@ -43,7 +43,7 @@ Behavior:
 
 ## Command Execution
 
-Use `agentikit_exec_cmd` to execute stash command templates through the OpenCode SDK.
+Use `akm_cmd` to execute stash command templates through the OpenCode SDK.
 
 Inputs:
 - `ref` (optional): stash ref like `command:review.md`

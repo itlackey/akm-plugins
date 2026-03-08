@@ -184,7 +184,7 @@ type PluginClient = {
 
 export const AgentikitPlugin: Plugin = async ({ client }) => ({
   tool: {
-    agentikit_search: tool({
+    akm_search: tool({
       description: "Search your stash of tools, skills, commands, agents, and knowledge. Use this tool anytime you need to find resources for a task.",
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
@@ -201,10 +201,10 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         return runCli(args)
       },
     }),
-    agentikit_show: tool({
+    akm_show: tool({
       description: "Show a stash asset by ref. For knowledge assets, use view_mode to retrieve specific content (toc, section, lines, frontmatter).",
       args: {
-        ref: tool.schema.string().describe("Asset reference returned by agentikit_search."),
+        ref: tool.schema.string().describe("Asset reference returned by akm_search."),
         view_mode: tool.schema
           .enum(["full", "toc", "frontmatter", "section", "lines"])
           .optional()
@@ -225,17 +225,17 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         return runCli(args)
       },
     }),
-    agentikit_index: tool({
+    akm_index: tool({
       description: "Build or rebuild the Agentikit stash index. Scans stash directories, generates missing .stash.json metadata, and builds a semantic search index.",
       args: {},
       async execute() {
         return runCli(["index"])
       },
     }),
-    agentikit_dispatch_agent: tool({
-      description: "Dispatch a stash agent by ref into a child OpenCode session, applying the agent prompt and metadata from agentikit_show.",
+    akm_agent: tool({
+      description: "Dispatch a stash agent by ref into a child OpenCode session, applying the agent prompt and metadata from akm_show.",
       args: {
-        ref: tool.schema.string().optional().describe("Agent ref from agentikit_search (e.g. agent:my-agent.md)."),
+        ref: tool.schema.string().optional().describe("Agent ref from akm_search (e.g. agent:my-agent.md)."),
         query: tool.schema.string().optional().describe("If ref is omitted, resolve best matching stash agent for this query."),
         task_prompt: tool.schema.string().describe("Task prompt sent to the dispatched OpenCode agent."),
         dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the task with. Defaults to 'general'."),
@@ -254,7 +254,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         if (!isShowAgentResponse(shown)) {
           return JSON.stringify({
             ok: false,
-            error: `Ref ${ref} is not an agent payload from agentikit_show.`,
+            error: `Ref ${ref} is not an agent payload from akm_show.`,
           })
         }
 
@@ -319,10 +319,10 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         })
       },
     }),
-    agentikit_exec_cmd: tool({
+    akm_cmd: tool({
       description: "Execute a stash command template through the OpenCode SDK in the current or child session.",
       args: {
-        ref: tool.schema.string().optional().describe("Command ref from agentikit_search (e.g. command:review.md)."),
+        ref: tool.schema.string().optional().describe("Command ref from akm_search (e.g. command:review.md)."),
         query: tool.schema.string().optional().describe("If ref is omitted, resolve best matching stash command for this query."),
         arguments: tool.schema.string().optional().describe("Command arguments used for $ARGUMENTS and positional placeholders ($1, $2, ...)."),
         dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the rendered command. Defaults to current agent."),
@@ -336,7 +336,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         const shown = parseCliJson<ShowCommandResponse | { type: string }>(shownRaw)
         if (isCliError(shown)) return JSON.stringify(shown)
         if (!isShowCommandResponse(shown)) {
-          return JSON.stringify({ ok: false, error: `Ref ${resolved.ref} is not a command payload from agentikit_show.` })
+          return JSON.stringify({ ok: false, error: `Ref ${resolved.ref} is not a command payload from akm_show.` })
         }
 
         const template = shown.template?.trim()
