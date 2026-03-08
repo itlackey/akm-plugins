@@ -1,12 +1,12 @@
 # Agentikit Plugins
 
-Platform-specific plugins for the [Agentikit](https://github.com/itlackey/agentikit) CLI. Both packages are thin wrappers that call the `akm` CLI to **search** and **show** extension assets from a stash directory.
+Platform-specific plugins for the [Agentikit](https://github.com/itlackey/agentikit) CLI. Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, and **execute commands** from a stash directory.
 
 ## Packages
 
 ### agentikit-claude
 
-Claude Code plugin providing a skill and slash commands.
+Claude Code plugin providing a skill for stash asset management, dynamic agent dispatch, and command execution.
 
 Add the marketplace and install the plugin:
 
@@ -27,6 +27,8 @@ claude plugin install agentikit@agentikit-plugins
 
 Provides:
 - **Agentikit Skill** — Claude automatically uses the akm CLI when you ask about stash assets
+- **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
+- **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
 
 ### agentikit-opencode
 
