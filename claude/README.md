@@ -1,6 +1,6 @@
 # agentikit-claude
 
-Claude Code plugin for the [Agentikit](https://github.com/itlackey/agentikit) CLI. Provides a skill that teaches Claude to **search**, **show**, **dispatch agents**, and **execute commands** from a stash directory.
+Claude Code plugin for the [Agentikit](https://github.com/itlackey/agentikit) CLI. Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, and **execute commands** from stash directories and registries.
 
 ## Installation
 
@@ -28,6 +28,7 @@ claude plugin install agentikit@agentikit-plugins
 The skill teaches Claude to:
 
 - **Search & show** assets via `akm search` and `akm show`
+- **Search the registry** for installable kits via `akm search --source registry` and install them with `akm add`
 - **Dispatch stash agents** dynamically — Claude fetches an agent's markdown definition (prompt, toolPolicy, modelHint) and spawns a subagent on the fly with those instructions embedded
 - **Execute stash commands** — Claude resolves a command template, renders `$ARGUMENTS`/`$1`/`$2` placeholders, and executes the result
 - **Run tools & scripts** — Claude fetches a tool/script via `akm show`, extracts the `runCmd` field, and executes it directly
@@ -51,6 +52,16 @@ Run the review command on src/main.ts --strict
 ```
 
 Claude will fetch the command template, render argument placeholders, and execute the result.
+
+### Registry discovery
+
+Ask Claude to find installable kits from the community registry:
+
+```
+Find an agentikit kit for code review and install the best match
+```
+
+Claude will search with `akm search ... --source registry`, inspect the returned `installRef` / `installCmd`, and then use `akm add` when you ask it to install a result.
 
 ### Limitations vs OpenCode plugin
 

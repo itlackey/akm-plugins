@@ -52,10 +52,15 @@ type ShowToolResponse = {
 type SearchHit = {
   type: AssetType | "registry"
   openRef?: string
+  installRef?: string
+  installCmd?: string
+  id?: string
   registryId?: string
   editable?: boolean
   hitSource?: "local" | "registry"
+  source?: "npm" | "github"
   name?: string
+  title?: string
   description?: string
   score?: number
   whyMatched?: string
@@ -199,6 +204,26 @@ function renderCommandTemplate(template: string, rawArguments: string): string {
     .replace(/\$(\d+)/g, (_m, index: string) => args[Number(index) - 1] ?? "")
 }
 
+function createSearchArgs(input: {
+  query: string
+  type?: AssetType | "any"
+  limit?: number
+  source?: "local" | "registry" | "both"
+  usage?: "none" | "both" | "item" | "guide"
+  defaultSource?: "local" | "registry" | "both"
+}): string[] {
+  const args = ["search", input.query]
+  if (input.type) args.push("--type", input.type)
+  if (input.limit) args.push("--limit", String(input.limit))
+  if (input.source) {
+    args.push("--source", input.source)
+  } else if (input.defaultSource) {
+    args.push("--source", input.defaultSource)
+  }
+  if (input.usage) args.push("--usage", input.usage)
+  return args
+}
+
 type PluginClient = {
   session: {
     create: (input: {
@@ -222,7 +247,7 @@ type PluginClient = {
 export const AgentikitPlugin: Plugin = async ({ client }) => ({
   tool: {
     akm_search: tool({
-      description: "Search your stash of tools, skills, commands, agents, scripts, and knowledge. Use this tool anytime you need to find resources for a task.",
+      description: "Search your local stash or the Agentikit registry for tools, skills, commands, agents, scripts, and knowledge. Use source='registry' or akm_registry_search for installable community kits.",
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
         type: tool.schema
@@ -234,13 +259,31 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
           .enum(["local", "registry", "both"])
           .optional()
           .describe("Search source. 'local' searches stash dirs, 'registry' searches npm/GitHub, 'both' searches all. Defaults to 'local'."),
+        usage: tool.schema
+          .enum(["none", "both", "item", "guide"])
+          .optional()
+          .describe("Usage metadata mode. Registry searches often work best with 'item' or 'none'."),
       },
-      async execute({ query, type, limit, source }) {
-        const args = ["search", query]
-        if (type) args.push("--type", type)
-        if (limit) args.push("--limit", String(limit))
-        if (source) args.push("--source", source)
-        return runCli(args)
+      async execute({ query, type, limit, source, usage }) {
+        return runCli(createSearchArgs({ query, type, limit, source, usage }))
+      },
+    }),
+    akm_registry_search: tool({
+      description: "Search the Agentikit registry only. Use this when you want installable kits from npm or GitHub without mixing in local stash results.",
+      args: {
+        query: tool.schema.string().describe("Search query for installable registry kits."),
+        type: tool.schema
+          .enum(["tool", "skill", "command", "agent", "knowledge", "script", "any"])
+          .optional()
+          .describe("Optional asset type filter. Defaults to 'any'."),
+        limit: tool.schema.number().optional().describe("Maximum number of registry hits to return. Defaults to 20."),
+        usage: tool.schema
+          .enum(["none", "both", "item", "guide"])
+          .optional()
+          .describe("Usage metadata mode. Defaults to the CLI behavior when omitted."),
+      },
+      async execute({ query, type, limit, usage }) {
+        return runCli(createSearchArgs({ query, type, limit, usage, defaultSource: "registry" }))
       },
     }),
     akm_show: tool({
@@ -275,9 +318,9 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
       },
     }),
     akm_add: tool({
-      description: "Install a kit from npm or GitHub into the stash registry. Installed kits become searchable alongside local assets.",
+      description: "Install a kit from npm, GitHub, another git host, or a local directory. Installed kits become searchable alongside local assets.",
       args: {
-        package_ref: tool.schema.string().describe("Package reference: npm package name, or github:<owner>/<repo>."),
+        package_ref: tool.schema.string().describe("Package reference such as npm:@scope/kit, github:<owner>/<repo>, git+https://host/repo, or ./local/kit."),
       },
       async execute({ package_ref }) {
         return runCli(["add", package_ref])
@@ -288,6 +331,51 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
       args: {},
       async execute() {
         return runCli(["list"])
+      },
+    }),
+    akm_remove: tool({
+      description: "Remove an installed registry kit by id or ref and reindex the stash.",
+      args: {
+        package_ref: tool.schema.string().describe("Installed kit id or ref, such as npm:@scope/kit or owner/repo."),
+      },
+      async execute({ package_ref }) {
+        return runCli(["remove", package_ref])
+      },
+    }),
+    akm_update: tool({
+      description: "Update one installed kit or all installed kits to the latest available version.",
+      args: {
+        package_ref: tool.schema.string().optional().describe("Installed kit id or ref to update."),
+        all: tool.schema.boolean().optional().describe("Update all installed kits."),
+        force: tool.schema.boolean().optional().describe("Force a fresh download even if the version is unchanged."),
+      },
+      async execute({ package_ref, all, force }) {
+        const args = ["update"]
+        if (all) {
+          args.push("--all")
+        } else if (package_ref?.trim()) {
+          args.push(package_ref.trim())
+        } else {
+          return JSON.stringify({ ok: false, error: "Provide 'package_ref' or set 'all' to true." })
+        }
+        if (force) args.push("--force")
+        return runCli(args)
+      },
+    }),
+    akm_clone: tool({
+      description: "Clone an asset from any source into the working stash or a custom destination for editing.",
+      args: {
+        ref: tool.schema.string().describe("Asset ref to clone, including optional origin such as npm:@scope/pkg//tool:deploy.sh."),
+        name: tool.schema.string().optional().describe("Optional new asset name."),
+        dest: tool.schema.string().optional().describe("Optional destination directory. The type subdirectory is appended automatically by akm."),
+        force: tool.schema.boolean().optional().describe("Overwrite the destination if it already exists."),
+      },
+      async execute({ ref, name, dest, force }) {
+        const args = ["clone", ref]
+        if (name) args.push("--name", name)
+        if (dest) args.push("--dest", dest)
+        if (force) args.push("--force")
+        return runCli(args)
       },
     }),
     akm_agent: tool({

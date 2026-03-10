@@ -16,16 +16,29 @@ Add to your OpenCode config (`opencode.json`):
 
 | Tool | Description |
 |------|-------------|
-| `akm_search` | Search the stash for tools, skills, commands, agents, and knowledge |
+| `akm_search` | Search the local stash, the registry, or both for tools, skills, commands, agents, scripts, and knowledge |
+| `akm_registry_search` | Search installable registry kits only and return `installRef` / `installCmd` results |
 | `akm_show` | Show a stash asset by its ref |
 | `akm_index` | Build or rebuild the search index |
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
 | `akm_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
-| `akm_add` | Install kits from npm or GitHub registries |
+| `akm_add` | Install kits from npm, GitHub, git URLs, or local directories |
 | `akm_list` | List installed registry kits |
+| `akm_remove` | Remove an installed registry kit and reindex |
+| `akm_update` | Update one installed kit or all installed kits |
+| `akm_clone` | Clone an asset into the working stash or a custom destination for editing |
 | `akm_config` | Show or update akm configuration (stashDir, mountedStashDirs, etc.) |
 | `akm_run` | Execute a stash tool or script using its `runCmd` |
 | `akm_submit` | Submit assets or feedback to the registry |
+
+### Registry discovery
+
+Use either:
+
+- `akm_search` with `source: "registry"` or `source: "both"`
+- `akm_registry_search` when you only want installable community kits
+
+Registry hits include `installRef` and `installCmd`, which can be passed directly to `akm_add`.
 
 ## Agent Dispatch
 

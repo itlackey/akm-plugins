@@ -14,14 +14,18 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides ten tools:
-- `akm_search` — search the stash
+Provides fourteen tools:
+- `akm_search` — search the stash, the registry, or both
+- `akm_registry_search` — search installable registry kits only
 - `akm_show` — show a stash asset by ref
 - `akm_index` — build/rebuild the search index
 - `akm_agent` — dispatch stash `agent:*` resources into OpenCode sessions
 - `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
-- `akm_add` — install kits from npm or GitHub registries
+- `akm_add` — install kits from npm, GitHub, git URLs, or local directories
 - `akm_list` — list installed registry kits
+- `akm_remove` — remove an installed registry kit
+- `akm_update` — update one or all installed registry kits
+- `akm_clone` — clone an asset into the working stash or another destination
 - `akm_config` — show or update akm configuration
 - `akm_run` — execute a stash tool or script via `runCmd`
 - `akm_submit` — submit assets or feedback to the registry

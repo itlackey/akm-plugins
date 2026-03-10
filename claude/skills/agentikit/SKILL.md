@@ -54,15 +54,20 @@ akm index [--full]
 
 Use `--full` to force a full reindex instead of incremental. Run this after adding new extensions to enable semantic search ranking.
 
-### Search the stash
+### Search the stash or registry
 
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type tool|skill|command|agent|knowledge|script|any] [--limit N] [--source local|registry|both]
+akm search [query] [--type tool|skill|command|agent|knowledge|script|any] [--limit N] [--source local|registry|both] [--usage none|both|item|guide]
 ```
 
 The response includes `hits` (ranked results), plus diagnostic fields: `timing` (totalMs, rankMs, embedMs), `warnings` (string array of non-fatal issues), and `tip` (contextual usage hint).
+
+- Local and installed stash hits include `openRef`, which you pass to `akm show`.
+- Registry hits include `installRef` and `installCmd`, which you pass to `akm add` when the user wants to install a kit.
+- Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once.
+- Use `--usage none` to reduce search noise when you only want concise result metadata.
 
 ### Show an asset
 
@@ -106,13 +111,23 @@ Configurable keys: `stashDir`, `semanticSearch`, `mountedStashDirs`, `embedding`
 Discover and install kits from npm or GitHub registries.
 
 ```bash
-akm add <package>                 # Install from npm or github:<owner>/<repo>
+akm search "deploy" --source registry  # Search installable registry kits
+akm add <package>                      # Install from npm, github, git, or local dir
+akm clone <ref>                        # Copy an asset into the working stash for editing
 akm list                          # List installed registry kits
 akm remove <id>                   # Remove an installed kit
-akm update [id]                   # Update installed kits
+akm update [id]                   # Update one installed kit
+akm update --all                  # Update all installed kits
 ```
 
 Installed kits become searchable alongside local stash assets. Use `--source registry` with search to query only remote registries.
+
+When the user wants to browse community kits:
+
+1. Run `akm search "<query>" --source registry`.
+2. Review the returned `hits` and prefer `installRef` / `installCmd` over trying to `akm show` a registry hit directly.
+3. If the user wants to install a result, run `akm add <installRef>`.
+4. If the user wants to customize an installed asset, run `akm clone <origin-qualified-ref>` to copy it into the working stash before editing.
 
 ## Dependencies
 
@@ -124,7 +139,8 @@ Installed kits become searchable alongside local stash assets. Use `--source reg
 2. Build the index: `akm index`
 3. Search for assets: `akm search "deploy" --type tool`
 4. Inspect a result: `akm show <ref>`
-5. Install kits: `akm add <package>` (optional)
+5. Search the registry when needed: `akm search "deploy" --source registry`
+6. Install kits: `akm add <package>` (optional)
 
 All output is JSON for easy parsing.
 

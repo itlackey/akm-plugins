@@ -61,16 +61,20 @@ describe("agentikit-opencode plugin", () => {
       const hooks = await AgentikitPlugin(createPluginInput())
       const toolNames = Object.keys(hooks.tool!)
       expect(toolNames).toContain("akm_search")
+      expect(toolNames).toContain("akm_registry_search")
       expect(toolNames).toContain("akm_show")
       expect(toolNames).toContain("akm_index")
       expect(toolNames).toContain("akm_agent")
       expect(toolNames).toContain("akm_cmd")
       expect(toolNames).toContain("akm_add")
       expect(toolNames).toContain("akm_list")
+      expect(toolNames).toContain("akm_remove")
+      expect(toolNames).toContain("akm_update")
+      expect(toolNames).toContain("akm_clone")
       expect(toolNames).toContain("akm_config")
       expect(toolNames).toContain("akm_run")
       expect(toolNames).toContain("akm_submit")
-      expect(toolNames).toHaveLength(10)
+      expect(toolNames).toHaveLength(14)
     })
   })
 
@@ -96,6 +100,17 @@ describe("agentikit-opencode plugin", () => {
       expect(search.args.query).toBeDefined()
       expect(search.args.type).toBeDefined()
       expect(search.args.limit).toBeDefined()
+      expect(search.args.source).toBeDefined()
+      expect(search.args.usage).toBeDefined()
+    })
+
+    it("akm_registry_search has required args schema", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      const search = hooks.tool!.akm_registry_search
+      expect(search.args.query).toBeDefined()
+      expect(search.args.type).toBeDefined()
+      expect(search.args.limit).toBeDefined()
+      expect(search.args.usage).toBeDefined()
     })
 
     it("akm_show has required args schema", async () => {
@@ -134,6 +149,29 @@ describe("agentikit-opencode plugin", () => {
       const hooks = await AgentikitPlugin(createPluginInput())
       const list = hooks.tool!.akm_list
       expect(Object.keys(list.args)).toHaveLength(0)
+    })
+
+    it("akm_remove has required args schema", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      const remove = hooks.tool!.akm_remove
+      expect(remove.args.package_ref).toBeDefined()
+    })
+
+    it("akm_update has required args schema", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      const update = hooks.tool!.akm_update
+      expect(update.args.package_ref).toBeDefined()
+      expect(update.args.all).toBeDefined()
+      expect(update.args.force).toBeDefined()
+    })
+
+    it("akm_clone has required args schema", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      const clone = hooks.tool!.akm_clone
+      expect(clone.args.ref).toBeDefined()
+      expect(clone.args.name).toBeDefined()
+      expect(clone.args.dest).toBeDefined()
+      expect(clone.args.force).toBeDefined()
     })
 
     it("akm_cmd has required args schema", async () => {
@@ -184,6 +222,45 @@ describe("agentikit-opencode plugin", () => {
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
         ["search", "hello", "--limit", "5"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_search passes usage mode", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_search.execute(
+        { query: "hello", usage: "item" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["search", "hello", "--usage", "item"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_registry_search defaults to registry source", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_registry_search.execute(
+        { query: "lint" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["search", "lint", "--source", "registry"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_registry_search passes usage mode", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_registry_search.execute(
+        { query: "lint", usage: "guide" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["search", "lint", "--source", "registry", "--usage", "guide"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -260,6 +337,73 @@ describe("agentikit-opencode plugin", () => {
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
         ["list"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_remove calls CLI with package ref", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_remove.execute(
+        { package_ref: "npm:@scope/kit" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["remove", "npm:@scope/kit"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_update calls CLI for a specific package", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_update.execute(
+        { package_ref: "owner/repo", force: true } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["update", "owner/repo", "--force"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_update can update all packages", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_update.execute(
+        { all: true } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["update", "--all"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_update validates required inputs", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_update.execute({} as any, {} as any)
+      expect(JSON.parse(result)).toEqual({
+        ok: false,
+        error: "Provide 'package_ref' or set 'all' to true.",
+      })
+      expect(mockExecFileSync).not.toHaveBeenCalled()
+    })
+
+    it("akm_clone calls CLI with optional flags", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_clone.execute(
+        {
+          ref: "npm:@scope/pkg//tool:deploy.sh",
+          name: "my-deploy.sh",
+          dest: "/tmp/worktree",
+          force: true,
+        } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["clone", "npm:@scope/pkg//tool:deploy.sh", "--name", "my-deploy.sh", "--dest", "/tmp/worktree", "--force"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
