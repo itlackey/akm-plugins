@@ -1,6 +1,6 @@
-# Agentikit Plugins
+# Agent-i-Kit Plugins
 
-Platform-specific plugins for the [Agentikit](https://github.com/itlackey/agentikit) CLI. Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, and **execute commands** from a stash directory.
+Platform-specific plugins for the [Agent-i-Kit](https://github.com/itlackey/agentikit) CLI. Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, and **execute commands** from a stash directory.
 
 ## OpenCode
 
