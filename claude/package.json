@@ -11,14 +11,14 @@
     "developer-tools",
     "plugin"
   ],
-  "homepage": "https://github.com/itlackey/agentikit-plugins#readme",
+  "homepage": "https://github.com/itlackey/akm-plugins#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/itlackey/agentikit-plugins.git",
+    "url": "git+https://github.com/itlackey/akm-plugins.git",
     "directory": "claude"
   },
   "bugs": {
-    "url": "https://github.com/itlackey/agentikit-plugins/issues"
+    "url": "https://github.com/itlackey/akm-plugins/issues"
   },
   "license": "MPL-2.0",
   "files": [
