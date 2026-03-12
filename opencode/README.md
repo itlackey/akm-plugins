@@ -75,13 +75,16 @@ At least one of `ref` or `query` is required.
 
 ## Prerequisites
 
-The `akm` CLI must be installed and available on PATH. Install it from the [agentikit repo](https://github.com/itlackey/agentikit). The plugin will automatically install the `akm` binary if it is not found on PATH.
+The plugin prefers an existing `akm` on PATH. If `akm` is missing and `bun` is available, it will attempt `bun install -g akm-cli` automatically. It does not run the standalone shell installers automatically. If Bun is not available, install `akm` from the [agentikit repo](https://github.com/itlackey/agentikit).
 
 ```sh
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/itlackey/agentikit/main/install.sh | bash
 # PowerShell (Windows)
 irm https://raw.githubusercontent.com/itlackey/agentikit/main/install.ps1 -OutFile install.ps1; ./install.ps1
+
+# Or via Bun
+bun install -g akm-cli
 ```
 
 ## Stash model

@@ -1,48 +1,99 @@
 import { type Plugin, tool } from "@opencode-ai/plugin"
 import { execFileSync, execSync } from "node:child_process"
-import { platform } from "node:os"
+import path from "node:path"
 
-let akmVerified = false
+let resolvedAkmCommand = "akm"
+let attemptedAutoInstall = false
 
-function ensureAkmInstalled(): void {
-  if (akmVerified) return
+function formatCliError(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
+    return "The 'akm' CLI was not found on PATH. Install it first from https://github.com/itlackey/agentikit."
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
+function getCommandStatus(command: string): "ok" | "missing" | "error" {
   try {
-    execFileSync("akm", ["--version"], { encoding: "utf8", timeout: 10_000 })
-    akmVerified = true
+    execFileSync(command, ["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+    return "ok"
+  } catch (error: unknown) {
+    if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
+      return "missing"
+    }
+    return "error"
+  }
+}
+
+function resolveAkmCommand(): string | CliError {
+  const currentStatus = getCommandStatus(resolvedAkmCommand)
+  if (currentStatus === "ok" || currentStatus === "error") return resolvedAkmCommand
+
+  if (attemptedAutoInstall) {
+    return { ok: false, error: "The 'akm' CLI was not found on PATH and automatic installation was unsuccessful." }
+  }
+  attemptedAutoInstall = true
+
+  try {
+    execFileSync("bun", ["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
   } catch {
-    // akm not found, attempt install
-    try {
-      const os = platform()
-      if (os === "win32") {
-        execSync(
-          'powershell -Command "irm https://raw.githubusercontent.com/itlackey/agentikit/main/install.ps1 -OutFile install.ps1; ./install.ps1"',
-          { encoding: "utf8", timeout: 120_000, stdio: "pipe" },
-        )
-      } else {
-        execSync(
-          "curl -fsSL https://raw.githubusercontent.com/itlackey/agentikit/main/install.sh | bash",
-          { encoding: "utf8", timeout: 120_000, stdio: "pipe" },
-        )
-      }
-      // Verify install succeeded
-      execFileSync("akm", ["--version"], { encoding: "utf8", timeout: 10_000 })
-      akmVerified = true
-    } catch {
-      // Install failed — let the original error propagate from runCli
-      akmVerified = true // Don't retry install on every call
+    return {
+      ok: false,
+      error: "The 'akm' CLI was not found on PATH, and Bun is not available for automatic installation. Install akm from https://github.com/itlackey/agentikit.",
+    }
+  }
+
+  try {
+    execFileSync("bun", ["install", "-g", "akm-cli"], {
+      encoding: "utf8",
+      timeout: 120_000,
+      stdio: "pipe",
+    })
+
+    const globalBin = execFileSync("bun", ["pm", "bin", "-g"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    }).trim()
+
+    const candidate = path.join(globalBin, process.platform === "win32" ? "akm.exe" : "akm")
+    if (getCommandStatus(candidate) === "ok") {
+      resolvedAkmCommand = candidate
+      return resolvedAkmCommand
+    }
+
+    if (getCommandStatus("akm") === "ok") {
+      resolvedAkmCommand = "akm"
+      return resolvedAkmCommand
+    }
+
+    return {
+      ok: false,
+      error: "Installed 'akm-cli' via Bun, but the 'akm' executable could not be resolved. Check your Bun global bin directory and PATH.",
+    }
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      error: `Failed to auto-install 'akm-cli' via Bun: ${formatCliError(error)}`,
     }
   }
 }
 
 function runCli(args: string[]): string {
-  ensureAkmInstalled()
+  const command = resolveAkmCommand()
+  if (typeof command !== "string") return JSON.stringify(command)
+
   try {
-    return execFileSync("akm", [...args, "--format", "json"], {
+    return execFileSync(command, [...args, "--format", "json"], {
       encoding: "utf8",
       timeout: 60_000,
     })
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = formatCliError(error)
     return JSON.stringify({ ok: false, error: message })
   }
 }

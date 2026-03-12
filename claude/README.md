@@ -70,7 +70,7 @@ Claude will search with `akm search ... --source registry`, inspect the returned
 
 ## Prerequisites
 
-The `akm` CLI must be installed and available on PATH. Install it from the [agentikit repo](https://github.com/itlackey/agentikit). The plugin will automatically install the `akm` binary if it is not found on PATH.
+The `akm` CLI must be installed and available on PATH before using the plugin. Install it from the [agentikit repo](https://github.com/itlackey/agentikit).
 
 ```sh
 # macOS / Linux

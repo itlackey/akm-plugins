@@ -1256,17 +1256,42 @@ describe("akm-opencode plugin", () => {
     })
   })
 
-  describe("auto-install akm CLI", () => {
-    it("attempts install when akm --version fails", async () => {
-      // We need to test the auto-install behavior.
-      // Since akmVerified is module-level and may already be true from prior tests,
-      // we test that ensureAkmInstalled is called by runCli (it's called on every tool execute).
-      // The mock for execFileSync already returns "mock output" so --version succeeds.
-      // This verifies the happy path (akm is found).
+  describe("akm CLI availability", () => {
+    it("auto-installs akm-cli via Bun when akm is missing", async () => {
+      let installComplete = false
+      mockExecFileSync.mockImplementation((cmd, args) => {
+        if (cmd === "akm" && args[0] === "--version") {
+          const error = new Error("spawn akm ENOENT") as Error & { code?: string }
+          error.code = "ENOENT"
+          throw error
+        }
+        if (cmd === "bun" && args[0] === "--version") return "1.3.5"
+        if (cmd === "bun" && args[0] === "install") {
+          installComplete = true
+          return "installed"
+        }
+        if (cmd === "bun" && args[0] === "pm") return "/tmp/.bun/bin\n"
+        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version" && installComplete) return "0.1.0"
+        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "sources" && installComplete) {
+          return JSON.stringify({ sources: [] })
+        }
+        return "mock output"
+      })
+
       const hooks = await AgentikitPlugin(createPluginInput())
-      await hooks.tool!.akm_sources.execute({} as any, {} as any)
-      // If we got here without error, ensureAkmInstalled did not throw
-      expect(mockExecFileSync).toHaveBeenCalled()
+      const result = await hooks.tool!.akm_sources.execute({} as any, {} as any)
+
+      expect(JSON.parse(result)).toEqual({ sources: [] })
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "bun",
+        ["install", "-g", "akm-cli"],
+        expect.objectContaining({ encoding: "utf8", timeout: 120_000, stdio: "pipe" }),
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "/tmp/.bun/bin/akm",
+        ["sources", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8", timeout: 60_000 }),
+      )
     })
   })
 })
