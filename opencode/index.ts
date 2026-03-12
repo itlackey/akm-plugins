@@ -5,11 +5,61 @@ import path from "node:path"
 let resolvedAkmCommand = "akm"
 let attemptedAutoInstall = false
 
+type LogLevel = "debug" | "info" | "warn" | "error"
+
+type LogCapableClient = {
+  app: {
+    log: (options: {
+      query?: { directory?: string }
+      body: {
+        service: string
+        level: LogLevel
+        message: string
+        extra?: Record<string, unknown>
+      }
+    }) => Promise<unknown>
+  }
+}
+
+type CliLogMeta = {
+  toolName: string
+  directory?: string
+  sessionID?: string
+}
+
 function formatCliError(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
     return "The 'akm' CLI was not found on PATH. Install it first from https://github.com/itlackey/agentikit."
   }
   return error instanceof Error ? error.message : String(error)
+}
+
+function toLogString(value: unknown): string | undefined {
+  if (typeof value === "string") return value
+  if (value instanceof Buffer) return value.toString("utf8")
+  return undefined
+}
+
+function getExecStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object" || !("status" in error)) return null
+  const status = (error as { status?: unknown }).status
+  return typeof status === "number" ? status : null
+}
+
+async function writePluginLog(client: LogCapableClient, level: LogLevel, message: string, extra: Record<string, unknown>) {
+  try {
+    await client.app.log({
+      query: typeof extra.directory === "string" ? { directory: extra.directory } : undefined,
+      body: {
+        service: "akm-opencode",
+        level,
+        message,
+        extra,
+      },
+    })
+  } catch {
+    // Avoid breaking the TUI if logging itself fails.
+  }
 }
 
 function getCommandStatus(command: string): "ok" | "missing" | "error" {
@@ -83,17 +133,55 @@ function resolveAkmCommand(): string | CliError {
   }
 }
 
-function runCli(args: string[]): string {
+async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta): Promise<string> {
   const command = resolveAkmCommand()
-  if (typeof command !== "string") return JSON.stringify(command)
+  if (typeof command !== "string") {
+    await writePluginLog(client, "error", "AKM command resolution failed", {
+      subsystem: "akm",
+      toolName: meta.toolName,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      command: resolvedAkmCommand,
+      args,
+      exitCode: null,
+      stdout: "",
+      stderr: command.error,
+    })
+    return JSON.stringify(command)
+  }
+
+  const fullArgs = [...args, "--format", "json"]
 
   try {
-    return execFileSync(command, [...args, "--format", "json"], {
+    const stdout = execFileSync(command, fullArgs, {
       encoding: "utf8",
       timeout: 60_000,
     })
+    await writePluginLog(client, "info", "AKM command completed", {
+      subsystem: "akm",
+      toolName: meta.toolName,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      command,
+      args: fullArgs,
+      exitCode: 0,
+      stdout,
+      stderr: "",
+    })
+    return stdout
   } catch (error: unknown) {
     const message = formatCliError(error)
+    await writePluginLog(client, "error", "AKM command failed", {
+      subsystem: "akm",
+      toolName: meta.toolName,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      command,
+      args: fullArgs,
+      exitCode: getExecStatus(error),
+      stdout: toLogString((error as { stdout?: unknown }).stdout) ?? "",
+      stderr: toLogString((error as { stderr?: unknown }).stderr) ?? message,
+    })
     return JSON.stringify({ ok: false, error: message })
   }
 }
@@ -147,6 +235,7 @@ type SearchHit = {
   type: AssetType | "registry" | "registry-asset"
   ref?: string
   id?: string
+  installRef?: string
   editable?: boolean
   name?: string
   description?: string
@@ -262,7 +351,12 @@ function extractText(parts: unknown): string {
   return segments.join("\n\n")
 }
 
-function resolveRefInput(input: { ref?: string; query?: string }, type: AssetType): { ok: true; ref: string } | CliError {
+async function resolveRefInput(
+  client: LogCapableClient,
+  input: { ref?: string; query?: string },
+  type: AssetType,
+  meta: CliLogMeta,
+): Promise<{ ok: true; ref: string } | CliError> {
   if (input.ref && input.ref.trim()) {
     return { ok: true, ref: input.ref.trim() }
   }
@@ -272,7 +366,7 @@ function resolveRefInput(input: { ref?: string; query?: string }, type: AssetTyp
     return { ok: false, error: "Provide either 'ref' or 'query'." }
   }
 
-  const raw = runCli(["search", query, "--type", type, "--limit", "1", "--detail", "normal", "--source", "local"])
+  const raw = await runCli(client, ["search", query, "--type", type, "--limit", "1", "--detail", "normal", "--source", "local"], meta)
   const parsed = parseCliJson<SearchResponse>(raw)
   if (isCliError(parsed)) return parsed
 
@@ -377,7 +471,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
           .describe("Search source. 'local' searches stash dirs, 'registry' searches npm/GitHub, 'both' searches all. Defaults to 'local'."),
       },
       async execute({ query, type, limit, source }) {
-        return runCli(createSearchArgs({ query, type, limit, source }))
+        return runCli(client as unknown as LogCapableClient, createSearchArgs({ query, type, limit, source }), { toolName: "akm_search" })
       },
     }),
     akm_registry_search: tool({
@@ -397,7 +491,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         const assetTypeFilter = type && type !== "any" ? type : undefined
         if (assets || assetTypeFilter) args.push("--assets")
 
-        const raw = runCli(args)
+        const raw = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_registry_search" })
         if (!assetTypeFilter) return raw
 
         const parsed = parseCliJson<{
@@ -440,14 +534,14 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
             if (end_line != null) args.push(String(end_line))
           }
         }
-        return runCli(args)
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_show" })
       },
     }),
     akm_index: tool({
       description: "Build or rebuild the akm stash index. Scans stash directories, generates missing .stash.json metadata, and builds a semantic search index.",
       args: {},
       async execute() {
-        return runCli(["index"])
+        return runCli(client as unknown as LogCapableClient, ["index"], { toolName: "akm_index" })
       },
     }),
     akm_add: tool({
@@ -456,14 +550,14 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         package_ref: tool.schema.string().describe("Package reference such as npm:@scope/kit, github:<owner>/<repo>, git+https://host/repo, or ./local/kit."),
       },
       async execute({ package_ref }) {
-        return runCli(["add", package_ref])
+        return runCli(client as unknown as LogCapableClient, ["add", package_ref], { toolName: "akm_add" })
       },
     }),
     akm_list: tool({
       description: "List all kits installed from the registry.",
       args: {},
       async execute() {
-        return runCli(["list"])
+        return runCli(client as unknown as LogCapableClient, ["list"], { toolName: "akm_list" })
       },
     }),
     akm_remove: tool({
@@ -472,7 +566,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         package_ref: tool.schema.string().describe("Installed kit id or ref, such as npm:@scope/kit or owner/repo."),
       },
       async execute({ package_ref }) {
-        return runCli(["remove", package_ref])
+        return runCli(client as unknown as LogCapableClient, ["remove", package_ref], { toolName: "akm_remove" })
       },
     }),
     akm_update: tool({
@@ -493,7 +587,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
           return JSON.stringify({ ok: false, error: "Provide 'package_ref' or set 'all' to true." })
         }
         if (force) args.push("--force")
-        return runCli(args)
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_update" })
       },
     }),
     akm_clone: tool({
@@ -509,7 +603,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         if (name) args.push("--name", name)
         if (dest) args.push("--dest", dest)
         if (force) args.push("--force")
-        return runCli(args)
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_clone" })
       },
     }),
     akm_agent: tool({
@@ -522,10 +616,15 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         as_subtask: tool.schema.boolean().optional().describe("Run in child session with parent context. Defaults to true."),
       },
       async execute({ ref, query, task_prompt, dispatch_agent, as_subtask }, context) {
-        const resolved = resolveRefInput({ ref, query }, "agent")
+        const logMeta = {
+          toolName: "akm_agent",
+          directory: context.directory,
+          sessionID: context.sessionID,
+        }
+        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "agent", logMeta)
         if (!resolved.ok) return JSON.stringify(resolved)
 
-        const shownRaw = runCli(["show", resolved.ref])
+        const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], logMeta)
         const shown = parseCliJson<ShowAgentResponse | { type: string }>(shownRaw)
         if (isCliError(shown)) {
           return JSON.stringify(shown)
@@ -609,10 +708,15 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         as_subtask: tool.schema.boolean().optional().describe("Run in child session with parent context. Defaults to false."),
       },
       async execute({ ref, query, arguments: commandArguments, dispatch_agent, as_subtask }, context) {
-        const resolved = resolveRefInput({ ref, query }, "command")
+        const logMeta = {
+          toolName: "akm_cmd",
+          directory: context.directory,
+          sessionID: context.sessionID,
+        }
+        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "command", logMeta)
         if (!resolved.ok) return JSON.stringify(resolved)
 
-        const shownRaw = runCli(["show", resolved.ref])
+        const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], logMeta)
         const shown = parseCliJson<ShowCommandResponse | { type: string }>(shownRaw)
         if (isCliError(shown)) return JSON.stringify(shown)
         if (!isShowCommandResponse(shown)) {
@@ -680,7 +784,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         if (key) args.push(key)
         if (value) args.push(value)
         if (action === "path" && all) args.push("--all")
-        return runCli(args)
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_config" })
       },
     }),
     akm_run: tool({
@@ -691,10 +795,10 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         args: tool.schema.string().optional().describe("Arguments to append to the run command."),
       },
       async execute({ ref, query, args: runArgs }) {
-        const resolved = resolveRefInput({ ref, query }, "script")
+        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "script", { toolName: "akm_run" })
         if (!resolved.ok) return JSON.stringify(resolved)
 
-        const shownRaw = runCli(["show", resolved.ref])
+        const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], { toolName: "akm_run" })
         const shown = parseCliJson<ShowToolResponse | { type: string }>(shownRaw)
         if (isCliError(shown)) return JSON.stringify(shown)
 
@@ -742,7 +846,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
       description: "List all resolved stash search paths and their status.",
       args: {},
       async execute() {
-        return runCli(["sources"])
+        return runCli(client as unknown as LogCapableClient, ["sources"], { toolName: "akm_sources" })
       },
     }),
     akm_upgrade: tool({
@@ -755,7 +859,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         const args = ["upgrade"]
         if (check) args.push("--check")
         if (force) args.push("--force")
-        return runCli(args)
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_upgrade" })
       },
     }),
   },

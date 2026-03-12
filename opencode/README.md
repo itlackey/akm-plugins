@@ -39,7 +39,7 @@ Use either:
 - `akm_search` with `source: "registry"` or `source: "both"`
 - `akm_registry_search` when you only want installable community kits
 
-Registry hits include `id` and `action` fields. Use `assets: true` when you also want asset-level matches from registry v2 indexes.
+Registry hits include `id`, `installRef`, and `action` fields. Use `installRef` when passing a result into `akm_add`; registry-specific IDs are not installable refs. Use `assets: true` when you also want asset-level matches from registry v2 indexes.
 
 ## Agent Dispatch
 

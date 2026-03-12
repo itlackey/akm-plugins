@@ -13,6 +13,9 @@ const { AgentikitPlugin } = await import("../opencode/index.ts")
 
 function createMockClient() {
   return {
+    app: {
+      log: mock(async () => ({ data: {}, error: undefined })),
+    },
     session: {
       create: mock(async () => ({ data: { id: "child-session-1" }, error: undefined })),
       prompt: mock(async () => ({
@@ -458,6 +461,78 @@ describe("akm-opencode plugin", () => {
       expect(parsed.error).toContain("command not found")
     })
 
+    it("writes successful AKM tool invocations to OpenCode app logs", async () => {
+      const client = createMockClient()
+      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+
+      await hooks.tool!.akm_search.execute(
+        { query: "deploy", source: "local" } as any,
+        {} as any,
+      )
+
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: undefined,
+        body: {
+          service: "akm-opencode",
+          level: "info",
+          message: "AKM command completed",
+          extra: expect.objectContaining({
+            subsystem: "akm",
+            toolName: "akm_search",
+            command: "akm",
+            args: ["search", "deploy", "--source", "local", "--detail", "normal", "--format", "json"],
+            exitCode: 0,
+            stdout: "mock output",
+            stderr: "",
+          }),
+        },
+      })
+    })
+
+    it("writes failed AKM tool invocations to OpenCode app logs", async () => {
+      mockExecFileSync.mockImplementation((cmd, args) => {
+        if (Array.isArray(args) && args[0] === "--version") return "0.0.18"
+        const error = new Error("Legacy show flags are no longer supported.") as Error & {
+          status?: number
+          stdout?: string
+          stderr?: string
+        }
+        error.status = 1
+        error.stdout = ""
+        error.stderr = "Legacy show flags are no longer supported."
+        throw error
+      })
+
+      const client = createMockClient()
+      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_show.execute(
+        { ref: "knowledge:guide.md", view_mode: "toc" } as any,
+        {} as any,
+      )
+
+      expect(JSON.parse(result)).toEqual({
+        ok: false,
+        error: "Legacy show flags are no longer supported.",
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: undefined,
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM command failed",
+          extra: expect.objectContaining({
+            subsystem: "akm",
+            toolName: "akm_show",
+            command: "akm",
+            args: ["show", "knowledge:guide.md", "toc", "--format", "json"],
+            exitCode: 1,
+            stdout: "",
+            stderr: "Legacy show flags are no longer supported.",
+          }),
+        },
+      })
+    })
+
     it("akm_agent creates child session and prompts with stash metadata", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (args[0] === "show") {
@@ -819,6 +894,30 @@ describe("akm-opencode plugin", () => {
       expect(hit.score).toBe(0.95)
       expect(hit.whyMatched).toEqual(["name match"])
       expect(hit.run).toBe("bash deploy.sh")
+    })
+
+    it("registry search hits include installRef for direct akm_add usage", async () => {
+      const registryResponse = JSON.stringify({
+        hits: [{
+          type: "registry",
+          id: "skills-sh:anthropics/skills/frontend-design",
+          installRef: "github:anthropics/skills",
+          action: "akm add github:anthropics/skills",
+          name: "frontend-design",
+        }],
+      })
+      mockExecFileSync.mockReturnValue(registryResponse)
+
+      const hooks = await AgentikitPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_registry_search.execute(
+        { query: "frontend design" } as any,
+        {} as any,
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed.hits[0].id).toBe("skills-sh:anthropics/skills/frontend-design")
+      expect(parsed.hits[0].installRef).toBe("github:anthropics/skills")
+      expect(parsed.hits[0].action).toBe("akm add github:anthropics/skills")
     })
 
     it("show agent response includes origin and editable", async () => {
