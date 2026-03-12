@@ -6,7 +6,7 @@ and knowledge documents via `akm` CLI.
 **Finding assets:**
 ```sh
 akm search "<query>"              # Search by keyword
-akm search "<query>" --type tool  # Filter by type (tool, skill, command, agent, knowledge, script)
+akm search "<query>" --type script  # Filter by type (script, skill, command, agent, knowledge)
 akm search "<query>" --source <source>  # Filter by source (e.g., "local", "registry", "both")
 ```
 Each hit includes a `ref` you use to retrieve the full asset.

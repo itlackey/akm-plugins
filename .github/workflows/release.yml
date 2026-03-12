@@ -97,7 +97,7 @@ jobs:
 
       - run: npm install -g npm@latest
 
-      - name: Publish agentikit-opencode
+      - name: Publish akm-opencode
         working-directory: opencode
         run: npm publish --provenance --access public
         env:

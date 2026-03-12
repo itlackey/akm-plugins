@@ -1,6 +1,6 @@
 {
   "name": "agentikit",
-  "description": "Search, show, and manage extension assets from Agentikit stash directories and registries.",
+  "description": "Search, show, and manage akm stash assets from local directories and registries.",
   "version": "0.1.1",
   "author": {
     "name": "itlackey",
@@ -10,9 +10,9 @@
   "repository": "https://github.com/itlackey/agentikit-plugins",
   "license": "CC-BY-4.0",
   "keywords": [
+    "akm",
     "agentikit",
     "stash",
-    "tools",
     "skills",
     "commands",
     "agents",

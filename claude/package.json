@@ -1,10 +1,11 @@
 {
   "name": "agentikit-claude",
   "version": "0.1.1",
-  "description": "Claude Code plugin for Agentikit - search and show extension assets via the akm CLI.",
+  "description": "Claude Code plugin for Agentikit and akm - search, show, and manage stash assets via the akm CLI.",
   "keywords": [
     "claude-code",
     "claude-code-plugin",
+    "akm",
     "agentikit",
     "ai-agent",
     "developer-tools",

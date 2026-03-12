@@ -48,7 +48,7 @@ function runCli(args: string[]): string {
 }
 
 type CliError = { ok: false; error: string }
-type AssetType = "tool" | "skill" | "command" | "agent" | "knowledge" | "script"
+type AssetType = "skill" | "command" | "agent" | "knowledge" | "script"
 
 type ShowAgentResponse = {
   type: "agent"
@@ -93,7 +93,7 @@ type ShowToolResponse = {
 }
 
 type SearchHit = {
-  type: AssetType | "registry"
+  type: AssetType | "registry" | "registry-asset"
   ref?: string
   id?: string
   editable?: boolean
@@ -164,10 +164,37 @@ function parseModelHint(modelHint: unknown): { providerID: string; modelID: stri
 }
 
 function parseToolPolicy(toolPolicy: unknown): Record<string, boolean> | undefined {
-  if (!toolPolicy || typeof toolPolicy !== "object" || Array.isArray(toolPolicy)) return undefined
   const result: Record<string, boolean> = {}
+
+  const assign = (key: string, value: unknown) => {
+    const normalizedKey = key.trim().toLowerCase()
+    if (!normalizedKey) return
+    if (typeof value === "boolean") {
+      result[normalizedKey] = value
+      return
+    }
+    if (typeof value === "string") {
+      if (value === "allow") result[normalizedKey] = true
+      if (value === "deny") result[normalizedKey] = false
+    }
+  }
+
+  if (typeof toolPolicy === "string") {
+    assign(toolPolicy, true)
+    return Object.keys(result).length > 0 ? result : undefined
+  }
+
+  if (Array.isArray(toolPolicy)) {
+    for (const item of toolPolicy) {
+      if (typeof item === "string") assign(item, true)
+    }
+    return Object.keys(result).length > 0 ? result : undefined
+  }
+
+  if (!toolPolicy || typeof toolPolicy !== "object") return undefined
+
   for (const [key, value] of Object.entries(toolPolicy as Record<string, unknown>)) {
-    if (typeof value === "boolean") result[key] = value
+    assign(key, value)
   }
   return Object.keys(result).length > 0 ? result : undefined
 }
@@ -285,11 +312,11 @@ type PluginClient = {
 export const AgentikitPlugin: Plugin = async ({ client }) => ({
   tool: {
     akm_search: tool({
-      description: "Search your local stash or the akm registry for tools, skills, commands, agents, scripts, and knowledge. Use source='registry' or akm_registry_search for installable community kits.",
+      description: "Search your local stash or the akm registry for scripts, skills, commands, agents, and knowledge. Use source='registry' or akm_registry_search for installable community kits.",
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
         type: tool.schema
-          .enum(["tool", "skill", "command", "agent", "knowledge", "script", "any"])
+          .enum(["skill", "command", "agent", "knowledge", "script", "any"])
           .optional()
           .describe("Optional type filter. Defaults to 'any'."),
         limit: tool.schema.number().optional().describe("Maximum number of hits to return. Defaults to 20."),
@@ -303,17 +330,38 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
       },
     }),
     akm_registry_search: tool({
-      description: "Search the akm registry only. Use this when you want installable kits from npm or GitHub without mixing in local stash results.",
+      description: "Search configured akm registries only. Use this when you want installable kits without mixing in local stash results.",
       args: {
         query: tool.schema.string().describe("Search query for installable registry kits."),
         type: tool.schema
-          .enum(["tool", "skill", "command", "agent", "knowledge", "script", "any"])
+          .enum(["skill", "command", "agent", "knowledge", "script", "any"])
           .optional()
           .describe("Optional asset type filter. Defaults to 'any'."),
         limit: tool.schema.number().optional().describe("Maximum number of registry hits to return. Defaults to 20."),
+        assets: tool.schema.boolean().optional().describe("Include asset-level results from registry index v2 payloads."),
       },
-      async execute({ query, type, limit }) {
-        return runCli(createSearchArgs({ query, type, limit, defaultSource: "registry" }))
+      async execute({ query, type, limit, assets }) {
+        const args = ["registry", "search", query]
+        if (limit) args.push("--limit", String(limit))
+        const assetTypeFilter = type && type !== "any" ? type : undefined
+        if (assets || assetTypeFilter) args.push("--assets")
+
+        const raw = runCli(args)
+        if (!assetTypeFilter) return raw
+
+        const parsed = parseCliJson<{
+          hits?: SearchHit[]
+          assetHits?: Array<SearchHit & { assetType?: AssetType }>
+          warnings?: string[]
+          query?: string
+        }>(raw)
+        if (isCliError(parsed)) return JSON.stringify(parsed)
+
+        return JSON.stringify({
+          ...parsed,
+          hits: [],
+          assetHits: (parsed.assetHits ?? []).filter((hit) => hit.assetType === assetTypeFilter),
+        })
       },
     }),
     akm_show: tool({
@@ -400,7 +448,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
     akm_clone: tool({
       description: "Clone an asset from any source into the working stash or a custom destination for editing.",
       args: {
-        ref: tool.schema.string().describe("Asset ref to clone, including optional origin such as npm:@scope/pkg//tool:deploy.sh."),
+        ref: tool.schema.string().describe("Asset ref to clone, including optional origin such as npm:@scope/pkg//script:deploy.sh."),
         name: tool.schema.string().optional().describe("Optional new asset name."),
         dest: tool.schema.string().optional().describe("Optional destination directory. The type subdirectory is appended automatically by akm."),
         force: tool.schema.boolean().optional().describe("Overwrite the destination if it already exists."),
@@ -454,7 +502,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         const targetSession = await ensureTargetSessionID({
           useSubtask,
           context: { sessionID: context.sessionID, directory: context.directory },
-          title: `agentikit:${shown.name}`,
+          title: `akm:${shown.name}`,
           client: client as unknown as PluginClient,
         })
         if (!targetSession.ok) return JSON.stringify(targetSession)
@@ -533,7 +581,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         const targetSession = await ensureTargetSessionID({
           useSubtask,
           context: { sessionID: context.sessionID, directory: context.directory },
-          title: `agentikit:cmd:${shown.name}`,
+          title: `akm:cmd:${shown.name}`,
           client: client as unknown as PluginClient,
         })
         if (!targetSession.ok) return JSON.stringify(targetSession)
@@ -571,22 +619,24 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
     akm_config: tool({
       description: "View or update akm configuration settings.",
       args: {
-        action: tool.schema.enum(["get", "set", "list"]).describe("Config action: 'get' a key, 'set' a key/value, or 'list' all settings."),
+        action: tool.schema.enum(["get", "set", "list", "unset", "path"]).describe("Config action: get, set, list, unset, or path."),
         key: tool.schema.string().optional().describe("Config key (required for get/set)."),
         value: tool.schema.string().optional().describe("Config value (required for set)."),
+        all: tool.schema.boolean().optional().describe("When action is 'path', include config, stash, cache, and index paths."),
       },
-      async execute({ action, key, value }) {
+      async execute({ action, key, value, all }) {
         const args = ["config", action]
         if (key) args.push(key)
         if (value) args.push(value)
+        if (action === "path" && all) args.push("--all")
         return runCli(args)
       },
     }),
     akm_run: tool({
-      description: "Execute a stash tool or script by ref. Resolves via search, fetches metadata via show, and runs the run command.",
+      description: "Execute a stash script by ref. Resolves via search, fetches metadata via show, and runs the run command.",
       args: {
-        ref: tool.schema.string().optional().describe("Tool ref from akm_search (e.g. tool:deploy.sh)."),
-        query: tool.schema.string().optional().describe("If ref is omitted, resolve best matching stash tool for this query."),
+        ref: tool.schema.string().optional().describe("Script ref from akm_search (e.g. script:deploy.sh)."),
+        query: tool.schema.string().optional().describe("If ref is omitted, resolve best matching stash script for this query."),
         args: tool.schema.string().optional().describe("Arguments to append to the run command."),
       },
       async execute({ ref, query, args: runArgs }) {
@@ -600,14 +650,14 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         if (!isShowToolResponse(shown)) {
           return JSON.stringify({
             ok: false,
-            error: `Ref ${resolved.ref} is not a tool payload from akm_show.`,
+            error: `Ref ${resolved.ref} is not a script payload from akm_show.`,
           })
         }
 
         if (!shown.run || !shown.run.trim()) {
           return JSON.stringify({
             ok: false,
-            error: `Tool ${shown.name} is missing run command.`,
+            error: `Script ${shown.name} is missing run command.`,
           })
         }
 
@@ -624,7 +674,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
           return JSON.stringify({
             ok: true,
             ref: resolved.ref,
-            tool: shown.name,
+            script: shown.name,
             run: cmd,
             output,
           })

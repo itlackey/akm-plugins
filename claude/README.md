@@ -31,7 +31,7 @@ The skill teaches Claude to:
 - **Search the registry** for installable kits via `akm search --source registry` and install them with `akm add`
 - **Dispatch stash agents** dynamically — Claude fetches an agent's markdown definition (prompt, toolPolicy, modelHint) and spawns a subagent on the fly with those instructions embedded
 - **Execute stash commands** — Claude resolves a command template, renders `$ARGUMENTS`/`$1`/`$2` placeholders, and executes the result
-- **Run tools & scripts** — Claude fetches a tool/script via `akm show`, extracts the `run` field, and executes it directly
+- **Run scripts** — Claude fetches a script via `akm show`, extracts the `run` field, and executes it directly
 
 ### Dynamic agent dispatch
 
@@ -91,8 +91,7 @@ Expected layout:
 
 ```
 stash/
-├── tools/      # executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat)
-├── scripts/    # general-purpose scripts (.py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
+├── scripts/    # executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
 ├── skills/     # skill directories containing SKILL.md
 ├── commands/   # markdown files
 ├── agents/     # markdown files

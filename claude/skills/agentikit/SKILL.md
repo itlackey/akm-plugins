@@ -18,12 +18,11 @@ Set the stash directory persistently with `akm config set stashDir /path/to/stas
 
 The stash directory contains:
 
-- **tools/** — executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat)
 - **skills/** — skill directories containing SKILL.md
 - **commands/** — markdown template files
 - **agents/** — markdown agent definition files
 - **knowledge/** — markdown knowledge files
-- **scripts/** — general-purpose scripts (.py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
+- **scripts/** — executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
 
 ### Multi-source resolution
 
@@ -40,7 +39,7 @@ Assets are classified using a multi-signal matcher system that considers file ex
 
 ### Refs
 
-Refs use the format `[origin//]type:name`. Simple refs like `tool:deploy.sh` search all sources. Origin-qualified refs like `npm:@scope/pkg//tool:deploy.sh` or `local//tool:deploy.sh` target a specific source.
+Refs use the format `[origin//]type:name`. Simple refs like `script:deploy.sh` search all sources. Origin-qualified refs like `npm:@scope/pkg//script:deploy.sh` or `local//script:deploy.sh` target a specific source.
 
 ## Commands
 
@@ -59,7 +58,7 @@ Use `--full` to force a full reindex instead of incremental. Run this after addi
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type tool|skill|command|agent|knowledge|script|any] [--limit N] [--source local|registry|both] [--usage none|both|item|guide]
+akm search [query] [--type skill|command|agent|knowledge|script|any] [--limit N] [--source local|registry|both]
 ```
 
 The response includes `hits` (ranked results), plus diagnostic fields: `timing` (totalMs, rankMs, embedMs), `warnings` (string array of non-fatal issues), and `tip` (contextual usage hint).
@@ -67,7 +66,6 @@ The response includes `hits` (ranked results), plus diagnostic fields: `timing` 
 - Local and installed stash hits include `ref`, which you pass to `akm show`.
 - Registry hits include `id`, `action` (contains install guidance), and `curated` fields.
 - Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once.
-- Use `--usage none` to reduce search noise when you only want concise result metadata.
 
 ### Show an asset
 
@@ -81,9 +79,8 @@ Returns type-specific payloads:
 - **skill** → full SKILL.md content
 - **command** → markdown template + description
 - **agent** → prompt + description, toolPolicy, modelHint
-- **tool** → execution command and run
 - **knowledge** → full markdown content (use `toc` or `section "..."` as positional args to navigate, e.g. `akm show knowledge:guide toc`)
-- **script** → execution command, interpreter, and run
+- **script** → execution command, setup, cwd, and run
 
 All show responses include these common fields when using `--detail full`:
 - `editable` — boolean indicating whether the asset can be modified in place
@@ -106,20 +103,21 @@ akm config path                 # Show config file path
 akm config path --all           # Show all paths (config, stash, cache, index)
 ```
 
-Configurable keys: `stashDir`, `semanticSearch`, `searchPaths`, `embedding`, `llm`.
+Common keys: `stashDir`, `searchPaths`, `output.format`, `output.detail`, `embedding`, `llm`, `registries`.
 
 ### Registry Management
 
 Discover and install kits from npm or GitHub registries.
 
 ```bash
-akm search "deploy" --source registry  # Search installable registry kits
-akm add <package>                      # Install from npm, github, git, or local dir
-akm clone <ref>                        # Copy an asset into the working stash for editing
-akm list                          # List installed registry kits
-akm remove <id>                   # Remove an installed kit
-akm update [id]                   # Update one installed kit
-akm update --all                  # Update all installed kits
+akm search "deploy" --source registry   # Search installable registry kits
+akm registry search "deploy" --assets   # Search registries including asset hits
+akm add <package>                        # Install from npm, github, git, or local dir
+akm clone <ref>                          # Copy an asset into the working stash for editing
+akm list                                 # List installed registry kits
+akm remove <id>                          # Remove an installed kit
+akm update [id]                          # Update one installed kit
+akm update --all                         # Update all installed kits
 ```
 
 Installed kits become searchable alongside local stash assets. Use `--source registry` with search to query only remote registries.
@@ -139,7 +137,7 @@ When the user wants to browse community kits:
 
 1. Initialize: `akm init` (creates stash dirs, installs ripgrep)
 2. Build the index: `akm index`
-3. Search for assets: `akm search "deploy" --type tool`
+3. Search for assets: `akm search "deploy" --type script`
 4. Inspect a result: `akm show <ref>`
 5. Search the registry when needed: `akm search "deploy" --source registry`
 6. Install kits: `akm add <package>` (optional)
@@ -178,7 +176,7 @@ When the user asks you to dispatch, run, or use a stash agent:
    ```bash
    akm search "<query>" --type agent --limit 1
    ```
-   Extract `ref` from the first hit in the `hits` array. Refs use the format `[origin//]type:name` (e.g., `tool:deploy.sh`, `npm:@scope/pkg//tool:deploy.sh`).
+   Extract `ref` from the first hit in the `hits` array. Refs use the format `[origin//]type:name` (e.g., `script:deploy.sh`, `npm:@scope/pkg//script:deploy.sh`).
 
 2. **Fetch the agent payload:**
    ```bash
@@ -279,25 +277,25 @@ akm show command:review.md
 ```
 Then render the template replacing `$1` with `src/main.ts` and `$ARGUMENTS` with `src/main.ts --strict`, and execute the resulting instruction.
 
-## Tool/Script Execution
+## Script Execution
 
-Tools and scripts in the stash can be executed directly. The `akm show` response for tools and scripts includes a `run` field — a ready-to-execute shell command string.
+Scripts in the stash can be executed directly. The `akm show` response includes a `run` field — a ready-to-execute shell command string.
 
 ### Execution workflow
 
-When the user asks you to run or execute a stash tool or script:
+When the user asks you to run or execute a stash script:
 
-1. **Resolve the ref.** If the user gives a direct ref (e.g. `tool:deploy.sh`), use it. Otherwise search:
+1. **Resolve the ref.** If the user gives a direct ref (e.g. `script:deploy.sh`), use it. Otherwise search:
    ```bash
-   akm search "<query>" --type tool --limit 1
+   akm search "<query>" --type script --limit 1
    ```
    Extract `ref` from the first hit.
 
-2. **Fetch the tool payload:**
+2. **Fetch the script payload:**
    ```bash
    akm show <ref>
    ```
-   Parse the JSON. Verify `type` is `"tool"` or `"script"` and `run` is non-empty.
+   Parse the JSON. Verify `type` is `"script"` and `run` is non-empty.
 
 3. **Prepare the environment.** If `setup` is present (e.g. `bun install`), run it first before executing `run`. If `cwd` is present, use it as the working directory.
 
@@ -315,10 +313,10 @@ When the user asks you to run or execute a stash tool or script:
 
 ### Example
 
-User: "Run the deploy tool"
+User: "Run the deploy script"
 
 You would run:
 ```bash
-akm show tool:deploy.sh
+akm show script:deploy.sh
 ```
 Extract the `run` field from the response and execute it with the Bash tool.

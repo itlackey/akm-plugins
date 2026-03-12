@@ -8,7 +8,7 @@
     {
       "name": "agentikit",
       "source": "./claude",
-      "description": "Search and show extension assets from an Agentikit stash directory. Provides skills for managing tools, commands, agents, and knowledge via the akm CLI.",
+      "description": "Search, show, and manage akm stash assets from local directories and registries via the akm CLI.",
       "version": "0.1.1"
     }
   ]

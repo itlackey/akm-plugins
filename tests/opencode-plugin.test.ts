@@ -38,7 +38,7 @@ function createPluginInput(overrides?: Partial<PluginInput>): PluginInput {
   }
 }
 
-describe("agentikit-opencode plugin", () => {
+describe("akm-opencode plugin", () => {
   beforeEach(() => {
     mockExecFileSync.mockClear()
     mockExecFileSync.mockReturnValue("mock output")
@@ -111,6 +111,7 @@ describe("agentikit-opencode plugin", () => {
       expect(search.args.query).toBeDefined()
       expect(search.args.type).toBeDefined()
       expect(search.args.limit).toBeDefined()
+      expect(search.args.assets).toBeDefined()
     })
 
     it("akm_show has required args schema", async () => {
@@ -247,7 +248,20 @@ describe("agentikit-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["search", "lint", "--source", "registry", "--detail", "normal", "--format", "json"],
+        ["registry", "search", "lint", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_registry_search passes --assets flag", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_registry_search.execute(
+        { query: "lint", assets: true } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["registry", "search", "lint", "--assets", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -255,12 +269,12 @@ describe("agentikit-opencode plugin", () => {
     it("akm_show calls CLI with ref", async () => {
       const hooks = await AgentikitPlugin(createPluginInput())
       await hooks.tool!.akm_show.execute(
-        { ref: "tool://my-tool" } as any,
+        { ref: "script:deploy.sh" } as any,
         {} as any,
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["show", "tool://my-tool", "--format", "json"],
+        ["show", "script:deploy.sh", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -380,7 +394,7 @@ describe("agentikit-opencode plugin", () => {
       const hooks = await AgentikitPlugin(createPluginInput())
       await hooks.tool!.akm_clone.execute(
         {
-          ref: "npm:@scope/pkg//tool:deploy.sh",
+          ref: "npm:@scope/pkg//script:deploy.sh",
           name: "my-deploy.sh",
           dest: "/tmp/worktree",
           force: true,
@@ -389,7 +403,7 @@ describe("agentikit-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["clone", "npm:@scope/pkg//tool:deploy.sh", "--name", "my-deploy.sh", "--dest", "/tmp/worktree", "--force", "--format", "json"],
+        ["clone", "npm:@scope/pkg//script:deploy.sh", "--name", "my-deploy.sh", "--dest", "/tmp/worktree", "--force", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -483,7 +497,7 @@ describe("agentikit-opencode plugin", () => {
       expect(parsed.sessionID).toBe("child-session-1")
       expect(client.session.create).toHaveBeenCalledWith({
         query: { directory: "/tmp/test-project" },
-        body: { parentID: "parent-session-1", title: "agentikit:coach.md" },
+        body: { parentID: "parent-session-1", title: "akm:coach.md" },
       })
       expect(client.session.prompt).toHaveBeenCalledWith({
         query: { directory: "/tmp/test-project" },
@@ -581,6 +595,49 @@ describe("agentikit-opencode plugin", () => {
       expect(client.session.create).not.toHaveBeenCalled()
       expect(client.session.prompt).toHaveBeenCalledWith(
         expect.objectContaining({ path: { id: "parent-session-1" } }),
+      )
+    })
+
+    it("akm_agent maps string-array toolPolicy into OpenCode tool flags", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (args[0] === "show") {
+          return JSON.stringify({
+            type: "agent",
+            name: "coach.md",
+            path: "/stash/agents/coach.md",
+            prompt: "Use this exact system prompt.",
+            toolPolicy: ["Read", "Bash"],
+          })
+        }
+        return "mock output"
+      })
+
+      const client = createMockClient()
+      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_agent.execute(
+        {
+          ref: "agent:coach.md",
+          task_prompt: "Analyze tests",
+          as_subtask: false,
+        } as any,
+        {
+          sessionID: "parent-session-1",
+          messageID: "message-1",
+          agent: "build",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(true)
+      expect(client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({ tools: { read: true, bash: true } }),
+        }),
       )
     })
 
@@ -713,7 +770,7 @@ describe("agentikit-opencode plugin", () => {
   describe("expanded response types", () => {
     it("search response includes timing, warnings, and tip", async () => {
       const searchResponse = JSON.stringify({
-        hits: [{ type: "tool", ref: "tool:deploy.sh" }],
+        hits: [{ type: "script", ref: "script:deploy.sh" }],
         source: "local",
         stashDir: "/home/user/.agentikit/stash",
         timing: { totalMs: 42, rankMs: 10, embedMs: 5 },
@@ -738,8 +795,8 @@ describe("agentikit-opencode plugin", () => {
     it("search hits include name, description, score, whyMatched, run", async () => {
       const searchResponse = JSON.stringify({
         hits: [{
-          type: "tool",
-          ref: "tool:deploy.sh",
+          type: "script",
+          ref: "script:deploy.sh",
           name: "deploy.sh",
           description: "Deploy the application",
           score: 0.95,
@@ -861,6 +918,32 @@ describe("agentikit-opencode plugin", () => {
       )
     })
 
+    it("config unset calls CLI as 'akm config unset <key>'", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_config.execute(
+        { action: "unset", key: "llm" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["config", "unset", "llm", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("config path supports --all", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_config.execute(
+        { action: "path", all: true } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["config", "path", "--all", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
     it("returns JSON error when CLI fails", async () => {
       mockExecFileSync.mockImplementation(() => {
         throw new Error("config read failed")
@@ -891,7 +974,7 @@ describe("agentikit-opencode plugin", () => {
           return JSON.stringify({
             type: "script",
             name: "deploy.sh",
-            path: "/stash/tools/deploy.sh",
+            path: "/stash/scripts/deploy.sh",
             run: "cd /stash && bash deploy.sh",
           })
         }
@@ -901,13 +984,13 @@ describe("agentikit-opencode plugin", () => {
 
       const hooks = await AgentikitPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
-        { ref: "tool:deploy.sh" } as any,
+        { ref: "script:deploy.sh" } as any,
         {} as any,
       )
 
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(true)
-      expect(parsed.tool).toBe("deploy.sh")
+      expect(parsed.script).toBe("deploy.sh")
       expect(parsed.run).toBe("cd /stash && bash deploy.sh")
       expect(parsed.output).toBe("deployed successfully")
       expect(mockExecSync).toHaveBeenCalledWith(
@@ -920,14 +1003,14 @@ describe("agentikit-opencode plugin", () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (args[0] === "search") {
           return JSON.stringify({
-            hits: [{ type: "script", ref: "tool:build.sh" }],
+            hits: [{ type: "script", ref: "script:build.sh" }],
           })
         }
         if (args[0] === "show") {
           return JSON.stringify({
             type: "script",
             name: "build.sh",
-            path: "/stash/tools/build.sh",
+            path: "/stash/scripts/build.sh",
             run: "bash build.sh",
           })
         }
@@ -943,7 +1026,7 @@ describe("agentikit-opencode plugin", () => {
 
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(true)
-      expect(parsed.tool).toBe("build.sh")
+      expect(parsed.script).toBe("build.sh")
       expect(parsed.output).toBe("build complete")
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
@@ -958,7 +1041,7 @@ describe("agentikit-opencode plugin", () => {
           return JSON.stringify({
             type: "script",
             name: "deploy.sh",
-            path: "/stash/tools/deploy.sh",
+            path: "/stash/scripts/deploy.sh",
             run: "bash deploy.sh",
           })
         }
@@ -968,7 +1051,7 @@ describe("agentikit-opencode plugin", () => {
 
       const hooks = await AgentikitPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
-        { ref: "tool:deploy.sh", args: "--env production" } as any,
+        { ref: "script:deploy.sh", args: "--env production" } as any,
         {} as any,
       )
 
@@ -981,7 +1064,7 @@ describe("agentikit-opencode plugin", () => {
       )
     })
 
-    it("returns error for non-tool type", async () => {
+    it("returns error for non-script type", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (args[0] === "show") {
           return JSON.stringify({
@@ -1002,7 +1085,7 @@ describe("agentikit-opencode plugin", () => {
 
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(false)
-      expect(parsed.error).toContain("not a tool payload")
+      expect(parsed.error).toContain("not a script payload")
     })
 
     it("returns error when run command is missing", async () => {
@@ -1011,7 +1094,7 @@ describe("agentikit-opencode plugin", () => {
           return JSON.stringify({
             type: "script",
             name: "broken.sh",
-            path: "/stash/tools/broken.sh",
+            path: "/stash/scripts/broken.sh",
           })
         }
         return "mock output"
@@ -1019,7 +1102,7 @@ describe("agentikit-opencode plugin", () => {
 
       const hooks = await AgentikitPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
-        { ref: "tool:broken.sh" } as any,
+        { ref: "script:broken.sh" } as any,
         {} as any,
       )
 
@@ -1034,7 +1117,7 @@ describe("agentikit-opencode plugin", () => {
           return JSON.stringify({
             type: "script",
             name: "fail.sh",
-            path: "/stash/tools/fail.sh",
+            path: "/stash/scripts/fail.sh",
             run: "bash fail.sh",
           })
         }
@@ -1046,7 +1129,7 @@ describe("agentikit-opencode plugin", () => {
 
       const hooks = await AgentikitPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
-        { ref: "tool:fail.sh" } as any,
+        { ref: "script:fail.sh" } as any,
         {} as any,
       )
 
@@ -1062,7 +1145,7 @@ describe("agentikit-opencode plugin", () => {
           return JSON.stringify({
             type: "script",
             name: "build.sh",
-            path: "/stash/tools/build.sh",
+            path: "/stash/scripts/build.sh",
             run: "bash build.sh",
           })
         }
@@ -1072,13 +1155,13 @@ describe("agentikit-opencode plugin", () => {
 
       const hooks = await AgentikitPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
-        { ref: "tool:build.sh" } as any,
+        { ref: "script:build.sh" } as any,
         {} as any,
       )
 
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(true)
-      expect(parsed.tool).toBe("build.sh")
+      expect(parsed.script).toBe("build.sh")
     })
 
     it("accepts type 'tool' from show response", async () => {
@@ -1087,7 +1170,7 @@ describe("agentikit-opencode plugin", () => {
           return JSON.stringify({
             type: "tool",
             name: "build.sh",
-            path: "/stash/tools/build.sh",
+            path: "/stash/scripts/build.sh",
             run: "bash build.sh",
           })
         }
@@ -1097,13 +1180,13 @@ describe("agentikit-opencode plugin", () => {
 
       const hooks = await AgentikitPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
-        { ref: "tool:build.sh" } as any,
+        { ref: "script:build.sh" } as any,
         {} as any,
       )
 
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(true)
-      expect(parsed.tool).toBe("build.sh")
+      expect(parsed.script).toBe("build.sh")
     })
   })
 

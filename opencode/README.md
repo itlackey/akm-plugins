@@ -1,4 +1,4 @@
-# agentikit-opencode
+# akm-opencode
 
 OpenCode plugin for the [Agentikit](https://github.com/itlackey/agentikit) CLI. Registers tools that let your AI agent **search**, **show**, and **manage** extension assets from stash directories and registries.
 
@@ -8,7 +8,7 @@ Add to your OpenCode config (`opencode.json`):
 
 ```json
 {
-  "plugin": ["agentikit-opencode"]
+  "plugin": ["akm-opencode"]
 }
 ```
 
@@ -16,8 +16,8 @@ Add to your OpenCode config (`opencode.json`):
 
 | Tool | Description |
 |------|-------------|
-| `akm_search` | Search the local stash, the registry, or both for tools, skills, commands, agents, scripts, and knowledge |
-| `akm_registry_search` | Search installable registry kits only and return `id` / `action` results |
+| `akm_search` | Search the local stash, the registry, or both for scripts, skills, commands, agents, and knowledge |
+| `akm_registry_search` | Search configured registries for installable kits and optional asset-level hits |
 | `akm_show` | Show a stash asset by its ref |
 | `akm_index` | Build or rebuild the search index |
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
@@ -27,8 +27,8 @@ Add to your OpenCode config (`opencode.json`):
 | `akm_remove` | Remove an installed registry kit and reindex |
 | `akm_update` | Update one installed kit or all installed kits |
 | `akm_clone` | Clone an asset into the working stash or a custom destination for editing |
-| `akm_config` | Show or update akm configuration (stashDir, searchPaths, etc.) |
-| `akm_run` | Execute a stash tool or script using its `run` field |
+| `akm_config` | Get, set, unset, list, or inspect akm configuration (including `config path --all`) |
+| `akm_run` | Execute a stash script using its `run` field |
 | `akm_sources` | List all resolved stash search paths |
 | `akm_upgrade` | Check for or install akm CLI updates |
 
@@ -39,7 +39,7 @@ Use either:
 - `akm_search` with `source: "registry"` or `source: "both"`
 - `akm_registry_search` when you only want installable community kits
 
-Registry hits include `id` and `action` fields, which can be used with `akm_add`.
+Registry hits include `id` and `action` fields. Use `assets: true` when you also want asset-level matches from registry v2 indexes.
 
 ## Agent Dispatch
 
@@ -96,8 +96,7 @@ Expected layout:
 
 ```
 stash/
-├── tools/      # executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat)
-├── scripts/    # general-purpose scripts (.py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
+├── scripts/    # executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
 ├── skills/     # skill directories containing SKILL.md
 ├── commands/   # markdown files
 ├── agents/     # markdown files
