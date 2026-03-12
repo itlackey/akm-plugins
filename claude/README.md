@@ -31,7 +31,7 @@ The skill teaches Claude to:
 - **Search the registry** for installable kits via `akm search --source registry` and install them with `akm add`
 - **Dispatch stash agents** dynamically — Claude fetches an agent's markdown definition (prompt, toolPolicy, modelHint) and spawns a subagent on the fly with those instructions embedded
 - **Execute stash commands** — Claude resolves a command template, renders `$ARGUMENTS`/`$1`/`$2` placeholders, and executes the result
-- **Run tools & scripts** — Claude fetches a tool/script via `akm show`, extracts the `runCmd` field, and executes it directly
+- **Run tools & scripts** — Claude fetches a tool/script via `akm show`, extracts the `run` field, and executes it directly
 
 ### Dynamic agent dispatch
 
@@ -61,7 +61,7 @@ Ask Claude to find installable kits from the community registry:
 Find an agentikit kit for code review and install the best match
 ```
 
-Claude will search with `akm search ... --source registry`, inspect the returned `installRef` / `installCmd`, and then use `akm add` when you ask it to install a result.
+Claude will search with `akm search ... --source registry`, inspect the returned `id` and `action` fields, and then use `akm add` when you ask it to install a result.
 
 ### Limitations vs OpenCode plugin
 
@@ -70,7 +70,7 @@ Claude will search with `akm search ... --source registry`, inspect the returned
 
 ## Prerequisites
 
-The `akm` CLI must be installed and available on PATH. Install it from the [agentikit repo](https://github.com/itlackey/agentikit).
+The `akm` CLI must be installed and available on PATH. Install it from the [agentikit repo](https://github.com/itlackey/agentikit). The plugin will automatically install the `akm` binary if it is not found on PATH.
 
 ```sh
 # macOS / Linux
@@ -99,7 +99,7 @@ stash/
 └── knowledge/  # markdown files
 ```
 
-Assets are resolved from three source types: **working** (local stash, read-write), **mounted** (read-only additional dirs via `mountedStashDirs` config), and **installed** (registry kits via `akm add`, read-only).
+Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
 
 ## Docs
 

@@ -11,7 +11,7 @@ You have access to the `akm` CLI (Agentikit Manager) to manage extension assets 
 
 The stash directory is resolved using a three-tier fallback:
 1. **Environment variable** — `AKM_STASH_DIR` (optional override)
-2. **Config file** — `stashDir` field in `$XDG_CONFIG_HOME/agentikit/config.json`
+2. **Config file** — `stashDir` field in `$XDG_CONFIG_HOME/akm/config.json`
 3. **Platform default** — OS-specific default location
 
 Set the stash directory persistently with `akm config set stashDir /path/to/stash` (preferred). The `AKM_STASH_DIR` env var is only needed as a temporary override.
@@ -28,11 +28,11 @@ The stash directory contains:
 ### Multi-source resolution
 
 Assets are resolved from multiple sources in priority order:
-1. **working** (origin: `local`) — your local stash directory (read-write)
-2. **mounted** — read-only additional directories configured via `mountedStashDirs` in config
-3. **installed** — kits installed from the registry via `akm add` (read-only)
+1. **working** (origin: `local`) — your local stash directory
+2. **search paths** — additional directories configured via `searchPaths` in config
+3. **installed** — kits installed from the registry via `akm add`
 
-Mounted stash directories let you share curated asset collections across projects without copying files. Configure them with `akm config set mountedStashDirs '["/path/a","/path/b"]'`.
+Search paths let you share curated asset collections across projects without copying files. Configure them with `akm config set searchPaths '["/path/a","/path/b"]'`.
 
 ### Asset classification
 
@@ -64,8 +64,8 @@ akm search [query] [--type tool|skill|command|agent|knowledge|script|any] [--lim
 
 The response includes `hits` (ranked results), plus diagnostic fields: `timing` (totalMs, rankMs, embedMs), `warnings` (string array of non-fatal issues), and `tip` (contextual usage hint).
 
-- Local and installed stash hits include `openRef`, which you pass to `akm show`.
-- Registry hits include `installRef` and `installCmd`, which you pass to `akm add` when the user wants to install a kit.
+- Local and installed stash hits include `ref`, which you pass to `akm show`.
+- Registry hits include `id`, `action` (contains install guidance), and `curated` fields.
 - Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once.
 - Use `--usage none` to reduce search noise when you only want concise result metadata.
 
@@ -81,30 +81,32 @@ Returns type-specific payloads:
 - **skill** → full SKILL.md content
 - **command** → markdown template + description
 - **agent** → prompt + description, toolPolicy, modelHint
-- **tool** → execution command, kind, and runCmd
-- **knowledge** → full markdown content (supports view modes: toc, frontmatter, section, lines)
-- **script** → execution command, interpreter, and runCmd
+- **tool** → execution command and run
+- **knowledge** → full markdown content (use `toc` or `section "..."` as positional args to navigate, e.g. `akm show knowledge:guide toc`)
+- **script** → execution command, interpreter, and run
 
-All show responses include these common fields:
-- `registryId` — registry package identifier (present for installed kit assets)
-- `editable` — boolean indicating whether the asset can be modified (true for working stash, false for mounted/installed)
-- `kind` — ToolKind for tools/scripts: `"bash"`, `"sh"`, `"ps1"`, `"cmd"`, `"bat"`, `"bun"`, `"node"`, `"python"`, `"ruby"`, `"go"`, `"unsupported"`
-- `runCmd` — ready-to-execute command string for tools and scripts (see Tool/Script Execution below)
+All show responses include these common fields when using `--detail full`:
+- `editable` — boolean indicating whether the asset can be modified in place
+- `editHint` — actionable guidance when editable is false (omitted when editable)
+- `origin` — source origin identifier (null for working stash)
+- `action` — suggested next action for the asset
+
+At default detail level, show responses include: `type`, `name`, `origin`, `action`, `description`, plus type-specific content fields (`prompt`, `template`, `run`, `setup`, `cwd`, `content`, `toolPolicy`, `modelHint`, `agent`, `parameters`).
 
 ### Configuration
 
-Show or update configuration stored at `~/.config/agentikit/config.json` (XDG standard).
+Show or update configuration stored at `~/.config/akm/config.json` (XDG standard).
 
 ```bash
 akm config list                 # Show current config
 akm config get <key>            # Get a config value
 akm config set <key> <value>    # Set a config value
 akm config unset <key>          # Remove a config value
-akm config providers            # List configured providers
-akm config use <provider>       # Switch active provider
+akm config path                 # Show config file path
+akm config path --all           # Show all paths (config, stash, cache, index)
 ```
 
-Configurable keys: `stashDir`, `semanticSearch`, `mountedStashDirs`, `embedding`, `llm`.
+Configurable keys: `stashDir`, `semanticSearch`, `searchPaths`, `embedding`, `llm`.
 
 ### Registry Management
 
@@ -125,8 +127,8 @@ Installed kits become searchable alongside local stash assets. Use `--source reg
 When the user wants to browse community kits:
 
 1. Run `akm search "<query>" --source registry`.
-2. Review the returned `hits` and prefer `installRef` / `installCmd` over trying to `akm show` a registry hit directly.
-3. If the user wants to install a result, run `akm add <installRef>`.
+2. Review the returned `hits` and use the `id` and `action` fields from registry results.
+3. If the user wants to install a result, run `akm add <id>`.
 4. If the user wants to customize an installed asset, run `akm clone <origin-qualified-ref>` to copy it into the working stash before editing.
 
 ## Dependencies
@@ -142,7 +144,7 @@ When the user wants to browse community kits:
 5. Search the registry when needed: `akm search "deploy" --source registry`
 6. Install kits: `akm add <package>` (optional)
 
-All output is JSON for easy parsing.
+Default output format is JSON. The plugin always passes `--format json --detail normal` for consistent parsing.
 
 ## Dispatching Stash Agents
 
@@ -176,7 +178,7 @@ When the user asks you to dispatch, run, or use a stash agent:
    ```bash
    akm search "<query>" --type agent --limit 1
    ```
-   Extract `openRef` from the first hit in the `hits` array. Refs use the format `[origin//]type:name` (e.g., `tool:deploy.sh`, `npm:@scope/pkg//tool:deploy.sh`).
+   Extract `ref` from the first hit in the `hits` array. Refs use the format `[origin//]type:name` (e.g., `tool:deploy.sh`, `npm:@scope/pkg//tool:deploy.sh`).
 
 2. **Fetch the agent payload:**
    ```bash
@@ -250,7 +252,7 @@ When the user asks you to run or execute a stash command:
    ```bash
    akm search "<query>" --type command --limit 1
    ```
-   Extract `openRef` from the first hit. Refs use the format `[origin//]type:name`.
+   Extract `ref` from the first hit. Refs use the format `[origin//]type:name`.
 
 2. **Fetch the command payload:**
    ```bash
@@ -279,7 +281,7 @@ Then render the template replacing `$1` with `src/main.ts` and `$ARGUMENTS` with
 
 ## Tool/Script Execution
 
-Tools and scripts in the stash can be executed directly. The `akm show` response for tools and scripts includes a `runCmd` field — a ready-to-execute shell command string.
+Tools and scripts in the stash can be executed directly. The `akm show` response for tools and scripts includes a `run` field — a ready-to-execute shell command string.
 
 ### Execution workflow
 
@@ -289,17 +291,19 @@ When the user asks you to run or execute a stash tool or script:
    ```bash
    akm search "<query>" --type tool --limit 1
    ```
-   Extract `openRef` from the first hit.
+   Extract `ref` from the first hit.
 
 2. **Fetch the tool payload:**
    ```bash
    akm show <ref>
    ```
-   Parse the JSON. Verify `type` is `"tool"` or `"script"` and `runCmd` is non-empty.
+   Parse the JSON. Verify `type` is `"tool"` or `"script"` and `run` is non-empty.
 
-3. **Execute the command** using the Bash tool with the `runCmd` value:
+3. **Prepare the environment.** If `setup` is present (e.g. `bun install`), run it first before executing `run`. If `cwd` is present, use it as the working directory.
+
+4. **Execute the command** using the Bash tool with the `run` value:
    ```bash
-   # runCmd examples by kind:
+   # run examples:
    # bash:       cd "/path" && bash "/path/script.sh"
    # bun (ts):   cd "/path" && bun "/path/script.ts"
    # node:       cd "/path" && node "/path/script.js"
@@ -307,7 +311,7 @@ When the user asks you to run or execute a stash tool or script:
    # powershell: powershell -ExecutionPolicy Bypass -File "/path/script.ps1"
    ```
 
-4. **Report results** to the user.
+5. **Report results** to the user.
 
 ### Example
 
@@ -317,4 +321,4 @@ You would run:
 ```bash
 akm show tool:deploy.sh
 ```
-Extract the `runCmd` field from the response and execute it with the Bash tool.
+Extract the `run` field from the response and execute it with the Bash tool.

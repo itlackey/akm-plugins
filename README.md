@@ -14,7 +14,7 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides fourteen tools:
+Provides fifteen tools:
 - `akm_search` — search the stash, the registry, or both
 - `akm_registry_search` — search installable registry kits only
 - `akm_show` — show a stash asset by ref
@@ -27,8 +27,9 @@ Provides fourteen tools:
 - `akm_update` — update one or all installed registry kits
 - `akm_clone` — clone an asset into the working stash or another destination
 - `akm_config` — show or update akm configuration
-- `akm_run` — execute a stash tool or script via `runCmd`
-- `akm_submit` — submit assets or feedback to the registry
+- `akm_run` — execute a stash tool or script via the `run` field
+- `akm_sources` — list all resolved stash search paths
+- `akm_upgrade` — check for or install akm CLI updates
 
 
 ### Claude Code
@@ -81,15 +82,15 @@ stash/
 └── knowledge/  # markdown files
 ```
 
-Assets are resolved from three source types: **working** (local stash, read-write), **mounted** (read-only additional dirs via `mountedStashDirs` config), and **installed** (registry kits via `akm add`, read-only).
+Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
 
 ## Configuration
 
-Config is stored at `~/.config/agentikit/config.json` (XDG standard). Use `akm config list` to view, `akm config set <key> <value>` to update.
+Config is stored at `~/.config/akm/config.json` (XDG standard). Use `akm config list` to view, `akm config set <key> <value>` to update.
 
 ## Prerequisites
 
-The `akm` CLI must be installed and available on PATH. Install it from the [agentikit repo](https://github.com/itlackey/agentikit). If not available on PATH, the agent will install it when needed.
+The `akm` CLI must be installed and available on PATH. Install it from the [agentikit repo](https://github.com/itlackey/agentikit). The plugin will automatically install the `akm` binary if it is not found on PATH.
 
 ```sh
 # macOS / Linux

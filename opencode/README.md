@@ -17,7 +17,7 @@ Add to your OpenCode config (`opencode.json`):
 | Tool | Description |
 |------|-------------|
 | `akm_search` | Search the local stash, the registry, or both for tools, skills, commands, agents, scripts, and knowledge |
-| `akm_registry_search` | Search installable registry kits only and return `installRef` / `installCmd` results |
+| `akm_registry_search` | Search installable registry kits only and return `id` / `action` results |
 | `akm_show` | Show a stash asset by its ref |
 | `akm_index` | Build or rebuild the search index |
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
@@ -27,9 +27,10 @@ Add to your OpenCode config (`opencode.json`):
 | `akm_remove` | Remove an installed registry kit and reindex |
 | `akm_update` | Update one installed kit or all installed kits |
 | `akm_clone` | Clone an asset into the working stash or a custom destination for editing |
-| `akm_config` | Show or update akm configuration (stashDir, mountedStashDirs, etc.) |
-| `akm_run` | Execute a stash tool or script using its `runCmd` |
-| `akm_submit` | Submit assets or feedback to the registry |
+| `akm_config` | Show or update akm configuration (stashDir, searchPaths, etc.) |
+| `akm_run` | Execute a stash tool or script using its `run` field |
+| `akm_sources` | List all resolved stash search paths |
+| `akm_upgrade` | Check for or install akm CLI updates |
 
 ### Registry discovery
 
@@ -38,7 +39,7 @@ Use either:
 - `akm_search` with `source: "registry"` or `source: "both"`
 - `akm_registry_search` when you only want installable community kits
 
-Registry hits include `installRef` and `installCmd`, which can be passed directly to `akm_add`.
+Registry hits include `id` and `action` fields, which can be used with `akm_add`.
 
 ## Agent Dispatch
 
@@ -74,7 +75,7 @@ At least one of `ref` or `query` is required.
 
 ## Prerequisites
 
-The `akm` CLI must be installed and available on PATH. Install it from the [agentikit repo](https://github.com/itlackey/agentikit).
+The `akm` CLI must be installed and available on PATH. Install it from the [agentikit repo](https://github.com/itlackey/agentikit). The plugin will automatically install the `akm` binary if it is not found on PATH.
 
 ```sh
 # macOS / Linux
@@ -103,7 +104,7 @@ stash/
 └── knowledge/  # markdown files
 ```
 
-Assets are resolved from three source types: **working** (local stash, read-write), **mounted** (read-only additional dirs via `mountedStashDirs` config), and **installed** (registry kits via `akm add`, read-only).
+Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
 
 ## Docs
 
