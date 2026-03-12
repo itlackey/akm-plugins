@@ -142,7 +142,7 @@ function parseCliJson<T>(raw: string): T | CliError {
   } catch {
     return {
       ok: false,
-      error: "Agentikit CLI returned non-JSON output",
+      error: "akm CLI returned non-JSON output",
     }
   }
 }
@@ -285,7 +285,7 @@ type PluginClient = {
 export const AgentikitPlugin: Plugin = async ({ client }) => ({
   tool: {
     akm_search: tool({
-      description: "Search your local stash or the Agentikit registry for tools, skills, commands, agents, scripts, and knowledge. Use source='registry' or akm_registry_search for installable community kits.",
+      description: "Search your local stash or the akm registry for tools, skills, commands, agents, scripts, and knowledge. Use source='registry' or akm_registry_search for installable community kits.",
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
         type: tool.schema
@@ -303,7 +303,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
       },
     }),
     akm_registry_search: tool({
-      description: "Search the Agentikit registry only. Use this when you want installable kits from npm or GitHub without mixing in local stash results.",
+      description: "Search the akm registry only. Use this when you want installable kits from npm or GitHub without mixing in local stash results.",
       args: {
         query: tool.schema.string().describe("Search query for installable registry kits."),
         type: tool.schema
@@ -345,7 +345,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
       },
     }),
     akm_index: tool({
-      description: "Build or rebuild the Agentikit stash index. Scans stash directories, generates missing .stash.json metadata, and builds a semantic search index.",
+      description: "Build or rebuild the akm stash index. Scans stash directories, generates missing .stash.json metadata, and builds a semantic search index.",
       args: {},
       async execute() {
         return runCli(["index"])
@@ -569,7 +569,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
       },
     }),
     akm_config: tool({
-      description: "View or update Agentikit configuration settings.",
+      description: "View or update akm configuration settings.",
       args: {
         action: tool.schema.enum(["get", "set", "list"]).describe("Config action: 'get' a key, 'set' a key/value, or 'list' all settings."),
         key: tool.schema.string().optional().describe("Config key (required for get/set)."),
