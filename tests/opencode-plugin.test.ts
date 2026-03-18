@@ -1356,14 +1356,9 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("akm CLI availability", () => {
-    it("auto-installs akm-cli via Bun when akm is missing", async () => {
+    it("installs the latest akm-cli package with Bun when the plugin loads", async () => {
       let installComplete = false
       mockExecFileSync.mockImplementation((cmd, args) => {
-        if (cmd === "akm" && args[0] === "--version") {
-          const error = new Error("spawn akm ENOENT") as Error & { code?: string }
-          error.code = "ENOENT"
-          throw error
-        }
         if (cmd === "bun" && args[0] === "--version") return "1.3.5"
         if (cmd === "bun" && args[0] === "install") {
           installComplete = true
@@ -1383,7 +1378,7 @@ describe("akm-opencode plugin", () => {
       expect(JSON.parse(result)).toEqual({ sources: [] })
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "bun",
-        ["install", "-g", "akm-cli"],
+        ["install", "-g", "akm-cli@latest"],
         expect.objectContaining({ encoding: "utf8", timeout: 120_000, stdio: "pipe" }),
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(

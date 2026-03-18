@@ -3,7 +3,6 @@ import { execFileSync, execSync } from "node:child_process"
 import path from "node:path"
 
 let resolvedAkmCommand = "akm"
-let attemptedAutoInstall = false
 
 type LogLevel = "debug" | "info" | "warn" | "error"
 
@@ -77,59 +76,84 @@ function getCommandStatus(command: string): "ok" | "missing" | "error" {
   }
 }
 
-function resolveAkmCommand(): string | CliError {
-  const currentStatus = getCommandStatus(resolvedAkmCommand)
-  if (currentStatus === "ok" || currentStatus === "error") return resolvedAkmCommand
-
-  if (attemptedAutoInstall) {
-    return { ok: false, error: "The 'akm' CLI was not found on PATH and automatic installation was unsuccessful." }
+function getBunGlobalAkmCommand(): string | null {
+  try {
+    const globalBin = execFileSync("bun", ["pm", "bin", "-g"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    }).trim()
+    if (!globalBin || !path.isAbsolute(globalBin)) return null
+    return process.platform === "win32"
+      ? path.join(globalBin, "akm.exe")
+      : path.join(globalBin, "akm")
+  } catch {
+    return null
   }
-  attemptedAutoInstall = true
+}
 
+async function ensureLatestAkmInstalled(client: LogCapableClient): Promise<void> {
   try {
     execFileSync("bun", ["--version"], {
       encoding: "utf8",
       timeout: 10_000,
     })
-  } catch {
-    return {
-      ok: false,
-      error: "The 'akm' CLI was not found on PATH, and Bun is not available for automatic installation. Install akm from https://github.com/itlackey/agentikit.",
-    }
+  } catch (error: unknown) {
+    await writePluginLog(client, "warn", "AKM auto-install skipped", {
+      subsystem: "akm",
+      installer: "bun",
+      error: `Bun is not available: ${formatCliError(error)}`,
+    })
+    return
   }
 
   try {
-    execFileSync("bun", ["install", "-g", "akm-cli"], {
+    execFileSync("bun", ["install", "-g", "akm-cli@latest"], {
       encoding: "utf8",
       timeout: 120_000,
       stdio: "pipe",
     })
 
-    const globalBin = execFileSync("bun", ["pm", "bin", "-g"], {
-      encoding: "utf8",
-      timeout: 10_000,
-    }).trim()
-
-    const candidate = path.join(globalBin, process.platform === "win32" ? "akm.exe" : "akm")
-    if (getCommandStatus(candidate) === "ok") {
-      resolvedAkmCommand = candidate
-      return resolvedAkmCommand
-    }
-
-    if (getCommandStatus("akm") === "ok") {
+    const bunGlobalAkm = getBunGlobalAkmCommand()
+    if (bunGlobalAkm && getCommandStatus(bunGlobalAkm) === "ok") {
+      resolvedAkmCommand = bunGlobalAkm
+    } else if (getCommandStatus("akm") === "ok") {
       resolvedAkmCommand = "akm"
-      return resolvedAkmCommand
     }
 
-    return {
-      ok: false,
-      error: "Installed 'akm-cli' via Bun, but the 'akm' executable could not be resolved. Check your Bun global bin directory and PATH.",
-    }
+    await writePluginLog(client, "info", "AKM CLI install check completed", {
+      subsystem: "akm",
+      installer: "bun",
+      package: "akm-cli@latest",
+      command: resolvedAkmCommand,
+    })
   } catch (error: unknown) {
-    return {
-      ok: false,
-      error: `Failed to auto-install 'akm-cli' via Bun: ${formatCliError(error)}`,
-    }
+    await writePluginLog(client, "warn", "AKM auto-install failed", {
+      subsystem: "akm",
+      installer: "bun",
+      package: "akm-cli@latest",
+      error: formatCliError(error),
+    })
+  }
+}
+
+function resolveAkmCommand(): string | CliError {
+  const currentStatus = getCommandStatus(resolvedAkmCommand)
+  if (currentStatus === "ok" || currentStatus === "error") return resolvedAkmCommand
+
+  const bunGlobalAkm = getBunGlobalAkmCommand()
+  if (bunGlobalAkm && getCommandStatus(bunGlobalAkm) === "ok") {
+    resolvedAkmCommand = bunGlobalAkm
+    return resolvedAkmCommand
+  }
+
+  if (getCommandStatus("akm") === "ok") {
+    resolvedAkmCommand = "akm"
+    return resolvedAkmCommand
+  }
+
+  return {
+    ok: false,
+    error: "The 'akm' CLI could not be resolved after attempting to install 'akm-cli@latest' with Bun. Install akm from https://github.com/itlackey/agentikit.",
   }
 }
 
@@ -454,8 +478,11 @@ type PluginClient = {
   }
 }
 
-export const AgentikitPlugin: Plugin = async ({ client }) => ({
-  tool: {
+export const AgentikitPlugin: Plugin = async ({ client }) => {
+  await ensureLatestAkmInstalled(client as unknown as LogCapableClient)
+
+  return {
+    tool: {
     akm_search: tool({
       description: "Search your local stash or the akm registry for scripts, skills, commands, agents, and knowledge. Use source='registry' or akm_registry_search for installable community kits.",
       args: {
@@ -862,5 +889,6 @@ export const AgentikitPlugin: Plugin = async ({ client }) => ({
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_upgrade" })
       },
     }),
-  },
-})
+    },
+  }
+}

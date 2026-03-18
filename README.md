@@ -89,7 +89,7 @@ Config is stored at `~/.config/akm/config.json` (XDG standard). Use `akm config 
 
 ## Prerequisites
 
-For OpenCode, the plugin prefers an existing `akm` on PATH. If `akm` is missing and `bun` is available, it will attempt `bun install -g akm-cli` automatically. It does not run the standalone shell installers automatically. If Bun is not available, install `akm` from the [agentikit repo](https://github.com/itlackey/agentikit).
+For OpenCode, the plugin installs `akm-cli@latest` with `bun install -g` when the plugin loads. It then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
 
 ```sh
 # macOS / Linux
@@ -98,7 +98,7 @@ curl -fsSL https://raw.githubusercontent.com/itlackey/agentikit/main/install.sh 
 irm https://raw.githubusercontent.com/itlackey/agentikit/main/install.ps1 -OutFile install.ps1; ./install.ps1
 
 # Or via Bun
-bun install -g akm-cli
+bun install -g akm-cli@latest
 ```
 
 ## Docs

@@ -75,7 +75,7 @@ At least one of `ref` or `query` is required.
 
 ## Prerequisites
 
-The plugin prefers an existing `akm` on PATH. If `akm` is missing and `bun` is available, it will attempt `bun install -g akm-cli` automatically. It does not run the standalone shell installers automatically. If Bun is not available, install `akm` from the [agentikit repo](https://github.com/itlackey/agentikit).
+When the plugin loads, it runs `bun install -g akm-cli@latest` so the latest published CLI is available. It then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
 
 ```sh
 # macOS / Linux
@@ -84,7 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/itlackey/agentikit/main/install.sh 
 irm https://raw.githubusercontent.com/itlackey/agentikit/main/install.ps1 -OutFile install.ps1; ./install.ps1
 
 # Or via Bun
-bun install -g akm-cli
+bun install -g akm-cli@latest
 ```
 
 ## Stash model
