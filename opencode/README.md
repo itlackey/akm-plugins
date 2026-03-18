@@ -75,7 +75,7 @@ At least one of `ref` or `query` is required.
 
 ## Prerequisites
 
-When the plugin loads, it runs `bun install -g akm-cli@latest` so the latest published CLI is available. It then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
+When the plugin loads, it runs `bun install -g akm-cli@latest` so it always picks up the latest published npm package. It then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
 
 ```sh
 # macOS / Linux

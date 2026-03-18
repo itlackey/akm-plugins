@@ -3,6 +3,7 @@ import { execFileSync, execSync } from "node:child_process"
 import path from "node:path"
 
 let resolvedAkmCommand = "akm"
+const autoInstallPackageRef = "akm-cli@latest"
 
 type LogLevel = "debug" | "info" | "warn" | "error"
 
@@ -107,7 +108,7 @@ async function ensureLatestAkmInstalled(client: LogCapableClient): Promise<void>
   }
 
   try {
-    execFileSync("bun", ["install", "-g", "akm-cli@latest"], {
+    execFileSync("bun", ["install", "-g", autoInstallPackageRef], {
       encoding: "utf8",
       timeout: 120_000,
       stdio: "pipe",
@@ -120,17 +121,17 @@ async function ensureLatestAkmInstalled(client: LogCapableClient): Promise<void>
       resolvedAkmCommand = "akm"
     }
 
-    await writePluginLog(client, "info", "AKM CLI install check completed", {
-      subsystem: "akm",
-      installer: "bun",
-      package: "akm-cli@latest",
-      command: resolvedAkmCommand,
-    })
+      await writePluginLog(client, "info", "AKM CLI install check completed", {
+        subsystem: "akm",
+        installer: "bun",
+        package: autoInstallPackageRef,
+        command: resolvedAkmCommand,
+      })
   } catch (error: unknown) {
     await writePluginLog(client, "warn", "AKM auto-install failed", {
       subsystem: "akm",
       installer: "bun",
-      package: "akm-cli@latest",
+      package: autoInstallPackageRef,
       error: formatCliError(error),
     })
   }
@@ -153,7 +154,7 @@ function resolveAkmCommand(): string | CliError {
 
   return {
     ok: false,
-    error: "The 'akm' CLI could not be resolved after attempting to install 'akm-cli@latest' with Bun. Install akm from https://github.com/itlackey/agentikit.",
+    error: `The 'akm' CLI could not be resolved after attempting to install '${autoInstallPackageRef}' with Bun. Install akm from https://github.com/itlackey/agentikit.`,
   }
 }
 

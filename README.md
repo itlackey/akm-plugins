@@ -89,7 +89,7 @@ Config is stored at `~/.config/akm/config.json` (XDG standard). Use `akm config 
 
 ## Prerequisites
 
-For OpenCode, the plugin installs `akm-cli@latest` with `bun install -g` when the plugin loads. It then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
+For OpenCode, the plugin installs `akm-cli@latest` with `bun install -g` when the plugin loads so it always picks up the latest published npm package. The plugin then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
 
 ```sh
 # macOS / Linux
