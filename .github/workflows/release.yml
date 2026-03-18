@@ -50,22 +50,24 @@ jobs:
       - name: Bump versions
         run: |
           VERSION="${{ inputs.version }}"
+          VERSION="$VERSION" node <<'EOF'
+          const fs = require('fs')
 
-          # Bump opencode package.json
-          cd opencode && npm version "$VERSION" --no-git-tag-version && cd ..
+          const version = process.env.VERSION
+          const updateJsonFile = (file, transform) => {
+            const current = JSON.parse(fs.readFileSync(file, 'utf8'))
+            const next = transform(current)
+            fs.writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`)
+          }
 
-          # Bump claude package.json
-          cd claude && npm version "$VERSION" --no-git-tag-version && cd ..
-
-          # Bump claude plugin.json version
-          cd claude/.claude-plugin
-          node -e "const f='plugin.json'; const p=JSON.parse(require('fs').readFileSync(f,'utf8')); p.version='$VERSION'; require('fs').writeFileSync(f, JSON.stringify(p, null, 2)+'\n')"
-          cd ../..
-
-          # Bump marketplace.json version
-          cd .claude-plugin
-          node -e "const f='marketplace.json'; const p=JSON.parse(require('fs').readFileSync(f,'utf8')); p.plugins[0].version='$VERSION'; require('fs').writeFileSync(f, JSON.stringify(p, null, 2)+'\n')"
-          cd ..
+          updateJsonFile('opencode/package.json', (pkg) => ({ ...pkg, version }))
+          updateJsonFile('claude/package.json', (pkg) => ({ ...pkg, version }))
+          updateJsonFile('claude/.claude-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
+          updateJsonFile('.claude-plugin/marketplace.json', (marketplace) => ({
+            ...marketplace,
+            plugins: marketplace.plugins.map((plugin, index) => index === 0 ? { ...plugin, version } : plugin),
+          }))
+          EOF
 
       - name: Commit and tag
         id: tag
@@ -73,9 +75,21 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add claude/package.json opencode/package.json claude/.claude-plugin/plugin.json .claude-plugin/marketplace.json
-          git commit -m "chore: bump version to ${{ inputs.version }}"
+
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump version to ${{ inputs.version }}"
+            git push
+          fi
+
+          if git rev-parse -q --verify "refs/tags/v${{ inputs.version }}" >/dev/null; then
+            git tag -d "v${{ inputs.version }}"
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ inputs.version }}" >/dev/null; then
+            git push origin ":refs/tags/v${{ inputs.version }}"
+          fi
+
           git tag "v${{ inputs.version }}"
-          git push
           git push origin "v${{ inputs.version }}"
           echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
 
