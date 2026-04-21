@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -34,15 +33,28 @@ function shellQuote(value: string) {
 }
 
 function runHook(args: string[], options?: { input?: string; env?: Record<string, string> }) {
-  return execFileSync("sh", [hookScript, ...args], {
+  let stdin: "ignore" | Blob = "ignore"
+
+  if (options?.input !== undefined) {
+    const inputPath = path.join(makeTempDir(), "stdin.txt")
+    writeFileSync(inputPath, options.input)
+    stdin = Bun.file(inputPath)
+  }
+
+  const result = Bun.spawnSync(["sh", hookScript, ...args], {
     cwd: repoRoot,
-    encoding: "utf8",
-    input: options?.input ?? "",
     env: {
       ...process.env,
       ...options?.env,
     },
+    stdio: [stdin, "pipe", "pipe"],
   })
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || `Hook exited with code ${result.exitCode}`)
+  }
+
+  return result.stdout.toString()
 }
 
 afterEach(() => {
