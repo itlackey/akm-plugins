@@ -14,7 +14,7 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides fifteen tools:
+Provides seventeen tools:
 - `akm_search` — search the stash, the registry, or both
 - `akm_registry_search` — search configured registries for installable kits and optional asset hits
 - `akm_show` — show a stash asset by ref
@@ -22,14 +22,18 @@ Provides fifteen tools:
 - `akm_agent` — dispatch stash `agent:*` resources into OpenCode sessions
 - `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
 - `akm_add` — install kits from npm, GitHub, git URLs, or local directories
-- `akm_list` — list installed registry kits
-- `akm_remove` — remove an installed registry kit
-- `akm_update` — update one or all installed registry kits
+- `akm_list` — list configured AKM sources
+- `akm_remove` — remove a configured AKM source
+- `akm_update` — update one or all managed AKM sources
 - `akm_clone` — clone an asset into the working stash or another destination
+- `akm_remember` — record a memory in the default stash
+- `akm_feedback` — record positive or negative feedback for a stash asset
 - `akm_config` — get, set, unset, list, or inspect akm configuration paths
 - `akm_run` — execute a stash script via the `run` field
-- `akm_sources` — list all resolved stash search paths
+- `akm_sources` — backward-compatible alias that lists configured AKM sources
 - `akm_upgrade` — check for or install akm CLI updates
+
+The OpenCode plugin also hooks `chat.message` and `tool.execute.after` to record user/system feedback events and memory usage in OpenCode app logs when relevant.
 
 
 ### Claude Code

@@ -212,7 +212,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
 }
 
 type CliError = { ok: false; error: string }
-type AssetType = "skill" | "command" | "agent" | "knowledge" | "script"
+type AssetType = "agent" | "command" | "knowledge" | "memory" | "script" | "skill"
 
 type ShowAgentResponse = {
   type: "agent"
@@ -276,7 +276,7 @@ type SearchHit = {
 
 type SearchResponse = {
   hits?: SearchHit[]
-  source?: "local" | "registry" | "both"
+  source?: "local" | "stash" | "registry" | "both"
   stashDir?: string
   timing?: { totalMs?: number; rankMs?: number; embedMs?: number }
   warnings?: string[]
@@ -376,6 +376,59 @@ function extractText(parts: unknown): string {
   return segments.join("\n\n")
 }
 
+function parseToolOutput(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+}
+
+function extractMemoryRefs(toolName: string, args: Record<string, unknown>, value: unknown): string[] {
+  const refs = new Set<string>()
+  const parsed = value && typeof value === "object" ? value as {
+    type?: unknown
+    ref?: unknown
+    name?: unknown
+    hits?: unknown
+  } : undefined
+
+  if (toolName === "akm_remember" && typeof parsed?.ref === "string" && parsed.ref) {
+    refs.add(parsed.ref)
+  }
+
+  if (parsed?.type === "memory") {
+    if (typeof parsed.ref === "string" && parsed.ref) refs.add(parsed.ref)
+    if (typeof args.ref === "string" && args.ref) refs.add(args.ref)
+    if (refs.size === 0 && typeof parsed.name === "string" && parsed.name) refs.add(`memory:${parsed.name}`)
+  }
+
+  if (Array.isArray(parsed?.hits)) {
+    for (const hit of parsed.hits) {
+      if (!hit || typeof hit !== "object") continue
+      if ((hit as { type?: unknown }).type !== "memory") continue
+      const ref = (hit as { ref?: unknown }).ref
+      if (typeof ref === "string" && ref) refs.add(ref)
+    }
+  }
+
+  return [...refs]
+}
+
+function classifyToolFeedback(value: unknown): "positive" | "negative" | undefined {
+  if (!value || typeof value !== "object") return undefined
+  if (isCliError(value)) return "negative"
+  if ("ok" in value && (value as { ok?: unknown }).ok === false) return "negative"
+  if ("error" in value && typeof (value as { error?: unknown }).error === "string") return "negative"
+  if ("ok" in value && (value as { ok?: unknown }).ok === true) return "positive"
+  if ("type" in value || "hits" in value || "assetHits" in value || "sources" in value) return "positive"
+  return undefined
+}
+
+function truncateLogText(value: string, limit = 1_000): string {
+  return value.length > limit ? `${value.slice(0, limit)}…` : value
+}
+
 async function resolveRefInput(
   client: LogCapableClient,
   input: { ref?: string; query?: string },
@@ -391,7 +444,7 @@ async function resolveRefInput(
     return { ok: false, error: "Provide either 'ref' or 'query'." }
   }
 
-  const raw = await runCli(client, ["search", query, "--type", type, "--limit", "1", "--detail", "normal", "--source", "local"], meta)
+  const raw = await runCli(client, ["search", query, "--type", type, "--limit", "1", "--detail", "normal", "--source", "stash"], meta)
   const parsed = parseCliJson<SearchResponse>(raw)
   if (isCliError(parsed)) return parsed
 
@@ -440,20 +493,24 @@ function renderCommandTemplate(template: string, rawArguments: string): string {
     .replace(/\$(\d+)/g, (_m, index: string) => args[Number(index) - 1] ?? "")
 }
 
+function normalizeSearchSource(source: "local" | "stash" | "registry" | "both"): "stash" | "registry" | "both" {
+  return source === "local" ? "stash" : source
+}
+
 function createSearchArgs(input: {
   query: string
   type?: AssetType | "any"
   limit?: number
-  source?: "local" | "registry" | "both"
-  defaultSource?: "local" | "registry" | "both"
+  source?: "local" | "stash" | "registry" | "both"
+  defaultSource?: "local" | "stash" | "registry" | "both"
 }): string[] {
   const args = ["search", input.query]
   if (input.type) args.push("--type", input.type)
   if (input.limit) args.push("--limit", String(input.limit))
   if (input.source) {
-    args.push("--source", input.source)
+    args.push("--source", normalizeSearchSource(input.source))
   } else if (input.defaultSource) {
-    args.push("--source", input.defaultSource)
+    args.push("--source", normalizeSearchSource(input.defaultSource))
   }
   args.push("--detail", "normal")
   return args
@@ -483,20 +540,63 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
   await ensureLatestAkmInstalled(client as unknown as LogCapableClient)
 
   return {
+    "chat.message": async (input, output) => {
+      const text = extractText(output.parts).trim()
+      if (!text) return
+      await writePluginLog(client as unknown as LogCapableClient, "info", "AKM user feedback recorded", {
+        subsystem: "feedback",
+        actor: "user",
+        sessionID: input.sessionID,
+        messageID: input.messageID,
+        agent: input.agent,
+        text: truncateLogText(text),
+      })
+    },
+    "tool.execute.after": async (input, output) => {
+      if (!input.tool.startsWith("akm_")) return
+
+      const parsed = parseToolOutput(output.output)
+      if (!parsed) return
+
+      const feedback = classifyToolFeedback(parsed)
+      if (feedback) {
+        await writePluginLog(client as unknown as LogCapableClient, feedback === "negative" ? "warn" : "info", "AKM system feedback recorded", {
+          subsystem: "feedback",
+          actor: "system",
+          feedback,
+          toolName: input.tool,
+          sessionID: input.sessionID,
+          callID: input.callID,
+          title: output.title,
+          error: typeof (parsed as { error?: unknown }).error === "string" ? (parsed as { error?: string }).error : undefined,
+        })
+      }
+
+      const memoryRefs = extractMemoryRefs(input.tool, input.args as Record<string, unknown>, parsed)
+      if (memoryRefs.length > 0) {
+        await writePluginLog(client as unknown as LogCapableClient, "info", "AKM memory usage recorded", {
+          subsystem: "memory",
+          toolName: input.tool,
+          sessionID: input.sessionID,
+          callID: input.callID,
+          refs: memoryRefs,
+        })
+      }
+    },
     tool: {
     akm_search: tool({
-      description: "Search your local stash or the akm registry for scripts, skills, commands, agents, and knowledge. Use source='registry' or akm_registry_search for installable community kits.",
+      description: "Search your stash or the akm registry for scripts, skills, commands, agents, knowledge, and memories. Use source='registry' or akm_registry_search for installable community kits.",
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
         type: tool.schema
-          .enum(["skill", "command", "agent", "knowledge", "script", "any"])
+          .enum(["agent", "command", "knowledge", "memory", "script", "skill", "any"])
           .optional()
           .describe("Optional type filter. Defaults to 'any'."),
         limit: tool.schema.number().optional().describe("Maximum number of hits to return. Defaults to 20."),
         source: tool.schema
-          .enum(["local", "registry", "both"])
+          .enum(["local", "stash", "registry", "both"])
           .optional()
-          .describe("Search source. 'local' searches stash dirs, 'registry' searches npm/GitHub, 'both' searches all. Defaults to 'local'."),
+          .describe("Search source. 'stash' searches local stash directories, 'registry' searches registries, and 'both' searches all sources. 'local' remains a backward-compatible alias for 'stash'."),
       },
       async execute({ query, type, limit, source }) {
         return runCli(client as unknown as LogCapableClient, createSearchArgs({ query, type, limit, source }), { toolName: "akm_search" })
@@ -507,7 +607,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
       args: {
         query: tool.schema.string().describe("Search query for installable registry kits."),
         type: tool.schema
-          .enum(["skill", "command", "agent", "knowledge", "script", "any"])
+          .enum(["agent", "command", "knowledge", "memory", "script", "skill", "any"])
           .optional()
           .describe("Optional asset type filter. Defaults to 'any'."),
         limit: tool.schema.number().optional().describe("Maximum number of registry hits to return. Defaults to 20."),
@@ -582,25 +682,25 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
       },
     }),
     akm_list: tool({
-      description: "List all kits installed from the registry.",
+      description: "List all configured AKM sources, including local directories, managed kits, and remote providers.",
       args: {},
       async execute() {
         return runCli(client as unknown as LogCapableClient, ["list"], { toolName: "akm_list" })
       },
     }),
     akm_remove: tool({
-      description: "Remove an installed registry kit by id or ref and reindex the stash.",
+      description: "Remove a configured AKM source by id, ref, path, URL, or name and reindex the stash.",
       args: {
-        package_ref: tool.schema.string().describe("Installed kit id or ref, such as npm:@scope/kit or owner/repo."),
+        package_ref: tool.schema.string().describe("Source id, ref, path, URL, or name, such as npm:@scope/kit, owner/repo, or ~/.claude/skills."),
       },
       async execute({ package_ref }) {
         return runCli(client as unknown as LogCapableClient, ["remove", package_ref], { toolName: "akm_remove" })
       },
     }),
     akm_update: tool({
-      description: "Update one installed kit or all installed kits to the latest available version.",
+      description: "Update one managed AKM source or all managed sources to the latest available version.",
       args: {
-        package_ref: tool.schema.string().optional().describe("Installed kit id or ref to update."),
+        package_ref: tool.schema.string().optional().describe("Managed source id or ref to update."),
         all: tool.schema.boolean().optional().describe("Update all installed kits."),
         force: tool.schema.boolean().optional().describe("Force a fresh download even if the version is unchanged."),
       },
@@ -632,6 +732,33 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
         if (dest) args.push("--dest", dest)
         if (force) args.push("--force")
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_clone" })
+      },
+    }),
+    akm_remember: tool({
+      description: "Record a memory in the default AKM stash so it can be searched and shown later.",
+      args: {
+        content: tool.schema.string().describe("Memory content to store."),
+        name: tool.schema.string().optional().describe("Optional memory name."),
+        force: tool.schema.boolean().optional().describe("Overwrite an existing memory with the same name."),
+      },
+      async execute({ content, name, force }) {
+        const args = ["remember", content]
+        if (name) args.push("--name", name)
+        if (force) args.push("--force")
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_remember" })
+      },
+    }),
+    akm_feedback: tool({
+      description: "Record positive or negative feedback for a stash asset so AKM can improve future ranking.",
+      args: {
+        ref: tool.schema.string().describe("Asset ref to record feedback for."),
+        sentiment: tool.schema.enum(["positive", "negative"]).describe("Whether the feedback is positive or negative."),
+        note: tool.schema.string().optional().describe("Optional note to attach to the feedback."),
+      },
+      async execute({ ref, sentiment, note }) {
+        const args = ["feedback", ref, sentiment === "positive" ? "--positive" : "--negative"]
+        if (note) args.push("--note", note)
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_feedback" })
       },
     }),
     akm_agent: tool({
@@ -871,10 +998,10 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
       },
     }),
     akm_sources: tool({
-      description: "List all resolved stash search paths and their status.",
+      description: "List all configured AKM sources. Kept as a backward-compatible alias for the older sources command.",
       args: {},
       async execute() {
-        return runCli(client as unknown as LogCapableClient, ["sources"], { toolName: "akm_sources" })
+        return runCli(client as unknown as LogCapableClient, ["list"], { toolName: "akm_sources" })
       },
     }),
     akm_upgrade: tool({

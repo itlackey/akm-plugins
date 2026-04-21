@@ -23,14 +23,18 @@ Add to your OpenCode config (`opencode.json`):
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
 | `akm_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
 | `akm_add` | Install kits from npm, GitHub, git URLs, or local directories |
-| `akm_list` | List installed registry kits |
-| `akm_remove` | Remove an installed registry kit and reindex |
-| `akm_update` | Update one installed kit or all installed kits |
+| `akm_list` | List configured AKM sources |
+| `akm_remove` | Remove a configured AKM source and reindex |
+| `akm_update` | Update one managed source or all managed sources |
 | `akm_clone` | Clone an asset into the working stash or a custom destination for editing |
+| `akm_remember` | Record a memory in the default stash |
+| `akm_feedback` | Record positive or negative feedback for a stash asset |
 | `akm_config` | Get, set, unset, list, or inspect akm configuration (including `config path --all`) |
 | `akm_run` | Execute a stash script using its `run` field |
-| `akm_sources` | List all resolved stash search paths |
+| `akm_sources` | Backward-compatible alias that lists configured AKM sources |
 | `akm_upgrade` | Check for or install akm CLI updates |
+
+The plugin also uses the OpenCode `chat.message` and `tool.execute.after` hooks to record user/system feedback activity and memory usage in OpenCode app logs when relevant.
 
 ### Registry discovery
 
