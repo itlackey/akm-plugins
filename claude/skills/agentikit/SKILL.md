@@ -59,14 +59,16 @@ Use `--full` to force a full reindex instead of incremental. Run this after addi
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type skill|command|agent|knowledge|memory|script|any] [--limit N] [--source stash|registry|both]
+akm search [query] [--type skill|command|agent|knowledge|memory|script|any] [--limit N] [--source stash|local|registry|both]
 ```
+
+Square brackets denote optional arguments; pipe-separated values denote allowed choices for a single flag.
 
 The response includes `hits` (ranked results), plus diagnostic fields: `timing` (totalMs, rankMs, embedMs), `warnings` (string array of non-fatal issues), and `tip` (contextual usage hint).
 
 - Local and installed stash hits include `ref`, which you pass to `akm show`.
 - Registry hits include `id`, `installRef`, `action` (contains install guidance), and `curated` fields.
-- Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once.
+- Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once. Note: `local` remains a backward-compatible alias for `stash`.
 
 ### Show an asset
 

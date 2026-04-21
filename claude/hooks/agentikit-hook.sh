@@ -20,10 +20,18 @@ sanitize() {
   tr '\t\r\n' '   ' | sed 's/  */ /g; s/^ //; s/ $//'
 }
 
+first_line() {
+  tr -d '\r' | head -n 1
+}
+
 append_log() {
   file="$1"
   shift
-  printf '%s\t%s\n' "$(timestamp)" "$*" >> "$file"
+  printf '%s' "$(timestamp)" >> "$file"
+  for field in "$@"; do
+    printf '\t%s' "$field" >> "$file"
+  done
+  printf '\n' >> "$file"
 }
 
 find_writable_path_dir() {
@@ -92,10 +100,10 @@ ensure_akm() {
 
   resolved="$(command -v akm 2>/dev/null || true)"
   if [ -n "$resolved" ]; then
-    version="$("$resolved" --version 2>/dev/null | head -n 1 | sanitize || true)"
-    append_log "$SESSION_LOG" "akm_ready	$installer	$resolved	${version:-unknown}"
+    version="$("$resolved" --version 2>/dev/null | first_line || true)"
+    append_log "$SESSION_LOG" "akm_ready" "$installer" "$resolved" "${version:-unknown}"
   else
-    append_log "$SESSION_LOG" "akm_missing	$installer	$PACKAGE_REF"
+    append_log "$SESSION_LOG" "akm_missing" "$installer" "$PACKAGE_REF"
   fi
 }
 
@@ -194,17 +202,17 @@ for key in ("tool", "tool_name", "toolName"):
 command = get_text(data.get("input")) or get_text(data.get("tool_input")) or get_text(data.get("command")) or ""
 output = get_text(data.get("output")) or get_text(data.get("tool_output")) or get_text(data.get("response")) or ""
 combined = "\n".join(part for part in (command, output) if part)
-refs = sorted(set(re.findall(r"memory:[A-Za-z0-9._/-]+", combined)))
+refs = set(re.findall(r"memory:[A-Za-z0-9._/-]+", combined))
 
 if not refs and "akm remember" in command:
     name_match = re.search(r"--name\s+([A-Za-z0-9._/-]+)", command)
     if name_match:
-        refs.append(f"memory:{name_match.group(1)}")
+        refs.add(f"memory:{name_match.group(1)}")
 
 print(tool)
 print(" ".join(command.split()))
 print(mode)
-print(",".join(refs))
+print(",".join(sorted(refs)))
 ' "$MODE"
 }
 
@@ -213,10 +221,10 @@ record_user_feedback() {
   text="$(printf '%s' "$raw_input" | extract_user_text | sanitize)"
   [ -n "$text" ] || exit 0
 
-  append_log "$FEEDBACK_LOG" "user	prompt	$text"
+  append_log "$FEEDBACK_LOG" "user" "prompt" "$text"
 
   if printf '%s' "$text" | grep -Eiq '\b(remember|memory|memories)\b'; then
-    append_log "$MEMORY_LOG" "user	intent	$text"
+    append_log "$MEMORY_LOG" "user" "intent" "$text"
   fi
 }
 
@@ -230,7 +238,7 @@ record_post_tool() {
 
   case "$command_text" in
     *akm*|*/akm*)
-      append_log "$FEEDBACK_LOG" "system	$status_text	${tool_name:-Bash}	$command_text"
+      append_log "$FEEDBACK_LOG" "system" "$status_text" "${tool_name:-Bash}" "$command_text"
       ;;
   esac
 
@@ -239,7 +247,7 @@ record_post_tool() {
     IFS=","
     for ref in $refs_csv; do
       [ -n "$ref" ] || continue
-      append_log "$MEMORY_LOG" "system	${tool_name:-Bash}	$ref	$command_text"
+      append_log "$MEMORY_LOG" "system" "${tool_name:-Bash}" "$ref" "$command_text"
     done
     IFS="${OLD_IFS}"
   fi

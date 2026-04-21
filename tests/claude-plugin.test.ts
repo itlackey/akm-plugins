@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync
 import { tmpdir } from "node:os"
 import path from "node:path"
 
-const repoRoot = "/home/runner/work/akm-plugins/akm-plugins"
+const repoRoot = path.resolve(import.meta.dir, "..")
 const hookScript = path.join(repoRoot, "claude/hooks/agentikit-hook.sh")
 const pluginJsonPath = path.join(repoRoot, "claude/.claude-plugin/plugin.json")
 const claudePackageJsonPath = path.join(repoRoot, "claude/package.json")
@@ -23,6 +23,14 @@ function readLogLines(filePath: string) {
     .trim()
     .split("\n")
     .filter(Boolean)
+}
+
+function getFirstLogEntry(stateDir: string, logName: string) {
+  return readLogLines(path.join(stateDir, `agentikit-claude/${logName}`))[0]
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", `'\\''`)}'`
 }
 
 function runHook(args: string[], options?: { input?: string; env?: Record<string, string> }) {
@@ -67,6 +75,9 @@ describe("Claude hook scripts", () => {
     const globalBinDir = path.join(tempDir, "global-bin")
     const stateDir = path.join(tempDir, "state")
     const npmLogPath = path.join(tempDir, "npm.log")
+    const quotedNpmLogPath = shellQuote(npmLogPath)
+    const quotedGlobalBinDir = shellQuote(globalBinDir)
+    const quotedTempDir = shellQuote(tempDir)
 
     mkdirSync(binDir, { recursive: true })
     mkdirSync(globalBinDir, { recursive: true })
@@ -77,18 +88,18 @@ describe("Claude hook scripts", () => {
       fakeNpmPath,
       `#!/usr/bin/env sh
 set -eu
-if [ "$1" = "install" ] && [ "${"$"}{2:-}" = "-g" ]; then
-    printf '%s\\n' "$*" >> "${npmLogPath}"
-    mkdir -p "${globalBinDir}"
-    cat > "${globalBinDir}/akm" <<'EOF'
+if [ "$1" = "install" ] && [ "\${2:-}" = "-g" ]; then
+    printf '%s %s %s\\n' "$1" "\${2:-}" "\${3:-}" >> ${quotedNpmLogPath}
+    mkdir -p ${quotedGlobalBinDir}
+    cat > ${quotedGlobalBinDir}/akm <<'EOF'
 #!/usr/bin/env sh
 echo "akm 9.9.9"
 EOF
-    chmod +x "${globalBinDir}/akm"
-elif [ "$1" = "bin" ] && [ "${"$"}{2:-}" = "-g" ]; then
-    printf '%s\\n' "${globalBinDir}"
-elif [ "$1" = "prefix" ] && [ "${"$"}{2:-}" = "-g" ]; then
-    printf '%s\\n' "${tempDir}"
+    chmod +x ${quotedGlobalBinDir}/akm
+elif [ "$1" = "bin" ] && [ "\${2:-}" = "-g" ]; then
+    printf '%s\\n' ${quotedGlobalBinDir}
+elif [ "$1" = "prefix" ] && [ "\${2:-}" = "-g" ]; then
+    printf '%s\\n' ${quotedTempDir}
 elif [ "$1" = "--version" ]; then
     printf '10.9.0\\n'
 else
@@ -108,7 +119,7 @@ fi
 
     expect(readFileSync(npmLogPath, "utf8")).toContain("install -g akm-cli@latest")
     expect(existsSync(path.join(binDir, "akm"))).toBe(true)
-    expect(readLogLines(path.join(stateDir, "agentikit-claude/session.log"))[0]).toContain("akm_ready")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready")
   })
 
   it("records user feedback and memory intent from prompt submissions", () => {
@@ -127,8 +138,8 @@ fi
       },
     })
 
-    expect(readLogLines(path.join(stateDir, "agentikit-claude/feedback.log"))[0]).toContain("user\tprompt\tPlease remember that the release checklist worked great with akm.")
-    expect(readLogLines(path.join(stateDir, "agentikit-claude/memory.log"))[0]).toContain("user\tintent\tPlease remember that the release checklist worked great with akm.")
+    expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("user\tprompt\tPlease remember that the release checklist worked great with akm.")
+    expect(getFirstLogEntry(stateDir, "memory.log")).toContain("user\tintent\tPlease remember that the release checklist worked great with akm.")
   })
 
   it("records successful system feedback and memory refs for akm Bash calls", () => {
@@ -149,8 +160,8 @@ fi
       },
     })
 
-    expect(readLogLines(path.join(stateDir, "agentikit-claude/feedback.log"))[0]).toContain("system\tsuccess\tBash\takm show memory:release-retro --format json")
-    expect(readLogLines(path.join(stateDir, "agentikit-claude/memory.log"))[0]).toContain("system\tBash\tmemory:release-retro\takm show memory:release-retro --format json")
+    expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tsuccess\tBash\takm show memory:release-retro --format json")
+    expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemory:release-retro\takm show memory:release-retro --format json")
   })
 
   it("records failed system feedback for akm Bash failures", () => {
@@ -171,6 +182,27 @@ fi
       },
     })
 
-    expect(readLogLines(path.join(stateDir, "agentikit-claude/feedback.log"))[0]).toContain("system\tfailure\tBash\takm feedback skill:release --negative --note stale")
+    expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skill:release --negative --note stale")
+  })
+
+  it("derives a memory ref from akm remember --name when output omits it", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["post-tool", "success"], {
+      input: JSON.stringify({
+        tool: "Bash",
+        input: { command: "akm remember --name release-retro" },
+        output: "{\"ok\":true}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemory:release-retro\takm remember --name release-retro")
   })
 })
