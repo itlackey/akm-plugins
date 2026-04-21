@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test"
-import { execFileSync } from "node:child_process"
+import { afterAll, describe, expect, it } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -34,18 +33,36 @@ function shellQuote(value: string) {
 }
 
 function runHook(args: string[], options?: { input?: string; env?: Record<string, string> }) {
-  return execFileSync("sh", [hookScript, ...args], {
+  let inputPath = ""
+
+  if (options?.input !== undefined) {
+    inputPath = path.join(makeTempDir(), "stdin.txt")
+    writeFileSync(inputPath, options.input)
+  }
+
+  const command = [
+    "sh",
+    shellQuote(hookScript),
+    ...args.map(shellQuote),
+  ].join(" ") + (inputPath ? ` < ${shellQuote(inputPath)}` : "")
+
+  const result = Bun.spawnSync(["sh", "-lc", command], {
     cwd: repoRoot,
-    encoding: "utf8",
-    input: options?.input ?? "",
     env: {
       ...process.env,
       ...options?.env,
     },
+    stdio: ["ignore", "pipe", "pipe"],
   })
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || `Hook exited with code ${result.exitCode}`)
+  }
+
+  return result.stdout.toString()
 }
 
-afterEach(() => {
+afterAll(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()
     if (dir) rmSync(dir, { recursive: true, force: true })
