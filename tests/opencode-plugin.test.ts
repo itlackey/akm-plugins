@@ -57,6 +57,8 @@ describe("akm-opencode plugin", () => {
     it("returns hooks object when invoked", async () => {
       const hooks = await AgentikitPlugin(createPluginInput())
       expect(hooks).toBeDefined()
+      expect(hooks["chat.message"]).toBeDefined()
+      expect(hooks["tool.execute.after"]).toBeDefined()
       expect(hooks.tool).toBeDefined()
     })
 
@@ -74,12 +76,14 @@ describe("akm-opencode plugin", () => {
       expect(toolNames).toContain("akm_remove")
       expect(toolNames).toContain("akm_update")
       expect(toolNames).toContain("akm_clone")
+      expect(toolNames).toContain("akm_remember")
+      expect(toolNames).toContain("akm_feedback")
       expect(toolNames).toContain("akm_config")
       expect(toolNames).toContain("akm_run")
       expect(toolNames).toContain("akm_sources")
       expect(toolNames).toContain("akm_upgrade")
       expect(toolNames).not.toContain("akm_submit")
-      expect(toolNames).toHaveLength(15)
+      expect(toolNames).toHaveLength(17)
     })
   })
 
@@ -176,6 +180,22 @@ describe("akm-opencode plugin", () => {
       expect(clone.args.name).toBeDefined()
       expect(clone.args.dest).toBeDefined()
       expect(clone.args.force).toBeDefined()
+    })
+
+    it("akm_remember has required args schema", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      const remember = hooks.tool!.akm_remember
+      expect(remember.args.content).toBeDefined()
+      expect(remember.args.name).toBeDefined()
+      expect(remember.args.force).toBeDefined()
+    })
+
+    it("akm_feedback has required args schema", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      const feedback = hooks.tool!.akm_feedback
+      expect(feedback.args.ref).toBeDefined()
+      expect(feedback.args.sentiment).toBeDefined()
+      expect(feedback.args.note).toBeDefined()
     })
 
     it("akm_cmd has required args schema", async () => {
@@ -411,6 +431,32 @@ describe("akm-opencode plugin", () => {
       )
     })
 
+    it("akm_remember records a memory with optional flags", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_remember.execute(
+        { content: "Deployment needs VPN", name: "ops/vpn", force: true } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["remember", "Deployment needs VPN", "--name", "ops/vpn", "--force", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_feedback records positive feedback with a note", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_feedback.execute(
+        { ref: "skill:code-review", sentiment: "positive", note: "Worked perfectly" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["feedback", "skill:code-review", "--positive", "--note", "Worked perfectly", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
     it("akm_search passes source filter", async () => {
       const hooks = await AgentikitPlugin(createPluginInput())
       await hooks.tool!.akm_search.execute(
@@ -433,6 +479,19 @@ describe("akm-opencode plugin", () => {
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
         ["search", "deploy", "--type", "script", "--detail", "normal", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_search supports memory type and stash source filters", async () => {
+      const hooks = await AgentikitPlugin(createPluginInput())
+      await hooks.tool!.akm_search.execute(
+        { query: "retro", type: "memory", source: "stash" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["search", "retro", "--type", "memory", "--source", "stash", "--detail", "normal", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -533,6 +592,91 @@ describe("akm-opencode plugin", () => {
       })
     })
 
+    it("records user feedback through the chat.message hook", async () => {
+      const client = createMockClient()
+      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+
+      await hooks["chat.message"]!(
+        {
+          sessionID: "parent-session-1",
+          messageID: "message-1",
+          agent: "build",
+        },
+        {
+          message: {} as any,
+          parts: [{ type: "text", text: "Please remember this worked well for the release." }] as any,
+        },
+      )
+
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: undefined,
+        body: {
+          service: "akm-opencode",
+          level: "info",
+          message: "AKM user feedback recorded",
+          extra: expect.objectContaining({
+            subsystem: "feedback",
+            actor: "user",
+            sessionID: "parent-session-1",
+            messageID: "message-1",
+            agent: "build",
+            text: "Please remember this worked well for the release.",
+          }),
+        },
+      })
+    })
+
+    it("records system feedback and memory usage through the tool.execute.after hook", async () => {
+      const client = createMockClient()
+      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+
+      await hooks["tool.execute.after"]!(
+        {
+          tool: "akm_show",
+          sessionID: "parent-session-1",
+          callID: "call-1",
+          args: { ref: "memory:release-retro" },
+        },
+        {
+          title: "show memory",
+          output: JSON.stringify({ type: "memory", ref: "memory:release-retro", content: "Remember the rollback steps." }),
+          metadata: {},
+        },
+      )
+
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: undefined,
+        body: {
+          service: "akm-opencode",
+          level: "info",
+          message: "AKM system feedback recorded",
+          extra: expect.objectContaining({
+            subsystem: "feedback",
+            actor: "system",
+            feedback: "positive",
+            toolName: "akm_show",
+            sessionID: "parent-session-1",
+            callID: "call-1",
+          }),
+        },
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: undefined,
+        body: {
+          service: "akm-opencode",
+          level: "info",
+          message: "AKM memory usage recorded",
+          extra: expect.objectContaining({
+            subsystem: "memory",
+            toolName: "akm_show",
+            sessionID: "parent-session-1",
+            callID: "call-1",
+            refs: ["memory:release-retro"],
+          }),
+        },
+      })
+    })
+
     it("akm_agent creates child session and prompts with stash metadata", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (args[0] === "show") {
@@ -624,7 +768,7 @@ describe("akm-opencode plugin", () => {
       expect(parsed.ref).toBe("agent:coach.md")
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["search", "coach", "--type", "agent", "--limit", "1", "--detail", "normal", "--source", "local", "--format", "json"],
+        ["search", "coach", "--type", "agent", "--limit", "1", "--detail", "normal", "--source", "stash", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -1129,7 +1273,7 @@ describe("akm-opencode plugin", () => {
       expect(parsed.output).toBe("build complete")
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["search", "build", "--type", "script", "--limit", "1", "--detail", "normal", "--source", "local", "--format", "json"],
+        ["search", "build", "--type", "script", "--limit", "1", "--detail", "normal", "--source", "stash", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -1298,12 +1442,12 @@ describe("akm-opencode plugin", () => {
       expect(typeof sources.execute).toBe("function")
     })
 
-    it("calls CLI with 'sources' command", async () => {
+    it("calls CLI with 'list' as the backward-compatible sources alias", async () => {
       const hooks = await AgentikitPlugin(createPluginInput())
       await hooks.tool!.akm_sources.execute({} as any, {} as any)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["sources", "--format", "json"],
+        ["list", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -1366,7 +1510,7 @@ describe("akm-opencode plugin", () => {
         }
         if (cmd === "bun" && args[0] === "pm") return "/tmp/.bun/bin\n"
         if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version" && installComplete) return "0.1.0"
-        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "sources" && installComplete) {
+        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "list" && installComplete) {
           return JSON.stringify({ sources: [] })
         }
         return "mock output"
@@ -1383,7 +1527,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "/tmp/.bun/bin/akm",
-        ["sources", "--format", "json"],
+        ["list", "--format", "json"],
         expect.objectContaining({ encoding: "utf8", timeout: 60_000 }),
       )
     })
