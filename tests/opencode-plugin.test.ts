@@ -539,7 +539,7 @@ describe("akm-opencode plugin", () => {
             subsystem: "akm",
             toolName: "akm_search",
             command: "akm",
-            args: ["search", "deploy", "--source", "local", "--detail", "normal", "--format", "json"],
+            args: ["search", "deploy", "--source", "stash", "--detail", "normal", "--format", "json"],
             exitCode: 0,
             stdout: "mock output",
             stderr: "",

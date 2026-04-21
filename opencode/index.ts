@@ -491,6 +491,10 @@ function renderCommandTemplate(template: string, rawArguments: string): string {
     .replace(/\$(\d+)/g, (_m, index: string) => args[Number(index) - 1] ?? "")
 }
 
+function normalizeSearchSource(source: "local" | "stash" | "registry" | "both"): "stash" | "registry" | "both" {
+  return source === "local" ? "stash" : source
+}
+
 function createSearchArgs(input: {
   query: string
   type?: AssetType | "any"
@@ -502,9 +506,9 @@ function createSearchArgs(input: {
   if (input.type) args.push("--type", input.type)
   if (input.limit) args.push("--limit", String(input.limit))
   if (input.source) {
-    args.push("--source", input.source)
+    args.push("--source", normalizeSearchSource(input.source))
   } else if (input.defaultSource) {
-    args.push("--source", input.defaultSource)
+    args.push("--source", normalizeSearchSource(input.defaultSource))
   }
   args.push("--detail", "normal")
   return args
