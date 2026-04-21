@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "bun:test"
+import { afterEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -57,7 +57,7 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
   return result.stdout.toString()
 }
 
-afterAll(() => {
+afterEach(() => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()
     if (dir) rmSync(dir, { recursive: true, force: true })
