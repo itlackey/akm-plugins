@@ -212,7 +212,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
 }
 
 type CliError = { ok: false; error: string }
-type AssetType = "skill" | "command" | "agent" | "knowledge" | "memory" | "script"
+type AssetType = "agent" | "command" | "knowledge" | "memory" | "script" | "skill"
 
 type ShowAgentResponse = {
   type: "agent"
@@ -376,7 +376,7 @@ function extractText(parts: unknown): string {
   return segments.join("\n\n")
 }
 
-function parseHookJson(raw: string): unknown {
+function parseToolOutput(raw: string): unknown {
   try {
     return JSON.parse(raw)
   } catch {
@@ -384,7 +384,7 @@ function parseHookJson(raw: string): unknown {
   }
 }
 
-function getHookMemoryRefs(toolName: string, args: Record<string, unknown>, value: unknown): string[] {
+function extractMemoryRefs(toolName: string, args: Record<string, unknown>, value: unknown): string[] {
   const refs = new Set<string>()
   const parsed = value && typeof value === "object" ? value as {
     type?: unknown
@@ -415,7 +415,7 @@ function getHookMemoryRefs(toolName: string, args: Record<string, unknown>, valu
   return [...refs]
 }
 
-function classifyHookFeedback(value: unknown): "positive" | "negative" | undefined {
+function classifyToolFeedback(value: unknown): "positive" | "negative" | undefined {
   if (!value || typeof value !== "object") return undefined
   if (isCliError(value)) return "negative"
   if ("ok" in value && (value as { ok?: unknown }).ok === false) return "negative"
@@ -549,10 +549,10 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
     "tool.execute.after": async (input, output) => {
       if (!input.tool.startsWith("akm_")) return
 
-      const parsed = parseHookJson(output.output)
+      const parsed = parseToolOutput(output.output)
       if (!parsed) return
 
-      const feedback = classifyHookFeedback(parsed)
+      const feedback = classifyToolFeedback(parsed)
       if (feedback) {
         await writePluginLog(client as unknown as LogCapableClient, feedback === "negative" ? "warn" : "info", "AKM system feedback recorded", {
           subsystem: "feedback",
@@ -566,7 +566,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
         })
       }
 
-      const memoryRefs = getHookMemoryRefs(input.tool, input.args as Record<string, unknown>, parsed)
+      const memoryRefs = extractMemoryRefs(input.tool, input.args as Record<string, unknown>, parsed)
       if (memoryRefs.length > 0) {
         await writePluginLog(client as unknown as LogCapableClient, "info", "AKM memory usage recorded", {
           subsystem: "memory",
@@ -583,7 +583,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
         type: tool.schema
-          .enum(["skill", "command", "agent", "knowledge", "memory", "script", "any"])
+          .enum(["agent", "command", "knowledge", "memory", "script", "skill", "any"])
           .optional()
           .describe("Optional type filter. Defaults to 'any'."),
         limit: tool.schema.number().optional().describe("Maximum number of hits to return. Defaults to 20."),
@@ -601,7 +601,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
       args: {
         query: tool.schema.string().describe("Search query for installable registry kits."),
         type: tool.schema
-          .enum(["skill", "command", "agent", "knowledge", "memory", "script", "any"])
+          .enum(["agent", "command", "knowledge", "memory", "script", "skill", "any"])
           .optional()
           .describe("Optional asset type filter. Defaults to 'any'."),
         limit: tool.schema.number().optional().describe("Maximum number of registry hits to return. Defaults to 20."),
