@@ -61,6 +61,7 @@ Provides:
 - **Agentikit Skill** — Claude automatically uses the akm CLI when you ask about stash assets
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
+- **Claude hooks** — the plugin refreshes `akm-cli@latest` on session start and records relevant user/system feedback and memory usage events in local state logs
 
 ### All Other Agents
 
@@ -94,6 +95,8 @@ Config is stored at `~/.config/akm/config.json` (XDG standard). Use `akm config 
 ## Prerequisites
 
 For OpenCode, the plugin installs `akm-cli@latest` with `bun install -g` when the plugin loads so it always picks up the latest published npm package. The plugin then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
+
+For Claude Code, the plugin uses a `SessionStart` hook to refresh `akm-cli@latest` with Bun first and npm as a fallback, then records hook-driven feedback and memory activity in local state logs during relevant prompt and Bash events.
 
 ```sh
 # macOS / Linux

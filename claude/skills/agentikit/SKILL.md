@@ -22,6 +22,7 @@ The stash directory contains:
 - **commands/** — markdown template files
 - **agents/** — markdown agent definition files
 - **knowledge/** — markdown knowledge files
+- **memories/** — markdown memory files recorded with `akm remember`
 - **scripts/** — executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
 
 ### Multi-source resolution
@@ -58,14 +59,16 @@ Use `--full` to force a full reindex instead of incremental. Run this after addi
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type skill|command|agent|knowledge|script|any] [--limit N] [--source local|registry|both]
+akm search [query] [--type skill|command|agent|knowledge|memory|script|any] [--limit N] [--source stash|local|registry|both]
 ```
+
+Square brackets denote optional arguments; pipe-separated values denote allowed choices for a single flag.
 
 The response includes `hits` (ranked results), plus diagnostic fields: `timing` (totalMs, rankMs, embedMs), `warnings` (string array of non-fatal issues), and `tip` (contextual usage hint).
 
 - Local and installed stash hits include `ref`, which you pass to `akm show`.
-- Registry hits include `id`, `action` (contains install guidance), and `curated` fields.
-- Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once.
+- Registry hits include `id`, `installRef`, `action` (contains install guidance), and `curated` fields.
+- Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once. Note: `local` remains a backward-compatible alias for `stash`.
 
 ### Show an asset
 
@@ -80,6 +83,7 @@ Returns type-specific payloads:
 - **command** → markdown template + description
 - **agent** → prompt + description, toolPolicy, modelHint
 - **knowledge** → full markdown content (use `toc` or `section "..."` as positional args to navigate, e.g. `akm show knowledge:guide toc`)
+- **memory** → recorded memory content
 - **script** → execution command, setup, cwd, and run
 
 All show responses include these common fields when using `--detail full`:
@@ -118,6 +122,7 @@ akm list                                 # List installed registry kits
 akm remove <id>                          # Remove an installed kit
 akm update [id]                          # Update one installed kit
 akm update --all                         # Update all installed kits
+akm upgrade --check                      # Check whether akm itself has an update
 ```
 
 Installed kits become searchable alongside local stash assets. Use `--source registry` with search to query only remote registries.
@@ -125,8 +130,8 @@ Installed kits become searchable alongside local stash assets. Use `--source reg
 When the user wants to browse community kits:
 
 1. Run `akm search "<query>" --source registry`.
-2. Review the returned `hits` and use the `id` and `action` fields from registry results.
-3. If the user wants to install a result, run `akm add <id>`.
+2. Review the returned `hits` and use the `installRef` and `action` fields from registry results.
+3. If the user wants to install a result, run `akm add <installRef>`.
 4. If the user wants to customize an installed asset, run `akm clone <origin-qualified-ref>` to copy it into the working stash before editing.
 
 ## Dependencies
@@ -142,7 +147,25 @@ When the user wants to browse community kits:
 5. Search the registry when needed: `akm search "deploy" --source registry`
 6. Install kits: `akm add <package>` (optional)
 
-Default output format is JSON. The plugin always passes `--format json --detail normal` for consistent parsing.
+Default output format is JSON. When you need the most compact machine-readable output, prefer `--format json --for-agent`.
+
+## Memories and Feedback
+
+Use memories to persist facts that should be searchable later:
+
+```bash
+akm remember "Deployment needs VPN access"
+akm remember --name release-retro < notes.md
+akm show memory:release-retro
+akm search "VPN" --type memory --source stash
+```
+
+Use feedback to reinforce helpful assets or down-rank stale ones:
+
+```bash
+akm feedback skill:code-review --positive
+akm feedback command:release --negative --note "Outdated for the current repo layout"
+```
 
 ## Dispatching Stash Agents
 

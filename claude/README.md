@@ -24,6 +24,7 @@ claude plugin install agentikit@agentikit-plugins
 ## What's included
 
 - **Agentikit Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
+- **Claude hooks** — SessionStart ensures the latest `akm-cli@latest` is available, and Claude hook events record user/system feedback plus memory-related usage in local state logs
 
 The skill teaches Claude to:
 
@@ -70,13 +71,17 @@ Claude will search with `akm search ... --source registry`, inspect the returned
 
 ## Prerequisites
 
-The `akm` CLI must be installed and available on PATH before using the plugin. Install it from the [agentikit repo](https://github.com/itlackey/agentikit).
+On session start, the plugin tries to install or refresh `akm-cli@latest` with Bun first and npm as a fallback so Claude uses the latest available AKM release when possible. If `akm` is already on PATH, the plugin reuses it. The standalone installers remain available when you want to preinstall manually.
 
 ```sh
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/itlackey/agentikit/main/install.sh | bash
 # PowerShell (Windows)
 irm https://raw.githubusercontent.com/itlackey/agentikit/main/install.ps1 -OutFile install.ps1; ./install.ps1
+
+# Or via Bun / npm
+bun install -g akm-cli@latest
+npm install -g akm-cli@latest
 ```
 
 ## Stash model
@@ -99,6 +104,14 @@ stash/
 ```
 
 Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
+
+## Hooks
+
+The Claude plugin registers these hooks:
+
+- **SessionStart** — installs or refreshes `akm-cli@latest` and records the resolved CLI path in a local session log
+- **UserPromptSubmit** — records user feedback prompts and memory-related intent in local state logs when relevant
+- **PostToolUse** / **PostToolUseFailure** — records system feedback for `akm` Bash invocations and tracks memory refs used by those commands
 
 ## Docs
 

@@ -19,5 +19,57 @@
     "scripts",
     "registry",
     "plugin"
-  ]
+  ],
+  "skills": [
+    "./skills/agentikit"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/agentikit-hook.sh\" ensure-akm",
+            "timeout": 120,
+            "statusMessage": "Ensuring the latest AKM CLI is available..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/agentikit-hook.sh\" user-feedback",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/agentikit-hook.sh\" post-tool success",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/agentikit-hook.sh\" post-tool failure",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
 }
