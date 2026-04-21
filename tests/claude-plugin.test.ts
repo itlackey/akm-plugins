@@ -33,26 +33,21 @@ function shellQuote(value: string) {
 }
 
 function runHook(args: string[], options?: { input?: string; env?: Record<string, string> }) {
-  let inputPath = ""
+  let stdin: "ignore" | Blob = "ignore"
 
   if (options?.input !== undefined) {
-    inputPath = path.join(makeTempDir(), "stdin.txt")
+    const inputPath = path.join(makeTempDir(), "stdin.txt")
     writeFileSync(inputPath, options.input)
+    stdin = Bun.file(inputPath)
   }
 
-  const command = [
-    "sh",
-    shellQuote(hookScript),
-    ...args.map(shellQuote),
-  ].join(" ") + (inputPath ? ` < ${shellQuote(inputPath)}` : "")
-
-  const result = Bun.spawnSync(["sh", "-lc", command], {
+  const result = Bun.spawnSync(["sh", hookScript, ...args], {
     cwd: repoRoot,
     env: {
       ...process.env,
       ...options?.env,
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [stdin, "pipe", "pipe"],
   })
 
   if (result.exitCode !== 0) {
