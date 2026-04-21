@@ -399,8 +399,8 @@ function extractMemoryRefs(toolName: string, args: Record<string, unknown>, valu
 
   if (parsed?.type === "memory") {
     if (typeof parsed.ref === "string" && parsed.ref) refs.add(parsed.ref)
-    else if (typeof args.ref === "string" && args.ref) refs.add(args.ref)
-    else if (typeof parsed.name === "string" && parsed.name) refs.add(`memory:${parsed.name}`)
+    if (typeof args.ref === "string" && args.ref) refs.add(args.ref)
+    if (refs.size === 0 && typeof parsed.name === "string" && parsed.name) refs.add(`memory:${parsed.name}`)
   }
 
   if (Array.isArray(parsed?.hits)) {
@@ -420,7 +420,9 @@ function classifyToolFeedback(value: unknown): "positive" | "negative" | undefin
   if (isCliError(value)) return "negative"
   if ("ok" in value && (value as { ok?: unknown }).ok === false) return "negative"
   if ("error" in value && typeof (value as { error?: unknown }).error === "string") return "negative"
-  return "positive"
+  if ("ok" in value && (value as { ok?: unknown }).ok === true) return "positive"
+  if ("type" in value || "hits" in value || "assetHits" in value || "sources" in value) return "positive"
+  return undefined
 }
 
 function truncateLogText(value: string, limit = 1_000): string {
@@ -594,7 +596,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
         source: tool.schema
           .enum(["local", "stash", "registry", "both"])
           .optional()
-          .describe("Search source. 'stash' is the current AKM name for local stash search; 'local' remains a backward-compatible alias."),
+          .describe("Search source. 'stash' searches local stash directories, 'registry' searches registries, and 'both' searches all sources. 'local' remains a backward-compatible alias for 'stash'."),
       },
       async execute({ query, type, limit, source }) {
         return runCli(client as unknown as LogCapableClient, createSearchArgs({ query, type, limit, source }), { toolName: "akm_search" })
@@ -698,7 +700,7 @@ export const AgentikitPlugin: Plugin = async ({ client }) => {
     akm_update: tool({
       description: "Update one managed AKM source or all managed sources to the latest available version.",
       args: {
-        package_ref: tool.schema.string().optional().describe("Installed kit id or ref to update."),
+        package_ref: tool.schema.string().optional().describe("Managed source id or ref to update."),
         all: tool.schema.boolean().optional().describe("Update all installed kits."),
         force: tool.schema.boolean().optional().describe("Force a fresh download even if the version is unchanged."),
       },
