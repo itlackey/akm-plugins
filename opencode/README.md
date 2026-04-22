@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI. Registers tools that let your AI agent **search**, **show**, and **manage** extension assets from stash directories and registries.
+OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI. Registers tools that let your AI agent **search**, **show**, and **manage** extension assets from stash directories and registries — plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used, and harvest session memories so the stash improves with every session.
 
 ## Installation
 
@@ -33,8 +33,43 @@ Add to your OpenCode config (`opencode.json`):
 | `akm_run` | Execute a stash script using its `run` field |
 | `akm_sources` | Backward-compatible alias that lists configured AKM sources |
 | `akm_upgrade` | Check for or install akm CLI updates |
+| `akm_curate` | Curate the stash for a task or topic and return ranked matches the agent can use |
+| `akm_evolve` | Dispatch the AKM curator agent to review recent session activity and propose stash improvements |
 
-The plugin also uses the OpenCode `chat.message` and `tool.execute.after` hooks to record user/system feedback activity and memory usage in OpenCode app logs when relevant.
+## Compound-engineering hooks
+
+The plugin subscribes to OpenCode lifecycle events so AKM participates in the
+session loop instead of waiting to be called. Every hook is non-blocking and
+fails silently when `akm` is not on PATH — the TUI is never affected.
+
+| Event | What happens |
+| --- | --- |
+| **`session.created`** (event hook) | Warms the stash index in the background and caches `akm hints` for the next system transform so the agent knows the CLI surface area at turn 0. |
+| **`chat.message`** | Runs `akm curate "<prompt>"` on each user message (prompts shorter than `AKM_CURATE_MIN_CHARS` are skipped). The top matches are stored for injection. Memory intents (prompts mentioning "remember" / "memory") are tracked in the session buffer. |
+| **`experimental.chat.system.transform`** | Appends the cached hints (once per session) and the curated context (once per turn) to the model's system prompt so the agent sees relevant stash assets before answering. |
+| **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, and records `akm feedback <ref> --positive` / `--negative` automatically based on whether the tool succeeded or failed. Never recurses into `akm_feedback` and skips `memory:` refs. |
+| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Flushes the per-session buffer into a `memory:opencode-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. Requires at least two observations before persisting. |
+
+### Environment overrides
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic `akm curate` on user messages. |
+| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
+| `AKM_AUTO_HINTS` | `1` | Set to `0` to skip injecting `akm hints` at session start. |
+| `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
+| `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
+| `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
+| `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
+
+### Curator agent
+
+`akm_evolve` dispatches a child OpenCode session running a built-in curator
+prompt that reviews recent AKM activity (OpenCode app logs, session-summary
+memories, live stash) and produces a prioritized action list: hot assets to
+promote, cold ones to investigate, coverage gaps to draft, duplicates to
+consolidate. The curator never applies destructive changes without explicit
+user approval.
 
 ### Registry discovery
 

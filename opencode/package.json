@@ -2,7 +2,7 @@
   "name": "akm-opencode",
   "version": "0.4.0",
   "type": "module",
-  "description": "OpenCode plugin for AKM - search and show extension assets via the akm CLI.",
+  "description": "OpenCode plugin for AKM - search, show, and manage extension assets via the akm CLI, with agentic hooks that auto-load relevant stash assets, record feedback, and harvest session memories so the stash improves every session.",
   "keywords": [
     "opencode",
     "opencode-ai",
