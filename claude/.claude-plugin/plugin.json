@@ -1,6 +1,6 @@
 {
   "name": "akm CLI",
-  "description": "Search, show, and manage akm stash assets from local directories and registries.",
+  "description": "Search, show, and manage akm stash assets from local directories and registries, with agentic hooks that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.",
   "version": "0.4.0",
   "author": {
     "name": "itlackey",
@@ -17,7 +17,9 @@
     "agents",
     "scripts",
     "registry",
-    "plugin"
+    "plugin",
+    "compound-engineering",
+    "self-evolving"
   ],
   "skills": [
     "./skills/akm"
@@ -28,9 +30,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" ensure-akm",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-start",
             "timeout": 120,
-            "statusMessage": "Ensuring the latest AKM CLI is available..."
+            "statusMessage": "Ensuring AKM is available and loading stash hints..."
           }
         ]
       }
@@ -40,8 +42,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" user-feedback",
-            "timeout": 10
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" curate-prompt",
+            "timeout": 15
           }
         ]
       }
@@ -54,6 +56,11 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool success",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" auto-feedback success",
+            "timeout": 20
           }
         ]
       }
@@ -66,6 +73,44 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool failure",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" auto-feedback failure",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory session-end",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory subagent-end",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory pre-compact",
+            "timeout": 30
           }
         ]
       }

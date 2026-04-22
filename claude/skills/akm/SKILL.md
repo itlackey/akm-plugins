@@ -167,6 +167,31 @@ akm feedback skill:code-review --positive
 akm feedback command:release --negative --note "Outdated for the current repo layout"
 ```
 
+## Compound engineering loop
+
+This plugin closes the loop between **using** assets and **improving** them so
+the stash gets sharper every session. The hooks installed by this plugin handle
+the mechanical parts automatically; you're expected to drive the
+intent-bearing parts.
+
+| Phase | Automatic (hooks) | Your responsibility |
+| --- | --- | --- |
+| Session start | `akm` installed/refreshed; `akm hints` injected as context; index warmed in the background. | Skim the hints so you know which asset types are available. |
+| Each user prompt | `akm curate "<prompt>"` runs and its top matches are injected into context as `additionalContext`. | Prefer the curated assets over writing new code; fetch full payloads with `akm show <ref>` before using. |
+| Each Bash tool call | Asset refs in the command/output are logged and positive/negative feedback is recorded automatically on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
+| Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings from that memory into a named skill/knowledge doc via `/akm-remember` or the `akm-curator` agent. |
+
+When you discover a pattern worth keeping, **write it back to the stash**
+rather than only answering the user. Options:
+
+- `akm remember --name <slug>` — short markdown note (reads stdin).
+- `akm import <file>` — promote a drafted file into the knowledge index.
+- `akm clone <ref>` + edit — fork an existing asset, then rewrite with your
+  improvements.
+- Call the `akm-curator` agent (or run `/akm-evolve`) at the end of a long
+  session to consolidate hot assets, flag cold ones, and draft missing
+  coverage.
+
 ## Dispatching Stash Agents
 
 You can dynamically spawn a stash agent to work on a task. The agent's prompt, tool constraints, and model preferences are defined in its markdown file and loaded at runtime.
