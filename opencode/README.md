@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode plugin for the [Agentikit](https://github.com/itlackey/agentikit) CLI. Registers tools that let your AI agent **search**, **show**, and **manage** extension assets from stash directories and registries.
+OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI. Registers tools that let your AI agent **search**, **show**, and **manage** extension assets from stash directories and registries.
 
 ## Installation
 
@@ -83,9 +83,9 @@ When the plugin loads, it runs `bun install -g akm-cli@latest` so it always pick
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/itlackey/agentikit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
 # PowerShell (Windows)
-irm https://raw.githubusercontent.com/itlackey/agentikit/main/install.ps1 -OutFile install.ps1; ./install.ps1
+irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
 
 # Or via Bun
 bun install -g akm-cli@latest
@@ -114,6 +114,6 @@ Assets are resolved from three source types: **working** (local stash), **search
 
 ## Docs
 
-- [Agentikit CLI](https://github.com/itlackey/agentikit)
+- [AKM CLI](https://github.com/itlackey/akm)
 - [OpenCode Plugins](https://opencode.ai/docs/plugins/)
 - [OpenCode Custom Tools](https://opencode.ai/docs/custom-tools/)

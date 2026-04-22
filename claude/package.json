@@ -1,8 +1,8 @@
 {
-  "name": "agentikit-claude",
+  "name": "akm-claude",
   "version": "0.4.0",
   "private": true,
-  "description": "Claude Code plugin for Agentikit AKM skills and hooks.",
+  "description": "Claude Code plugin for AKM skills and hooks.",
   "license": "MPL-2.0",
   "files": [
     ".claude-plugin",

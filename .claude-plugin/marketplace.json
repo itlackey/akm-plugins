@@ -1,12 +1,12 @@
 {
-  "name": "agentikit-plugins",
+  "name": "akm-plugins",
   "owner": {
     "name": "itlackey",
     "url": "https://github.com/itlackey"
   },
   "plugins": [
     {
-      "name": "agentikit",
+      "name": "akm",
       "source": "./claude",
       "description": "Search, show, and manage akm stash assets from local directories and registries via the akm CLI.",
       "version": "0.4.0"

@@ -9,7 +9,7 @@ mock.module("node:child_process", () => ({
   execSync: mockExecSync,
 }))
 
-const { AgentikitPlugin } = await import("../opencode/index.ts")
+const { AkmPlugin } = await import("../opencode/index.ts")
 
 function createMockClient() {
   return {
@@ -50,12 +50,12 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("plugin loading", () => {
-    it("exports AgentikitPlugin as a function", () => {
-      expect(typeof AgentikitPlugin).toBe("function")
+    it("exports AkmPlugin as a function", () => {
+      expect(typeof AkmPlugin).toBe("function")
     })
 
     it("returns hooks object when invoked", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       expect(hooks).toBeDefined()
       expect(hooks["chat.message"]).toBeDefined()
       expect(hooks["tool.execute.after"]).toBeDefined()
@@ -63,7 +63,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("registers all tools", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const toolNames = Object.keys(hooks.tool!)
       expect(toolNames).toContain("akm_search")
       expect(toolNames).toContain("akm_registry_search")
@@ -89,7 +89,7 @@ describe("akm-opencode plugin", () => {
 
   describe("tool definitions", () => {
     it("each tool has a description", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       for (const [name, def] of Object.entries(hooks.tool!)) {
         expect(def.description).toBeTruthy()
         expect(typeof def.description).toBe("string")
@@ -97,14 +97,14 @@ describe("akm-opencode plugin", () => {
     })
 
     it("each tool has an execute function", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       for (const [name, def] of Object.entries(hooks.tool!)) {
         expect(typeof def.execute).toBe("function")
       }
     })
 
     it("akm_search has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const search = hooks.tool!.akm_search
       expect(search.args.query).toBeDefined()
       expect(search.args.type).toBeDefined()
@@ -113,7 +113,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_registry_search has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const search = hooks.tool!.akm_registry_search
       expect(search.args.query).toBeDefined()
       expect(search.args.type).toBeDefined()
@@ -122,7 +122,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_show has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const show = hooks.tool!.akm_show
       expect(show.args.ref).toBeDefined()
       expect(show.args.view_mode).toBeDefined()
@@ -132,13 +132,13 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_index has no required args", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const index = hooks.tool!.akm_index
       expect(Object.keys(index.args)).toHaveLength(0)
     })
 
     it("akm_agent has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const dispatch = hooks.tool!.akm_agent
       expect(dispatch.args.ref).toBeDefined()
       expect(dispatch.args.query).toBeDefined()
@@ -148,25 +148,25 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_add has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const add = hooks.tool!.akm_add
       expect(add.args.package_ref).toBeDefined()
     })
 
     it("akm_list has no required args", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const list = hooks.tool!.akm_list
       expect(Object.keys(list.args)).toHaveLength(0)
     })
 
     it("akm_remove has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const remove = hooks.tool!.akm_remove
       expect(remove.args.package_ref).toBeDefined()
     })
 
     it("akm_update has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const update = hooks.tool!.akm_update
       expect(update.args.package_ref).toBeDefined()
       expect(update.args.all).toBeDefined()
@@ -174,7 +174,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_clone has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const clone = hooks.tool!.akm_clone
       expect(clone.args.ref).toBeDefined()
       expect(clone.args.name).toBeDefined()
@@ -183,7 +183,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_remember has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const remember = hooks.tool!.akm_remember
       expect(remember.args.content).toBeDefined()
       expect(remember.args.name).toBeDefined()
@@ -191,7 +191,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_feedback has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const feedback = hooks.tool!.akm_feedback
       expect(feedback.args.ref).toBeDefined()
       expect(feedback.args.sentiment).toBeDefined()
@@ -199,7 +199,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_cmd has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const cmd = hooks.tool!.akm_cmd
       expect(cmd.args.ref).toBeDefined()
       expect(cmd.args.query).toBeDefined()
@@ -209,13 +209,13 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_sources has no required args", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const sources = hooks.tool!.akm_sources
       expect(Object.keys(sources.args)).toHaveLength(0)
     })
 
     it("akm_upgrade has required args schema", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const upgrade = hooks.tool!.akm_upgrade
       expect(upgrade.args.check).toBeDefined()
       expect(upgrade.args.force).toBeDefined()
@@ -224,7 +224,7 @@ describe("akm-opencode plugin", () => {
 
   describe("tool execution", () => {
     it("akm_search calls CLI with correct args", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_search.execute(
         { query: "test-query" } as any,
         {} as any,
@@ -238,7 +238,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_search passes type filter", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_search.execute(
         { query: "hello", type: "skill" } as any,
         {} as any,
@@ -251,7 +251,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_search passes limit", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_search.execute(
         { query: "hello", limit: 5 } as any,
         {} as any,
@@ -264,7 +264,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_registry_search defaults to registry source", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_registry_search.execute(
         { query: "lint" } as any,
         {} as any,
@@ -277,7 +277,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_registry_search passes --assets flag", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_registry_search.execute(
         { query: "lint", assets: true } as any,
         {} as any,
@@ -290,7 +290,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_show calls CLI with ref", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_show.execute(
         { ref: "script:deploy.sh" } as any,
         {} as any,
@@ -303,7 +303,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_show passes view_mode and heading as positional args", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_show.execute(
         { ref: "knowledge://doc", view_mode: "section", heading: "Install" } as any,
         {} as any,
@@ -316,7 +316,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_show passes line range as positional args", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_show.execute(
         { ref: "knowledge://doc", view_mode: "lines", start_line: 10, end_line: 20 } as any,
         {} as any,
@@ -329,7 +329,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_add calls CLI with package ref", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_add.execute(
         { package_ref: "my-kit" } as any,
         {} as any,
@@ -343,7 +343,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_add handles github refs", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_add.execute(
         { package_ref: "github:itlackey/my-kit" } as any,
         {} as any,
@@ -356,7 +356,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_list calls CLI with no extra args", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_list.execute({} as any, {} as any)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
@@ -366,7 +366,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_remove calls CLI with package ref", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_remove.execute(
         { package_ref: "npm:@scope/kit" } as any,
         {} as any,
@@ -379,7 +379,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_update calls CLI for a specific package", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_update.execute(
         { package_ref: "owner/repo", force: true } as any,
         {} as any,
@@ -392,7 +392,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_update can update all packages", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_update.execute(
         { all: true } as any,
         {} as any,
@@ -405,7 +405,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_update validates required inputs", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_update.execute({} as any, {} as any)
       expect(JSON.parse(result)).toEqual({
         ok: false,
@@ -414,7 +414,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_clone calls CLI with optional flags", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_clone.execute(
         {
           ref: "npm:@scope/pkg//script:deploy.sh",
@@ -432,7 +432,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_remember records a memory with optional flags", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_remember.execute(
         { content: "Deployment needs VPN", name: "ops/vpn", force: true } as any,
         {} as any,
@@ -445,7 +445,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_feedback records positive feedback with a note", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_feedback.execute(
         { ref: "skill:code-review", sentiment: "positive", note: "Worked perfectly" } as any,
         {} as any,
@@ -458,7 +458,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_search passes source filter", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_search.execute(
         { query: "hello", source: "registry" } as any,
         {} as any,
@@ -471,7 +471,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_search supports script type filter", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_search.execute(
         { query: "deploy", type: "script" } as any,
         {} as any,
@@ -484,7 +484,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_search supports memory type and stash source filters", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_search.execute(
         { query: "retro", type: "memory", source: "stash" } as any,
         {} as any,
@@ -497,7 +497,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("akm_index calls CLI with no extra args", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_index.execute({} as any, {} as any)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
@@ -510,7 +510,7 @@ describe("akm-opencode plugin", () => {
       mockExecFileSync.mockImplementation(() => {
         throw new Error("command not found: akm")
       })
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_search.execute(
         { query: "test" } as any,
         {} as any,
@@ -522,7 +522,7 @@ describe("akm-opencode plugin", () => {
 
     it("writes successful AKM tool invocations to OpenCode app logs", async () => {
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
 
       await hooks.tool!.akm_search.execute(
         { query: "deploy", source: "local" } as any,
@@ -563,7 +563,7 @@ describe("akm-opencode plugin", () => {
       })
 
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
       const result = await hooks.tool!.akm_show.execute(
         { ref: "knowledge:guide.md", view_mode: "toc" } as any,
         {} as any,
@@ -594,7 +594,7 @@ describe("akm-opencode plugin", () => {
 
     it("records user feedback through the chat.message hook", async () => {
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
 
       await hooks["chat.message"]!(
         {
@@ -628,7 +628,7 @@ describe("akm-opencode plugin", () => {
 
     it("records system feedback and memory usage through the tool.execute.after hook", async () => {
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
 
       await hooks["tool.execute.after"]!(
         {
@@ -693,7 +693,7 @@ describe("akm-opencode plugin", () => {
       })
 
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
       const result = await hooks.tool!.akm_agent.execute(
         {
           ref: "agent:coach.md",
@@ -748,7 +748,7 @@ describe("akm-opencode plugin", () => {
       })
 
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
       const result = await hooks.tool!.akm_agent.execute(
         { query: "coach", task_prompt: "Do work" } as any,
         {
@@ -787,7 +787,7 @@ describe("akm-opencode plugin", () => {
       })
 
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
       const result = await hooks.tool!.akm_agent.execute(
         {
           ref: "agent:coach.md",
@@ -832,7 +832,7 @@ describe("akm-opencode plugin", () => {
       })
 
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
       const result = await hooks.tool!.akm_agent.execute(
         {
           ref: "agent:coach.md",
@@ -873,7 +873,7 @@ describe("akm-opencode plugin", () => {
         return "mock output"
       })
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_agent.execute(
         {
           ref: "knowledge:docs.md",
@@ -910,7 +910,7 @@ describe("akm-opencode plugin", () => {
       })
 
       const client = createMockClient()
-      const hooks = await AgentikitPlugin(createPluginInput({ client: client as any }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
       const result = await hooks.tool!.akm_cmd.execute(
         {
           ref: "command:create-file.md",
@@ -961,7 +961,7 @@ describe("akm-opencode plugin", () => {
         return "mock output"
       })
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_cmd.execute(
         {
           query: "review",
@@ -991,21 +991,21 @@ describe("akm-opencode plugin", () => {
       const searchResponse = JSON.stringify({
         hits: [{ type: "script", ref: "script:deploy.sh" }],
         source: "local",
-        stashDir: "/home/user/.agentikit/stash",
+        stashDir: "/home/user/.akm/stash",
         timing: { totalMs: 42, rankMs: 10, embedMs: 5 },
         warnings: ["Index is stale"],
         tip: "Run akm index to refresh",
       })
       mockExecFileSync.mockReturnValue(searchResponse)
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_search.execute(
         { query: "deploy" } as any,
         {} as any,
       )
 
       const parsed = JSON.parse(result)
-      expect(parsed.stashDir).toBe("/home/user/.agentikit/stash")
+      expect(parsed.stashDir).toBe("/home/user/.akm/stash")
       expect(parsed.timing).toEqual({ totalMs: 42, rankMs: 10, embedMs: 5 })
       expect(parsed.warnings).toEqual(["Index is stale"])
       expect(parsed.tip).toBe("Run akm index to refresh")
@@ -1025,7 +1025,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecFileSync.mockReturnValue(searchResponse)
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_search.execute(
         { query: "deploy" } as any,
         {} as any,
@@ -1052,7 +1052,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecFileSync.mockReturnValue(registryResponse)
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_registry_search.execute(
         { query: "frontend design" } as any,
         {} as any,
@@ -1075,7 +1075,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecFileSync.mockReturnValue(agentResponse)
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_show.execute(
         { ref: "agent:reviewer.md" } as any,
         {} as any,
@@ -1099,7 +1099,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecFileSync.mockReturnValue(commandResponse)
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_show.execute(
         { ref: "command:lint.md" } as any,
         {} as any,
@@ -1115,7 +1115,7 @@ describe("akm-opencode plugin", () => {
 
   describe("akm_config tool", () => {
     it("tool exists with description and execute function", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const config = hooks.tool!.akm_config
       expect(config).toBeDefined()
       expect(config.description).toBeTruthy()
@@ -1123,7 +1123,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("config list calls CLI as 'akm config list'", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_config.execute(
         { action: "list" } as any,
         {} as any,
@@ -1136,7 +1136,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("config get calls CLI as 'akm config get <key>'", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_config.execute(
         { action: "get", key: "stashDir" } as any,
         {} as any,
@@ -1149,7 +1149,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("config set calls CLI as 'akm config set <key> <value>'", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_config.execute(
         { action: "set", key: "stashDir", value: "/tmp/stash" } as any,
         {} as any,
@@ -1162,7 +1162,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("config unset calls CLI as 'akm config unset <key>'", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_config.execute(
         { action: "unset", key: "llm" } as any,
         {} as any,
@@ -1175,7 +1175,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("config path supports --all", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_config.execute(
         { action: "path", all: true } as any,
         {} as any,
@@ -1191,7 +1191,7 @@ describe("akm-opencode plugin", () => {
       mockExecFileSync.mockImplementation(() => {
         throw new Error("config read failed")
       })
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_config.execute(
         { action: "list" } as any,
         {} as any,
@@ -1204,7 +1204,7 @@ describe("akm-opencode plugin", () => {
 
   describe("akm_run tool", () => {
     it("tool exists with description and execute function", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const run = hooks.tool!.akm_run
       expect(run).toBeDefined()
       expect(run.description).toBeTruthy()
@@ -1225,7 +1225,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecSync.mockReturnValue("deployed successfully")
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
         { ref: "script:deploy.sh" } as any,
         {} as any,
@@ -1261,7 +1261,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecSync.mockReturnValue("build complete")
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
         { query: "build" } as any,
         {} as any,
@@ -1292,7 +1292,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecSync.mockReturnValue("deployed to prod")
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
         { ref: "script:deploy.sh", args: "--env production" } as any,
         {} as any,
@@ -1320,7 +1320,7 @@ describe("akm-opencode plugin", () => {
         return "mock output"
       })
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
         { ref: "agent:coach.md" } as any,
         {} as any,
@@ -1343,7 +1343,7 @@ describe("akm-opencode plugin", () => {
         return "mock output"
       })
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
         { ref: "script:broken.sh" } as any,
         {} as any,
@@ -1370,7 +1370,7 @@ describe("akm-opencode plugin", () => {
         throw new Error("exit code 1: script failed")
       })
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
         { ref: "script:fail.sh" } as any,
         {} as any,
@@ -1396,7 +1396,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecSync.mockReturnValue("done")
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
         { ref: "script:build.sh" } as any,
         {} as any,
@@ -1421,7 +1421,7 @@ describe("akm-opencode plugin", () => {
       })
       mockExecSync.mockReturnValue("done")
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_run.execute(
         { ref: "script:build.sh" } as any,
         {} as any,
@@ -1435,7 +1435,7 @@ describe("akm-opencode plugin", () => {
 
   describe("akm_sources tool", () => {
     it("tool exists with description and execute function", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const sources = hooks.tool!.akm_sources
       expect(sources).toBeDefined()
       expect(sources.description).toBeTruthy()
@@ -1443,7 +1443,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("calls CLI with 'list' as the backward-compatible sources alias", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_sources.execute({} as any, {} as any)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
@@ -1455,7 +1455,7 @@ describe("akm-opencode plugin", () => {
 
   describe("akm_upgrade tool", () => {
     it("tool exists with description and execute function", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const upgrade = hooks.tool!.akm_upgrade
       expect(upgrade).toBeDefined()
       expect(upgrade.description).toBeTruthy()
@@ -1463,7 +1463,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("calls CLI with 'upgrade' command", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_upgrade.execute({} as any, {} as any)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
@@ -1473,7 +1473,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("passes --check flag", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_upgrade.execute(
         { check: true } as any,
         {} as any,
@@ -1486,7 +1486,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("passes --force flag", async () => {
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_upgrade.execute(
         { force: true } as any,
         {} as any,
@@ -1516,7 +1516,7 @@ describe("akm-opencode plugin", () => {
         return "mock output"
       })
 
-      const hooks = await AgentikitPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_sources.execute({} as any, {} as any)
 
       expect(JSON.parse(result)).toEqual({ sources: [] })

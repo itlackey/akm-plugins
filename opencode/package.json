@@ -2,13 +2,13 @@
   "name": "akm-opencode",
   "version": "0.4.0",
   "type": "module",
-  "description": "OpenCode plugin for Agentikit - search and show extension assets via the akm CLI.",
+  "description": "OpenCode plugin for AKM - search and show extension assets via the akm CLI.",
   "keywords": [
     "opencode",
     "opencode-ai",
     "opencode-plugin",
     "opencode-extensions",
-    "agentikit",
+    "akm",
     "ai-agent",
     "developer-tools",
     "plugin"

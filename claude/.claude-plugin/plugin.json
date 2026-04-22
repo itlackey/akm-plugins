@@ -11,7 +11,6 @@
   "license": "MPL-2.0",
   "keywords": [
     "akm",
-    "agentikit",
     "stash",
     "skills",
     "commands",
@@ -21,7 +20,7 @@
     "plugin"
   ],
   "skills": [
-    "./skills/agentikit"
+    "./skills/akm"
   ],
   "hooks": {
     "SessionStart": [
@@ -29,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/agentikit-hook.sh\" ensure-akm",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" ensure-akm",
             "timeout": 120,
             "statusMessage": "Ensuring the latest AKM CLI is available..."
           }
@@ -41,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/agentikit-hook.sh\" user-feedback",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" user-feedback",
             "timeout": 10
           }
         ]
@@ -53,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/agentikit-hook.sh\" post-tool success",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool success",
             "timeout": 15
           }
         ]
@@ -65,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/agentikit-hook.sh\" post-tool failure",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool failure",
             "timeout": 15
           }
         ]
