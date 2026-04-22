@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI. Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, and **execute commands** from stash directories and registries.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI. Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, and **execute commands** from stash directories and registries — plus **agentic hooks** that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.
 
 ## Installation
 
@@ -24,7 +24,9 @@ claude plugin install akm@akm-plugins
 ## What's included
 
 - **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
-- **Claude hooks** — SessionStart ensures the latest `akm-cli@latest` is available, and Claude hook events record user/system feedback plus memory-related usage in local state logs
+- **Agentic hooks** — lifecycle hooks that install `akm`, auto-curate stash matches into every user prompt, auto-record feedback when assets are used, and harvest session memories at stop/compact time
+- **Slash commands** — `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve` for explicit control of the compound-engineering loop
+- **`akm-curator` agent** — a self-evolution subagent that reviews session logs and proposes stash improvements
 
 The skill teaches Claude to:
 
@@ -107,11 +109,36 @@ Assets are resolved from three source types: **working** (local stash), **search
 
 ## Hooks
 
-The Claude plugin registers these hooks:
+The Claude plugin registers these hooks. Each one runs automatically on the
+corresponding Claude Code event and is non-blocking — if `akm` is not on PATH
+or the CLI call fails, the hook exits silently without affecting the session.
 
-- **SessionStart** — installs or refreshes `akm-cli@latest` and records the resolved CLI path in a local session log
-- **UserPromptSubmit** — records user feedback prompts and memory-related intent in local state logs when relevant
-- **PostToolUse** / **PostToolUseFailure** — records system feedback for `akm` Bash invocations and tracks memory refs used by those commands
+| Event | What happens |
+| --- | --- |
+| **SessionStart** | Installs/refreshes `akm-cli@latest` (Bun → npm fallback), warms the stash index in the background, and injects `akm hints` into the model context so Claude knows the CLI surface area at turn 0. |
+| **UserPromptSubmit** | Runs `akm curate "<prompt>"` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
+| **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. |
+| **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
+| **Stop** / **SubagentStop** | Flushes the per-session buffer into a `memory:claude-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. |
+| **PreCompact** | Same memory capture before Claude Code compacts the transcript, so learnings survive compaction. |
+
+### Environment overrides
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
+| `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
+| `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
+| `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
+| `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
+| `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Where session logs and per-session buffers live. |
+
+### Slash commands
+
+- `/akm-curate <task>` — manually curate stash assets for a topic and load them.
+- `/akm-remember [slug]` — distill the current conversation into a durable memory.
+- `/akm-feedback <ref> <+|-> [note]` — record explicit feedback on an asset.
+- `/akm-evolve [focus]` — dispatch the `akm-curator` agent to review session logs and propose stash improvements (promote hot assets, flag cold ones, draft missing coverage).
 
 ## Docs
 
