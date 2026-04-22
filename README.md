@@ -1,6 +1,6 @@
-# Agent-i-Kit Plugins
+# AKM Plugins
 
-Platform-specific plugins for the [Agent-i-Kit](https://github.com/itlackey/agentikit) CLI. Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, and **execute commands** from a stash directory.
+Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI. Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, and **execute commands** from a stash directory.
 
 ## OpenCode
 
@@ -43,22 +43,22 @@ Claude Code plugin providing a skill for stash asset management, dynamic agent d
 Add the marketplace and install the plugin:
 
 ```sh
-# Add the Agentikit marketplace
-/plugin marketplace add itlackey/agentikit-plugins
+# Add the AKM marketplace
+/plugin marketplace add itlackey/akm-plugins
 
 # Install the plugin
-/plugin install agentikit
+/plugin install akm
 ```
 
 Or via the Claude CLI:
 
 ```sh
-claude plugin marketplace add itlackey/agentikit-plugins
-claude plugin install agentikit@agentikit-plugins
+claude plugin marketplace add itlackey/akm-plugins
+claude plugin install akm@akm-plugins
 ```
 
 Provides:
-- **Agentikit Skill** — Claude automatically uses the akm CLI when you ask about stash assets
+- **AKM Skill** — Claude automatically uses the akm CLI when you ask about stash assets
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
 - **Claude hooks** — the plugin refreshes `akm-cli@latest` on session start and records relevant user/system feedback and memory usage events in local state logs
@@ -100,9 +100,9 @@ For Claude Code, the plugin uses a `SessionStart` hook to refresh `akm-cli@lates
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/itlackey/agentikit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
 # PowerShell (Windows)
-irm https://raw.githubusercontent.com/itlackey/agentikit/main/install.ps1 -OutFile install.ps1; ./install.ps1
+irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
 
 # Or via Bun
 bun install -g akm-cli@latest
@@ -110,6 +110,6 @@ bun install -g akm-cli@latest
 
 ## Docs
 
-- **Agentikit CLI**: [github.com/itlackey/agentikit](https://github.com/itlackey/agentikit)
+- **AKM CLI**: [github.com/itlackey/akm](https://github.com/itlackey/akm)
 - **OpenCode**: [Plugins](https://opencode.ai/docs/plugins/) · [Custom tools](https://opencode.ai/docs/custom-tools/)
 - **Claude Code**: [Plugins](https://code.claude.com/docs/en/plugins) · [Skills](https://code.claude.com/docs/en/skills)

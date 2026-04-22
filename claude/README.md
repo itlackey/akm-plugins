@@ -1,29 +1,29 @@
-# agentikit-claude
+# akm-claude
 
-Claude Code plugin for the [Agentikit](https://github.com/itlackey/agentikit) CLI. Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, and **execute commands** from stash directories and registries.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI. Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, and **execute commands** from stash directories and registries.
 
 ## Installation
 
 Add the marketplace and install the plugin:
 
 ```sh
-# Add the Agentikit marketplace
-/plugin marketplace add itlackey/agentikit-plugins
+# Add the AKM marketplace
+/plugin marketplace add itlackey/akm-plugins
 
 # Install the plugin
-/plugin install agentikit
+/plugin install akm
 ```
 
 Or via the Claude CLI:
 
 ```sh
-claude plugin marketplace add itlackey/agentikit-plugins
-claude plugin install agentikit@agentikit-plugins
+claude plugin marketplace add itlackey/akm-plugins
+claude plugin install akm@akm-plugins
 ```
 
 ## What's included
 
-- **Agentikit Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
+- **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
 - **Claude hooks** — SessionStart ensures the latest `akm-cli@latest` is available, and Claude hook events record user/system feedback plus memory-related usage in local state logs
 
 The skill teaches Claude to:
@@ -59,7 +59,7 @@ Claude will fetch the command template, render argument placeholders, and execut
 Ask Claude to find installable kits from the community registry:
 
 ```
-Find an agentikit kit for code review and install the best match
+Find an akm kit for code review and install the best match
 ```
 
 Claude will search with `akm search ... --source registry`, inspect the returned `id` and `action` fields, and then use `akm add` when you ask it to install a result.
@@ -75,9 +75,9 @@ On session start, the plugin tries to install or refresh `akm-cli@latest` with B
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/itlackey/agentikit/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
 # PowerShell (Windows)
-irm https://raw.githubusercontent.com/itlackey/agentikit/main/install.ps1 -OutFile install.ps1; ./install.ps1
+irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
 
 # Or via Bun / npm
 bun install -g akm-cli@latest
@@ -115,6 +115,6 @@ The Claude plugin registers these hooks:
 
 ## Docs
 
-- [Agentikit CLI](https://github.com/itlackey/agentikit)
+- [AKM CLI](https://github.com/itlackey/akm)
 - [Claude Code Plugins](https://code.claude.com/docs/en/plugins)
 - [Claude Code Skills](https://code.claude.com/docs/en/skills)

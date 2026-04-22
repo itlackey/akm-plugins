@@ -5,7 +5,7 @@ set -eu
 COMMAND="${1:-}"
 MODE="${2:-}"
 PACKAGE_REF="akm-cli@latest"
-STATE_DIR="${AKM_PLUGIN_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-.}/.local/state}/agentikit-claude}"
+STATE_DIR="${AKM_PLUGIN_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-.}/.local/state}/akm-claude}"
 SESSION_LOG="$STATE_DIR/session.log"
 FEEDBACK_LOG="$STATE_DIR/feedback.log"
 MEMORY_LOG="$STATE_DIR/memory.log"

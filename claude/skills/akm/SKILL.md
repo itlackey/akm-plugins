@@ -1,11 +1,11 @@
 ---
-name: agentikit
-description: Search, show, dispatch agents, and execute commands from an Agentikit stash directory. Use when the user wants to find or use tools, skills, commands, agents, or knowledge in their stash.
+name: akm
+description: Search, show, dispatch agents, and execute commands from an AKM stash directory. Use when the user wants to find or use tools, skills, commands, agents, or knowledge in their stash.
 ---
 
-# Agentikit Stash
+# AKM Stash
 
-You have access to the `akm` CLI (Agentikit Manager) to manage extension assets from a stash directory.
+You have access to the `akm` CLI (AKM) to manage extension assets from a stash directory.
 
 ### Stash directory resolution
 

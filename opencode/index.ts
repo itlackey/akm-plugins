@@ -29,7 +29,7 @@ type CliLogMeta = {
 
 function formatCliError(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
-    return "The 'akm' CLI was not found on PATH. Install it first from https://github.com/itlackey/agentikit."
+    return "The 'akm' CLI was not found on PATH. Install it first from https://github.com/itlackey/akm."
   }
   return error instanceof Error ? error.message : String(error)
 }
@@ -154,7 +154,7 @@ function resolveAkmCommand(): string | CliError {
 
   return {
     ok: false,
-    error: `The 'akm' CLI could not be resolved after attempting to install '${autoInstallPackageRef}' with Bun. Install akm from https://github.com/itlackey/agentikit.`,
+    error: `The 'akm' CLI could not be resolved after attempting to install '${autoInstallPackageRef}' with Bun. Install akm from https://github.com/itlackey/akm.`,
   }
 }
 
@@ -536,7 +536,7 @@ type PluginClient = {
   }
 }
 
-export const AgentikitPlugin: Plugin = async ({ client }) => {
+export const AkmPlugin: Plugin = async ({ client }) => {
   await ensureLatestAkmInstalled(client as unknown as LogCapableClient)
 
   return {

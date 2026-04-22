@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 const repoRoot = path.resolve(import.meta.dir, "..")
-const hookScript = path.join(repoRoot, "claude/hooks/agentikit-hook.sh")
+const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.sh")
 const pluginJsonPath = path.join(repoRoot, "claude/.claude-plugin/plugin.json")
 const claudePackageJsonPath = path.join(repoRoot, "claude/package.json")
 const marketplaceJsonPath = path.join(repoRoot, ".claude-plugin/marketplace.json")
@@ -25,7 +25,7 @@ function readLogLines(filePath: string) {
 }
 
 function getFirstLogEntry(stateDir: string, logName: string) {
-  return readLogLines(path.join(stateDir, `agentikit-claude/${logName}`))[0]
+  return readLogLines(path.join(stateDir, `akm-claude/${logName}`))[0]
 }
 
 function shellQuote(value: string) {
@@ -70,7 +70,7 @@ describe("Claude plugin metadata", () => {
     const pkg = JSON.parse(readFileSync(claudePackageJsonPath, "utf8"))
     const marketplace = JSON.parse(readFileSync(marketplaceJsonPath, "utf8"))
 
-    expect(plugin.skills).toEqual(["./skills/agentikit"])
+    expect(plugin.skills).toEqual(["./skills/akm"])
     expect(plugin.hooks.SessionStart).toBeDefined()
     expect(plugin.hooks.UserPromptSubmit).toBeDefined()
     expect(plugin.hooks.PostToolUse).toBeDefined()
