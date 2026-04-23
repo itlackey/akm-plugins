@@ -520,12 +520,79 @@ describe("akm-opencode plugin", () => {
       expect(parsed.dispatchAgent).toBe("general")
       expect(parsed.focus).toBe("release workflow")
       expect(client.session.create).toHaveBeenCalledWith({
-        query: { directory: "/tmp/test-project" },
         body: { parentID: "parent-session-1", title: "akm:curator" },
       })
       const promptArgs = (client.session.prompt as any).mock.calls[0][0]
+      expect(promptArgs.path).toEqual({ id: "child-session-1" })
       expect(promptArgs.body.system).toContain("AKM curator")
       expect(promptArgs.body.parts[0].text).toContain("release workflow")
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "info",
+          message: "AKM dispatch child session created",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_evolve",
+            childSessionID: "child-session-1",
+          }),
+        },
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "info",
+          message: "AKM dispatch prompt completed",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_evolve",
+            targetSessionID: "child-session-1",
+            dispatchAgent: "general",
+          }),
+        },
+      })
+    })
+
+    it("akm_evolve returns JSON error when session.prompt throws", async () => {
+      const client = createMockClient()
+      client.session.prompt = mock(async () => {
+        throw new Error("prompt exploded")
+      })
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_evolve.execute(
+        { focus: "release workflow" } as any,
+        {
+          sessionID: "parent-session-1",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "build",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed).toEqual({
+        ok: false,
+        error: "Failed to dispatch curator: prompt exploded",
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM dispatch prompt threw",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_evolve",
+            targetSessionID: "child-session-1",
+            error: "prompt exploded",
+          }),
+        },
+      })
     })
 
     it("akm_search passes source filter", async () => {
@@ -959,11 +1026,9 @@ describe("akm-opencode plugin", () => {
       expect(parsed.ok).toBe(true)
       expect(parsed.sessionID).toBe("child-session-1")
       expect(client.session.create).toHaveBeenCalledWith({
-        query: { directory: "/tmp/test-project" },
         body: { parentID: "parent-session-1", title: "akm:coach.md" },
       })
       expect(client.session.prompt).toHaveBeenCalledWith({
-        query: { directory: "/tmp/test-project" },
         path: { id: "child-session-1" },
         body: {
           agent: "general",
@@ -971,6 +1036,119 @@ describe("akm-opencode plugin", () => {
           system: "Use this exact system prompt.",
           tools: { read: true, edit: false, bash: false },
           parts: [{ type: "text", text: "Review this repository for bugs" }],
+        },
+      })
+    })
+
+    it("akm_agent returns JSON error when session.create throws", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (args[0] === "show") {
+          return JSON.stringify({
+            type: "agent",
+            name: "coach.md",
+            path: "/stash/agents/coach.md",
+            prompt: "Use this exact system prompt.",
+          })
+        }
+        return "mock output"
+      })
+
+      const client = createMockClient()
+      client.session.create = mock(async () => {
+        throw new Error("create exploded")
+      })
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_agent.execute(
+        {
+          ref: "agent:coach.md",
+          task_prompt: "Review this repository for bugs",
+        } as any,
+        {
+          sessionID: "parent-session-1",
+          messageID: "message-1",
+          agent: "build",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed).toEqual({
+        ok: false,
+        error: "Failed to create child session: create exploded",
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM dispatch child session threw",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_agent",
+            title: "akm:coach.md",
+            error: "create exploded",
+          }),
+        },
+      })
+    })
+
+    it("akm_agent returns JSON error when session.prompt throws", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (args[0] === "show") {
+          return JSON.stringify({
+            type: "agent",
+            name: "coach.md",
+            path: "/stash/agents/coach.md",
+            prompt: "Use this exact system prompt.",
+          })
+        }
+        return "mock output"
+      })
+
+      const client = createMockClient()
+      client.session.prompt = mock(async () => {
+        throw new Error("prompt exploded")
+      })
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_agent.execute(
+        {
+          ref: "agent:coach.md",
+          task_prompt: "Review this repository for bugs",
+        } as any,
+        {
+          sessionID: "parent-session-1",
+          messageID: "message-1",
+          agent: "build",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed).toEqual({
+        ok: false,
+        error: "Failed to dispatch prompt for agent:coach.md: prompt exploded",
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM dispatch prompt threw",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_agent",
+            ref: "agent:coach.md",
+            targetSessionID: "child-session-1",
+            error: "prompt exploded",
+          }),
         },
       })
     })
@@ -1177,7 +1355,6 @@ describe("akm-opencode plugin", () => {
       expect(parsed.usedSubtask).toBe(false)
       expect(client.session.create).not.toHaveBeenCalled()
       expect(client.session.prompt).toHaveBeenCalledWith({
-        query: { directory: "/tmp/test-project" },
         path: { id: "parent-session-1" },
         body: {
           agent: "build",
@@ -1185,6 +1362,63 @@ describe("akm-opencode plugin", () => {
             type: "text",
             text: "Create config.json in src with content: {\"key\":\"value\"}. All args: config.json src '{\"key\":\"value\"}'",
           }],
+        },
+      })
+    })
+
+    it("akm_cmd returns JSON error when session.prompt throws", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (args[0] === "show") {
+          return JSON.stringify({
+            type: "command",
+            name: "create-file.md",
+            path: "/stash/commands/create-file.md",
+            template: "Create $1 in $2 with content: $3. All args: $ARGUMENTS",
+          })
+        }
+        return "mock output"
+      })
+
+      const client = createMockClient()
+      client.session.prompt = mock(async () => {
+        throw new Error("prompt exploded")
+      })
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_cmd.execute(
+        {
+          ref: "command:create-file.md",
+          arguments: "config.json src '{\"key\":\"value\"}'",
+        } as any,
+        {
+          sessionID: "parent-session-1",
+          messageID: "message-1",
+          agent: "build",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed).toEqual({
+        ok: false,
+        error: "Failed to execute command command:create-file.md: prompt exploded",
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM dispatch prompt threw",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_cmd",
+            ref: "command:create-file.md",
+            targetSessionID: "parent-session-1",
+            error: "prompt exploded",
+          }),
         },
       })
     })
