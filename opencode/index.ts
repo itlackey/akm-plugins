@@ -92,6 +92,14 @@ type CliLogMeta = {
   sessionID?: string
 }
 
+type SessionPromptBody = {
+  agent: string
+  parts: Array<{ type: "text"; text: string }>
+  system?: string
+  model?: { providerID: string; modelID: string }
+  tools?: Record<string, boolean>
+}
+
 function formatCliError(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
     return "The 'akm' CLI was not found on PATH. Install it first from https://github.com/itlackey/akm."
@@ -729,18 +737,111 @@ async function ensureTargetSessionID(input: {
   context: { sessionID: string; directory: string }
   title: string
   client: PluginClient
+  logClient: LogCapableClient
+  toolName: string
 }): Promise<{ ok: true; sessionID: string } | CliError> {
   if (!input.useSubtask) return { ok: true, sessionID: input.context.sessionID }
 
-  const created = await input.client.session.create({
-    query: { directory: input.context.directory },
-    body: { parentID: input.context.sessionID, title: input.title },
-  })
-  if (created.error || !created.data?.id) {
-    const reason = created.error ? JSON.stringify(created.error) : "missing child session id"
+  try {
+    const created = await input.client.session.create({
+      body: { parentID: input.context.sessionID, title: input.title },
+    })
+    if (created.error || !created.data?.id) {
+      const reason = created.error ? JSON.stringify(created.error) : "missing child session id"
+      await writePluginLog(input.logClient, "error", "AKM dispatch child session failed", {
+        subsystem: "dispatch",
+        toolName: input.toolName,
+        sessionID: input.context.sessionID,
+        directory: input.context.directory,
+        title: input.title,
+        error: reason,
+      })
+      return { ok: false, error: `Failed to create child session: ${reason}` }
+    }
+    await writePluginLog(input.logClient, "info", "AKM dispatch child session created", {
+      subsystem: "dispatch",
+      toolName: input.toolName,
+      sessionID: input.context.sessionID,
+      directory: input.context.directory,
+      childSessionID: created.data.id,
+      title: input.title,
+    })
+    return { ok: true, sessionID: created.data.id }
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error)
+    await writePluginLog(input.logClient, "error", "AKM dispatch child session threw", {
+      subsystem: "dispatch",
+      toolName: input.toolName,
+      sessionID: input.context.sessionID,
+      directory: input.context.directory,
+      title: input.title,
+      error: reason,
+    })
     return { ok: false, error: `Failed to create child session: ${reason}` }
   }
-  return { ok: true, sessionID: created.data.id }
+}
+
+async function promptTargetSession(input: {
+  client: PluginClient
+  logClient: LogCapableClient
+  toolName: string
+  context: { sessionID: string; directory: string }
+  targetSessionID: string
+  promptBody: SessionPromptBody
+  failureMessage: string
+  ref?: string
+}): Promise<{ ok: true; data: { parts?: unknown } } | CliError> {
+  try {
+    const promptResponse = await input.client.session.prompt({
+      path: { id: input.targetSessionID },
+      body: input.promptBody,
+    })
+
+    if (promptResponse.error || !promptResponse.data) {
+      const reason = promptResponse.error ? JSON.stringify(promptResponse.error) : "empty response"
+      await writePluginLog(input.logClient, "error", "AKM dispatch prompt failed", {
+        subsystem: "dispatch",
+        toolName: input.toolName,
+        sessionID: input.context.sessionID,
+        directory: input.context.directory,
+        targetSessionID: input.targetSessionID,
+        dispatchAgent: input.promptBody.agent,
+        ref: input.ref,
+        error: reason,
+      })
+      return {
+        ok: false,
+        error: `${input.failureMessage}: ${reason}`,
+      }
+    }
+
+    await writePluginLog(input.logClient, "info", "AKM dispatch prompt completed", {
+      subsystem: "dispatch",
+      toolName: input.toolName,
+      sessionID: input.context.sessionID,
+      directory: input.context.directory,
+      targetSessionID: input.targetSessionID,
+      dispatchAgent: input.promptBody.agent,
+      ref: input.ref,
+    })
+    return { ok: true, data: promptResponse.data }
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error)
+    await writePluginLog(input.logClient, "error", "AKM dispatch prompt threw", {
+      subsystem: "dispatch",
+      toolName: input.toolName,
+      sessionID: input.context.sessionID,
+      directory: input.context.directory,
+      targetSessionID: input.targetSessionID,
+      dispatchAgent: input.promptBody.agent,
+      ref: input.ref,
+      error: reason,
+    })
+    return {
+      ok: false,
+      error: `${input.failureMessage}: ${reason}`,
+    }
+  }
 }
 
 function splitArguments(raw: string): string[] {
@@ -787,19 +888,11 @@ function createSearchArgs(input: {
 type PluginClient = {
   session: {
     create: (input: {
-      query: { directory: string }
       body: { parentID: string; title: string }
     }) => Promise<{ data?: { id?: string }; error?: unknown }>
     prompt: (input: {
-      query: { directory: string }
       path: { id: string }
-      body: {
-        agent: string
-        parts: Array<{ type: "text"; text: string }>
-        system?: string
-        model?: { providerID: string; modelID: string }
-        tools?: Record<string, boolean>
-      }
+      body: SessionPromptBody
     }) => Promise<{ data?: { parts?: unknown }; error?: unknown }>
   }
 }
@@ -1203,6 +1296,8 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           context: { sessionID: context.sessionID, directory: context.directory },
           title: "akm:curator",
           client: client as unknown as PluginClient,
+          logClient,
+          toolName: "akm_evolve",
         })
         if (!targetSession.ok) return JSON.stringify(targetSession)
 
@@ -1210,23 +1305,20 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           ? `Review recent AKM activity with an emphasis on: ${focus.trim()}. Produce the prioritized action list described in the system prompt.`
           : "Review recent AKM activity and produce the prioritized action list described in the system prompt."
 
-        const promptResponse = await client.session.prompt({
-          query: { directory: context.directory },
-          path: { id: targetSession.sessionID },
-          body: {
+        const promptResponse = await promptTargetSession({
+          client: client as unknown as PluginClient,
+          logClient,
+          toolName: "akm_evolve",
+          context: { sessionID: context.sessionID, directory: context.directory },
+          targetSessionID: targetSession.sessionID,
+          failureMessage: "Failed to dispatch curator",
+          promptBody: {
             agent: targetAgent,
             system: CURATOR_AGENT_PROMPT,
             parts: [{ type: "text", text: task }],
           },
         })
-
-        if (promptResponse.error || !promptResponse.data) {
-          const reason = promptResponse.error ? JSON.stringify(promptResponse.error) : "empty response"
-          return JSON.stringify({
-            ok: false,
-            error: `Failed to dispatch curator: ${reason}`,
-          })
-        }
+        if (!promptResponse.ok) return JSON.stringify(promptResponse)
 
         return JSON.stringify({
           ok: true,
@@ -1286,16 +1378,12 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           context: { sessionID: context.sessionID, directory: context.directory },
           title: `akm:${shown.name}`,
           client: client as unknown as PluginClient,
+          logClient,
+          toolName: "akm_agent",
         })
         if (!targetSession.ok) return JSON.stringify(targetSession)
 
-        const promptBody: {
-          agent: string
-          system: string
-          parts: Array<{ type: "text"; text: string }>
-          model?: { providerID: string; modelID: string }
-          tools?: Record<string, boolean>
-        } = {
+        const promptBody: SessionPromptBody = {
           agent: targetAgent,
           system: shown.prompt,
           parts: [{ type: "text", text: task_prompt }],
@@ -1303,19 +1391,17 @@ export const AkmPlugin: Plugin = async ({ client }) => {
         if (model) promptBody.model = model
         if (tools) promptBody.tools = tools
 
-        const promptResponse = await client.session.prompt({
-          query: { directory: context.directory },
-          path: { id: targetSession.sessionID },
-          body: promptBody,
+        const promptResponse = await promptTargetSession({
+          client: client as unknown as PluginClient,
+          logClient,
+          toolName: "akm_agent",
+          context: { sessionID: context.sessionID, directory: context.directory },
+          targetSessionID: targetSession.sessionID,
+          promptBody,
+          failureMessage: `Failed to dispatch prompt for ${resolved.ref}`,
+          ref: resolved.ref,
         })
-
-        if (promptResponse.error || !promptResponse.data) {
-          const reason = promptResponse.error ? JSON.stringify(promptResponse.error) : "empty response"
-          return JSON.stringify({
-            ok: false,
-            error: `Failed to dispatch prompt for ${resolved.ref}: ${reason}`,
-          })
-        }
+        if (!promptResponse.ok) return JSON.stringify(promptResponse)
 
         return JSON.stringify({
           ok: true,
@@ -1370,25 +1456,25 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           context: { sessionID: context.sessionID, directory: context.directory },
           title: `akm:cmd:${shown.name}`,
           client: client as unknown as PluginClient,
+          logClient,
+          toolName: "akm_cmd",
         })
         if (!targetSession.ok) return JSON.stringify(targetSession)
 
-        const promptResponse = await client.session.prompt({
-          query: { directory: context.directory },
-          path: { id: targetSession.sessionID },
-          body: {
+        const promptResponse = await promptTargetSession({
+          client: client as unknown as PluginClient,
+          logClient,
+          toolName: "akm_cmd",
+          context: { sessionID: context.sessionID, directory: context.directory },
+          targetSessionID: targetSession.sessionID,
+          failureMessage: `Failed to execute command ${resolved.ref}`,
+          ref: resolved.ref,
+          promptBody: {
             agent: targetAgent,
             parts: [{ type: "text", text: rendered }],
           },
         })
-
-        if (promptResponse.error || !promptResponse.data) {
-          const reason = promptResponse.error ? JSON.stringify(promptResponse.error) : "empty response"
-          return JSON.stringify({
-            ok: false,
-            error: `Failed to execute command ${resolved.ref}: ${reason}`,
-          })
-        }
+        if (!promptResponse.ok) return JSON.stringify(promptResponse)
 
         return JSON.stringify({
           ok: true,
