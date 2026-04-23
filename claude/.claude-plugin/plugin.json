@@ -1,7 +1,7 @@
 {
   "name": "akm",
   "description": "Search, show, and manage akm stash assets from local directories and registries, with agentic hooks that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "author": {
     "name": "itlackey",
     "url": "https://github.com/itlackey"
