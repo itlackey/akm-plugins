@@ -9,7 +9,8 @@ mock.module("node:child_process", () => ({
   execSync: mockExecSync,
 }))
 
-const { AkmPlugin } = await import("../opencode/index.ts")
+const pluginModule = await import("../opencode/index.ts")
+const { AkmPlugin, server, default: defaultPluginModule } = pluginModule
 
 function createMockClient() {
   return {
@@ -52,6 +53,11 @@ describe("akm-opencode plugin", () => {
   describe("plugin loading", () => {
     it("exports AkmPlugin as a function", () => {
       expect(typeof AkmPlugin).toBe("function")
+    })
+
+    it("exports the OpenCode plugin module shape", () => {
+      expect(server).toBe(AkmPlugin)
+      expect(defaultPluginModule).toEqual({ server: AkmPlugin })
     })
 
     it("returns hooks object when invoked", async () => {

@@ -1497,3 +1497,6 @@ export const AkmPlugin: Plugin = async ({ client }) => {
     },
   }
 }
+
+export const server = AkmPlugin
+export default { server }
