@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI. Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, and **execute commands** from stash directories and registries — plus **agentic hooks** that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.5.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, and **handle vaults safely** — plus **agentic hooks** that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.
 
 ## Installation
 
@@ -102,7 +102,11 @@ stash/
 ├── skills/     # skill directories containing SKILL.md
 ├── commands/   # markdown files
 ├── agents/     # markdown files
-└── knowledge/  # markdown files
+├── knowledge/  # markdown files
+├── memories/   # markdown memory files (akm remember)
+├── workflows/  # multi-step procedures (workflow:<name>)
+├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
+└── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
 ```
 
 Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
@@ -138,7 +142,12 @@ or the CLI call fails, the hook exits silently without affecting the session.
 - `/akm-curate <task>` — manually curate stash assets for a topic and load them.
 - `/akm-remember [slug]` — distill the current conversation into a durable memory.
 - `/akm-feedback <ref> <+|-> [note]` — record explicit feedback on an asset.
-- `/akm-evolve [focus]` — dispatch the `akm-curator` agent to review session logs and propose stash improvements (promote hot assets, flag cold ones, draft missing coverage).
+- `/akm-evolve [focus]` — dispatch the `akm-curator` agent to review session logs and propose stash improvements.
+- `/akm-wiki <subcommand> [args]` — manage AKM wikis (create, register, list, show, pages, search, stash, lint, ingest, remove).
+- `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
+- `/akm-save [name] [-m "msg"]` — commit (and push, when writable) a git-backed stash.
+
+Vault management is intentionally not exposed as a slash command — use `akm vault …` in the shell directly so secret values never pass through the chat turn.
 
 ## Docs
 

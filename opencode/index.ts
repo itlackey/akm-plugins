@@ -29,7 +29,7 @@ const sessionBuffer = new Map<string, SessionBufferEntry[]>()
 const sessionMemoryCaptured = new Set<string>()
 
 // Asset-ref grammar matching the stash skill: [origin//]type:name
-const AKM_REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script):[A-Za-z0-9._/\-]+/g
+const AKM_REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/\-]+/g
 
 const CURATOR_AGENT_PROMPT = `You are the AKM curator — a compound-engineering agent that keeps the user's AKM stash improving every time the main agent finishes a task.
 
@@ -41,9 +41,12 @@ Inputs you should inspect:
 Signals to act on:
 - Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --note "curator: consistently useful" to reinforce.
 - Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --note "<excerpt>" and open the asset for review.
-- Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, or knowledge doc in the working stash and reindex with akm_index.
+- Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex with akm_index.
 - Duplicates / drift: near-identical descriptions or overlapping responsibilities. Propose a consolidation.
-- Stale memories: session summaries that never get recalled. Propose akm_remove memory:<name> once distilled into a durable knowledge doc.
+- Stale memories: session summaries that never get recalled. Propose akm_remove memory:<name> once distilled into a durable knowledge doc or wiki page.
+- Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
+- Stuck workflows: run akm_workflow list --active and surface any runs in blocked or failed state with their step ids. Propose whether to resume or escalate.
+- Never touch vaults: do not call akm_vault show or shell_snippet unless the user explicitly asks. Vault values must never appear in reports.
 
 Rules of engagement:
 - Never apply destructive changes without explicit user approval.
@@ -65,6 +68,12 @@ Output shape: end every run with a markdown report that has these sections:
 
 ## Duplicates / drift
 - <ref a> vs <ref b> — consolidation proposal
+
+## Wiki health
+- <wiki> — lint findings (orphan, broken-xref, uncited-raw, stale-index) with suggested fix
+
+## Workflow health
+- <workflow|runId> — blocked/failed state — resume or escalate
 
 ## Housekeeping
 - stale memories, reindex needs, config tweaks
@@ -488,7 +497,29 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
 }
 
 type CliError = { ok: false; error: string }
-type AssetType = "agent" | "command" | "knowledge" | "memory" | "script" | "skill"
+type AssetType =
+  | "agent"
+  | "command"
+  | "knowledge"
+  | "memory"
+  | "script"
+  | "skill"
+  | "workflow"
+  | "vault"
+  | "wiki"
+
+const ASSET_TYPES = [
+  "agent",
+  "command",
+  "knowledge",
+  "memory",
+  "script",
+  "skill",
+  "workflow",
+  "vault",
+  "wiki",
+  "any",
+] as const
 
 type ShowAgentResponse = {
   type: "agent"
@@ -868,7 +899,7 @@ function normalizeSearchSource(source: "local" | "stash" | "registry" | "both"):
 
 function createSearchArgs(input: {
   query: string
-  type?: AssetType | "any"
+  type?: AssetType | "any" | string
   limit?: number
   source?: "local" | "stash" | "registry" | "both"
   defaultSource?: "local" | "stash" | "registry" | "both"
@@ -1073,8 +1104,10 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           ? `opencode auto: ${input.tool} succeeded`
           : `opencode auto: ${input.tool} failed`
         for (const ref of allRefs) {
-          // Memories do not accept feedback in the current CLI.
-          if (ref.startsWith("memory:")) continue
+          // Memories and vault refs are not first-class feedback targets —
+          // memories do not accept feedback, and vault values never surface in
+          // JSON so automatic usage signals would be misleading.
+          if (ref.startsWith("memory:") || ref.startsWith("vault:")) continue
           const ok = recordFeedbackSync(ref, feedback, note)
           if (!ok) break
         }
@@ -1082,11 +1115,11 @@ export const AkmPlugin: Plugin = async ({ client }) => {
     },
     tool: {
     akm_search: tool({
-      description: "Search your stash or the akm registry for scripts, skills, commands, agents, knowledge, and memories. Use source='registry' or akm_registry_search for installable community kits.",
+      description: "Search your stash or the akm registry for scripts, skills, commands, agents, knowledge, memories, workflows, vaults, and wikis. Use source='registry' or akm_registry_search for installable community kits.",
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
         type: tool.schema
-          .enum(["agent", "command", "knowledge", "memory", "script", "skill", "any"])
+          .enum(ASSET_TYPES as unknown as [string, ...string[]])
           .optional()
           .describe("Optional type filter. Defaults to 'any'."),
         limit: tool.schema.number().optional().describe("Maximum number of hits to return. Defaults to 20."),
@@ -1104,7 +1137,7 @@ export const AkmPlugin: Plugin = async ({ client }) => {
       args: {
         query: tool.schema.string().describe("Search query for installable registry kits."),
         type: tool.schema
-          .enum(["agent", "command", "knowledge", "memory", "script", "skill", "any"])
+          .enum(ASSET_TYPES as unknown as [string, ...string[]])
           .optional()
           .describe("Optional asset type filter. Defaults to 'any'."),
         limit: tool.schema.number().optional().describe("Maximum number of registry hits to return. Defaults to 20."),
@@ -1170,12 +1203,29 @@ export const AkmPlugin: Plugin = async ({ client }) => {
       },
     }),
     akm_add: tool({
-      description: "Install a kit from npm, GitHub, another git host, or a local directory. Installed kits become searchable alongside local assets.",
+      description: "Install a kit or register an external source from npm, GitHub, another git host, a URL, or a local directory. Use type='wiki' to register a wiki source instead of a stash kit.",
       args: {
-        package_ref: tool.schema.string().describe("Package reference such as npm:@scope/kit, github:<owner>/<repo>, git+https://host/repo, or ./local/kit."),
+        package_ref: tool.schema.string().describe("Package reference such as npm:@scope/kit, github:<owner>/<repo>, git+https://host/repo, https://url, or ./local/kit."),
+        type: tool.schema.enum(["wiki"]).optional().describe("Route the add through a typed registrar. 'wiki' registers an external wiki source."),
+        name: tool.schema.string().optional().describe("Optional name to register the source under."),
+        writable: tool.schema.boolean().optional().describe("Mark a git-backed source as push-writable (used by akm save)."),
+        trust: tool.schema.boolean().optional().describe("Bypass install-audit blocking for this registration only."),
+        provider: tool.schema.string().optional().describe("Provider hint (required for raw URL refs, e.g. 'github', 'website')."),
+        options: tool.schema.string().optional().describe("JSON string of provider-specific options."),
+        max_pages: tool.schema.number().optional().describe("Cap for website crawlers (default 50)."),
+        max_depth: tool.schema.number().optional().describe("Depth cap for website crawlers (default 3)."),
       },
-      async execute({ package_ref }) {
-        return runCli(client as unknown as LogCapableClient, ["add", package_ref], { toolName: "akm_add" })
+      async execute({ package_ref, type, name, writable, trust, provider, options, max_pages, max_depth }) {
+        const args = ["add", package_ref]
+        if (type) args.push("--type", type)
+        if (name) args.push("--name", name)
+        if (writable) args.push("--writable")
+        if (trust) args.push("--trust")
+        if (provider) args.push("--provider", provider)
+        if (options) args.push("--options", options)
+        if (max_pages != null) args.push("--max-pages", String(max_pages))
+        if (max_depth != null) args.push("--max-depth", String(max_depth))
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_add" })
       },
     }),
     akm_list: tool({
@@ -1565,6 +1615,324 @@ export const AkmPlugin: Plugin = async ({ client }) => {
       args: {},
       async execute() {
         return runCli(client as unknown as LogCapableClient, ["list"], { toolName: "akm_sources" })
+      },
+    }),
+    akm_save: tool({
+      description: "Commit (and push, when writable) pending changes in a git-backed stash. No-op for non-git stashes.",
+      args: {
+        name: tool.schema.string().optional().describe("Optional stash source name. Defaults to the primary stash."),
+        message: tool.schema.string().optional().describe("Commit message. Defaults to an auto-generated summary."),
+      },
+      async execute({ name, message }) {
+        const args = ["save"]
+        if (name) args.push(name)
+        if (message) args.push("-m", message)
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_save" })
+      },
+    }),
+    akm_import: tool({
+      description: "Import a file (or stdin) into the stash as a typed asset. Pass '-' as source to read from a string via content.",
+      args: {
+        source: tool.schema.string().describe("Path to the source file, or '-' to read from stdin (use 'content' to provide it)."),
+        name: tool.schema.string().optional().describe("Optional asset name override."),
+        force: tool.schema.boolean().optional().describe("Overwrite an existing asset with the same name."),
+        content: tool.schema.string().optional().describe("Raw content to feed on stdin when source is '-'."),
+      },
+      async execute({ source, name, force, content }) {
+        const args = ["import", source]
+        if (name) args.push("--name", name)
+        if (force) args.push("--force")
+        const command = resolveAkmCommand()
+        if (typeof command !== "string") return JSON.stringify(command)
+        if (source === "-" && content) {
+          try {
+            const stdout = execFileSync(command, [...args, "--format", "json"], {
+              encoding: "utf8",
+              timeout: 60_000,
+              input: content,
+            })
+            return stdout
+          } catch (error: unknown) {
+            return JSON.stringify({ ok: false, error: formatCliError(error) })
+          }
+        }
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_import" })
+      },
+    }),
+    akm_vault: tool({
+      description: "Manage encrypted-at-rest vaults of KEY=VALUE pairs. Values never surface in any output channel — 'show'/'list' return key names only, 'set'/'unset' never echo the value. Use 'shell_snippet' to get a shell-eval snippet that loads values into the process.",
+      args: {
+        action: tool.schema.enum(["list", "show", "create", "set", "unset", "shell_snippet"]).describe("Vault subcommand. 'shell_snippet' wraps 'vault load' — treat its output as opaque shell text meant for eval."),
+        ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/set/unset/shell_snippet; optional for list."),
+        name: tool.schema.string().optional().describe("Vault name when action is 'create' (e.g. 'prod' → vaults/prod.env)."),
+        key: tool.schema.string().optional().describe("Variable name for set/unset. May include '=' to pass KEY=VALUE in one field when value is omitted."),
+        value: tool.schema.string().optional().describe("Value to store. Never echoed back."),
+        comment: tool.schema.string().optional().describe("Optional inline '# comment' written above the key for 'set'."),
+      },
+      async execute({ action, ref, name, key, value, comment }) {
+        const logMeta = { toolName: "akm_vault" }
+        switch (action) {
+          case "list": {
+            const args = ["vault", "list"]
+            if (ref) args.push(ref)
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "show": {
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='show'." })
+            return runCli(client as unknown as LogCapableClient, ["vault", "show", ref], logMeta)
+          }
+          case "create": {
+            if (!name) return JSON.stringify({ ok: false, error: "'name' is required for action='create'." })
+            return runCli(client as unknown as LogCapableClient, ["vault", "create", name], logMeta)
+          }
+          case "set": {
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='set'." })
+            if (!key) return JSON.stringify({ ok: false, error: "'key' is required for action='set'." })
+            const args = ["vault", "set", ref, key]
+            if (value != null) args.push(value)
+            if (comment) args.push("--comment", comment)
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "unset": {
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='unset'." })
+            if (!key) return JSON.stringify({ ok: false, error: "'key' is required for action='unset'." })
+            return runCli(client as unknown as LogCapableClient, ["vault", "unset", ref, key], logMeta)
+          }
+          case "shell_snippet": {
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='shell_snippet'." })
+            // `vault load` emits raw shell — not JSON. Return the snippet verbatim
+            // so the caller can hand it to a shell via eval. Never parse values.
+            const command = resolveAkmCommand()
+            if (typeof command !== "string") return JSON.stringify(command)
+            try {
+              const stdout = execFileSync(command, ["vault", "load", ref], {
+                encoding: "utf8",
+                timeout: 30_000,
+              })
+              return JSON.stringify({ ok: true, ref, shell: stdout.trim() })
+            } catch (error: unknown) {
+              return JSON.stringify({ ok: false, error: formatCliError(error) })
+            }
+          }
+        }
+      },
+    }),
+    akm_wiki: tool({
+      description: "Manage AKM wikis — multi-wiki knowledge bases under <stashDir>/wikis/<name>/. Supports scaffolding, registering external sources, listing pages, scoped search, stashing raw sources, lint, and ingest workflow.",
+      args: {
+        action: tool.schema.enum([
+          "create",
+          "register",
+          "list",
+          "show",
+          "remove",
+          "pages",
+          "search",
+          "stash",
+          "lint",
+          "ingest",
+        ]).describe("Wiki subcommand."),
+        name: tool.schema.string().optional().describe("Wiki name (required for every action except 'list')."),
+        source_ref: tool.schema.string().optional().describe("Source ref to register (required for action='register'). Accepts directory paths, git URLs, github owner/repo, or https:// website roots."),
+        writable: tool.schema.boolean().optional().describe("When registering a git-backed source, mark it as push-writable (used by akm_save)."),
+        trust: tool.schema.boolean().optional().describe("Bypass install-audit blocking for this registration only."),
+        max_pages: tool.schema.number().optional().describe("Crawler page cap when registering a website (default 50)."),
+        max_depth: tool.schema.number().optional().describe("Crawler depth cap when registering a website (default 3)."),
+        query: tool.schema.string().optional().describe("Query string for action='search'."),
+        limit: tool.schema.number().optional().describe("Result cap for action='search'."),
+        source: tool.schema.string().optional().describe("Source path (or '-' for stdin) for action='stash'."),
+        as_slug: tool.schema.string().optional().describe("Explicit slug for action='stash' (defaults to derived from source)."),
+        content: tool.schema.string().optional().describe("Raw content to feed stdin when stashing with source='-'."),
+        force: tool.schema.boolean().optional().describe("Required for action='remove'."),
+        with_sources: tool.schema.boolean().optional().describe("When removing, also delete the raw/ sources (default false)."),
+      },
+      async execute({ action, name, source_ref, writable, trust, max_pages, max_depth, query, limit, source, as_slug, content, force, with_sources }) {
+        const logMeta = { toolName: "akm_wiki" }
+        const requireName = () => {
+          if (!name) return JSON.stringify({ ok: false, error: `'name' is required for action='${action}'.` })
+          return null
+        }
+        switch (action) {
+          case "list":
+            return runCli(client as unknown as LogCapableClient, ["wiki", "list"], logMeta)
+          case "create": {
+            const err = requireName(); if (err) return err
+            return runCli(client as unknown as LogCapableClient, ["wiki", "create", name!], logMeta)
+          }
+          case "show": {
+            const err = requireName(); if (err) return err
+            return runCli(client as unknown as LogCapableClient, ["wiki", "show", name!], logMeta)
+          }
+          case "pages": {
+            const err = requireName(); if (err) return err
+            return runCli(client as unknown as LogCapableClient, ["wiki", "pages", name!], logMeta)
+          }
+          case "ingest": {
+            const err = requireName(); if (err) return err
+            return runCli(client as unknown as LogCapableClient, ["wiki", "ingest", name!], logMeta)
+          }
+          case "lint": {
+            const err = requireName(); if (err) return err
+            // `wiki lint` exits 1 when findings exist, which runCli surfaces as
+            // an error envelope. That is still useful output — the JSON body is
+            // the lint report. Pass through either way.
+            return runCli(client as unknown as LogCapableClient, ["wiki", "lint", name!], logMeta)
+          }
+          case "register": {
+            const err = requireName(); if (err) return err
+            if (!source_ref) return JSON.stringify({ ok: false, error: "'source_ref' is required for action='register'." })
+            const args = ["wiki", "register", name!, source_ref]
+            if (writable) args.push("--writable")
+            if (trust) args.push("--trust")
+            if (max_pages != null) args.push("--max-pages", String(max_pages))
+            if (max_depth != null) args.push("--max-depth", String(max_depth))
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "remove": {
+            const err = requireName(); if (err) return err
+            if (!force) return JSON.stringify({ ok: false, error: "'force' must be true to remove a wiki." })
+            const args = ["wiki", "remove", name!, "--force"]
+            if (with_sources) args.push("--with-sources")
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "search": {
+            const err = requireName(); if (err) return err
+            if (!query) return JSON.stringify({ ok: false, error: "'query' is required for action='search'." })
+            const args = ["wiki", "search", name!, query]
+            if (limit != null) args.push("--limit", String(limit))
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "stash": {
+            const err = requireName(); if (err) return err
+            if (!source) return JSON.stringify({ ok: false, error: "'source' is required for action='stash'." })
+            const args = ["wiki", "stash", name!, source]
+            if (as_slug) args.push("--as", as_slug)
+            if (source === "-" && content) {
+              const command = resolveAkmCommand()
+              if (typeof command !== "string") return JSON.stringify(command)
+              try {
+                const stdout = execFileSync(command, [...args, "--format", "json"], {
+                  encoding: "utf8",
+                  timeout: 60_000,
+                  input: content,
+                })
+                return stdout
+              } catch (error: unknown) {
+                return JSON.stringify({ ok: false, error: formatCliError(error) })
+              }
+            }
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+        }
+      },
+    }),
+    akm_workflow: tool({
+      description: "Manage AKM workflow runs — stateful multi-step procedures defined as workflow:<name> assets. Use start/next/complete/resume to drive a run, status/list to inspect, create/template to author.",
+      args: {
+        action: tool.schema.enum([
+          "start",
+          "next",
+          "complete",
+          "status",
+          "list",
+          "create",
+          "template",
+          "resume",
+        ]).describe("Workflow subcommand."),
+        ref: tool.schema.string().optional().describe("Workflow ref (e.g. workflow:release). Required for start; accepted by next/status as a target."),
+        target: tool.schema.string().optional().describe("Run id or workflow ref for next/status. When a workflow ref is passed to 'next', a new run is auto-started."),
+        run_id: tool.schema.string().optional().describe("Workflow run id. Required for complete and resume."),
+        params: tool.schema.string().optional().describe("JSON object string of parameters for start/next."),
+        step: tool.schema.string().optional().describe("Step id to transition (required for action='complete')."),
+        state: tool.schema.enum(["completed", "blocked", "failed", "skipped"]).optional().describe("Step state for 'complete'. Defaults to 'completed'."),
+        notes: tool.schema.string().optional().describe("Freeform notes attached to the step transition."),
+        evidence: tool.schema.string().optional().describe("JSON object string of evidence attached to the step transition."),
+        name: tool.schema.string().optional().describe("Workflow name for action='create'."),
+        from: tool.schema.string().optional().describe("Path to a markdown template for action='create'."),
+        force: tool.schema.boolean().optional().describe("Overwrite an existing workflow on create (requires --from or --reset)."),
+        reset: tool.schema.boolean().optional().describe("Reset to the built-in template for action='create'."),
+        filter_ref: tool.schema.string().optional().describe("Restrict action='list' to runs of this workflow ref."),
+        active_only: tool.schema.boolean().optional().describe("Restrict action='list' to active (non-terminal) runs."),
+      },
+      async execute({
+        action,
+        ref,
+        target,
+        run_id,
+        params,
+        step,
+        state,
+        notes,
+        evidence,
+        name,
+        from,
+        force,
+        reset,
+        filter_ref,
+        active_only,
+      }) {
+        const logMeta = { toolName: "akm_workflow" }
+        switch (action) {
+          case "start": {
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='start'." })
+            const args = ["workflow", "start", ref]
+            if (params) args.push("--params", params)
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "next": {
+            const picked = target ?? run_id ?? ref
+            if (!picked) return JSON.stringify({ ok: false, error: "'target', 'run_id', or 'ref' is required for action='next'." })
+            const args = ["workflow", "next", picked]
+            if (params) args.push("--params", params)
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "complete": {
+            if (!run_id) return JSON.stringify({ ok: false, error: "'run_id' is required for action='complete'." })
+            if (!step) return JSON.stringify({ ok: false, error: "'step' is required for action='complete'." })
+            const args = ["workflow", "complete", run_id, "--step", step]
+            if (state) args.push("--state", state)
+            if (notes) args.push("--notes", notes)
+            if (evidence) args.push("--evidence", evidence)
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "status": {
+            const picked = target ?? run_id ?? ref
+            if (!picked) return JSON.stringify({ ok: false, error: "'target', 'run_id', or 'ref' is required for action='status'." })
+            return runCli(client as unknown as LogCapableClient, ["workflow", "status", picked], logMeta)
+          }
+          case "list": {
+            const args = ["workflow", "list"]
+            if (filter_ref) args.push("--ref", filter_ref)
+            if (active_only) args.push("--active")
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "create": {
+            if (!name) return JSON.stringify({ ok: false, error: "'name' is required for action='create'." })
+            const args = ["workflow", "create", name]
+            if (from) args.push("--from", from)
+            if (force) args.push("--force")
+            if (reset) args.push("--reset")
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "template": {
+            // The workflow template is emitted as raw markdown, not JSON.
+            const command = resolveAkmCommand()
+            if (typeof command !== "string") return JSON.stringify(command)
+            try {
+              const stdout = execFileSync(command, ["workflow", "template"], {
+                encoding: "utf8",
+                timeout: 30_000,
+              })
+              return JSON.stringify({ ok: true, template: stdout })
+            } catch (error: unknown) {
+              return JSON.stringify({ ok: false, error: formatCliError(error) })
+            }
+          }
+          case "resume": {
+            if (!run_id) return JSON.stringify({ ok: false, error: "'run_id' is required for action='resume'." })
+            return runCli(client as unknown as LogCapableClient, ["workflow", "resume", run_id], logMeta)
+          }
+        }
       },
     }),
     akm_upgrade: tool({

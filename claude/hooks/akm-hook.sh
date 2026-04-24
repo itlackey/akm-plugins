@@ -247,8 +247,9 @@ output = get_text(data.get("output")) or get_text(data.get("tool_output")) or ge
 combined = "\n".join(part for part in (command, output) if part)
 
 # Detect any asset ref that akm might know about. Ref grammar from the skill:
-#   [origin//]type:name   where type ∈ {skill, command, agent, knowledge, memory, script}
-ref_pattern = re.compile(r"(?:[A-Za-z0-9@._+/-]+//)?(?:skill|command|agent|knowledge|memory|script):[A-Za-z0-9._/-]+")
+#   [origin//]type:name   where type ∈ {skill, command, agent, knowledge, memory,
+#                                       script, workflow, vault, wiki}
+ref_pattern = re.compile(r"(?:[A-Za-z0-9@._+/-]+//)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/-]+")
 refs = set(ref_pattern.findall(combined))
 
 if not refs and "akm remember" in command:
@@ -357,6 +358,7 @@ auto_feedback() {
     [ -n "$ref" ] || continue
     case "$ref" in
       memory:*) continue ;;  # memories don't take feedback today
+      vault:*) continue ;;   # vault values never surface — feedback is noise
     esac
     akm_run --format json -q feedback "$ref" "$sentiment_flag" --note "$note" >/dev/null
   done
