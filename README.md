@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI. Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, and **execute commands** from a stash directory.
+Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0.5.0+). Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, and **access vaults** from a stash directory.
 
 ## OpenCode
 
@@ -14,14 +14,14 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides seventeen tools:
-- `akm_search` — search the stash, the registry, or both
+Provides twenty-four tools:
+- `akm_search` — search the stash, the registry, or both (now including `workflow`, `vault`, and `wiki` types)
 - `akm_registry_search` — search configured registries for installable kits and optional asset hits
 - `akm_show` — show a stash asset by ref
 - `akm_index` — build/rebuild the search index
 - `akm_agent` — dispatch stash `agent:*` resources into OpenCode sessions
 - `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
-- `akm_add` — install kits from npm, GitHub, git URLs, or local directories
+- `akm_add` — install kits or register external sources (including wikis via `type: "wiki"`)
 - `akm_list` — list configured AKM sources
 - `akm_remove` — remove a configured AKM source
 - `akm_update` — update one or all managed AKM sources
@@ -32,6 +32,13 @@ Provides seventeen tools:
 - `akm_run` — execute a stash script via the `run` field
 - `akm_sources` — backward-compatible alias that lists configured AKM sources
 - `akm_upgrade` — check for or install akm CLI updates
+- `akm_curate` — curate stash assets for a task or topic
+- `akm_evolve` — dispatch the AKM curator agent
+- `akm_save` — commit (and push, when writable) a git-backed stash
+- `akm_import` — import a file (or stdin content) as a typed asset
+- `akm_vault` — manage vaults (`list`, `show`, `create`, `set`, `unset`, `shell_snippet`). Values never surface in any output channel
+- `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
+- `akm_workflow` — drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`)
 
 The OpenCode plugin also hooks `chat.message` and `tool.execute.after` to record user/system feedback events and memory usage in OpenCode app logs when relevant.
 
@@ -83,7 +90,11 @@ stash/
 ├── skills/     # skill directories containing SKILL.md
 ├── commands/   # markdown files
 ├── agents/     # markdown files
-└── knowledge/  # markdown files
+├── knowledge/  # markdown files
+├── memories/   # markdown memory files (akm remember)
+├── workflows/  # multi-step procedures (workflow:<name>)
+├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
+└── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
 ```
 
 Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).

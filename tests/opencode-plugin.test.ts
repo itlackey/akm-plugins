@@ -90,8 +90,13 @@ describe("akm-opencode plugin", () => {
       expect(toolNames).toContain("akm_upgrade")
       expect(toolNames).toContain("akm_curate")
       expect(toolNames).toContain("akm_evolve")
+      expect(toolNames).toContain("akm_save")
+      expect(toolNames).toContain("akm_import")
+      expect(toolNames).toContain("akm_vault")
+      expect(toolNames).toContain("akm_wiki")
+      expect(toolNames).toContain("akm_workflow")
       expect(toolNames).not.toContain("akm_submit")
-      expect(toolNames).toHaveLength(19)
+      expect(toolNames).toHaveLength(24)
     })
 
     it("returns lifecycle hooks for the compound-engineering loop", async () => {
@@ -234,6 +239,83 @@ describe("akm-opencode plugin", () => {
       const upgrade = hooks.tool!.akm_upgrade
       expect(upgrade.args.check).toBeDefined()
       expect(upgrade.args.force).toBeDefined()
+    })
+
+    it("akm_save has required args schema", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const save = hooks.tool!.akm_save
+      expect(save.args.name).toBeDefined()
+      expect(save.args.message).toBeDefined()
+    })
+
+    it("akm_import has required args schema", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const imp = hooks.tool!.akm_import
+      expect(imp.args.source).toBeDefined()
+      expect(imp.args.name).toBeDefined()
+      expect(imp.args.force).toBeDefined()
+      expect(imp.args.content).toBeDefined()
+    })
+
+    it("akm_vault has required args schema", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const vault = hooks.tool!.akm_vault
+      expect(vault.args.action).toBeDefined()
+      expect(vault.args.ref).toBeDefined()
+      expect(vault.args.name).toBeDefined()
+      expect(vault.args.key).toBeDefined()
+      expect(vault.args.value).toBeDefined()
+      expect(vault.args.comment).toBeDefined()
+    })
+
+    it("akm_wiki has required args schema", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const wiki = hooks.tool!.akm_wiki
+      expect(wiki.args.action).toBeDefined()
+      expect(wiki.args.name).toBeDefined()
+      expect(wiki.args.source_ref).toBeDefined()
+      expect(wiki.args.writable).toBeDefined()
+      expect(wiki.args.trust).toBeDefined()
+      expect(wiki.args.max_pages).toBeDefined()
+      expect(wiki.args.max_depth).toBeDefined()
+      expect(wiki.args.query).toBeDefined()
+      expect(wiki.args.source).toBeDefined()
+      expect(wiki.args.as_slug).toBeDefined()
+      expect(wiki.args.force).toBeDefined()
+      expect(wiki.args.with_sources).toBeDefined()
+    })
+
+    it("akm_workflow has required args schema", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const wf = hooks.tool!.akm_workflow
+      expect(wf.args.action).toBeDefined()
+      expect(wf.args.ref).toBeDefined()
+      expect(wf.args.target).toBeDefined()
+      expect(wf.args.run_id).toBeDefined()
+      expect(wf.args.params).toBeDefined()
+      expect(wf.args.step).toBeDefined()
+      expect(wf.args.state).toBeDefined()
+      expect(wf.args.evidence).toBeDefined()
+      expect(wf.args.name).toBeDefined()
+      expect(wf.args.from).toBeDefined()
+      expect(wf.args.force).toBeDefined()
+      expect(wf.args.reset).toBeDefined()
+      expect(wf.args.filter_ref).toBeDefined()
+      expect(wf.args.active_only).toBeDefined()
+    })
+
+    it("akm_add exposes the expanded v0.5.0 flag surface", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const add = hooks.tool!.akm_add
+      expect(add.args.package_ref).toBeDefined()
+      expect(add.args.type).toBeDefined()
+      expect(add.args.name).toBeDefined()
+      expect(add.args.writable).toBeDefined()
+      expect(add.args.trust).toBeDefined()
+      expect(add.args.provider).toBeDefined()
+      expect(add.args.options).toBeDefined()
+      expect(add.args.max_pages).toBeDefined()
+      expect(add.args.max_depth).toBeDefined()
     })
   })
 
@@ -1974,6 +2056,293 @@ describe("akm-opencode plugin", () => {
         ["upgrade", "--force", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
+    })
+  })
+
+  describe("v0.5.0 tool execution", () => {
+    it("akm_save invokes the CLI with name and message", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_save.execute({ name: "stash", message: "checkpoint" } as any, {} as any)
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["save", "stash", "-m", "checkpoint", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_import pipes content on stdin when source is '-'", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_import.execute(
+        { source: "-", content: "# snippet", name: "notes" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["import", "-", "--name", "notes", "--format", "json"],
+        expect.objectContaining({ input: "# snippet" }),
+      )
+    })
+
+    it("akm_vault set forwards ref, key, value, and comment", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_vault.execute(
+        { action: "set", ref: "vault:prod", key: "API_KEY", value: "s3kret", comment: "prod key" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["vault", "set", "vault:prod", "API_KEY", "s3kret", "--comment", "prod key", "--format", "json"],
+        expect.any(Object),
+      )
+    })
+
+    it("akm_vault shell_snippet returns raw shell text wrapped in JSON", async () => {
+      // `resolveAkmCommand` probes the binary via --version before the actual
+      // command runs, so route shell output only for the vault-load invocation.
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "vault" && args[1] === "load") {
+          return ". '/tmp/vault.sh'; rm -f '/tmp/vault.sh'"
+        }
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_vault.execute(
+        { action: "shell_snippet", ref: "vault:prod" } as any,
+        {} as any,
+      )
+      const parsed = JSON.parse(result as string)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.ref).toBe("vault:prod")
+      expect(parsed.shell).toContain(". '/tmp/vault.sh'")
+    })
+
+    it("akm_vault rejects set without a key", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_vault.execute(
+        { action: "set", ref: "vault:prod" } as any,
+        {} as any,
+      )
+      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "'key' is required for action='set'." })
+    })
+
+    it("akm_wiki register passes writable, trust, and crawler caps", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_wiki.execute(
+        {
+          action: "register",
+          name: "team",
+          source_ref: "https://example.com/docs",
+          writable: true,
+          trust: true,
+          max_pages: 120,
+          max_depth: 4,
+        } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        [
+          "wiki",
+          "register",
+          "team",
+          "https://example.com/docs",
+          "--writable",
+          "--trust",
+          "--max-pages",
+          "120",
+          "--max-depth",
+          "4",
+          "--format",
+          "json",
+        ],
+        expect.any(Object),
+      )
+    })
+
+    it("akm_wiki remove requires force and forwards --with-sources", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const denied = await hooks.tool!.akm_wiki.execute(
+        { action: "remove", name: "team" } as any,
+        {} as any,
+      )
+      expect(JSON.parse(denied as string)).toEqual({ ok: false, error: "'force' must be true to remove a wiki." })
+
+      await hooks.tool!.akm_wiki.execute(
+        { action: "remove", name: "team", force: true, with_sources: true } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["wiki", "remove", "team", "--force", "--with-sources", "--format", "json"],
+        expect.any(Object),
+      )
+    })
+
+    it("akm_wiki stash streams content on stdin when source is '-'", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_wiki.execute(
+        {
+          action: "stash",
+          name: "team",
+          source: "-",
+          as_slug: "intro",
+          content: "# intro",
+        } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["wiki", "stash", "team", "-", "--as", "intro", "--format", "json"],
+        expect.objectContaining({ input: "# intro" }),
+      )
+    })
+
+    it("akm_workflow start passes --params JSON verbatim", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_workflow.execute(
+        { action: "start", ref: "workflow:release", params: '{"tag":"v1"}' } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["workflow", "start", "workflow:release", "--params", '{"tag":"v1"}', "--format", "json"],
+        expect.any(Object),
+      )
+    })
+
+    it("akm_workflow complete requires run_id and step and forwards evidence", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const missing = await hooks.tool!.akm_workflow.execute(
+        { action: "complete", step: "qa" } as any,
+        {} as any,
+      )
+      expect(JSON.parse(missing as string).ok).toBe(false)
+
+      await hooks.tool!.akm_workflow.execute(
+        {
+          action: "complete",
+          run_id: "run-1",
+          step: "qa",
+          state: "blocked",
+          notes: "awaiting review",
+          evidence: '{"url":"https://ex.com/1"}',
+        } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        [
+          "workflow",
+          "complete",
+          "run-1",
+          "--step",
+          "qa",
+          "--state",
+          "blocked",
+          "--notes",
+          "awaiting review",
+          "--evidence",
+          '{"url":"https://ex.com/1"}',
+          "--format",
+          "json",
+        ],
+        expect.any(Object),
+      )
+    })
+
+    it("akm_workflow next accepts either a run id or a workflow ref", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_workflow.execute(
+        { action: "next", ref: "workflow:release" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["workflow", "next", "workflow:release", "--format", "json"],
+        expect.any(Object),
+      )
+    })
+
+    it("akm_add routes wiki registrations through --type wiki", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_add.execute(
+        {
+          package_ref: "https://example.com/docs",
+          type: "wiki",
+          name: "docs",
+          writable: true,
+          provider: "website",
+          max_pages: 80,
+        } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        [
+          "add",
+          "https://example.com/docs",
+          "--type",
+          "wiki",
+          "--name",
+          "docs",
+          "--writable",
+          "--provider",
+          "website",
+          "--max-pages",
+          "80",
+          "--format",
+          "json",
+        ],
+        expect.any(Object),
+      )
+    })
+  })
+
+  describe("v0.5.0 ref pattern", () => {
+    it("extracts workflow, vault, and wiki refs from tool output", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const output = JSON.stringify({
+        ok: true,
+        hits: [
+          { ref: "workflow:release" },
+          { ref: "vault:prod" },
+          { ref: "wiki:team/intro" },
+          { ref: "skill:review" },
+        ],
+      })
+      const logCalls: any[] = []
+      const input = createPluginInput({
+        client: {
+          ...(createMockClient() as any),
+          app: {
+            log: mock(async (payload: any) => {
+              logCalls.push(payload)
+              return { data: {}, error: undefined }
+            }),
+          },
+        },
+      })
+      const hooks2 = await AkmPlugin(input)
+      await hooks2["tool.execute.after"]!(
+        { tool: "akm_search", args: {}, sessionID: "s1", callID: "c1" } as any,
+        { title: "t", output, metadata: {} } as any,
+      )
+      const memoryLog = logCalls.find((c) => c.body?.extra?.subsystem === "feedback")
+      expect(memoryLog).toBeDefined()
+      // Verify the ref extraction picked up the v0.5.0 asset types by checking
+      // that feedback was recorded for the non-memory, non-vault refs.
+      // Auto-feedback wraps its call as: [..., "-q", "feedback", <ref>, ...]
+      const feedbackRefs = mockExecFileSync.mock.calls
+        .filter((call: any[]) => Array.isArray(call[1]) && call[1].includes("feedback"))
+        .map((call: any[]) => {
+          const args = call[1] as string[]
+          return args[args.indexOf("feedback") + 1]
+        })
+      expect(feedbackRefs).toContain("workflow:release")
+      expect(feedbackRefs).toContain("wiki:team/intro")
+      expect(feedbackRefs).toContain("skill:review")
+      // Vault refs MUST NOT receive automatic feedback.
+      expect(feedbackRefs).not.toContain("vault:prod")
     })
   })
 

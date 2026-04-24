@@ -1,11 +1,11 @@
 ---
 name: akm
-description: Search, show, dispatch agents, and execute commands from an AKM stash directory. Use when the user wants to find or use tools, skills, commands, agents, or knowledge in their stash.
+description: Search, show, dispatch agents, execute commands, run workflows, manage wikis and vaults, and curate stash assets via the akm CLI. Use when the user wants to find or use tools, skills, commands, agents, knowledge, wikis, vaults, or workflows.
 ---
 
 # AKM Stash
 
-You have access to the `akm` CLI (AKM) to manage extension assets from a stash directory.
+You have access to the `akm` CLI (AKM, v0.5.0+) to manage extension assets from a stash directory.
 
 ### Stash directory resolution
 
@@ -24,6 +24,9 @@ The stash directory contains:
 - **knowledge/** — markdown knowledge files
 - **memories/** — markdown memory files recorded with `akm remember`
 - **scripts/** — executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
+- **workflows/** — multi-step procedures (`workflow:<name>`) driven by `akm workflow`
+- **vaults/** — `.env` files (`vault:<name>`) whose values are managed by `akm vault` and **never** surface in JSON, logs, or search indexes
+- **wikis/** — per-wiki directories (`<stashDir>/wikis/<name>/`) containing `schema.md`, `index.md`, `log.md`, `raw/`, and agent-authored pages referenced as `wiki:<name>/<page>`
 
 ### Multi-source resolution
 
@@ -59,7 +62,7 @@ Use `--full` to force a full reindex instead of incremental. Run this after addi
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type skill|command|agent|knowledge|memory|script|any] [--limit N] [--source stash|local|registry|both]
+akm search [query] [--type skill|command|agent|knowledge|memory|script|workflow|vault|wiki|any] [--limit N] [--source stash|local|registry|both]
 ```
 
 Square brackets denote optional arguments; pipe-separated values denote allowed choices for a single flag.
@@ -191,6 +194,76 @@ rather than only answering the user. Options:
 - Call the `akm-curator` agent (or run `/akm-evolve`) at the end of a long
   session to consolidate hot assets, flag cold ones, and draft missing
   coverage.
+
+## Wikis
+
+Wikis are first-class knowledge bases under `<stashDir>/wikis/<name>/`. Each wiki has `schema.md` (rulebook), `index.md` (regenerable catalog), `log.md` (append-only, agent-maintained), `raw/` (immutable ingested sources), and agent-authored pages referenced as `wiki:<name>/<page>`. Wiki names must match `[a-z0-9][a-z0-9-]*`.
+
+```bash
+akm wiki create <name>                                # scaffold a new wiki
+akm wiki register <name> <ref> [--writable] [--trust] [--max-pages N] [--max-depth N]
+akm wiki list                                         # summaries with counts + last-modified
+akm wiki show <name>                                  # path, description, last 3 log entries
+akm wiki pages <name>                                 # author-written pages only (excludes schema/index/log/raw)
+akm wiki search <name> <query> [--limit N]            # scoped wiki search
+akm wiki stash <name> <source> [--as <slug>]          # copy a file/stdin into wikis/<name>/raw/
+akm wiki lint <name>                                  # orphan/xref/description/uncited-raw/stale-index checks
+akm wiki ingest <name>                                # print the ingest workflow for the agent to drive
+akm wiki remove <name> --force [--with-sources]       # preserves raw/ by default
+```
+
+`register` accepts directory paths, git URLs (`github:owner/repo`, `git+https://…`), and website roots (`https://…`). `--writable` marks a git-backed source as push-writable for `akm save`. `--trust` bypasses the install-audit block for this one registration.
+
+Page frontmatter fields: `description`, `pageKind`, `xrefs: wiki:<name>/<page>[]` (bidirectional — lint enforces), `sources: raw/<slug>[]`. `wikiRole` is reserved for `index`/`raw`.
+
+`akm wiki lint` exits 1 when findings exist — still returns a JSON report.
+
+## Vaults
+
+Vaults are `.env`-style key/value stores under `<stashDir>/vaults/<name>.env`, referenced as `vault:<name>` (or `vault:team/prod` for nested). **Values never surface in any structured channel** — not in the search index, not in `.stash.json`, not in `akm show`, not in any JSON output. Only the `vault load` command emits a shell snippet intended for `eval`.
+
+```bash
+akm vault create <name>                               # scaffold vaults/<name>.env (mode 0600)
+akm vault list [<ref>]                                # list vaults, or list keys + comments of one vault
+akm vault show <ref>                                  # key names + comments only (no values)
+akm vault set <ref> <key> [value] [--comment "..."]   # key may also be KEY=VALUE
+akm vault unset <ref> <key>
+akm vault load <ref>                                  # emits shell text: use with eval "$(akm vault load vault:<n>)"
+```
+
+**Hard rules when handling vaults:**
+- Never read or echo vault values. If the user needs to load them, run `eval "$(akm vault load vault:<name>)"` in their shell — do not pipe the output through the LLM.
+- Never write vault values back to chat, logs, or files. If a user shares a value to be stored, call `akm vault set …` directly and confirm by key name only.
+- Vault refs do not accept `akm feedback` (the hooks skip them automatically).
+
+## Workflows
+
+Workflows are stateful multi-step procedures. A workflow is an asset (`workflow:<name>`) that describes ordered steps; a **run** is a live instance driven forward with `akm workflow next` / `complete`.
+
+```bash
+akm workflow template                                 # print the starter markdown to stdout
+akm workflow create <name> [--from <file>] [--force] [--reset]
+akm workflow start <ref> [--params <json>]            # → { runId, ... }
+akm workflow next <target> [--params <json>]          # target = runId OR workflow ref (auto-starts)
+akm workflow complete <runId> --step <id> [--state completed|blocked|failed|skipped] [--notes "..."] [--evidence <json>]
+akm workflow status <target>                          # runId OR workflow ref (resolves most recent run)
+akm workflow list [--ref <workflow>] [--active]
+akm workflow resume <runId>                           # flip blocked/failed → active
+```
+
+When the user asks you to run a workflow, prefer `akm workflow next <ref>` for the first call (auto-starts a new run) and then track the returned `runId` for subsequent `complete`/`next` calls.
+
+## Saving and importing
+
+```bash
+akm save [name] [-m "message"]                        # commit (and push, if writable) a git-backed stash
+akm import <source> [--name <slug>] [--force]         # promote a file (or stdin with "-") into the indexed stash
+akm help migrate <version>                            # release notes / migration guidance (e.g. 0.5.0)
+akm enable <skills.sh|context-hub>                    # toggle optional components
+akm disable <skills.sh|context-hub>
+```
+
+Use `akm save` at the end of a session to persist stash edits when the primary stash is git-backed and marked `writable`. Use `akm import` to register a drafted markdown file as a first-class asset.
 
 ## Dispatching Stash Agents
 
