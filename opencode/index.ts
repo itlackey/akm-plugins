@@ -1053,15 +1053,14 @@ async function searchRef(
   return { ok: true, ref }
 }
 
-async function resolveRefInput(
+async function resolveRefOrQueryInput(
   client: LogCapableClient,
   input: { ref?: string; query?: string },
   type: AssetType | "any",
   meta: CliLogMeta,
 ): Promise<{ ok: true; ref: string } | CliError> {
-  if (input.ref && input.ref.trim()) {
-    return { ok: true, ref: input.ref.trim() }
-  }
+  const explicitRef = input.ref?.trim()
+  if (explicitRef) return { ok: true, ref: explicitRef }
 
   const query = input.query?.trim()
   if (!query) {
@@ -1874,13 +1873,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         })
         if (!promptResponse.ok) return JSON.stringify(promptResponse)
 
-        const text = extractText(promptResponse.data.parts)
-        sessionCuratorReport.set(context.sessionID, summarizeCuratorReportForContext(text))
+        const fullText = extractText(promptResponse.data.parts)
+        sessionCuratorReport.set(context.sessionID, summarizeCuratorReportForContext(fullText))
         markContextEpochDirty(context.sessionID)
         const dateTag = buildDateTag()
         const shortSid = context.sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"
-        const curatorMemoryRef = text
-          ? rememberTextAsMemory(`akm-curator-${dateTag}-${shortSid}`, text)
+        const curatorMemoryRef = fullText
+          ? rememberTextAsMemory(`akm-curator-${dateTag}-${shortSid}`, fullText)
           : null
 
         return JSON.stringify({
@@ -1890,7 +1889,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           sessionID: targetSession.sessionID,
           focus: focus ?? null,
           curatorMemoryRef,
-          text,
+          text: fullText,
         })
       },
     }),
@@ -1950,7 +1949,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           directory: context.directory,
           sessionID: context.sessionID,
         }
-        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "agent", logMeta)
+        const resolved = await resolveRefOrQueryInput(client as unknown as LogCapableClient, { ref, query }, "agent", logMeta)
         if (!resolved.ok) return JSON.stringify(resolved)
 
         const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], logMeta)
@@ -2036,7 +2035,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           directory: context.directory,
           sessionID: context.sessionID,
         }
-        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "command", logMeta)
+        const resolved = await resolveRefOrQueryInput(client as unknown as LogCapableClient, { ref, query }, "command", logMeta)
         if (!resolved.ok) return JSON.stringify(resolved)
 
         const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], logMeta)
@@ -2118,7 +2117,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         args: tool.schema.string().optional().describe("Arguments to append to the run command."),
       },
       async execute({ ref, query, args: runArgs }) {
-        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "script", { toolName: "akm_run" })
+        const resolved = await resolveRefOrQueryInput(client as unknown as LogCapableClient, { ref, query }, "script", { toolName: "akm_run" })
         if (!resolved.ok) return JSON.stringify(resolved)
 
         const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], { toolName: "akm_run" })
