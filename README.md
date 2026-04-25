@@ -14,7 +14,7 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides twenty-four tools:
+Provides twenty-six tools:
 - `akm_search` — search the stash, the registry, or both (now including `workflow`, `vault`, and `wiki` types)
 - `akm_registry_search` — search configured registries for installable kits and optional asset hits
 - `akm_show` — show a stash asset by ref
@@ -34,13 +34,15 @@ Provides twenty-four tools:
 - `akm_upgrade` — check for or install akm CLI updates
 - `akm_curate` — curate stash assets for a task or topic
 - `akm_evolve` — dispatch the AKM curator agent
+- `akm_parent_messages` — summarize the parent OpenCode session for dispatched stash subagents
+- `akm_session_messages` — summarize a specific OpenCode session (restricted for arbitrary session IDs)
 - `akm_save` — commit (and push, when writable) a git-backed stash
 - `akm_import` — import a file (or stdin content) as a typed asset
 - `akm_vault` — manage vaults (`list`, `show`, `create`, `set`, `unset`, `shell_snippet`). Values never surface in any output channel
 - `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
 - `akm_workflow` — drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`)
 
-The OpenCode plugin also hooks `chat.message` and `tool.execute.after` to record user/system feedback events and memory usage in OpenCode app logs when relevant.
+The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to auto-resolve refs, gate destructive actions, preserve context through compaction, and record user/system feedback and memory usage in OpenCode app logs when relevant.
 
 
 ### Claude Code
