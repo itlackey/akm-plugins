@@ -49,7 +49,7 @@ This table is the curated long-tail reference, embedded verbatim from
 | Build or rebuild the stash search index | `akm index` | Rarely needed — the index refreshes implicitly after writes. | index, reindex, rebuild |
 | View or update akm config (get/set/list/unset/path) | `akm config <action> [<key>] [<value>] [--all]` | `akm config path --all` prints config, stash, cache, and index paths. | config, settings, configure, path |
 | Check for or install an akm CLI update | `akm upgrade [--check] [--force]` |  | upgrade cli, update cli, self-upgrade |
-| Run a stash script end-to-end (resolve → show → run) | `akm show <script-ref> # then exec the printed `run` command` | Or `akm --format json -q show <ref>` and pipe `.run` into your shell. | run, execute, script, exec |
+| Run a stash script end-to-end (resolve → show → run) | ``akm show <script-ref> # then exec the printed `run` command`` | Or `akm --format json -q show <ref>` and pipe `.run` into your shell. | run, execute, script, exec |
 
 ### Stash directory resolution
 
