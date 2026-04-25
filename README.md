@@ -28,7 +28,7 @@ Provides a trimmed surface of fourteen tools (down from twenty-six in 0.5.x — 
 - `akm_feedback` — record positive or negative feedback for a stash asset
 - `akm_session_messages` — summarize a specific OpenCode session (restricted for arbitrary session IDs)
 - `akm_parent_messages` — summarize the parent OpenCode session for dispatched stash subagents
-- `akm_help` — quick-reference table for non-first-class `akm` verbs, with live `akm --help` fallback (new in 0.6.0)
+- `akm_help` — quick-reference table for non-first-class `akm` verbs, with live `akm --help` fallback
 
 The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to gate destructive actions, preserve context through compaction, and record user/system feedback and memory usage in OpenCode app logs when relevant.
 
@@ -56,7 +56,7 @@ claude plugin install akm@akm-plugins
 
 Provides:
 - **AKM Skill** — Claude automatically uses the akm CLI when you ask about stash assets
-- **Trimmed slash-command surface (14 verbs)** — `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-add` (new in 0.6.0), `/akm-vault` (new in 0.6.0; read-only `list`/`show`), and `/akm-help` (new in 0.6.0)
+- **Trimmed slash-command surface (13 verbs)** — `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-add`, `/akm-vault` (read-only `list`/`show`), and `/akm-help`
 - **`/akm-help` discovery flow** — for verbs no longer first-class (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result

@@ -128,7 +128,6 @@ describe("Claude plugin metadata", () => {
       expect(existsSync(file)).toBe(true)
       expect(readFileSync(file, "utf8")).toMatch(/^---/)
     }
-    // akm-save was removed in 0.6.0 — saving is reached via /akm-help.
     expect(existsSync(path.join(commandsDir, "akm-save.md"))).toBe(false)
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
   })

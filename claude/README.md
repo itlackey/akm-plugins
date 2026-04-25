@@ -139,7 +139,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 ### Slash commands
 
-The plugin ships a trimmed surface of 14 first-class verbs. `/akm-add`, `/akm-vault`, and `/akm-help` are new in 0.6.0; `/akm-save` has been removed from the slash-command surface (the underlying `akm save` CLI verb is still available — see "When to use what" below).
+The plugin ships a trimmed surface of 13 first-class verbs. `/akm-save` is no longer part of the slash-command surface — the underlying `akm save` CLI verb is still available via `/akm-help` (see "When to use what" below).
 
 - `/akm-search <query> [flags]` — run `akm search` directly from Claude.
 - `/akm-show <ref> [view args]` — inspect a stash asset by ref.
@@ -151,9 +151,9 @@ The plugin ships a trimmed surface of 14 first-class verbs. `/akm-add`, `/akm-va
 - `/akm-evolve [focus]` — dispatch the `akm-curator` agent to review session logs and propose stash improvements.
 - `/akm-wiki <subcommand> [args]` — manage AKM wikis (create, register, list, show, pages, search, stash, lint, ingest, remove).
 - `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
-- `/akm-add <kit-or-source>` — install registry kits or register external sources (new in 0.6.0).
-- `/akm-vault <list|show> [name]` — read-only vault inspection: enumerate vaults or show key names for a single vault. Values never surface through the chat turn (new in 0.6.0).
-- `/akm-help [task]` — surface a curated quick-reference for non-first-class `akm` verbs and fall back to live `akm --help` (new in 0.6.0).
+- `/akm-add <kit-or-source>` — install registry kits or register external sources.
+- `/akm-vault <list|show> [name]` — read-only vault inspection: enumerate vaults or show key names for a single vault. Values never surface through the chat turn.
+- `/akm-help [task]` — surface a curated quick-reference for non-first-class `akm` verbs and fall back to live `akm --help`.
 
 ### When to use what
 

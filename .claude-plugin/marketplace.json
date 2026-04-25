@@ -9,7 +9,7 @@
       "name": "akm",
       "source": "./claude",
       "description": "Search, show, curate, and manage akm stash assets — skills, commands, agents, knowledge, memories, scripts, workflows, vaults, and wikis — from local directories and registries via the akm CLI.",
-      "version": "0.6.0"
+      "version": "0.5.0"
     }
   ]
 }
