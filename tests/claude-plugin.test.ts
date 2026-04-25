@@ -109,7 +109,7 @@ describe("Claude plugin metadata", () => {
   it("ships the slash commands and curator agent referenced by the docs", () => {
     const commandsDir = path.join(repoRoot, "claude/commands")
     const agentsDir = path.join(repoRoot, "claude/agents")
-    for (const name of ["akm-curate", "akm-remember", "akm-feedback", "akm-evolve"]) {
+    for (const name of ["akm-curate", "akm-remember", "akm-feedback", "akm-evolve", "akm-search", "akm-show", "akm-agent", "akm-cmd"]) {
       const file = path.join(commandsDir, `${name}.md`)
       expect(existsSync(file)).toBe(true)
       expect(readFileSync(file, "utf8")).toMatch(/^---/)

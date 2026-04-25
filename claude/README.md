@@ -25,7 +25,7 @@ claude plugin install akm@akm-plugins
 
 - **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
 - **Agentic hooks** — lifecycle hooks that install `akm`, auto-curate stash matches into every user prompt, auto-record feedback when assets are used, and harvest session memories at stop/compact time
-- **Slash commands** — `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve` for explicit control of the compound-engineering loop
+- **Slash commands** — `/akm-curate`, `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-remember`, `/akm-feedback`, `/akm-evolve` for explicit control of the compound-engineering loop
 - **`akm-curator` agent** — a self-evolution subagent that reviews session logs and proposes stash improvements
 
 The skill teaches Claude to:
@@ -140,6 +140,10 @@ or the CLI call fails, the hook exits silently without affecting the session.
 ### Slash commands
 
 - `/akm-curate <task>` — manually curate stash assets for a topic and load them.
+- `/akm-search <query> [flags]` — run `akm search` directly from Claude.
+- `/akm-show <ref> [view args]` — inspect a stash asset by ref.
+- `/akm-agent <agent-ref-or-query> [task]` — resolve and dispatch a stash agent through the AKM skill flow.
+- `/akm-cmd <command-ref-or-query> [args]` — resolve and execute a stash command template through the AKM skill flow.
 - `/akm-remember [slug]` — distill the current conversation into a durable memory.
 - `/akm-feedback <ref> <+|-> [note]` — record explicit feedback on an asset.
 - `/akm-evolve [focus]` — dispatch the `akm-curator` agent to review session logs and propose stash improvements.
