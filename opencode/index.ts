@@ -47,7 +47,9 @@ const sessionFinalMemoryCaptured = new Set<string>()
 const sessionSuccessfulAssetTouchCount = new Map<string, number>()
 let cachedAkmStashDir: string | undefined
 
-// Asset-ref grammar matching the stash skill: [origin//]type:name
+// Asset-ref grammar matching the stash skill: [origin//]type:name.
+// We validate normalized tokens individually instead of running a global regex
+// over arbitrary tool output to keep extraction predictable and ReDoS-safe.
 const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/\-]+$/
 
 function readPackageVersion(): string {
@@ -1447,8 +1449,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         }
         for (const key of ["ref", "package_ref"]) {
           const value = args[key]
-          if (typeof value !== "string" || !value.trim() || isAkmRef(value.trim()) || !AKM_FUZZY_REFS) continue
-          const resolved = await resolveRefInput(logClient, { ref: value.trim() }, "any", {
+          const trimmedValue = typeof value === "string" ? value.trim() : ""
+          if (!trimmedValue || isAkmRef(trimmedValue) || !AKM_FUZZY_REFS) continue
+          const resolved = await resolveRefInput(logClient, { ref: trimmedValue }, "any", {
             toolName: input.tool,
             sessionID: input.sessionID,
           })
