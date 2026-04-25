@@ -94,38 +94,49 @@ describe("akm-opencode plugin", () => {
       expect(hooks.tool).toBeDefined()
     })
 
-    it("registers all tools", async () => {
+    it("registers the trimmed high-value tool surface plus akm_help", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const toolNames = Object.keys(hooks.tool!)
-      expect(toolNames).toContain("akm_search")
-      expect(toolNames).toContain("akm_registry_search")
-      expect(toolNames).toContain("akm_show")
-      expect(toolNames).toContain("akm_index")
-      expect(toolNames).toContain("akm_agent")
-      expect(toolNames).toContain("akm_cmd")
-      expect(toolNames).toContain("akm_add")
-      expect(toolNames).toContain("akm_list")
-      expect(toolNames).toContain("akm_remove")
-      expect(toolNames).toContain("akm_update")
-      expect(toolNames).toContain("akm_clone")
-      expect(toolNames).toContain("akm_remember")
-      expect(toolNames).toContain("akm_feedback")
-      expect(toolNames).toContain("akm_config")
-      expect(toolNames).toContain("akm_run")
-      expect(toolNames).toContain("akm_sources")
-      expect(toolNames).toContain("akm_upgrade")
-        expect(toolNames).toContain("akm_curate")
-        expect(toolNames).toContain("akm_evolve")
-        expect(toolNames).toContain("akm_parent_messages")
-        expect(toolNames).toContain("akm_session_messages")
-        expect(toolNames).toContain("akm_save")
-        expect(toolNames).toContain("akm_import")
-        expect(toolNames).toContain("akm_vault")
-        expect(toolNames).toContain("akm_wiki")
-        expect(toolNames).toContain("akm_workflow")
-        expect(toolNames).not.toContain("akm_submit")
-        expect(toolNames).toHaveLength(26)
-      })
+      const expected = [
+        "akm_search",
+        "akm_show",
+        "akm_add",
+        "akm_remember",
+        "akm_feedback",
+        "akm_curate",
+        "akm_parent_messages",
+        "akm_session_messages",
+        "akm_agent",
+        "akm_cmd",
+        "akm_vault",
+        "akm_wiki",
+        "akm_workflow",
+        "akm_help",
+      ]
+      for (const name of expected) {
+        expect(toolNames).toContain(name)
+      }
+      const removed = [
+        "akm_registry_search",
+        "akm_index",
+        "akm_list",
+        "akm_remove",
+        "akm_update",
+        "akm_clone",
+        "akm_evolve",
+        "akm_config",
+        "akm_run",
+        "akm_sources",
+        "akm_upgrade",
+        "akm_save",
+        "akm_import",
+        "akm_submit",
+      ]
+      for (const name of removed) {
+        expect(toolNames).not.toContain(name)
+      }
+      expect(toolNames).toHaveLength(expected.length)
+    })
 
     it("returns lifecycle hooks for the compound-engineering loop", async () => {
       const hooks = await AkmPlugin(createPluginInput())
@@ -161,15 +172,6 @@ describe("akm-opencode plugin", () => {
       expect(search.args.source).toBeDefined()
     })
 
-    it("akm_registry_search has required args schema", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const search = hooks.tool!.akm_registry_search
-      expect(search.args.query).toBeDefined()
-      expect(search.args.type).toBeDefined()
-      expect(search.args.limit).toBeDefined()
-      expect(search.args.assets).toBeDefined()
-    })
-
     it("akm_show has required args schema", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const show = hooks.tool!.akm_show
@@ -178,12 +180,6 @@ describe("akm-opencode plugin", () => {
       expect(show.args.heading).toBeDefined()
       expect(show.args.start_line).toBeDefined()
       expect(show.args.end_line).toBeDefined()
-    })
-
-    it("akm_index has no required args", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const index = hooks.tool!.akm_index
-      expect(Object.keys(index.args)).toHaveLength(0)
     })
 
     it("akm_agent has required args schema", async () => {
@@ -200,36 +196,6 @@ describe("akm-opencode plugin", () => {
       const hooks = await AkmPlugin(createPluginInput())
       const add = hooks.tool!.akm_add
       expect(add.args.package_ref).toBeDefined()
-    })
-
-    it("akm_list has no required args", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const list = hooks.tool!.akm_list
-      expect(Object.keys(list.args)).toHaveLength(0)
-    })
-
-    it("akm_remove has required args schema", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const remove = hooks.tool!.akm_remove
-      expect(remove.args.package_ref).toBeDefined()
-      expect(remove.args.confirm).toBeDefined()
-    })
-
-    it("akm_update has required args schema", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const update = hooks.tool!.akm_update
-      expect(update.args.package_ref).toBeDefined()
-      expect(update.args.all).toBeDefined()
-      expect(update.args.force).toBeDefined()
-    })
-
-    it("akm_clone has required args schema", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const clone = hooks.tool!.akm_clone
-      expect(clone.args.ref).toBeDefined()
-      expect(clone.args.name).toBeDefined()
-      expect(clone.args.dest).toBeDefined()
-      expect(clone.args.force).toBeDefined()
     })
 
     it("akm_remember has required args schema", async () => {
@@ -258,35 +224,11 @@ describe("akm-opencode plugin", () => {
       expect(cmd.args.as_subtask).toBeDefined()
     })
 
-    it("akm_sources has no required args", async () => {
+    it("akm_help exposes topic and command args", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const sources = hooks.tool!.akm_sources
-      expect(Object.keys(sources.args)).toHaveLength(0)
-    })
-
-    it("akm_upgrade has required args schema", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const upgrade = hooks.tool!.akm_upgrade
-      expect(upgrade.args.check).toBeDefined()
-      expect(upgrade.args.force).toBeDefined()
-    })
-
-    it("akm_save has required args schema", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const save = hooks.tool!.akm_save
-      expect(save.args.name).toBeDefined()
-      expect(save.args.message).toBeDefined()
-      expect(save.args.push).toBeDefined()
-      expect(save.args.confirm).toBeDefined()
-    })
-
-    it("akm_import has required args schema", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const imp = hooks.tool!.akm_import
-      expect(imp.args.source).toBeDefined()
-      expect(imp.args.name).toBeDefined()
-      expect(imp.args.force).toBeDefined()
-      expect(imp.args.content).toBeDefined()
+      const help = hooks.tool!.akm_help
+      expect(help.args.topic).toBeDefined()
+      expect(help.args.command).toBeDefined()
     })
 
     it("akm_vault has required args schema", async () => {
@@ -399,32 +341,6 @@ describe("akm-opencode plugin", () => {
       )
     })
 
-    it("akm_registry_search defaults to registry source", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_registry_search.execute(
-        { query: "lint" } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["registry", "search", "lint", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_registry_search passes --assets flag", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_registry_search.execute(
-        { query: "lint", assets: true } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["registry", "search", "lint", "--assets", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
     it("akm_show calls CLI with ref", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_show.execute(
@@ -491,82 +407,6 @@ describe("akm-opencode plugin", () => {
       )
     })
 
-    it("akm_list calls CLI with no extra args", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_list.execute({} as any, {} as any)
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["list", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_remove calls CLI with package ref", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_remove.execute(
-        { package_ref: "npm:@scope/kit" } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["remove", "npm:@scope/kit", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_update calls CLI for a specific package", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_update.execute(
-        { package_ref: "owner/repo", force: true } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["update", "owner/repo", "--force", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_update can update all packages", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_update.execute(
-        { all: true } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["update", "--all", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_update validates required inputs", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_update.execute({} as any, {} as any)
-      expect(JSON.parse(result)).toEqual({
-        ok: false,
-        error: "Provide 'package_ref' or set 'all' to true.",
-      })
-    })
-
-    it("akm_clone calls CLI with optional flags", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_clone.execute(
-        {
-          ref: "npm:@scope/pkg//script:deploy.sh",
-          name: "my-deploy.sh",
-          dest: "/tmp/worktree",
-          force: true,
-        } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["clone", "npm:@scope/pkg//script:deploy.sh", "--name", "my-deploy.sh", "--dest", "/tmp/worktree", "--force", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
     it("akm_remember records a memory with optional flags", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_remember.execute(
@@ -615,132 +455,6 @@ describe("akm-opencode plugin", () => {
         ],
         expect.objectContaining({ encoding: "utf8" }),
       )
-    })
-
-    it("akm_evolve dispatches the curator prompt through a child session", async () => {
-      const client = createMockClient()
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      const result = await hooks.tool!.akm_evolve.execute(
-        { focus: "release workflow" } as any,
-        {
-          sessionID: "parent-session-1",
-          directory: "/tmp/test-project",
-          worktree: "/tmp/test-project",
-          agent: "build",
-          abort: new AbortController().signal,
-          metadata: () => {},
-          ask: async () => {},
-        } as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(true)
-      expect(parsed.sessionID).toBe("child-session-1")
-      expect(parsed.dispatchAgent).toBe("akm-curator")
-      expect(parsed.curatorMemoryRef).toMatch(/^memory:akm-curator-/)
-      expect(parsed.focus).toBe("release workflow")
-      expect(client.session.create).toHaveBeenCalledWith({
-        body: { parentID: "parent-session-1", title: "akm:curator" },
-      })
-      const promptArgs = (client.session.prompt as any).mock.calls[0][0]
-      expect(promptArgs.path).toEqual({ id: "child-session-1" })
-      expect(promptArgs.body.system).toBeUndefined()
-      expect(promptArgs.body.parts[0].text).toContain("release workflow")
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        expect.arrayContaining(["remember", "--name", expect.stringMatching(/^akm-curator-/), "--force"]),
-        expect.objectContaining({ input: "child response" }),
-      )
-      expect(client.app.log).toHaveBeenCalledWith({
-        query: { directory: "/tmp/test-project" },
-        body: {
-          service: "akm-opencode",
-          level: "info",
-          message: "AKM dispatch child session created",
-          extra: expect.objectContaining({
-            subsystem: "dispatch",
-            toolName: "akm_evolve",
-            childSessionID: "child-session-1",
-          }),
-        },
-      })
-      expect(client.app.log).toHaveBeenCalledWith({
-        query: { directory: "/tmp/test-project" },
-        body: {
-          service: "akm-opencode",
-          level: "info",
-          message: "AKM dispatch prompt completed",
-          extra: expect.objectContaining({
-            subsystem: "dispatch",
-            toolName: "akm_evolve",
-            targetSessionID: "child-session-1",
-            dispatchAgent: "akm-curator",
-          }),
-        },
-      })
-    })
-
-    it("akm_evolve degrades gracefully when curator memory persistence fails", async () => {
-      const client = createMockClient()
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args.includes("remember")) throw new Error("remember failed")
-        return "mock output"
-      })
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      const result = await hooks.tool!.akm_evolve.execute(
-        { focus: "release workflow" } as any,
-        {
-          sessionID: "parent-session-1",
-          directory: "/tmp/test-project",
-          worktree: "/tmp/test-project",
-          agent: "build",
-          abort: new AbortController().signal,
-          metadata: () => {},
-          ask: async () => {},
-        } as any,
-      )
-
-      expect(JSON.parse(result).curatorMemoryRef).toBeNull()
-    })
-
-    it("akm_evolve returns JSON error when session.prompt throws", async () => {
-      const client = createMockClient()
-      client.session.prompt = mock(async () => {
-        throw new Error("prompt exploded")
-      })
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      const result = await hooks.tool!.akm_evolve.execute(
-        { focus: "release workflow" } as any,
-        {
-          sessionID: "parent-session-1",
-          directory: "/tmp/test-project",
-          worktree: "/tmp/test-project",
-          agent: "build",
-          abort: new AbortController().signal,
-          metadata: () => {},
-          ask: async () => {},
-        } as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed).toEqual({
-        ok: false,
-        error: "Failed to dispatch curator: prompt exploded",
-      })
-      expect(client.app.log).toHaveBeenCalledWith({
-        query: { directory: "/tmp/test-project" },
-        body: {
-          service: "akm-opencode",
-          level: "error",
-          message: "AKM dispatch prompt threw",
-          extra: expect.objectContaining({
-            subsystem: "dispatch",
-            toolName: "akm_evolve",
-            targetSessionID: "child-session-1",
-            error: "prompt exploded",
-          }),
-        },
-      })
     })
 
     it("akm_parent_messages returns the parent session transcript summary", async () => {
@@ -848,16 +562,6 @@ describe("akm-opencode plugin", () => {
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
         ["search", "retro", "--type", "memory", "--source", "stash", "--detail", "normal", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_index calls CLI with no extra args", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_index.execute({} as any, {} as any)
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["index", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -1115,12 +819,12 @@ describe("akm-opencode plugin", () => {
       expect(curateCall).toBeUndefined()
     })
 
-    it("tool.execute.before blocks destructive operations until confirm:true is provided", async () => {
+    it("tool.execute.before blocks akm_vault show until confirm:true is provided", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const output = { args: { package_ref: "npm:@scope/kit" } as any }
+      const output = { args: { action: "show", ref: "vault:prod" } as any }
       await hooks["tool.execute.before"]!(
         {
-          tool: "akm_remove",
+          tool: "akm_vault",
           sessionID: "session-block-1",
           callID: "call-1",
         } as any,
@@ -1146,14 +850,13 @@ describe("akm-opencode plugin", () => {
       expect(output.args.__akmBlocked).toBeUndefined()
     })
 
-    it("preserves hints, curation, workflows, and curator reports across compaction", async () => {
+    it("preserves hints, curation, and workflows across compaction", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args[0] === "--format" && args.includes("workflow")) {
           return JSON.stringify([{ ref: "workflow:release", runId: "run-1", state: "blocked" }])
         }
         if (Array.isArray(args) && args.includes("curate")) return "# curated\n- skill:deploy\n"
-        if (Array.isArray(args) && args.includes("remember")) return JSON.stringify({ ref: "memory:akm-curator-20260425-session" })
         return "mock output"
       })
 
@@ -1166,18 +869,6 @@ describe("akm-opencode plugin", () => {
         { sessionID: "session-compact-1", messageID: "m1", agent: "build" } as any,
         { message: {} as any, parts: [{ type: "text", text: "Help me deploy the application to production" }] as any },
       )
-      await hooks.tool!.akm_evolve.execute(
-        { focus: "release workflow" } as any,
-        {
-          sessionID: "session-compact-1",
-          directory: "/tmp/test-project",
-          worktree: "/tmp/test-project",
-          agent: "build",
-          abort: new AbortController().signal,
-          metadata: () => {},
-          ask: async () => {},
-        } as any,
-      )
 
       const compactOutput = { context: [] as string[] }
       await hooks["experimental.session.compacting"]!(
@@ -1188,7 +879,6 @@ describe("akm-opencode plugin", () => {
       expect(compactOutput.context.join("\n")).toContain("AKM is available in this session")
       expect(compactOutput.context.join("\n")).toContain("AKM stash — assets relevant to this prompt")
       expect(compactOutput.context.join("\n")).toContain("workflow:release")
-      expect(compactOutput.context.join("\n")).toContain("AKM curator report")
 
       const postCompactSystem = { system: [] as string[] }
       await hooks["experimental.chat.system.transform"]!(
@@ -1198,39 +888,6 @@ describe("akm-opencode plugin", () => {
 
       expect(postCompactSystem.system.join("\n")).toContain("AKM is available in this session")
       expect(postCompactSystem.system.join("\n")).toContain("workflow:release")
-    })
-
-    it("truncates curator reports before re-injecting them into context", async () => {
-      const longReport = `${"A".repeat(4500)}TAIL`
-      const client = createMockClient()
-      client.session.prompt = mock(async () => ({
-        data: { parts: [{ type: "text", text: longReport }] },
-        error: undefined,
-      }))
-
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      await hooks.tool!.akm_evolve.execute(
-        { focus: "release workflow" } as any,
-        {
-          sessionID: "session-compact-2",
-          directory: "/tmp/test-project",
-          worktree: "/tmp/test-project",
-          agent: "build",
-          abort: new AbortController().signal,
-          metadata: () => {},
-          ask: async () => {},
-        } as any,
-      )
-
-      const compactOutput = { context: [] as string[] }
-      await hooks["experimental.session.compacting"]!(
-        { sessionID: "session-compact-2" } as any,
-        compactOutput as any,
-      )
-
-      const combined = compactOutput.context.join("\n")
-      expect(combined).toContain("[truncated for context]")
-      expect(combined).not.toContain("TAIL")
     })
 
     it("records auto positive feedback after a successful akm tool invocation", async () => {
@@ -2045,30 +1702,6 @@ describe("akm-opencode plugin", () => {
       expect(hit.run).toBe("bash deploy.sh")
     })
 
-    it("registry search hits include installRef for direct akm_add usage", async () => {
-      const registryResponse = JSON.stringify({
-        hits: [{
-          type: "registry",
-          id: "skills-sh:anthropics/skills/frontend-design",
-          installRef: "github:anthropics/skills",
-          action: "akm add github:anthropics/skills",
-          name: "frontend-design",
-        }],
-      })
-      mockExecFileSync.mockReturnValue(registryResponse)
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_registry_search.execute(
-        { query: "frontend design" } as any,
-        {} as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed.hits[0].id).toBe("skills-sh:anthropics/skills/frontend-design")
-      expect(parsed.hits[0].installRef).toBe("github:anthropics/skills")
-      expect(parsed.hits[0].action).toBe("akm add github:anthropics/skills")
-    })
-
     it("show agent response includes origin and editable", async () => {
       const agentResponse = JSON.stringify({
         type: "agent",
@@ -2118,416 +1751,48 @@ describe("akm-opencode plugin", () => {
     })
   })
 
-  describe("akm_config tool", () => {
-    it("tool exists with description and execute function", async () => {
+  describe("akm_help tool", () => {
+    it("calls `akm --help` by default and returns the curated quick-reference", async () => {
+      mockExecFileSync.mockReturnValue("Usage: akm [command]\n  search    ...\n  show      ...\n")
       const hooks = await AkmPlugin(createPluginInput())
-      const config = hooks.tool!.akm_config
-      expect(config).toBeDefined()
-      expect(config.description).toBeTruthy()
-      expect(typeof config.execute).toBe("function")
-    })
-
-    it("config list calls CLI as 'akm config list'", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_config.execute(
-        { action: "list" } as any,
-        {} as any,
-      )
+      const result = await hooks.tool!.akm_help.execute({} as any, {} as any)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["config", "list", "--format", "json"],
+        ["--help"],
         expect.objectContaining({ encoding: "utf8" }),
       )
-    })
-
-    it("config get calls CLI as 'akm config get <key>'", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_config.execute(
-        { action: "get", key: "stashDir" } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["config", "get", "stashDir", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("config set calls CLI as 'akm config set <key> <value>'", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_config.execute(
-        { action: "set", key: "stashDir", value: "/tmp/stash" } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["config", "set", "stashDir", "/tmp/stash", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("config unset calls CLI as 'akm config unset <key>'", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_config.execute(
-        { action: "unset", key: "llm" } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["config", "unset", "llm", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("config path supports --all", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_config.execute(
-        { action: "path", all: true } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["config", "path", "--all", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("returns JSON error when CLI fails", async () => {
-      mockExecFileSync.mockImplementation(() => {
-        throw new Error("config read failed")
-      })
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_config.execute(
-        { action: "list" } as any,
-        {} as any,
-      )
-      const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(false)
-      expect(parsed.error).toContain("config read failed")
-    })
-  })
-
-  describe("akm_run tool", () => {
-    it("tool exists with description and execute function", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const run = hooks.tool!.akm_run
-      expect(run).toBeDefined()
-      expect(run.description).toBeTruthy()
-      expect(typeof run.execute).toBe("function")
-    })
-
-    it("run by ref executes the run command from show response", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (args[0] === "show") {
-          return JSON.stringify({
-            type: "script",
-            name: "deploy.sh",
-            path: "/stash/scripts/deploy.sh",
-            run: "cd /stash && bash deploy.sh",
-          })
-        }
-        return "mock output"
-      })
-      mockExecSync.mockReturnValue("deployed successfully")
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_run.execute(
-        { ref: "script:deploy.sh" } as any,
-        {} as any,
-      )
-
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(true)
-      expect(parsed.script).toBe("deploy.sh")
-      expect(parsed.run).toBe("cd /stash && bash deploy.sh")
-      expect(parsed.output).toBe("deployed successfully")
-      expect(mockExecSync).toHaveBeenCalledWith(
-        "cd /stash && bash deploy.sh",
-        expect.objectContaining({ encoding: "utf8" }),
-      )
+      expect(parsed.help).toContain("Usage: akm")
+      expect(Array.isArray(parsed.quickReference)).toBe(true)
+      expect(parsed.quickReference.length).toBeGreaterThan(0)
     })
 
-    it("run by query resolves ref via search then show then executes", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (args[0] === "search") {
-          return JSON.stringify({
-            hits: [{ type: "script", ref: "script:build.sh" }],
-          })
-        }
-        if (args[0] === "show") {
-          return JSON.stringify({
-            type: "script",
-            name: "build.sh",
-            path: "/stash/scripts/build.sh",
-            run: "bash build.sh",
-          })
-        }
-        return "mock output"
-      })
-      mockExecSync.mockReturnValue("build complete")
-
+    it("filters quick-reference hints by topic keywords", async () => {
+      mockExecFileSync.mockReturnValue("help text")
       const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_run.execute(
-        { query: "build" } as any,
+      const result = await hooks.tool!.akm_help.execute(
+        { topic: "commit and push my stash" } as any,
         {} as any,
       )
-
       const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(true)
-      expect(parsed.script).toBe("build.sh")
-      expect(parsed.output).toBe("build complete")
+      expect(parsed.hints.length).toBeGreaterThan(0)
+      expect(parsed.hints.some((h: { command: string }) => h.command.startsWith("akm save"))).toBe(true)
+    })
+
+    it("inspects a specific subcommand via `akm <command> --help`", async () => {
+      mockExecFileSync.mockReturnValue("save help text")
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_help.execute({ command: "save" } as any, {} as any)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["search", "build", "--type", "script", "--limit", "1", "--detail", "normal", "--source", "stash", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("run with args appends args to run command", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (args[0] === "show") {
-          return JSON.stringify({
-            type: "script",
-            name: "deploy.sh",
-            path: "/stash/scripts/deploy.sh",
-            run: "bash deploy.sh",
-          })
-        }
-        return "mock output"
-      })
-      mockExecSync.mockReturnValue("deployed to prod")
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_run.execute(
-        { ref: "script:deploy.sh", args: "--env production" } as any,
-        {} as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(true)
-      expect(parsed.run).toBe("bash deploy.sh --env production")
-      expect(mockExecSync).toHaveBeenCalledWith(
-        "bash deploy.sh --env production",
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("returns error for non-script type", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (args[0] === "show") {
-          return JSON.stringify({
-            type: "agent",
-            name: "coach.md",
-            path: "/stash/agents/coach.md",
-            prompt: "You are a coach.",
-          })
-        }
-        return "mock output"
-      })
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_run.execute(
-        { ref: "agent:coach.md" } as any,
-        {} as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(false)
-      expect(parsed.error).toContain("not a script payload")
-    })
-
-    it("returns error when run command is missing", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (args[0] === "show") {
-          return JSON.stringify({
-            type: "script",
-            name: "broken.sh",
-            path: "/stash/scripts/broken.sh",
-          })
-        }
-        return "mock output"
-      })
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_run.execute(
-        { ref: "script:broken.sh" } as any,
-        {} as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(false)
-      expect(parsed.error).toContain("missing run command")
-    })
-
-    it("returns error when execution fails", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (args[0] === "show") {
-          return JSON.stringify({
-            type: "script",
-            name: "fail.sh",
-            path: "/stash/scripts/fail.sh",
-            run: "bash fail.sh",
-          })
-        }
-        return "mock output"
-      })
-      mockExecSync.mockImplementation(() => {
-        throw new Error("exit code 1: script failed")
-      })
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_run.execute(
-        { ref: "script:fail.sh" } as any,
-        {} as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(false)
-      expect(parsed.error).toContain("Failed to execute run command")
-      expect(parsed.error).toContain("exit code 1")
-    })
-
-    it("accepts type 'script' from show response", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (args[0] === "show") {
-          return JSON.stringify({
-            type: "script",
-            name: "build.sh",
-            path: "/stash/scripts/build.sh",
-            run: "bash build.sh",
-          })
-        }
-        return "mock output"
-      })
-      mockExecSync.mockReturnValue("done")
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_run.execute(
-        { ref: "script:build.sh" } as any,
-        {} as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(true)
-      expect(parsed.script).toBe("build.sh")
-    })
-
-    it("accepts type 'tool' from show response", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (args[0] === "show") {
-          return JSON.stringify({
-            type: "tool",
-            name: "build.sh",
-            path: "/stash/scripts/build.sh",
-            run: "bash build.sh",
-          })
-        }
-        return "mock output"
-      })
-      mockExecSync.mockReturnValue("done")
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_run.execute(
-        { ref: "script:build.sh" } as any,
-        {} as any,
-      )
-
-      const parsed = JSON.parse(result)
-      expect(parsed.ok).toBe(true)
-      expect(parsed.script).toBe("build.sh")
-    })
-  })
-
-  describe("akm_sources tool", () => {
-    it("tool exists with description and execute function", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const sources = hooks.tool!.akm_sources
-      expect(sources).toBeDefined()
-      expect(sources.description).toBeTruthy()
-      expect(typeof sources.execute).toBe("function")
-    })
-
-    it("calls CLI with 'list' as the backward-compatible sources alias", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_sources.execute({} as any, {} as any)
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["list", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-  })
-
-  describe("akm_upgrade tool", () => {
-    it("tool exists with description and execute function", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const upgrade = hooks.tool!.akm_upgrade
-      expect(upgrade).toBeDefined()
-      expect(upgrade.description).toBeTruthy()
-      expect(typeof upgrade.execute).toBe("function")
-    })
-
-    it("calls CLI with 'upgrade' command", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_upgrade.execute({} as any, {} as any)
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["upgrade", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("passes --check flag", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_upgrade.execute(
-        { check: true } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["upgrade", "--check", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("passes --force flag", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_upgrade.execute(
-        { force: true } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["upgrade", "--force", "--format", "json"],
+        ["save", "--help"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
   })
 
   describe("v0.5.0 tool execution", () => {
-    it("akm_save invokes the CLI with name, message, and push", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_save.execute({ name: "stash", message: "checkpoint", push: true, confirm: true } as any, {} as any)
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["save", "stash", "-m", "checkpoint", "--push", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_import pipes content on stdin when source is '-'", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_import.execute(
-        { source: "-", content: "# snippet", name: "notes" } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["import", "-", "--name", "notes", "--format", "json"],
-        expect.objectContaining({ input: "# snippet" }),
-      )
-    })
-
     it("akm_vault set forwards ref, key, value, and comment", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_vault.execute(
@@ -2802,16 +2067,16 @@ describe("akm-opencode plugin", () => {
         }
         if (cmd === "bun" && args[0] === "pm") return "/tmp/.bun/bin\n"
         if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version" && installComplete) return "0.1.0"
-        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "list" && installComplete) {
-          return JSON.stringify({ sources: [] })
+        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "search" && installComplete) {
+          return JSON.stringify({ hits: [] })
         }
         return "mock output"
       })
 
       const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_sources.execute({} as any, {} as any)
+      const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
 
-      expect(JSON.parse(result)).toEqual({ sources: [] })
+      expect(JSON.parse(result)).toEqual({ hits: [] })
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "bun",
         ["install", "-g", "akm-cli@latest"],
@@ -2819,7 +2084,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "/tmp/.bun/bin/akm",
-        ["list", "--format", "json"],
+        ["search", "anything", "--detail", "normal", "--format", "json"],
         expect.objectContaining({ encoding: "utf8", timeout: 60_000 }),
       )
     })
