@@ -17,10 +17,9 @@ const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5")
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
 const AKM_MEMORY_CHECKPOINT_EVERY = Math.max(1, Number(process.env.AKM_MEMORY_CHECKPOINT_EVERY ?? "8") || 8)
-const AKM_RETROSPECTIVE_FEEDBACK_RE = new RegExp(
-  process.env.AKM_RETROSPECTIVE_FEEDBACK_PATTERN ?? "\\b(thanks|perfect|worked)\\b",
-  "i",
-)
+const SESSION_DATE_TAG_LENGTH = 8
+const CHECKPOINT_DATE_TAG_LENGTH = 15
+const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
 const PLUGIN_VERSION = readPackageVersion()
 
 // Per-session state that drives the compound-engineering loop.
@@ -59,6 +58,15 @@ function readPackageVersion(): string {
     return typeof parsed.version === "string" && parsed.version ? parsed.version : "0.0.0"
   } catch {
     return "0.0.0"
+  }
+}
+
+function createRetrospectiveFeedbackRegex(): RegExp {
+  const pattern = process.env.AKM_RETROSPECTIVE_FEEDBACK_PATTERN ?? "\\b(thanks|perfect|worked)\\b"
+  try {
+    return new RegExp(pattern, "i")
+  } catch {
+    return /\b(thanks|perfect|worked)\b/i
   }
 }
 
@@ -195,6 +203,11 @@ async function writePluginLog(client: LogCapableClient, level: LogLevel, message
 
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+function buildDateTag(options?: { includeTime?: boolean }): string {
+  const compactIso = new Date().toISOString().replace(/[-:]/g, "")
+  return compactIso.slice(0, options?.includeTime ? CHECKPOINT_DATE_TAG_LENGTH : SESSION_DATE_TAG_LENGTH)
 }
 
 function addBufferEntry(sessionID: string | undefined, entry: Omit<SessionBufferEntry, "timestamp">) {
@@ -486,7 +499,7 @@ function captureSessionMemory(
   }
   const body = lines.join("\n")
 
-  const dateTag = new Date().toISOString().replace(/[-:]/g, "").slice(0, isCheckpoint ? 15 : 8)
+  const dateTag = buildDateTag({ includeTime: isCheckpoint })
   const shortSid = sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"
   const name = isCheckpoint
     ? `opencode-checkpoint-${dateTag}-${shortSid}`
@@ -530,8 +543,8 @@ const AKM_REF_EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")"
 function normalizeExtractedRef(ref: string): string {
   let start = 0
   let end = ref.length
-  while (start < end && AKM_REF_EDGE_PUNCTUATION.has(ref[start]!)) start += 1
-  while (end > start && AKM_REF_EDGE_PUNCTUATION.has(ref[end - 1]!)) end -= 1
+  while (start < end && AKM_REF_EDGE_PUNCTUATION.has(ref[start] ?? "")) start += 1
+  while (end > start && AKM_REF_EDGE_PUNCTUATION.has(ref[end - 1] ?? "")) end -= 1
   return ref.slice(start, end)
 }
 
@@ -1878,7 +1891,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const text = extractText(promptResponse.data.parts)
         sessionCuratorReport.set(context.sessionID, text)
         markContextEpochDirty(context.sessionID)
-        const dateTag = new Date().toISOString().replace(/[-:]/g, "").slice(0, 8)
+        const dateTag = buildDateTag()
         const shortSid = context.sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"
         const curatorMemoryRef = text
           ? rememberTextAsMemory(`akm-curator-${dateTag}-${shortSid}`, text)
