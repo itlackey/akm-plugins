@@ -19,10 +19,9 @@ Provides a trimmed surface of fourteen tools (down from twenty-six in 0.5.x — 
 - `akm_show` — show a stash asset by ref
 - `akm_agent` — dispatch stash `agent:*` resources into OpenCode sessions
 - `akm_workflow` — drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`)
-- `akm_add` — install kits or register external sources (including wikis via `type: "wiki"`)
 - `akm_remember` — record a memory in the default stash
 - `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
-- `akm_vault` — read-only vault inspection (`list`, `show` of key names). Values never surface in any output channel; writes go through raw `akm vault …`
+- `akm_vault` — vault `list`, `show` (key names), and `load` (shell-eval snippet for value injection). `show`/`list` never echo values; writes (`set`, `unset`, `create`) go through raw `akm vault …`
 - `akm_curate` — curate stash assets for a task or topic
 - `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
 - `akm_feedback` — record positive or negative feedback for a stash asset
@@ -56,7 +55,7 @@ claude plugin install akm@akm-plugins
 
 Provides:
 - **AKM Skill** — Claude automatically uses the akm CLI when you ask about stash assets
-- **Trimmed slash-command surface (13 verbs)** — `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-add`, `/akm-vault` (read-only `list`/`show`), and `/akm-help`
+- **Trimmed slash-command surface (12 verbs)** — `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault` (`list`/`show`/`load`), and `/akm-help`
 - **`/akm-help` discovery flow** — for verbs no longer first-class (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result

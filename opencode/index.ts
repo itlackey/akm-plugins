@@ -86,7 +86,7 @@ Signals to act on:
 - Stale memories: session summaries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
 - Stuck workflows: run akm_workflow list --active and surface any runs in blocked or failed state with their step ids. Propose whether to resume or escalate.
-- Never touch vaults: do not call akm_vault show or shell_snippet unless the user explicitly asks. Vault values must never appear in reports.
+- Never touch vaults: do not call akm_vault show or load unless the user explicitly asks. Vault values must never appear in reports.
 
 Rules of engagement:
 - Never apply destructive changes without explicit user approval.
@@ -626,6 +626,12 @@ type AkmHelpEntry = {
 }
 
 const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
+  {
+    task: "Install a kit or register an external source (npm, GitHub, git, URL, local dir)",
+    command: "akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]",
+    notes: "Confirm with the user before passing --trust or registering a website crawler.",
+    keywords: ["add", "install", "register", "kit", "source", "github", "npm"],
+  },
   {
     task: "Commit (and optionally push) pending stash changes",
     command: "akm save [<source-name>] [-m <msg>] [--push]",
@@ -1730,32 +1736,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_show" })
       },
     }),
-    akm_add: tool({
-      description: "Install a kit or register an external source from npm, GitHub, another git host, a URL, or a local directory. Use type='wiki' to register a wiki source instead of a stash kit.",
-      args: {
-        package_ref: tool.schema.string().describe("Package reference such as npm:@scope/kit, github:<owner>/<repo>, git+https://host/repo, https://url, or ./local/kit."),
-        type: tool.schema.enum(["wiki"]).optional().describe("Route the add through a typed registrar. 'wiki' registers an external wiki source."),
-        name: tool.schema.string().optional().describe("Optional name to register the source under."),
-        writable: tool.schema.boolean().optional().describe("Mark a git-backed source as push-writable (used by `akm save`; see akm_help topic='save')."),
-        trust: tool.schema.boolean().optional().describe("Bypass install-audit blocking for this registration only."),
-        provider: tool.schema.string().optional().describe("Provider hint (required for raw URL refs, e.g. 'github', 'website')."),
-        options: tool.schema.string().optional().describe("JSON string of provider-specific options."),
-        max_pages: tool.schema.number().optional().describe("Cap for website crawlers (default 50)."),
-        max_depth: tool.schema.number().optional().describe("Depth cap for website crawlers (default 3)."),
-      },
-      async execute({ package_ref, type, name, writable, trust, provider, options, max_pages, max_depth }) {
-        const args = ["add", package_ref]
-        if (type) args.push("--type", type)
-        if (name) args.push("--name", name)
-        if (writable) args.push("--writable")
-        if (trust) args.push("--trust")
-        if (provider) args.push("--provider", provider)
-        if (options) args.push("--options", options)
-        if (max_pages != null) args.push("--max-pages", String(max_pages))
-        if (max_depth != null) args.push("--max-depth", String(max_depth))
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_add" })
-      },
-    }),
     akm_remember: tool({
       description: "Record a memory in the default AKM stash so it can be searched and shown later.",
       args: {
@@ -2007,10 +1987,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
     }),
     akm_vault: tool({
-      description: "Manage encrypted-at-rest vaults of KEY=VALUE pairs. Values never surface in any output channel — 'show'/'list' return key names only, 'set'/'unset' never echo the value. Use 'shell_snippet' to get a shell-eval snippet that loads values into the process. action='show' and action='unset' require confirm:true.",
+      description: "Manage encrypted-at-rest vaults of KEY=VALUE pairs. Values never surface in any output channel — 'show'/'list' return key names only, 'set'/'unset' never echo the value. Use 'load' to get a shell-eval snippet that loads values into the process. action='show' and action='unset' require confirm:true.",
       args: {
-        action: tool.schema.enum(["list", "show", "create", "set", "unset", "shell_snippet"]).describe("Vault subcommand. 'shell_snippet' wraps 'vault load' — treat its output as opaque shell text meant for eval."),
-        ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/set/unset/shell_snippet; optional for list."),
+        action: tool.schema.enum(["list", "show", "create", "set", "unset", "load"]).describe("Vault subcommand. 'load' wraps `akm vault load` — treat its output as opaque shell text meant for eval."),
+        ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/set/unset/load; optional for list."),
         name: tool.schema.string().optional().describe("Vault name when action is 'create' (e.g. 'prod' → vaults/prod.env)."),
         key: tool.schema.string().optional().describe("Variable name for set/unset. May include '=' to pass KEY=VALUE in one field when value is omitted."),
         value: tool.schema.string().optional().describe("Value to store. Never echoed back."),
@@ -2049,8 +2029,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             if (!key) return JSON.stringify({ ok: false, error: "'key' is required for action='unset'." })
             return runCli(client as unknown as LogCapableClient, ["vault", "unset", ref, key], logMeta)
           }
-          case "shell_snippet": {
-            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='shell_snippet'." })
+          case "load": {
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='load'." })
             // `vault load` emits raw shell — not JSON. Return the snippet verbatim
             // so the caller can hand it to a shell via eval. Never parse values.
             const command = resolveAkmCommand()

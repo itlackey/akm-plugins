@@ -100,7 +100,6 @@ describe("akm-opencode plugin", () => {
       const expected = [
         "akm_search",
         "akm_show",
-        "akm_add",
         "akm_remember",
         "akm_feedback",
         "akm_curate",
@@ -117,6 +116,7 @@ describe("akm-opencode plugin", () => {
         expect(toolNames).toContain(name)
       }
       const removed = [
+        "akm_add",
         "akm_registry_search",
         "akm_index",
         "akm_list",
@@ -190,12 +190,6 @@ describe("akm-opencode plugin", () => {
       expect(dispatch.args.task_prompt).toBeDefined()
       expect(dispatch.args.dispatch_agent).toBeDefined()
       expect(dispatch.args.as_subtask).toBeDefined()
-    })
-
-    it("akm_add has required args schema", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const add = hooks.tool!.akm_add
-      expect(add.args.package_ref).toBeDefined()
     })
 
     it("akm_remember has required args schema", async () => {
@@ -285,19 +279,6 @@ describe("akm-opencode plugin", () => {
       expect(wf.args.active_only).toBeDefined()
     })
 
-    it("akm_add exposes the expanded v0.5.0 flag surface", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const add = hooks.tool!.akm_add
-      expect(add.args.package_ref).toBeDefined()
-      expect(add.args.type).toBeDefined()
-      expect(add.args.name).toBeDefined()
-      expect(add.args.writable).toBeDefined()
-      expect(add.args.trust).toBeDefined()
-      expect(add.args.provider).toBeDefined()
-      expect(add.args.options).toBeDefined()
-      expect(add.args.max_pages).toBeDefined()
-      expect(add.args.max_depth).toBeDefined()
-    })
   })
 
   describe("tool execution", () => {
@@ -376,33 +357,6 @@ describe("akm-opencode plugin", () => {
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
         ["show", "knowledge://doc", "lines", "10", "20", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_add calls CLI with package ref", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_add.execute(
-        { package_ref: "my-kit" } as any,
-        {} as any,
-      )
-      expect(result).toBe("mock output")
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["add", "my-kit", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
-    })
-
-    it("akm_add handles github refs", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_add.execute(
-        { package_ref: "github:itlackey/my-kit" } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["add", "github:itlackey/my-kit", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -1806,7 +1760,7 @@ describe("akm-opencode plugin", () => {
       )
     })
 
-    it("akm_vault shell_snippet returns raw shell text wrapped in JSON", async () => {
+    it("akm_vault load returns raw shell text wrapped in JSON", async () => {
       // `resolveAkmCommand` probes the binary via --version before the actual
       // command runs, so route shell output only for the vault-load invocation.
       mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -1817,7 +1771,7 @@ describe("akm-opencode plugin", () => {
       })
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_vault.execute(
-        { action: "shell_snippet", ref: "vault:prod" } as any,
+        { action: "load", ref: "vault:prod" } as any,
         {} as any,
       )
       const parsed = JSON.parse(result as string)
@@ -1973,39 +1927,6 @@ describe("akm-opencode plugin", () => {
       )
     })
 
-    it("akm_add routes wiki registrations through --type wiki", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_add.execute(
-        {
-          package_ref: "https://example.com/docs",
-          type: "wiki",
-          name: "docs",
-          writable: true,
-          provider: "website",
-          max_pages: 80,
-        } as any,
-        {} as any,
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        [
-          "add",
-          "https://example.com/docs",
-          "--type",
-          "wiki",
-          "--name",
-          "docs",
-          "--writable",
-          "--provider",
-          "website",
-          "--max-pages",
-          "80",
-          "--format",
-          "json",
-        ],
-        expect.any(Object),
-      )
-    })
   })
 
   describe("v0.5.0 ref pattern", () => {

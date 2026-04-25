@@ -120,7 +120,6 @@ describe("Claude plugin metadata", () => {
       "akm-evolve",
       "akm-wiki",
       "akm-workflow",
-      "akm-add",
       "akm-vault",
       "akm-help",
     ]) {
@@ -129,6 +128,7 @@ describe("Claude plugin metadata", () => {
       expect(readFileSync(file, "utf8")).toMatch(/^---/)
     }
     expect(existsSync(path.join(commandsDir, "akm-save.md"))).toBe(false)
+    expect(existsSync(path.join(commandsDir, "akm-add.md"))).toBe(false)
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
   })
 

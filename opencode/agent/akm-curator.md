@@ -25,7 +25,7 @@ Signals to act on:
 - Stale memories: session summaries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
 - Stuck workflows: run akm_workflow list --active and surface any runs in blocked or failed state with their step ids. Propose whether to resume or escalate.
-- Never touch vaults: do not call akm_vault show or shell_snippet unless the user explicitly asks. Vault values must never appear in reports.
+- Never touch vaults: do not call akm_vault show or load unless the user explicitly asks. Vault values must never appear in reports.
 
 Rules of engagement:
 - Never apply destructive changes without explicit user approval.

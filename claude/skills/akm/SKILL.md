@@ -9,7 +9,7 @@ You have access to the `akm` CLI (AKM, v0.5.0+) to manage extension assets from 
 
 ## Tool surface vs. CLI
 
-The Claude AKM plugin exposes **14 first-class slash commands** for the high-value verbs:
+The Claude AKM plugin exposes **12 first-class slash commands** for the high-value verbs:
 
 - `/akm-search` — search the stash or registry
 - `/akm-show` — fetch the full payload for a ref
@@ -21,16 +21,14 @@ The Claude AKM plugin exposes **14 first-class slash commands** for the high-val
 - `/akm-evolve` — dispatch the `akm-curator` agent
 - `/akm-wiki` — wiki create/register/list/show/pages/search/stash/lint/ingest/remove
 - `/akm-workflow` — start/next/complete/status/list/create/resume/template
-- `/akm-add` — install a kit or register an external source
-- `/akm-vault` — **read-only** vault list / show (no `set`/`unset`/`load`)
+- `/akm-vault` — vault `list` / `show` (key names) / `load` (shell-eval snippet)
 - `/akm-help` — discover the right raw `akm` invocation for the long tail
-- `/akm-search` (et al. above)
 
-For every other verb — `save`, `import`, `clone`, `update`, `remove` (uninstall a source),
-`list` (configured sources), `registry search`, `index` (reindex), `config`, `upgrade`,
-ad-hoc `run`, vault writes (`set` / `unset` / `load`), and any flag not exposed by the
-slash commands above — **call `/akm-help` first** to discover the right `akm` CLI form,
-then run it via Bash.
+For every other verb — `add` (install kits / register sources), `save`, `import`, `clone`,
+`update`, `remove` (uninstall a source), `list` (configured sources), `registry search`,
+`index` (reindex), `config`, `upgrade`, ad-hoc `run`, vault writes (`set` / `unset`), and
+any flag not exposed by the slash commands above — **call `/akm-help` first** to discover
+the right `akm` CLI form, then run it via Bash.
 
 ### akm_help quick reference
 
@@ -40,6 +38,7 @@ This table is the curated long-tail reference, embedded verbatim from
 
 | Task | Command | Notes | Keywords |
 | --- | --- | --- | --- |
+| Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]` | Confirm with the user before passing `--trust` or registering a website crawler. | add, install, register, kit, source, github, npm |
 | Commit (and optionally push) pending stash changes | `akm save [<source-name>] [-m <msg>] [--push]` | Add `--push` only when the stash is writable; review the diff first. | save, commit, push, publish, git |
 | Import a file (or stdin) into the stash as a typed asset | `akm import <path|-> [--name <name>] [--force]` | Use `-` and pipe content via stdin to import a string. | import, ingest, upload, stdin |
 | Clone an asset from any source for editing | `akm clone <ref> [--name <new>] [--dest <dir>] [--force]` | Type subdirectory is appended automatically; ref may include origin (e.g. `npm:@scope/pkg//script:foo`). | clone, copy, fork, edit |
