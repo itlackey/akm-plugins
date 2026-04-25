@@ -42,7 +42,7 @@ Provides twenty-six tools:
 - `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
 - `akm_workflow` — drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`)
 
-The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to auto-resolve refs, gate destructive actions, preserve context through compaction, and record user/system feedback and memory usage in OpenCode app logs when relevant.
+The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to gate destructive actions, preserve context through compaction, and record user/system feedback and memory usage in OpenCode app logs when relevant.
 
 
 ### Claude Code

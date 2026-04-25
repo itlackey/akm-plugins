@@ -2,7 +2,6 @@ import { describe, it, expect, mock, beforeEach } from "bun:test"
 import type { PluginInput } from "@opencode-ai/plugin"
 
 // Mock execFileSync and execSync before importing the plugin
-process.env.AKM_FUZZY_REFS = "1"
 const mockExecFileSync = mock(() => "mock output")
 const mockExecSync = mock(() => "exec output")
 const mockSpawn = mock(() => ({
@@ -1131,48 +1130,20 @@ describe("akm-opencode plugin", () => {
       expect(output.args.__akmBlocked).toContain("confirm:true")
     })
 
-    it("tool.execute.before fuzzy-resolves non-ref inputs when enabled", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "search") {
-          return JSON.stringify({ hits: [{ ref: "skill:deploy-helper" }] })
-        }
-        return "mock output"
-      })
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const output = { args: { ref: "deploy helper" } as any }
-      await hooks["tool.execute.before"]!(
-        {
-          tool: "akm_show",
-          sessionID: "session-fuzzy-1",
-          callID: "call-1",
-        } as any,
-        output as any,
-      )
-
-      expect(output.args.ref).toBe("skill:deploy-helper")
-    })
-
-    it("tool.execute.before blocks fuzzy refs when no confident match exists", async () => {
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "search") {
-          return JSON.stringify({ hits: [] })
-        }
-        return "mock output"
-      })
-
+    it("tool.execute.before leaves non-exact refs unchanged", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const output = { args: { ref: "unknown helper" } as any }
       await hooks["tool.execute.before"]!(
         {
           tool: "akm_show",
-          sessionID: "session-fuzzy-2",
+          sessionID: "session-ref-1",
           callID: "call-1",
         } as any,
         output as any,
       )
 
-      expect(output.args.__akmBlocked).toContain("Use akm_search to disambiguate")
+      expect(output.args.ref).toBe("unknown helper")
+      expect(output.args.__akmBlocked).toBeUndefined()
     })
 
     it("preserves hints, curation, workflows, and curator reports across compaction", async () => {
@@ -1229,6 +1200,39 @@ describe("akm-opencode plugin", () => {
       expect(postCompactSystem.system.join("\n")).toContain("workflow:release")
     })
 
+    it("truncates curator reports before re-injecting them into context", async () => {
+      const longReport = `${"A".repeat(4500)}TAIL`
+      const client = createMockClient()
+      client.session.prompt = mock(async () => ({
+        data: { parts: [{ type: "text", text: longReport }] },
+        error: undefined,
+      }))
+
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      await hooks.tool!.akm_evolve.execute(
+        { focus: "release workflow" } as any,
+        {
+          sessionID: "session-compact-2",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "build",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const compactOutput = { context: [] as string[] }
+      await hooks["experimental.session.compacting"]!(
+        { sessionID: "session-compact-2" } as any,
+        compactOutput as any,
+      )
+
+      const combined = compactOutput.context.join("\n")
+      expect(combined).toContain("[truncated for context]")
+      expect(combined).not.toContain("TAIL")
+    })
+
     it("records auto positive feedback after a successful akm tool invocation", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockClear()
@@ -1273,7 +1277,7 @@ describe("akm-opencode plugin", () => {
             ok: false,
             error: "dispatch failed",
             ref: "agent:coach.md",
-            text: "Try skill:deploy and knowledge:release-guide next.",
+            text: "Try `skill:deploy` and \"knowledge:release-guide\" next.",
           }),
           metadata: {},
         } as any,
@@ -1298,7 +1302,7 @@ describe("akm-opencode plugin", () => {
           output: JSON.stringify({
             ok: true,
             ref: "agent:coach.md",
-            text: "Use skill:deploy, skill:deploy, and knowledge:release-guide.",
+            text: "Use `skill:deploy`, {skill:deploy}, and \"knowledge:release-guide\".",
           }),
           metadata: {},
         } as any,

@@ -12,11 +12,11 @@ const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
 const AKM_AUTO_HINTS = (process.env.AKM_AUTO_HINTS ?? "1") !== "0"
-const AKM_FUZZY_REFS = (process.env.AKM_FUZZY_REFS ?? "0") === "1"
 const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
 const AKM_MEMORY_CHECKPOINT_EVERY = Math.max(1, Number(process.env.AKM_MEMORY_CHECKPOINT_EVERY ?? "8") || 8)
+const AKM_CURATOR_CONTEXT_MAX_CHARS = Math.max(500, Number(process.env.AKM_CURATOR_CONTEXT_MAX_CHARS ?? "4000") || 4000)
 const SESSION_DATE_TAG_LENGTH = 8
 const CHECKPOINT_DATE_TAG_LENGTH = 15
 const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
@@ -339,6 +339,11 @@ function formatCuratorReportContext(report: string): string {
   return `# AKM curator report\n${report}`
 }
 
+function summarizeCuratorReportForContext(report: string): string {
+  if (report.length <= AKM_CURATOR_CONTEXT_MAX_CHARS) return report
+  return `${report.slice(0, AKM_CURATOR_CONTEXT_MAX_CHARS).trimEnd()}\n\n[truncated for context]`
+}
+
 function getAkmStashDir(): string | undefined {
   if (cachedAkmStashDir !== undefined) return cachedAkmStashDir || undefined
   const result = runCliSyncRaw(["--format", "json", "-q", "config", "get", "stashDir"], AKM_CURATE_TIMEOUT_MS)
@@ -538,7 +543,7 @@ function maybeCheckpointSessionMemory(sessionID: string): string | null {
   return captured
 }
 
-const AKM_REF_EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]"])
+const AKM_REF_EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"])
 
 function normalizeExtractedRef(ref: string): string {
   let start = 0
@@ -1055,9 +1060,7 @@ async function resolveRefInput(
   meta: CliLogMeta,
 ): Promise<{ ok: true; ref: string } | CliError> {
   if (input.ref && input.ref.trim()) {
-    const ref = input.ref.trim()
-    if (isAkmRef(ref) || !AKM_FUZZY_REFS) return { ok: true, ref }
-    return searchRef(client, ref, type, meta)
+    return { ok: true, ref: input.ref.trim() }
   }
 
   const query = input.query?.trim()
@@ -1459,23 +1462,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             __akmBlocked: `akm_vault action='${String(args.action)}' requires confirm:true to avoid accidental secret exposure or deletion.`,
           }
           return
-        }
-        for (const key of ["ref", "package_ref"]) {
-          const value = args[key]
-          const trimmedValue = typeof value === "string" ? value.trim() : ""
-          if (!trimmedValue || isAkmRef(trimmedValue) || !AKM_FUZZY_REFS) continue
-          const resolved = await resolveRefInput(logClient, { ref: trimmedValue }, "any", {
-            toolName: input.tool,
-            sessionID: input.sessionID,
-          })
-          if (!resolved.ok) {
-            output.args = {
-              ...args,
-              __akmBlocked: resolved.error,
-            }
-            return
-          }
-          args[key] = resolved.ref
         }
         output.args = args
       } catch {
@@ -1889,7 +1875,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (!promptResponse.ok) return JSON.stringify(promptResponse)
 
         const text = extractText(promptResponse.data.parts)
-        sessionCuratorReport.set(context.sessionID, text)
+        sessionCuratorReport.set(context.sessionID, summarizeCuratorReportForContext(text))
         markContextEpochDirty(context.sessionID)
         const dateTag = buildDateTag()
         const shortSid = context.sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"

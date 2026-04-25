@@ -54,7 +54,7 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | **`session.created`** (event hook) | Warms the stash index in the background and caches `akm hints` plus active workflow status for the next system transform so the agent knows the CLI surface area at turn 0. |
 | **`chat.message`** | Runs `akm curate "<prompt>"` on each user message (prompts shorter than `AKM_CURATE_MIN_CHARS` are skipped). The top matches are stored for injection. Memory intents (prompts mentioning "remember" / "memory") are tracked in the session buffer. |
 | **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
-| **`tool.execute.before`** (`akm_*` tools) | Optionally fuzzy-resolves non-exact stash refs (`AKM_FUZZY_REFS=1`) before execution, and blocks destructive or sensitive operations until `confirm:true` is provided. |
+| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations until `confirm:true` is provided. |
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, checkpoints memories every `AKM_MEMORY_CHECKPOINT_EVERY` successful asset-touching tool calls, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
 | **`shell.env`** | Exposes `AKM_STASH_DIR`, `AKM_PROJECT`, and `AKM_PLUGIN_VERSION` to shell tools so plain `akm` calls inherit the right context. |
@@ -68,10 +68,10 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip injecting `akm hints` at session start. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
-| `AKM_FUZZY_REFS` | `0` | Set to `1` to pre-resolve non-exact `ref` / `package_ref` tool inputs through `akm search --limit 1`. |
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
+| `AKM_CURATOR_CONTEXT_MAX_CHARS` | `4000` | Max cached curator-report characters re-injected into system/compaction context; the full report is still persisted as memory. |
 | `AKM_MEMORY_CHECKPOINT_EVERY` | `8` | Number of successful asset-touching tool calls between mid-session checkpoint memories. |
 | `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | `\b(thanks|perfect|worked)\b` | Case-insensitive regex used for lightweight positive retrospective feedback on the most recent refs. |
 
