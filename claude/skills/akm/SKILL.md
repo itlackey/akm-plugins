@@ -7,6 +7,50 @@ description: Search, show, dispatch agents, execute commands, run workflows, man
 
 You have access to the `akm` CLI (AKM, v0.5.0+) to manage extension assets from a stash directory.
 
+## Tool surface vs. CLI
+
+The Claude AKM plugin exposes **12 first-class slash commands** for the high-value verbs:
+
+- `/akm-search` — search the stash or registry
+- `/akm-show` — fetch the full payload for a ref
+- `/akm-agent` — dispatch a stash agent
+- `/akm-cmd` — render and execute a stash command template
+- `/akm-curate` — pull the top-N curated assets for a task
+- `/akm-remember` — record a memory
+- `/akm-feedback` — record positive/negative feedback for a ref
+- `/akm-evolve` — dispatch the `akm-curator` agent
+- `/akm-wiki` — wiki create/register/list/show/pages/search/stash/lint/ingest/remove
+- `/akm-workflow` — start/next/complete/status/list/create/resume/template
+- `/akm-vault` — vault `list` / `show` (key names) / `load` (shell-eval snippet)
+- `/akm-help` — discover the right raw `akm` invocation for the long tail
+
+For every other verb — `add` (install kits / register sources), `save`, `import`, `clone`,
+`update`, `remove` (uninstall a source), `list` (configured sources), `registry search`,
+`index` (reindex), `config`, `upgrade`, ad-hoc `run`, vault writes (`set` / `unset`), and
+any flag not exposed by the slash commands above — **call `/akm-help` first** to discover
+the right `akm` CLI form, then run it via Bash.
+
+### akm_help quick reference
+
+This table is the curated long-tail reference, embedded verbatim from
+`docs/akm-help-registry.md` (the canonical source). The parity test in
+`tests/claude-plugin.test.ts` fails when this table drifts from the canonical doc.
+
+| Task | Command | Notes | Keywords |
+| --- | --- | --- | --- |
+| Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]` | Confirm with the user before passing `--trust` or registering a website crawler. | add, install, register, kit, source, github, npm |
+| Commit (and optionally push) pending stash changes | `akm save [<source-name>] [-m <msg>] [--push]` | Add `--push` only when the stash is writable; review the diff first. | save, commit, push, publish, git |
+| Import a file (or stdin) into the stash as a typed asset | `akm import <path|-> [--name <name>] [--force]` | Use `-` and pipe content via stdin to import a string. | import, ingest, upload, stdin |
+| Clone an asset from any source for editing | `akm clone <ref> [--name <new>] [--dest <dir>] [--force]` | Type subdirectory is appended automatically; ref may include origin (e.g. `npm:@scope/pkg//script:foo`). | clone, copy, fork, edit |
+| Update a managed source (or all of them) | `akm update [<package_ref>|--all] [--force]` |  | update, upgrade kit, refresh, pull |
+| Remove a configured source and reindex | `akm remove <id|ref|path|url|name>` | Destructive — confirm intent before running. | remove, uninstall, delete source |
+| List configured sources (local dirs, kits, remotes) | `akm list` |  | list, sources, kits, show sources |
+| Search the registry only (skip local stash) | `akm registry search <query> [--limit N] [--assets]` | `akm_search` with `source='registry'` covers most cases; this is the explicit form. | registry, search registry, installable, discover kit |
+| Build or rebuild the stash search index | `akm index` | Rarely needed — the index refreshes implicitly after writes. | index, reindex, rebuild |
+| View or update akm config (get/set/list/unset/path) | `akm config <action> [<key>] [<value>] [--all]` | `akm config path --all` prints config, stash, cache, and index paths. | config, settings, configure, path |
+| Check for or install an akm CLI update | `akm upgrade [--check] [--force]` |  | upgrade cli, update cli, self-upgrade |
+| Run a stash script end-to-end (resolve → show → run) | ``akm show <script-ref> # then exec the printed `run` command`` | Or `akm --format json -q show <ref>` and pipe `.run` into your shell. | run, execute, script, exec |
+
 ### Stash directory resolution
 
 The stash directory is resolved using a three-tier fallback:
@@ -187,10 +231,11 @@ intent-bearing parts.
 When you discover a pattern worth keeping, **write it back to the stash**
 rather than only answering the user. Options:
 
-- `akm remember --name <slug>` — short markdown note (reads stdin).
-- `akm import <file>` — promote a drafted file into the knowledge index.
+- `/akm-remember` (or `akm remember --name <slug>`) — short markdown note (reads stdin).
+- `akm import <file>` — promote a drafted file into the knowledge index. Run `/akm-help`
+  topic="import" if you need a refresher on the flag surface.
 - `akm clone <ref>` + edit — fork an existing asset, then rewrite with your
-  improvements.
+  improvements. Run `/akm-help` topic="clone" for the full flag surface.
 - Call the `akm-curator` agent (or run `/akm-evolve`) at the end of a long
   session to consolidate hot assets, flag cold ones, and draft missing
   coverage.
@@ -255,15 +300,14 @@ When the user asks you to run a workflow, prefer `akm workflow next <ref>` for t
 
 ## Saving and importing
 
-```bash
-akm save [name] [-m "message"]                        # commit (and push, if writable) a git-backed stash
-akm import <source> [--name <slug>] [--force]         # promote a file (or stdin with "-") into the indexed stash
-akm help migrate <version>                            # release notes / migration guidance (e.g. 0.5.0)
-akm enable <skills.sh|context-hub>                    # toggle optional components
-akm disable <skills.sh|context-hub>
-```
+`akm save` and `akm import` are no longer first-class slash commands — they live in the
+curated long-tail table above. To persist stash edits at the end of a session, run
+`/akm-help` topic="save" to confirm the exact invocation, then run `akm save …` via Bash.
+To promote a drafted markdown file as a first-class asset, run `/akm-help` topic="import"
+and then `akm import …` via Bash.
 
-Use `akm save` at the end of a session to persist stash edits when the primary stash is git-backed and marked `writable`. Use `akm import` to register a drafted markdown file as a first-class asset.
+Other long-tail verbs covered the same way: `akm help migrate <version>` (release notes),
+`akm enable <skills.sh|context-hub>` and `akm disable …` (toggle optional components).
 
 ## Dispatching Stash Agents
 

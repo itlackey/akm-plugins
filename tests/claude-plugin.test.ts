@@ -109,12 +109,67 @@ describe("Claude plugin metadata", () => {
   it("ships the slash commands and curator agent referenced by the docs", () => {
     const commandsDir = path.join(repoRoot, "claude/commands")
     const agentsDir = path.join(repoRoot, "claude/agents")
-    for (const name of ["akm-curate", "akm-remember", "akm-feedback", "akm-evolve"]) {
+    for (const name of [
+      "akm-search",
+      "akm-show",
+      "akm-agent",
+      "akm-cmd",
+      "akm-curate",
+      "akm-remember",
+      "akm-feedback",
+      "akm-evolve",
+      "akm-wiki",
+      "akm-workflow",
+      "akm-vault",
+      "akm-help",
+    ]) {
       const file = path.join(commandsDir, `${name}.md`)
       expect(existsSync(file)).toBe(true)
       expect(readFileSync(file, "utf8")).toMatch(/^---/)
     }
+    expect(existsSync(path.join(commandsDir, "akm-save.md"))).toBe(false)
+    expect(existsSync(path.join(commandsDir, "akm-add.md"))).toBe(false)
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
+  })
+
+  it("keeps the curated akm_help registry table in parity across embeds", () => {
+    const registryPath = path.join(repoRoot, "docs/akm-help-registry.md")
+    const helpCommandPath = path.join(repoRoot, "claude/commands/akm-help.md")
+    const skillPath = path.join(repoRoot, "claude/skills/akm/SKILL.md")
+
+    const registry = readFileSync(registryPath, "utf8")
+    const helpCommand = readFileSync(helpCommandPath, "utf8")
+    const skill = readFileSync(skillPath, "utf8")
+
+    // Pull every command-column cell from the canonical doc — it's column 2 in
+    // a markdown table where columns are separated by " | ". We skip the
+    // header and separator rows.
+    const tableRows = registry
+      .split("\n")
+      .filter((line) => line.startsWith("| ") && !line.startsWith("| ---") && !line.startsWith("| Task |"))
+    expect(tableRows.length).toBeGreaterThan(0)
+
+    for (const row of tableRows) {
+      // Strip the surrounding pipes, then split on " | " to get the cells:
+      // [task, command, notes, keywords].
+      const trimmed = row.replace(/^\|\s?/, "").replace(/\s?\|$/, "")
+      const cells = trimmed.split(" | ")
+      expect(cells.length).toBe(4)
+      const command = cells[1].trim()
+      expect(helpCommand).toContain(command)
+      expect(skill).toContain(command)
+    }
+  })
+
+  it("/akm-help frontmatter and body advertise the help-discovery flow", () => {
+    const helpCommandPath = path.join(repoRoot, "claude/commands/akm-help.md")
+    const body = readFileSync(helpCommandPath, "utf8")
+
+    expect(body).toMatch(/^---\s*\ndescription:[^\n]+\nargument-hint:[^\n]+\n---/m)
+    // Live fallback hint
+    expect(body).toContain("akm --help")
+    // Curated table header (parity with the canonical doc)
+    expect(body).toContain("| Task | Command | Notes | Keywords |")
   })
 })
 

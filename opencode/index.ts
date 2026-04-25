@@ -1,9 +1,12 @@
 import { type Plugin, tool } from "@opencode-ai/plugin"
-import { execFileSync, execSync } from "node:child_process"
+import { execFileSync, execSync, spawn } from "node:child_process"
+import { readFileSync } from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 let resolvedAkmCommand = "akm"
 const autoInstallPackageRef = "akm-cli@latest"
+const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
@@ -12,11 +15,23 @@ const AKM_AUTO_HINTS = (process.env.AKM_AUTO_HINTS ?? "1") !== "0"
 const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
+const AKM_MEMORY_CHECKPOINT_EVERY = Math.max(1, Number(process.env.AKM_MEMORY_CHECKPOINT_EVERY ?? "8") || 8)
+const AKM_CURATOR_CONTEXT_MAX_CHARS = Math.max(500, Number(process.env.AKM_CURATOR_CONTEXT_MAX_CHARS ?? "4000") || 4000)
+const SESSION_DATE_TAG_LENGTH = 8
+const CHECKPOINT_DATE_TAG_LENGTH = 15
+const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
+const PLUGIN_VERSION = readPackageVersion()
 
 // Per-session state that drives the compound-engineering loop.
 // These maps are keyed by OpenCode sessionID.
 const sessionHints = new Map<string, string>()
 const sessionCurated = new Map<string, string>()
+const sessionWorkflow = new Map<string, string>()
+const sessionCuratorReport = new Map<string, string>()
+const sessionContextEpoch = new Map<string, number>()
+const sessionContextInjectedEpoch = new Map<string, number>()
+const sessionCuratedVersion = new Map<string, number>()
+const sessionCuratedInjectedVersion = new Map<string, number>()
 type SessionBufferEntry = {
   timestamp: string
   kind: "memory-intent" | "tool-ref"
@@ -24,35 +39,60 @@ type SessionBufferEntry = {
   ref?: string
   status?: "positive" | "negative" | "unknown"
   note?: string
+  checkpointed?: boolean
 }
 const sessionBuffer = new Map<string, SessionBufferEntry[]>()
-const sessionMemoryCaptured = new Set<string>()
+const sessionFinalMemoryCaptured = new Set<string>()
+const sessionSuccessfulAssetTouchCount = new Map<string, number>()
+let cachedAkmStashDir: string | undefined
 
-// Asset-ref grammar matching the stash skill: [origin//]type:name
-const AKM_REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/\-]+/g
+// Asset-ref grammar matching the stash skill: [origin//]type:name.
+// We validate normalized tokens individually instead of running a global regex
+// over arbitrary tool output to keep extraction predictable and ReDoS-safe.
+const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/\-]+$/
 
-const CURATOR_AGENT_PROMPT = `You are the AKM curator — a compound-engineering agent that keeps the user's AKM stash improving every time the main agent finishes a task.
+function readPackageVersion(): string {
+  try {
+    const raw = readFileSync(path.join(moduleDir, "package.json"), "utf8")
+    const parsed = JSON.parse(raw) as { version?: unknown }
+    return typeof parsed.version === "string" && parsed.version ? parsed.version : "0.0.0"
+  } catch {
+    return "0.0.0"
+  }
+}
+
+function createRetrospectiveFeedbackRegex(): RegExp {
+  const pattern = process.env.AKM_RETROSPECTIVE_FEEDBACK_PATTERN ?? "\\b(thanks|perfect|worked)\\b"
+  try {
+    return new RegExp(pattern, "i")
+  } catch {
+    return /\b(thanks|perfect|worked)\b/i
+  }
+}
+
+const CURATOR_AGENT_PROMPT_FALLBACK = `You are the AKM curator — a compound-engineering agent that keeps the user's AKM stash improving every time the main agent finishes a task.
 
 Inputs you should inspect:
 1. OpenCode app logs that include the "akm-opencode" service (feedback, memory, tool invocations).
 2. Session-summary memories named memory:opencode-session-*.
-3. The live stash: call akm_list, akm_search "" --limit 50, and akm_show <ref>.
+3. The live stash: call akm_search "" --limit 50 (and akm_show <ref>) to enumerate assets; reach for akm_help topic="list sources" if you need the configured-sources view.
+4. Parent-session context via akm_parent_messages when this session was dispatched as a child.
 
 Signals to act on:
 - Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --note "curator: consistently useful" to reinforce.
 - Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --note "<excerpt>" and open the asset for review.
-- Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex with akm_index.
+- Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see akm_help topic="reindex").
 - Duplicates / drift: near-identical descriptions or overlapping responsibilities. Propose a consolidation.
-- Stale memories: session summaries that never get recalled. Propose akm_remove memory:<name> once distilled into a durable knowledge doc or wiki page.
+- Stale memories: session summaries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
 - Stuck workflows: run akm_workflow list --active and surface any runs in blocked or failed state with their step ids. Propose whether to resume or escalate.
-- Never touch vaults: do not call akm_vault show or shell_snippet unless the user explicitly asks. Vault values must never appear in reports.
+- Never touch vaults: do not call akm_vault show or load unless the user explicitly asks. Vault values must never appear in reports.
 
 Rules of engagement:
 - Never apply destructive changes without explicit user approval.
 - Report findings as a prioritized action list of concrete akm_* tool calls the user can run.
 - Prefer small, reversible edits: promote via positive feedback, draft a candidate skill, or clone and tweak.
-- When drafting new assets, write them into the working stash directory (akm_config get stashDir) under skills/, commands/, agents/, knowledge/, or scripts/. Call akm_index when finished.
+- When drafting new assets, write them into the working stash directory under skills/, commands/, agents/, knowledge/, or scripts/. Use akm_help (topic="config" / topic="reindex") to look up the right CLI invocation when you need the stash path or want to force a reindex.
 - When finished, persist your own summary with akm_remember (name: curator-run-<timestamp>) so the next curator run can build on yours.
 
 Output shape: end every run with a markdown report that has these sections:
@@ -78,6 +118,23 @@ Output shape: end every run with a markdown report that has these sections:
 ## Housekeeping
 - stale memories, reindex needs, config tweaks
 `
+
+function loadCuratorAgentPrompt(): string {
+  try {
+    const raw = readFileSync(path.join(moduleDir, "agent", "akm-curator.md"), "utf8").trim()
+    let body = raw
+    const lines = raw.split(/\r?\n/)
+    if (lines[0] === "---") {
+      const closingIndex = lines.indexOf("---", 1)
+      if (closingIndex > 0) body = lines.slice(closingIndex + 1).join("\n").trim()
+    }
+    return body || CURATOR_AGENT_PROMPT_FALLBACK
+  } catch {
+    return CURATOR_AGENT_PROMPT_FALLBACK
+  }
+}
+
+const CURATOR_AGENT_PROMPT = loadCuratorAgentPrompt()
 
 type LogLevel = "debug" | "info" | "warn" | "error"
 
@@ -148,11 +205,36 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+function buildDateTag(options?: { includeTime?: boolean }): string {
+  const compactIso = new Date().toISOString().replace(/[-:]/g, "")
+  return compactIso.slice(0, options?.includeTime ? CHECKPOINT_DATE_TAG_LENGTH : SESSION_DATE_TAG_LENGTH)
+}
+
 function addBufferEntry(sessionID: string | undefined, entry: Omit<SessionBufferEntry, "timestamp">) {
   if (!sessionID) return
   const buf = sessionBuffer.get(sessionID) ?? []
   buf.push({ timestamp: nowIso(), ...entry })
   sessionBuffer.set(sessionID, buf)
+}
+
+function markContextEpochDirty(sessionID: string) {
+  sessionContextEpoch.set(sessionID, (sessionContextEpoch.get(sessionID) ?? 0) + 1)
+}
+
+function bumpCuratedVersion(sessionID: string) {
+  sessionCuratedVersion.set(sessionID, (sessionCuratedVersion.get(sessionID) ?? 0) + 1)
+}
+
+function isAkmRef(value: string): boolean {
+  return AKM_REF_PATTERN.test(value)
+}
+
+function parseMaybeJson(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return undefined
+  }
 }
 
 // Synchronous CLI invocation used by the lifecycle hooks — the plugin host does
@@ -202,6 +284,92 @@ function runHintsForSession(): string | null {
   return body || null
 }
 
+function summarizeWorkflowList(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const lines = value
+      .map((item) => {
+        if (!item || typeof item !== "object") return null
+        const record = item as Record<string, unknown>
+        const id = typeof record.runId === "string"
+          ? record.runId
+          : typeof record.id === "string"
+            ? record.id
+            : null
+        const ref = typeof record.ref === "string"
+          ? record.ref
+          : typeof record.workflowRef === "string"
+            ? record.workflowRef
+            : null
+        const state = typeof record.state === "string" ? record.state : typeof record.status === "string" ? record.status : null
+        const step = typeof record.step === "string"
+          ? record.step
+          : typeof record.currentStep === "string"
+            ? record.currentStep
+            : null
+        if (!id && !ref && !state && !step) return null
+        return `- ${ref ?? "workflow"} (${id ?? "run"})${state ? ` — ${state}` : ""}${step ? ` — next: ${step}` : ""}`
+      })
+      .filter((line): line is string => !!line)
+    return lines.length > 0 ? lines.join("\n") : null
+  }
+  return null
+}
+
+function runWorkflowSummaryForSession(): string | null {
+  const result = runCliSyncRaw(["--format", "json", "-q", "workflow", "list", "--active"], AKM_CURATE_TIMEOUT_MS)
+  if (!result.ok) return null
+  const parsed = parseMaybeJson(result.stdout)
+  const summary = summarizeWorkflowList(
+    Array.isArray(parsed)
+      ? parsed
+      : (parsed && typeof parsed === "object" && Array.isArray((parsed as { runs?: unknown }).runs))
+        ? (parsed as { runs: unknown[] }).runs
+        : (parsed && typeof parsed === "object" && Array.isArray((parsed as { items?: unknown }).items))
+          ? (parsed as { items: unknown[] }).items
+          : [],
+  )
+  return summary
+}
+
+function formatWorkflowContext(summary: string): string {
+  return `# AKM active workflows\n${summary}`
+}
+
+function formatCuratorReportContext(report: string): string {
+  return `# AKM curator report\n${report}`
+}
+
+function summarizeCuratorReportForContext(report: string): string {
+  if (report.length <= AKM_CURATOR_CONTEXT_MAX_CHARS) return report
+  return `${report.slice(0, AKM_CURATOR_CONTEXT_MAX_CHARS).trimEnd()}\n\n[truncated for context]`
+}
+
+function getAkmStashDir(): string | undefined {
+  if (cachedAkmStashDir !== undefined) return cachedAkmStashDir || undefined
+  const result = runCliSyncRaw(["--format", "json", "-q", "config", "get", "stashDir"], AKM_CURATE_TIMEOUT_MS)
+  if (!result.ok) {
+    cachedAkmStashDir = ""
+    return undefined
+  }
+  const parsed = parseMaybeJson(result.stdout)
+  if (typeof parsed === "string" && parsed.trim()) {
+    cachedAkmStashDir = parsed.trim()
+    return cachedAkmStashDir
+  }
+  if (parsed && typeof parsed === "object") {
+    for (const key of ["value", "path", "stashDir"]) {
+      const value = (parsed as Record<string, unknown>)[key]
+      if (typeof value === "string" && value.trim()) {
+        cachedAkmStashDir = value.trim()
+        return cachedAkmStashDir
+      }
+    }
+  }
+  const raw = result.stdout.trim()
+  cachedAkmStashDir = raw || ""
+  return cachedAkmStashDir || undefined
+}
+
 function warmIndexInBackground(): void {
   const command = resolveAkmCommand()
   if (typeof command !== "string") return
@@ -214,31 +382,106 @@ function warmIndexInBackground(): void {
   }
 }
 
-function recordFeedbackSync(ref: string, sentiment: "positive" | "negative", note: string): boolean {
-  const result = runCliSyncRaw(
-    [
-      "--format",
-      "json",
-      "-q",
-      "feedback",
+function queueFeedback(
+  client: LogCapableClient,
+  ref: string,
+  sentiment: "positive" | "negative",
+  note: string,
+  meta: CliLogMeta,
+  dedupe?: Set<string>,
+): boolean {
+  const dedupeKey = `${ref}:${sentiment}`
+  if (dedupe?.has(dedupeKey)) return true
+  dedupe?.add(dedupeKey)
+
+  const command = resolveAkmCommand()
+  if (typeof command !== "string") {
+    void writePluginLog(client, "warn", "AKM auto-feedback skipped", {
+      subsystem: "feedback",
+      toolName: meta.toolName,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
       ref,
-      sentiment === "positive" ? "--positive" : "--negative",
-      "--note",
-      note,
-    ],
-    AKM_CURATE_TIMEOUT_MS,
-  )
-  return result.ok
+      sentiment,
+      error: command.error,
+    })
+    return false
+  }
+
+  try {
+    const child = spawn(
+      command,
+      [
+        "--format",
+        "json",
+        "-q",
+        "feedback",
+        ref,
+        sentiment === "positive" ? "--positive" : "--negative",
+        "--note",
+        note,
+      ],
+      {
+        detached: true,
+        stdio: "ignore",
+      },
+    )
+    child.on("error", (error) => {
+      void writePluginLog(client, "warn", "AKM auto-feedback failed", {
+        subsystem: "feedback",
+        toolName: meta.toolName,
+        sessionID: meta.sessionID,
+        directory: meta.directory,
+        ref,
+        sentiment,
+        error: formatCliError(error),
+      })
+    })
+    child.unref()
+    return true
+  } catch (error: unknown) {
+    void writePluginLog(client, "warn", "AKM auto-feedback failed", {
+      subsystem: "feedback",
+      toolName: meta.toolName,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      ref,
+      sentiment,
+      error: formatCliError(error),
+    })
+    return false
+  }
 }
 
-function captureSessionMemory(sessionID: string, reason: string): string | null {
+function rememberTextAsMemory(name: string, body: string): string | null {
+  const command = resolveAkmCommand()
+  if (typeof command !== "string") return null
+  try {
+    execFileSync(command, ["--format", "json", "-q", "remember", "--name", name, "--force"], {
+      encoding: "utf8",
+      timeout: AKM_CURATE_TIMEOUT_MS * 2,
+      input: body,
+    })
+    return `memory:${name}`
+  } catch {
+    return null
+  }
+}
+
+function captureSessionMemory(
+  sessionID: string,
+  reason: string,
+  options?: { checkpoint?: boolean },
+): string | null {
   if (!AKM_AUTO_MEMORY) return null
   if (!sessionID) return null
-  if (sessionMemoryCaptured.has(sessionID)) return null
+  const isCheckpoint = options?.checkpoint === true
+  if (!isCheckpoint && sessionFinalMemoryCaptured.has(sessionID)) return null
   const entries = sessionBuffer.get(sessionID) ?? []
+  const pendingEntries = isCheckpoint ? entries.filter((entry) => !entry.checkpointed) : entries
   // Require at least two observations before persisting — single events are noise.
-  if (entries.length < 2) {
-    sessionBuffer.delete(sessionID)
+  if (pendingEntries.length < 2) {
+    if (!isCheckpoint) sessionBuffer.delete(sessionID)
     return null
   }
 
@@ -247,7 +490,7 @@ function captureSessionMemory(sessionID: string, reason: string): string | null 
   lines.push(`Reason: ${reason}`)
   lines.push(`Session: ${sessionID}`)
   lines.push("")
-  for (const entry of entries) {
+  for (const entry of pendingEntries) {
     if (entry.kind === "memory-intent") {
       lines.push(`## ${entry.timestamp} — user memory intent`)
       if (entry.note) lines.push(entry.note)
@@ -261,38 +504,74 @@ function captureSessionMemory(sessionID: string, reason: string): string | null 
   }
   const body = lines.join("\n")
 
-  const dateTag = new Date().toISOString().replace(/[-:]/g, "").slice(0, 8)
+  const dateTag = buildDateTag({ includeTime: isCheckpoint })
   const shortSid = sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"
-  const name = `opencode-session-${dateTag}-${shortSid}`
+  const name = isCheckpoint
+    ? `opencode-checkpoint-${dateTag}-${shortSid}`
+    : `opencode-session-${dateTag}-${shortSid}`
 
-  const command = resolveAkmCommand()
-  if (typeof command !== "string") {
-    sessionMemoryCaptured.add(sessionID)
-    sessionBuffer.delete(sessionID)
+  const ref = rememberTextAsMemory(name, body)
+  if (!ref) {
+    if (!isCheckpoint) {
+      sessionFinalMemoryCaptured.add(sessionID)
+      sessionBuffer.delete(sessionID)
+    }
     return null
   }
-  try {
-    execFileSync(command, ["--format", "json", "-q", "remember", "--name", name, "--force"], {
-      encoding: "utf8",
-      timeout: AKM_CURATE_TIMEOUT_MS * 2,
-      input: body,
-    })
-    sessionMemoryCaptured.add(sessionID)
-    sessionBuffer.delete(sessionID)
-    return `memory:${name}`
-  } catch {
-    sessionMemoryCaptured.add(sessionID)
-    sessionBuffer.delete(sessionID)
-    return null
+
+  if (isCheckpoint) {
+    for (const entry of entries) {
+      if (!entry.checkpointed) entry.checkpointed = true
+    }
+    sessionSuccessfulAssetTouchCount.set(sessionID, 0)
+    sessionBuffer.set(sessionID, entries)
+    return ref
   }
+
+  sessionFinalMemoryCaptured.add(sessionID)
+  sessionBuffer.delete(sessionID)
+  return ref
 }
 
-function extractToolRefs(toolName: string, args: Record<string, unknown>, output: unknown): string[] {
+function maybeCheckpointSessionMemory(sessionID: string): string | null {
+  const count = sessionSuccessfulAssetTouchCount.get(sessionID) ?? 0
+  if (count < AKM_MEMORY_CHECKPOINT_EVERY) return null
+  const captured = captureSessionMemory(sessionID, "checkpoint", { checkpoint: true })
+  if (!captured) {
+    sessionSuccessfulAssetTouchCount.set(sessionID, 0)
+  }
+  return captured
+}
+
+const AKM_REF_EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"])
+
+function normalizeExtractedRef(ref: string): string {
+  let start = 0
+  let end = ref.length
+  while (start < end && AKM_REF_EDGE_PUNCTUATION.has(ref[start] ?? "")) start += 1
+  while (end > start && AKM_REF_EDGE_PUNCTUATION.has(ref[end - 1] ?? "")) end -= 1
+  return ref.slice(start, end)
+}
+
+function extractRefsFromText(value: string): string[] {
   const refs = new Set<string>()
+  for (const token of value.split(/\s+/)) {
+    const normalized = normalizeExtractedRef(token)
+    if (normalized && isAkmRef(normalized)) refs.add(normalized)
+  }
+  return [...refs]
+}
+
+function extractToolRefs(
+  toolName: string,
+  args: Record<string, unknown>,
+  output: unknown,
+): { refs: string[]; positiveOnlyRefs: string[] } {
+  const refs = new Set<string>()
+  const positiveOnlyRefs = new Set<string>()
   const addMatches = (value: unknown) => {
     if (typeof value !== "string") return
-    const matches = value.match(AKM_REF_PATTERN)
-    if (matches) for (const ref of matches) refs.add(ref)
+    for (const ref of extractRefsFromText(value)) refs.add(ref)
   }
 
   for (const key of ["ref", "package_ref"]) {
@@ -313,9 +592,18 @@ function extractToolRefs(toolName: string, args: Record<string, unknown>, output
       }
     }
     if (toolName === "akm_remember" && typeof o.ref === "string") addMatches(o.ref)
+    if (
+      (toolName === "akm_agent" || toolName === "akm_cmd" || toolName === "akm_evolve")
+      && typeof o.text === "string"
+    ) {
+      for (const ref of extractRefsFromText(o.text)) {
+        refs.add(ref)
+        positiveOnlyRefs.add(ref)
+      }
+    }
   }
 
-  return [...refs]
+  return { refs: [...refs], positiveOnlyRefs: [...positiveOnlyRefs] }
 }
 
 const AKM_HINTS_PREFIX = [
@@ -326,6 +614,98 @@ const AKM_HINTS_PREFIX = [
 
 const AKM_CURATED_HEADER = "# AKM stash — assets relevant to this prompt"
 const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content, and record `akm_feedback <ref> positive|negative` once you know whether the asset helped."
+
+// Curated quick-reference for the long-tail of `akm` CLI verbs that no longer
+// have a dedicated tool wrapper. Surfaced through akm_help so agents can
+// always find the right invocation without polluting default context.
+type AkmHelpEntry = {
+  task: string
+  command: string
+  notes?: string
+  keywords: string[]
+}
+
+const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
+  {
+    task: "Install a kit or register an external source (npm, GitHub, git, URL, local dir)",
+    command: "akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]",
+    notes: "Confirm with the user before passing --trust or registering a website crawler.",
+    keywords: ["add", "install", "register", "kit", "source", "github", "npm"],
+  },
+  {
+    task: "Commit (and optionally push) pending stash changes",
+    command: "akm save [<source-name>] [-m <msg>] [--push]",
+    notes: "Add --push only when the stash is writable; review the diff first.",
+    keywords: ["save", "commit", "push", "publish", "git"],
+  },
+  {
+    task: "Import a file (or stdin) into the stash as a typed asset",
+    command: "akm import <path|-> [--name <name>] [--force]",
+    notes: "Use `-` and pipe content via stdin to import a string.",
+    keywords: ["import", "ingest", "upload", "stdin"],
+  },
+  {
+    task: "Clone an asset from any source for editing",
+    command: "akm clone <ref> [--name <new>] [--dest <dir>] [--force]",
+    notes: "Type subdirectory is appended automatically; ref may include origin (e.g. npm:@scope/pkg//script:foo).",
+    keywords: ["clone", "copy", "fork", "edit"],
+  },
+  {
+    task: "Update a managed source (or all of them)",
+    command: "akm update [<package_ref>|--all] [--force]",
+    keywords: ["update", "upgrade kit", "refresh", "pull"],
+  },
+  {
+    task: "Remove a configured source and reindex",
+    command: "akm remove <id|ref|path|url|name>",
+    notes: "Destructive — confirm intent before running.",
+    keywords: ["remove", "uninstall", "delete source"],
+  },
+  {
+    task: "List configured sources (local dirs, kits, remotes)",
+    command: "akm list",
+    keywords: ["list", "sources", "kits", "show sources"],
+  },
+  {
+    task: "Search the registry only (skip local stash)",
+    command: "akm registry search <query> [--limit N] [--assets]",
+    notes: "akm_search with source='registry' covers most cases; this is the explicit form.",
+    keywords: ["registry", "search registry", "installable", "discover kit"],
+  },
+  {
+    task: "Build or rebuild the stash search index",
+    command: "akm index",
+    notes: "Rarely needed — the index refreshes implicitly after writes.",
+    keywords: ["index", "reindex", "rebuild"],
+  },
+  {
+    task: "View or update akm config (get/set/list/unset/path)",
+    command: "akm config <action> [<key>] [<value>] [--all]",
+    notes: "`akm config path --all` prints config, stash, cache, and index paths.",
+    keywords: ["config", "settings", "configure", "path"],
+  },
+  {
+    task: "Check for or install an akm CLI update",
+    command: "akm upgrade [--check] [--force]",
+    keywords: ["upgrade cli", "update cli", "self-upgrade"],
+  },
+  {
+    task: "Run a stash script end-to-end (resolve → show → run)",
+    command: "akm show <script-ref> # then exec the printed `run` command",
+    notes: "Or `akm --format json -q show <ref>` and pipe `.run` into your shell.",
+    keywords: ["run", "execute", "script", "exec"],
+  },
+]
+
+function lookupAkmHelpHint(topic: string): AkmHelpEntry[] {
+  const needle = topic.toLowerCase().trim()
+  if (!needle) return []
+  return AKM_HELP_QUICK_REFERENCE.filter((entry) =>
+    entry.keywords.some((kw) => needle.includes(kw))
+    || entry.task.toLowerCase().includes(needle)
+    || entry.command.toLowerCase().includes(needle),
+  )
+}
 
 function extractSessionIdFromEvent(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object") return undefined
@@ -460,7 +840,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
     return JSON.stringify(command)
   }
 
-  const fullArgs = [...args, "--format", "json"]
+  const fullArgs = args.includes("--format") ? [...args] : [...args, "--format", "json"]
 
   try {
     const stdout = execFileSync(command, fullArgs, {
@@ -619,6 +999,12 @@ function parseCliJson<T>(raw: string): T | CliError {
   }
 }
 
+function blockedToolResponse(args: Record<string, unknown>): string | null {
+  return typeof args.__akmBlocked === "string"
+    ? JSON.stringify({ ok: false, error: args.__akmBlocked })
+    : null
+}
+
 function isCliError(value: unknown): value is CliError {
   return !!value
     && typeof value === "object"
@@ -736,31 +1122,43 @@ function truncateLogText(value: string, limit = 1_000): string {
   return value.length > limit ? `${value.slice(0, limit)}…` : value
 }
 
-async function resolveRefInput(
+async function searchRef(
   client: LogCapableClient,
-  input: { ref?: string; query?: string },
-  type: AssetType,
+  query: string,
+  type: AssetType | "any",
   meta: CliLogMeta,
 ): Promise<{ ok: true; ref: string } | CliError> {
-  if (input.ref && input.ref.trim()) {
-    return { ok: true, ref: input.ref.trim() }
+  const raw = await runCli(
+    client,
+    ["search", query, "--type", type, "--limit", "1", "--detail", "normal", "--source", "stash"],
+    meta,
+  )
+  const parsed = parseCliJson<SearchResponse>(raw)
+  if (isCliError(parsed)) return parsed
+  const ref = parsed.hits?.[0]?.ref
+  if (!ref) {
+    return {
+      ok: false,
+      error: `No stash ref matched '${query}'. Use akm_search to disambiguate, then retry with an exact ref.`,
+    }
   }
+  return { ok: true, ref }
+}
+
+async function resolveRefOrQueryInput(
+  client: LogCapableClient,
+  input: { ref?: string; query?: string },
+  type: AssetType | "any",
+  meta: CliLogMeta,
+): Promise<{ ok: true; ref: string } | CliError> {
+  const explicitRef = input.ref?.trim()
+  if (explicitRef) return { ok: true, ref: explicitRef }
 
   const query = input.query?.trim()
   if (!query) {
     return { ok: false, error: "Provide either 'ref' or 'query'." }
   }
-
-  const raw = await runCli(client, ["search", query, "--type", type, "--limit", "1", "--detail", "normal", "--source", "stash"], meta)
-  const parsed = parseCliJson<SearchResponse>(raw)
-  if (isCliError(parsed)) return parsed
-
-  const ref = parsed.hits?.[0]?.ref
-  if (!ref) {
-    return { ok: false, error: `No ${type} match found for query '${query}'.` }
-  }
-
-  return { ok: true, ref }
+  return searchRef(client, query, type, meta)
 }
 
 async function ensureTargetSessionID(input: {
@@ -875,6 +1273,65 @@ async function promptTargetSession(input: {
   }
 }
 
+async function resolveDispatchAgent(
+  client: PluginClient,
+  requestedAgent: string,
+  directory: string,
+): Promise<string> {
+  if (requestedAgent !== "akm-curator") return requestedAgent
+  try {
+    const agents = await client.app.agents({ query: { directory } })
+    if (agents.error) return "general"
+    const hasCurator = (agents.data ?? []).some((agent) => agent?.name === "akm-curator")
+    return hasCurator ? "akm-curator" : "general"
+  } catch {
+    return "general"
+  }
+}
+
+function summarizeSessionMessages(
+  sessionID: string,
+  messages: Array<{ info?: Record<string, unknown>; parts?: unknown }>,
+) {
+  return {
+    ok: true,
+    sessionID,
+    messages: messages.map((message) => {
+      const info = message.info ?? {}
+      const role = typeof info.role === "string" ? info.role : "unknown"
+      const agent = typeof info.agent === "string"
+        ? info.agent
+        : typeof info.mode === "string"
+          ? info.mode
+          : null
+      return {
+        role,
+        agent,
+        text: extractText(message.parts),
+      }
+    }),
+  }
+}
+
+async function getParentSessionID(
+  client: PluginClient,
+  sessionID: string,
+  directory: string,
+): Promise<{ ok: true; parentID: string } | CliError> {
+  try {
+    const result = await client.session.get({
+      path: { id: sessionID },
+      query: { directory },
+    })
+    if (result.error || !result.data?.parentID) {
+      return { ok: false, error: "This session does not have a parent session." }
+    }
+    return { ok: true, parentID: result.data.parentID }
+  } catch (error: unknown) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 function splitArguments(raw: string): string[] {
   if (!raw.trim()) return []
   const args: string[] = []
@@ -921,17 +1378,31 @@ type PluginClient = {
     create: (input: {
       body: { parentID: string; title: string }
     }) => Promise<{ data?: { id?: string }; error?: unknown }>
+    get: (input: {
+      path: { id: string }
+      query?: { directory?: string }
+    }) => Promise<{ data?: { id?: string; parentID?: string }; error?: unknown }>
+    messages: (input: {
+      path: { id: string }
+      query?: { directory?: string }
+    }) => Promise<{ data?: Array<{ info?: Record<string, unknown>; parts?: unknown }>; error?: unknown }>
     prompt: (input: {
       path: { id: string }
       body: SessionPromptBody
     }) => Promise<{ data?: { parts?: unknown }; error?: unknown }>
   }
+  app: {
+    agents: (input?: {
+      query?: { directory?: string }
+    }) => Promise<{ data?: Array<{ name?: string }>; error?: unknown }>
+  }
 }
 
-export const AkmPlugin: Plugin = async ({ client }) => {
+export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
   await ensureLatestAkmInstalled(client as unknown as LogCapableClient)
 
   const logClient = client as unknown as LogCapableClient
+  const sdkClient = client as unknown as PluginClient
 
   return {
     // Events cover the lifecycle boundaries that Claude Code exposes as
@@ -944,11 +1415,15 @@ export const AkmPlugin: Plugin = async ({ client }) => {
         const sid = extractSessionIdFromEvent(event) ?? extractSessionIdFromEvent((event as { properties?: unknown }).properties)
         if (type === "session.created" || type === "session.updated") {
           if (!sid) return
-          if (!AKM_AUTO_HINTS) return
-          if (sessionHints.has(sid)) return
-          warmIndexInBackground()
-          const hints = runHintsForSession()
-          if (hints) sessionHints.set(sid, hints)
+          if (!sessionContextEpoch.has(sid)) sessionContextEpoch.set(sid, 0)
+          if (type === "session.created") warmIndexInBackground()
+          if (AKM_AUTO_HINTS && !sessionHints.has(sid)) {
+            const hints = runHintsForSession()
+            if (hints) sessionHints.set(sid, hints)
+          }
+          if (!sessionWorkflow.has(sid)) {
+            sessionWorkflow.set(sid, runWorkflowSummaryForSession() ?? "")
+          }
         } else if (type === "session.compacted" || type === "session.idle" || type === "session.deleted") {
           if (!sid) return
           const captured = captureSessionMemory(sid, type)
@@ -966,7 +1441,14 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           if (type === "session.deleted") {
             sessionHints.delete(sid)
             sessionCurated.delete(sid)
-            sessionMemoryCaptured.delete(sid)
+            sessionWorkflow.delete(sid)
+            sessionCuratorReport.delete(sid)
+            sessionContextEpoch.delete(sid)
+            sessionContextInjectedEpoch.delete(sid)
+            sessionCuratedVersion.delete(sid)
+            sessionCuratedInjectedVersion.delete(sid)
+            sessionFinalMemoryCaptured.delete(sid)
+            sessionSuccessfulAssetTouchCount.delete(sid)
             sessionBuffer.delete(sid)
           }
         }
@@ -995,6 +1477,24 @@ export const AkmPlugin: Plugin = async ({ client }) => {
         // Best-effort only.
       }
     },
+    "experimental.session.compacting": async (input, output) => {
+      try {
+        const sid = input.sessionID
+        if (!sid) return
+        if (!Array.isArray(output.context)) return
+        markContextEpochDirty(sid)
+        const hints = sessionHints.get(sid)
+        if (hints) output.context.push(`${AKM_HINTS_PREFIX}\n\n${hints}`)
+        const curated = sessionCurated.get(sid)
+        if (curated) output.context.push(`${AKM_CURATED_HEADER}\n${curated}${AKM_CURATED_TAIL}`)
+        const workflow = sessionWorkflow.get(sid)
+        if (workflow) output.context.push(formatWorkflowContext(workflow))
+        const curatorReport = sessionCuratorReport.get(sid)
+        if (curatorReport) output.context.push(formatCuratorReportContext(curatorReport))
+      } catch {
+        // Never break compaction because of plugin context.
+      }
+    },
     // experimental.chat.system.transform is how OpenCode exposes the
     // additionalContext channel. We append the cached hints (once per session)
     // and the curated assets (once per turn) so the next LLM call sees them.
@@ -1005,19 +1505,54 @@ export const AkmPlugin: Plugin = async ({ client }) => {
       try {
         if (!output || !Array.isArray(output.system)) return
         const sid = extractSessionIdFromEvent(input) ?? ""
-        const hints = sid ? sessionHints.get(sid) : undefined
-        if (hints) {
-          output.system.push(`${AKM_HINTS_PREFIX}\n\n${hints}`)
-          // Only inject hints on the first transform of the session.
-          sessionHints.delete(sid)
+        const epoch = sessionContextEpoch.get(sid) ?? 0
+        const injectedEpoch = sessionContextInjectedEpoch.get(sid)
+        if (sid && injectedEpoch !== epoch) {
+          const hints = sessionHints.get(sid)
+          if (hints) output.system.push(`${AKM_HINTS_PREFIX}\n\n${hints}`)
+          const workflow = sessionWorkflow.get(sid)
+          if (workflow) output.system.push(formatWorkflowContext(workflow))
+          const curatorReport = sessionCuratorReport.get(sid)
+          if (curatorReport) output.system.push(formatCuratorReportContext(curatorReport))
+          sessionContextInjectedEpoch.set(sid, epoch)
         }
         const curated = sid ? sessionCurated.get(sid) : undefined
+        const curatedVersion = sessionCuratedVersion.get(sid) ?? 0
         if (curated) {
-          output.system.push(`${AKM_CURATED_HEADER}\n${curated}${AKM_CURATED_TAIL}`)
-          sessionCurated.delete(sid)
+          if (sessionCuratedInjectedVersion.get(sid) !== curatedVersion) {
+            output.system.push(`${AKM_CURATED_HEADER}\n${curated}${AKM_CURATED_TAIL}`)
+            sessionCuratedInjectedVersion.set(sid, curatedVersion)
+          }
         }
       } catch {
         // Never break the turn because of a transform failure.
+      }
+    },
+    "tool.execute.before": async (input, output) => {
+      try {
+        if (!input.tool.startsWith("akm_")) return
+        const args = output.args && typeof output.args === "object" ? output.args as Record<string, unknown> : {}
+        const confirm = args.confirm === true
+        if (input.tool === "akm_vault" && (args.action === "show" || args.action === "unset") && !confirm) {
+          output.args = {
+            ...args,
+            __akmBlocked: `akm_vault action='${String(args.action)}' requires confirm:true to avoid accidental secret exposure or deletion.`,
+          }
+          return
+        }
+        output.args = args
+      } catch {
+        // Never break tool execution from the pre-hook.
+      }
+    },
+    "shell.env": async (_input, output) => {
+      try {
+        output.env.AKM_PROJECT = worktree
+        output.env.AKM_PLUGIN_VERSION = PLUGIN_VERSION
+        const stashDir = getAkmStashDir()
+        if (stashDir) output.env.AKM_STASH_DIR = stashDir
+      } catch {
+        // Best-effort only.
       }
     },
     "chat.message": async (input, output) => {
@@ -1036,7 +1571,10 @@ export const AkmPlugin: Plugin = async ({ client }) => {
       // stash the result so experimental.chat.system.transform can inject it.
       if (AKM_AUTO_CURATE && input.sessionID) {
         const curated = runCurateForPrompt(text)
-        if (curated) sessionCurated.set(input.sessionID, curated)
+        if (curated) {
+          sessionCurated.set(input.sessionID, curated)
+          bumpCuratedVersion(input.sessionID)
+        }
       }
 
       // Track explicit memory intents so capture-memory has something durable
@@ -1046,6 +1584,21 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           kind: "memory-intent",
           note: truncateLogText(text, 500),
         })
+      }
+
+      if (input.sessionID && AKM_AUTO_FEEDBACK && AKM_RETROSPECTIVE_FEEDBACK_RE.test(text)) {
+        const recentRefs = (sessionBuffer.get(input.sessionID) ?? [])
+          .filter((entry) => entry.kind === "tool-ref" && !!entry.ref)
+          .map((entry) => entry.ref!)
+          .filter((ref, index, refs) => !ref.startsWith("memory:") && !ref.startsWith("vault:") && refs.indexOf(ref) === index)
+          .slice(-3)
+        const dedupe = new Set<string>()
+        for (const ref of recentRefs) {
+          queueFeedback(logClient, ref, "positive", "opencode retrospective: user confirmed it worked", {
+            toolName: "chat.message",
+            sessionID: input.sessionID,
+          }, dedupe)
+        }
       }
     },
     "tool.execute.after": async (input, output) => {
@@ -1082,9 +1635,9 @@ export const AkmPlugin: Plugin = async ({ client }) => {
       // Auto-feedback + session buffering: record every asset ref the tool
       // touched so the stash ranking improves over time and so Stop/Compact
       // has material to flush into a session summary memory.
-      const allRefs = extractToolRefs(input.tool, input.args as Record<string, unknown>, parsed)
-      if (allRefs.length > 0 && input.sessionID) {
-        for (const ref of allRefs) {
+      const refResult = extractToolRefs(input.tool, input.args as Record<string, unknown>, parsed)
+      if (refResult.refs.length > 0 && input.sessionID) {
+        for (const ref of refResult.refs) {
           addBufferEntry(input.sessionID, {
             kind: "tool-ref",
             toolName: input.tool,
@@ -1092,30 +1645,53 @@ export const AkmPlugin: Plugin = async ({ client }) => {
             status: feedback ?? "unknown",
           })
         }
+        if (feedback === "positive") {
+          sessionSuccessfulAssetTouchCount.set(
+            input.sessionID,
+            (sessionSuccessfulAssetTouchCount.get(input.sessionID) ?? 0) + 1,
+          )
+          const checkpointRef = maybeCheckpointSessionMemory(input.sessionID)
+          if (checkpointRef) {
+            await writePluginLog(logClient, "info", "AKM checkpoint memory captured", {
+              subsystem: "memory",
+              actor: "system",
+              sessionID: input.sessionID,
+              reason: "checkpoint",
+              ref: checkpointRef,
+            })
+          }
+        }
       }
 
       if (
         AKM_AUTO_FEEDBACK
         && feedback
         && input.tool !== "akm_feedback"
-        && allRefs.length > 0
+        && refResult.refs.length > 0
       ) {
+        const dedupe = new Set<string>()
+        const feedbackRefs = feedback === "positive"
+          ? refResult.refs
+          : refResult.refs.filter((ref) => !refResult.positiveOnlyRefs.includes(ref))
         const note = feedback === "positive"
           ? `opencode auto: ${input.tool} succeeded`
           : `opencode auto: ${input.tool} failed`
-        for (const ref of allRefs) {
+        for (const ref of feedbackRefs) {
           // Memories and vault refs are not first-class feedback targets —
           // memories do not accept feedback, and vault values never surface in
           // JSON so automatic usage signals would be misleading.
           if (ref.startsWith("memory:") || ref.startsWith("vault:")) continue
-          const ok = recordFeedbackSync(ref, feedback, note)
+          const ok = queueFeedback(logClient, ref, feedback, note, {
+            toolName: input.tool,
+            sessionID: input.sessionID,
+          }, dedupe)
           if (!ok) break
         }
       }
     },
     tool: {
     akm_search: tool({
-      description: "Search your stash or the akm registry for scripts, skills, commands, agents, knowledge, memories, workflows, vaults, and wikis. Use source='registry' or akm_registry_search for installable community kits.",
+      description: "Search your stash or the akm registry for scripts, skills, commands, agents, knowledge, memories, workflows, vaults, and wikis. Use source='registry' for installable community kits.",
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
         type: tool.schema
@@ -1130,41 +1706,6 @@ export const AkmPlugin: Plugin = async ({ client }) => {
       },
       async execute({ query, type, limit, source }) {
         return runCli(client as unknown as LogCapableClient, createSearchArgs({ query, type, limit, source }), { toolName: "akm_search" })
-      },
-    }),
-    akm_registry_search: tool({
-      description: "Search configured akm registries only. Use this when you want installable kits without mixing in local stash results.",
-      args: {
-        query: tool.schema.string().describe("Search query for installable registry kits."),
-        type: tool.schema
-          .enum(ASSET_TYPES as unknown as [string, ...string[]])
-          .optional()
-          .describe("Optional asset type filter. Defaults to 'any'."),
-        limit: tool.schema.number().optional().describe("Maximum number of registry hits to return. Defaults to 20."),
-        assets: tool.schema.boolean().optional().describe("Include asset-level results from registry index v2 payloads."),
-      },
-      async execute({ query, type, limit, assets }) {
-        const args = ["registry", "search", query]
-        if (limit) args.push("--limit", String(limit))
-        const assetTypeFilter = type && type !== "any" ? type : undefined
-        if (assets || assetTypeFilter) args.push("--assets")
-
-        const raw = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_registry_search" })
-        if (!assetTypeFilter) return raw
-
-        const parsed = parseCliJson<{
-          hits?: SearchHit[]
-          assetHits?: Array<SearchHit & { assetType?: AssetType }>
-          warnings?: string[]
-          query?: string
-        }>(raw)
-        if (isCliError(parsed)) return JSON.stringify(parsed)
-
-        return JSON.stringify({
-          ...parsed,
-          hits: [],
-          assetHits: (parsed.assetHits ?? []).filter((hit) => hit.assetType === assetTypeFilter),
-        })
       },
     }),
     akm_show: tool({
@@ -1193,92 +1734,6 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           }
         }
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_show" })
-      },
-    }),
-    akm_index: tool({
-      description: "Build or rebuild the akm stash index. Scans stash directories, generates missing .stash.json metadata, and builds a semantic search index.",
-      args: {},
-      async execute() {
-        return runCli(client as unknown as LogCapableClient, ["index"], { toolName: "akm_index" })
-      },
-    }),
-    akm_add: tool({
-      description: "Install a kit or register an external source from npm, GitHub, another git host, a URL, or a local directory. Use type='wiki' to register a wiki source instead of a stash kit.",
-      args: {
-        package_ref: tool.schema.string().describe("Package reference such as npm:@scope/kit, github:<owner>/<repo>, git+https://host/repo, https://url, or ./local/kit."),
-        type: tool.schema.enum(["wiki"]).optional().describe("Route the add through a typed registrar. 'wiki' registers an external wiki source."),
-        name: tool.schema.string().optional().describe("Optional name to register the source under."),
-        writable: tool.schema.boolean().optional().describe("Mark a git-backed source as push-writable (used by akm save)."),
-        trust: tool.schema.boolean().optional().describe("Bypass install-audit blocking for this registration only."),
-        provider: tool.schema.string().optional().describe("Provider hint (required for raw URL refs, e.g. 'github', 'website')."),
-        options: tool.schema.string().optional().describe("JSON string of provider-specific options."),
-        max_pages: tool.schema.number().optional().describe("Cap for website crawlers (default 50)."),
-        max_depth: tool.schema.number().optional().describe("Depth cap for website crawlers (default 3)."),
-      },
-      async execute({ package_ref, type, name, writable, trust, provider, options, max_pages, max_depth }) {
-        const args = ["add", package_ref]
-        if (type) args.push("--type", type)
-        if (name) args.push("--name", name)
-        if (writable) args.push("--writable")
-        if (trust) args.push("--trust")
-        if (provider) args.push("--provider", provider)
-        if (options) args.push("--options", options)
-        if (max_pages != null) args.push("--max-pages", String(max_pages))
-        if (max_depth != null) args.push("--max-depth", String(max_depth))
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_add" })
-      },
-    }),
-    akm_list: tool({
-      description: "List all configured AKM sources, including local directories, managed kits, and remote providers.",
-      args: {},
-      async execute() {
-        return runCli(client as unknown as LogCapableClient, ["list"], { toolName: "akm_list" })
-      },
-    }),
-    akm_remove: tool({
-      description: "Remove a configured AKM source by id, ref, path, URL, or name and reindex the stash.",
-      args: {
-        package_ref: tool.schema.string().describe("Source id, ref, path, URL, or name, such as npm:@scope/kit, owner/repo, or ~/.claude/skills."),
-      },
-      async execute({ package_ref }) {
-        return runCli(client as unknown as LogCapableClient, ["remove", package_ref], { toolName: "akm_remove" })
-      },
-    }),
-    akm_update: tool({
-      description: "Update one managed AKM source or all managed sources to the latest available version.",
-      args: {
-        package_ref: tool.schema.string().optional().describe("Managed source id or ref to update."),
-        all: tool.schema.boolean().optional().describe("Update all installed kits."),
-        force: tool.schema.boolean().optional().describe("Force a fresh download even if the version is unchanged."),
-      },
-      async execute({ package_ref, all, force }) {
-        const args = ["update"]
-        const packageRef = package_ref?.trim()
-        if (all) {
-          args.push("--all")
-        } else if (packageRef) {
-          args.push(packageRef)
-        } else {
-          return JSON.stringify({ ok: false, error: "Provide 'package_ref' or set 'all' to true." })
-        }
-        if (force) args.push("--force")
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_update" })
-      },
-    }),
-    akm_clone: tool({
-      description: "Clone an asset from any source into the working stash or a custom destination for editing.",
-      args: {
-        ref: tool.schema.string().describe("Asset ref to clone, including optional origin such as npm:@scope/pkg//script:deploy.sh."),
-        name: tool.schema.string().optional().describe("Optional new asset name."),
-        dest: tool.schema.string().optional().describe("Optional destination directory. The type subdirectory is appended automatically by akm."),
-        force: tool.schema.boolean().optional().describe("Overwrite the destination if it already exists."),
-      },
-      async execute({ ref, name, dest, force }) {
-        const args = ["clone", ref]
-        if (name) args.push("--name", name)
-        if (dest) args.push("--dest", dest)
-        if (force) args.push("--force")
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_clone" })
       },
     }),
     akm_remember: tool({
@@ -1332,20 +1787,21 @@ export const AkmPlugin: Plugin = async ({ client }) => {
       },
     }),
     akm_evolve: tool({
-      description: "Dispatch the AKM curator agent to review recent session activity and propose stash improvements (promote hot assets, flag cold ones, draft missing coverage).",
+      description: "Dispatch the AKM curator agent to review recent session activity and propose stash improvements (promote hot assets, flag cold ones, draft missing coverage). Persists the report as a memory and seeds the curator-context cache so it survives compaction.",
       args: {
         focus: tool.schema.string().optional().describe("Optional focus area or theme to weight the review toward."),
-        dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the curator with. Defaults to 'general'."),
+        dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the curator with. Defaults to 'akm-curator', or falls back to 'general' when that agent is unavailable."),
         as_subtask: tool.schema.boolean().optional().describe("Run in a child session with parent context. Defaults to true."),
       },
       async execute({ focus, dispatch_agent, as_subtask }, context) {
         const useSubtask = as_subtask ?? true
-        const targetAgent = dispatch_agent ?? "general"
+        const requestedAgent = dispatch_agent ?? "akm-curator"
+        const targetAgent = await resolveDispatchAgent(sdkClient, requestedAgent, context.directory)
         const targetSession = await ensureTargetSessionID({
           useSubtask,
           context: { sessionID: context.sessionID, directory: context.directory },
           title: "akm:curator",
-          client: client as unknown as PluginClient,
+          client: sdkClient,
           logClient,
           toolName: "akm_evolve",
         })
@@ -1356,7 +1812,7 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           : "Review recent AKM activity and produce the prioritized action list described in the system prompt."
 
         const promptResponse = await promptTargetSession({
-          client: client as unknown as PluginClient,
+          client: sdkClient,
           logClient,
           toolName: "akm_evolve",
           context: { sessionID: context.sessionID, directory: context.directory },
@@ -1364,11 +1820,20 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           failureMessage: "Failed to dispatch curator",
           promptBody: {
             agent: targetAgent,
-            system: CURATOR_AGENT_PROMPT,
+            system: targetAgent === "akm-curator" ? undefined : CURATOR_AGENT_PROMPT,
             parts: [{ type: "text", text: task }],
           },
         })
         if (!promptResponse.ok) return JSON.stringify(promptResponse)
+
+        const fullText = extractText(promptResponse.data.parts)
+        sessionCuratorReport.set(context.sessionID, summarizeCuratorReportForContext(fullText))
+        markContextEpochDirty(context.sessionID)
+        const dateTag = buildDateTag()
+        const shortSid = context.sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"
+        const curatorMemoryRef = fullText
+          ? rememberTextAsMemory(`akm-curator-${dateTag}-${shortSid}`, fullText)
+          : null
 
         return JSON.stringify({
           ok: true,
@@ -1376,8 +1841,50 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           usedSubtask: useSubtask,
           sessionID: targetSession.sessionID,
           focus: focus ?? null,
-          text: extractText(promptResponse.data.parts),
+          curatorMemoryRef,
+          text: fullText,
         })
+      },
+    }),
+    akm_parent_messages: tool({
+      description: "Read compact text summaries of the parent session's messages so a dispatched AKM subagent can inherit upstream context.",
+      args: {},
+      async execute(_input, context) {
+        const parent = await getParentSessionID(sdkClient, context.sessionID, context.directory)
+        if (!parent.ok) return JSON.stringify(parent)
+        const messages = await sdkClient.session.messages({
+          path: { id: parent.parentID },
+          query: { directory: context.directory },
+        })
+        if (messages.error || !messages.data) {
+          return JSON.stringify({ ok: false, error: "Failed to read parent session messages." })
+        }
+        return JSON.stringify(summarizeSessionMessages(parent.parentID, messages.data))
+      },
+    }),
+    akm_session_messages: tool({
+      description: "Read compact text summaries for a specific OpenCode session. Arbitrary session IDs are restricted to the akm-curator agent; other agents may read only their current or parent session.",
+      args: {
+        session_id: tool.schema.string().describe("OpenCode session ID to inspect."),
+      },
+      async execute({ session_id }, context) {
+        const parent = await getParentSessionID(sdkClient, context.sessionID, context.directory)
+        const allowedSessionIDs = new Set<string>([context.sessionID])
+        if (parent.ok) allowedSessionIDs.add(parent.parentID)
+        if (context.agent !== "akm-curator" && !allowedSessionIDs.has(session_id)) {
+          return JSON.stringify({
+            ok: false,
+            error: "akm_session_messages only allows arbitrary session IDs for the akm-curator agent. Use akm_parent_messages for parent context.",
+          })
+        }
+        const messages = await sdkClient.session.messages({
+          path: { id: session_id },
+          query: { directory: context.directory },
+        })
+        if (messages.error || !messages.data) {
+          return JSON.stringify({ ok: false, error: `Failed to read messages for session '${session_id}'.` })
+        }
+        return JSON.stringify(summarizeSessionMessages(session_id, messages.data))
       },
     }),
     akm_agent: tool({
@@ -1395,7 +1902,7 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           directory: context.directory,
           sessionID: context.sessionID,
         }
-        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "agent", logMeta)
+        const resolved = await resolveRefOrQueryInput(client as unknown as LogCapableClient, { ref, query }, "agent", logMeta)
         if (!resolved.ok) return JSON.stringify(resolved)
 
         const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], logMeta)
@@ -1481,7 +1988,7 @@ export const AkmPlugin: Plugin = async ({ client }) => {
           directory: context.directory,
           sessionID: context.sessionID,
         }
-        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "command", logMeta)
+        const resolved = await resolveRefOrQueryInput(client as unknown as LogCapableClient, { ref, query }, "command", logMeta)
         if (!resolved.ok) return JSON.stringify(resolved)
 
         const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], logMeta)
@@ -1539,137 +2046,21 @@ export const AkmPlugin: Plugin = async ({ client }) => {
         })
       },
     }),
-    akm_config: tool({
-      description: "View or update akm configuration settings.",
-      args: {
-        action: tool.schema.enum(["get", "set", "list", "unset", "path"]).describe("Config action: get, set, list, unset, or path."),
-        key: tool.schema.string().optional().describe("Config key (required for get/set)."),
-        value: tool.schema.string().optional().describe("Config value (required for set)."),
-        all: tool.schema.boolean().optional().describe("When action is 'path', include config, stash, cache, and index paths."),
-      },
-      async execute({ action, key, value, all }) {
-        const args = ["config", action]
-        if (key) args.push(key)
-        if (value) args.push(value)
-        if (action === "path" && all) args.push("--all")
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_config" })
-      },
-    }),
-    akm_run: tool({
-      description: "Execute a stash script by ref. Resolves via search, fetches metadata via show, and runs the run command.",
-      args: {
-        ref: tool.schema.string().optional().describe("Script ref from akm_search (e.g. script:deploy.sh)."),
-        query: tool.schema.string().optional().describe("If ref is omitted, resolve best matching stash script for this query."),
-        args: tool.schema.string().optional().describe("Arguments to append to the run command."),
-      },
-      async execute({ ref, query, args: runArgs }) {
-        const resolved = await resolveRefInput(client as unknown as LogCapableClient, { ref, query }, "script", { toolName: "akm_run" })
-        if (!resolved.ok) return JSON.stringify(resolved)
-
-        const shownRaw = await runCli(client as unknown as LogCapableClient, ["show", resolved.ref], { toolName: "akm_run" })
-        const shown = parseCliJson<ShowToolResponse | { type: string }>(shownRaw)
-        if (isCliError(shown)) return JSON.stringify(shown)
-
-        if (!isShowToolResponse(shown)) {
-          return JSON.stringify({
-            ok: false,
-            error: `Ref ${resolved.ref} is not a script payload from akm_show.`,
-          })
-        }
-
-        if (!shown.run || !shown.run.trim()) {
-          return JSON.stringify({
-            ok: false,
-            error: `Script ${shown.name} is missing run command.`,
-          })
-        }
-
-        let cmd = shown.run
-        if (runArgs && runArgs.trim()) {
-          cmd = `${cmd} ${runArgs.trim()}`
-        }
-
-        try {
-          const output = execSync(cmd, {
-            encoding: "utf8",
-            timeout: 120_000,
-          })
-          return JSON.stringify({
-            ok: true,
-            ref: resolved.ref,
-            script: shown.name,
-            run: cmd,
-            output,
-          })
-        } catch (error: unknown) {
-          const message = error instanceof Error ? error.message : String(error)
-          return JSON.stringify({
-            ok: false,
-            error: `Failed to execute run command for ${shown.name}: ${message}`,
-          })
-        }
-      },
-    }),
-    akm_sources: tool({
-      description: "List all configured AKM sources. Kept as a backward-compatible alias for the older sources command.",
-      args: {},
-      async execute() {
-        return runCli(client as unknown as LogCapableClient, ["list"], { toolName: "akm_sources" })
-      },
-    }),
-    akm_save: tool({
-      description: "Commit (and push, when writable) pending changes in a git-backed stash. No-op for non-git stashes.",
-      args: {
-        name: tool.schema.string().optional().describe("Optional stash source name. Defaults to the primary stash."),
-        message: tool.schema.string().optional().describe("Commit message. Defaults to an auto-generated summary."),
-      },
-      async execute({ name, message }) {
-        const args = ["save"]
-        if (name) args.push(name)
-        if (message) args.push("-m", message)
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_save" })
-      },
-    }),
-    akm_import: tool({
-      description: "Import a file (or stdin) into the stash as a typed asset. Pass '-' as source to read from a string via content.",
-      args: {
-        source: tool.schema.string().describe("Path to the source file, or '-' to read from stdin (use 'content' to provide it)."),
-        name: tool.schema.string().optional().describe("Optional asset name override."),
-        force: tool.schema.boolean().optional().describe("Overwrite an existing asset with the same name."),
-        content: tool.schema.string().optional().describe("Raw content to feed on stdin when source is '-'."),
-      },
-      async execute({ source, name, force, content }) {
-        const args = ["import", source]
-        if (name) args.push("--name", name)
-        if (force) args.push("--force")
-        const command = resolveAkmCommand()
-        if (typeof command !== "string") return JSON.stringify(command)
-        if (source === "-" && content) {
-          try {
-            const stdout = execFileSync(command, [...args, "--format", "json"], {
-              encoding: "utf8",
-              timeout: 60_000,
-              input: content,
-            })
-            return stdout
-          } catch (error: unknown) {
-            return JSON.stringify({ ok: false, error: formatCliError(error) })
-          }
-        }
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_import" })
-      },
-    }),
     akm_vault: tool({
-      description: "Manage encrypted-at-rest vaults of KEY=VALUE pairs. Values never surface in any output channel — 'show'/'list' return key names only, 'set'/'unset' never echo the value. Use 'shell_snippet' to get a shell-eval snippet that loads values into the process.",
+      description: "Manage encrypted-at-rest vaults of KEY=VALUE pairs. Values never surface in any output channel — 'show'/'list' return key names only, 'set'/'unset' never echo the value. Use 'load' to get a shell-eval snippet that loads values into the process. action='show' and action='unset' require confirm:true.",
       args: {
-        action: tool.schema.enum(["list", "show", "create", "set", "unset", "shell_snippet"]).describe("Vault subcommand. 'shell_snippet' wraps 'vault load' — treat its output as opaque shell text meant for eval."),
-        ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/set/unset/shell_snippet; optional for list."),
+        action: tool.schema.enum(["list", "show", "create", "set", "unset", "load"]).describe("Vault subcommand. 'load' wraps `akm vault load` — treat its output as opaque shell text meant for eval."),
+        ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/set/unset/load; optional for list."),
         name: tool.schema.string().optional().describe("Vault name when action is 'create' (e.g. 'prod' → vaults/prod.env)."),
         key: tool.schema.string().optional().describe("Variable name for set/unset. May include '=' to pass KEY=VALUE in one field when value is omitted."),
         value: tool.schema.string().optional().describe("Value to store. Never echoed back."),
         comment: tool.schema.string().optional().describe("Optional inline '# comment' written above the key for 'set'."),
+        confirm: tool.schema.boolean().optional().describe("Must be true for sensitive actions like show and unset."),
       },
-      async execute({ action, ref, name, key, value, comment }) {
+      async execute(input) {
+        const blocked = blockedToolResponse(input as Record<string, unknown>)
+        if (blocked) return blocked
+        const { action, ref, name, key, value, comment } = input
         const logMeta = { toolName: "akm_vault" }
         switch (action) {
           case "list": {
@@ -1698,8 +2089,8 @@ export const AkmPlugin: Plugin = async ({ client }) => {
             if (!key) return JSON.stringify({ ok: false, error: "'key' is required for action='unset'." })
             return runCli(client as unknown as LogCapableClient, ["vault", "unset", ref, key], logMeta)
           }
-          case "shell_snippet": {
-            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='shell_snippet'." })
+          case "load": {
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='load'." })
             // `vault load` emits raw shell — not JSON. Return the snippet verbatim
             // so the caller can hand it to a shell via eval. Never parse values.
             const command = resolveAkmCommand()
@@ -1734,7 +2125,7 @@ export const AkmPlugin: Plugin = async ({ client }) => {
         ]).describe("Wiki subcommand."),
         name: tool.schema.string().optional().describe("Wiki name (required for every action except 'list')."),
         source_ref: tool.schema.string().optional().describe("Source ref to register (required for action='register'). Accepts directory paths, git URLs, github owner/repo, or https:// website roots."),
-        writable: tool.schema.boolean().optional().describe("When registering a git-backed source, mark it as push-writable (used by akm_save)."),
+        writable: tool.schema.boolean().optional().describe("When registering a git-backed source, mark it as push-writable (used by `akm save`; see akm_help topic='save')."),
         trust: tool.schema.boolean().optional().describe("Bypass install-audit blocking for this registration only."),
         max_pages: tool.schema.number().optional().describe("Crawler page cap when registering a website (default 50)."),
         max_depth: tool.schema.number().optional().describe("Crawler depth cap when registering a website (default 3)."),
@@ -1935,17 +2326,35 @@ export const AkmPlugin: Plugin = async ({ client }) => {
         }
       },
     }),
-    akm_upgrade: tool({
-      description: "Check for or install akm CLI updates.",
+    akm_help: tool({
+      description: "Discover the right `akm` CLI command and args for tasks not covered by a first-class tool — e.g. save/push, import, clone, update, remove, list sources, registry search, reindex, config, CLI upgrade, run script. Returns a curated quick-reference plus live `akm --help` output. Pass `command` to drill into a specific subcommand.",
       args: {
-        check: tool.schema.boolean().optional().describe("Only check for updates without installing."),
-        force: tool.schema.boolean().optional().describe("Force upgrade even if already on latest version."),
+        topic: tool.schema.string().optional().describe("Natural-language description of the task (e.g. 'commit and push my stash', 'install a kit from github'). Returns curated hints if any keywords match."),
+        command: tool.schema.string().optional().describe("Specific akm subcommand to inspect (e.g. 'save', 'clone', 'config'). Runs `akm <command> --help` and returns the output verbatim."),
       },
-      async execute({ check, force }) {
-        const args = ["upgrade"]
-        if (check) args.push("--check")
-        if (force) args.push("--force")
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_upgrade" })
+      async execute({ topic, command }) {
+        const cliCommand = resolveAkmCommand()
+        if (typeof cliCommand !== "string") return JSON.stringify(cliCommand)
+        const helpArgs = command && command.trim()
+          ? [command.trim(), "--help"]
+          : ["--help"]
+        let helpText = ""
+        try {
+          helpText = execFileSync(cliCommand, helpArgs, {
+            encoding: "utf8",
+            timeout: 30_000,
+          }).toString().trim()
+        } catch (error: unknown) {
+          return JSON.stringify({ ok: false, error: formatCliError(error) })
+        }
+        return JSON.stringify({
+          ok: true,
+          command: command ?? null,
+          topic: topic ?? null,
+          hints: topic ? lookupAkmHelpHint(topic) : [],
+          quickReference: AKM_HELP_QUICK_REFERENCE,
+          help: helpText,
+        })
       },
     }),
     },
