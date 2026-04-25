@@ -103,6 +103,7 @@ describe("akm-opencode plugin", () => {
         "akm_remember",
         "akm_feedback",
         "akm_curate",
+        "akm_evolve",
         "akm_parent_messages",
         "akm_session_messages",
         "akm_agent",
@@ -123,7 +124,6 @@ describe("akm-opencode plugin", () => {
         "akm_remove",
         "akm_update",
         "akm_clone",
-        "akm_evolve",
         "akm_config",
         "akm_run",
         "akm_sources",
@@ -409,6 +409,132 @@ describe("akm-opencode plugin", () => {
         ],
         expect.objectContaining({ encoding: "utf8" }),
       )
+    })
+
+    it("akm_evolve dispatches the curator prompt through a child session", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_evolve.execute(
+        { focus: "release workflow" } as any,
+        {
+          sessionID: "parent-session-1",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "build",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.sessionID).toBe("child-session-1")
+      expect(parsed.dispatchAgent).toBe("akm-curator")
+      expect(parsed.curatorMemoryRef).toMatch(/^memory:akm-curator-/)
+      expect(parsed.focus).toBe("release workflow")
+      expect(client.session.create).toHaveBeenCalledWith({
+        body: { parentID: "parent-session-1", title: "akm:curator" },
+      })
+      const promptArgs = (client.session.prompt as any).mock.calls[0][0]
+      expect(promptArgs.path).toEqual({ id: "child-session-1" })
+      expect(promptArgs.body.system).toBeUndefined()
+      expect(promptArgs.body.parts[0].text).toContain("release workflow")
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        expect.arrayContaining(["remember", "--name", expect.stringMatching(/^akm-curator-/), "--force"]),
+        expect.objectContaining({ input: "child response" }),
+      )
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "info",
+          message: "AKM dispatch child session created",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_evolve",
+            childSessionID: "child-session-1",
+          }),
+        },
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "info",
+          message: "AKM dispatch prompt completed",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_evolve",
+            targetSessionID: "child-session-1",
+            dispatchAgent: "akm-curator",
+          }),
+        },
+      })
+    })
+
+    it("akm_evolve degrades gracefully when curator memory persistence fails", async () => {
+      const client = createMockClient()
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args.includes("remember")) throw new Error("remember failed")
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_evolve.execute(
+        { focus: "release workflow" } as any,
+        {
+          sessionID: "parent-session-1",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "build",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      expect(JSON.parse(result).curatorMemoryRef).toBeNull()
+    })
+
+    it("akm_evolve returns JSON error when session.prompt throws", async () => {
+      const client = createMockClient()
+      client.session.prompt = mock(async () => {
+        throw new Error("prompt exploded")
+      })
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_evolve.execute(
+        { focus: "release workflow" } as any,
+        {
+          sessionID: "parent-session-1",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "build",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed).toEqual({
+        ok: false,
+        error: "Failed to dispatch curator: prompt exploded",
+      })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM dispatch prompt threw",
+          extra: expect.objectContaining({
+            subsystem: "dispatch",
+            toolName: "akm_evolve",
+            targetSessionID: "child-session-1",
+            error: "prompt exploded",
+          }),
+        },
+      })
     })
 
     it("akm_parent_messages returns the parent session transcript summary", async () => {
@@ -804,13 +930,14 @@ describe("akm-opencode plugin", () => {
       expect(output.args.__akmBlocked).toBeUndefined()
     })
 
-    it("preserves hints, curation, and workflows across compaction", async () => {
+    it("preserves hints, curation, workflows, and curator reports across compaction", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args[0] === "--format" && args.includes("workflow")) {
           return JSON.stringify([{ ref: "workflow:release", runId: "run-1", state: "blocked" }])
         }
         if (Array.isArray(args) && args.includes("curate")) return "# curated\n- skill:deploy\n"
+        if (Array.isArray(args) && args.includes("remember")) return JSON.stringify({ ref: "memory:akm-curator-20260425-session" })
         return "mock output"
       })
 
@@ -823,6 +950,18 @@ describe("akm-opencode plugin", () => {
         { sessionID: "session-compact-1", messageID: "m1", agent: "build" } as any,
         { message: {} as any, parts: [{ type: "text", text: "Help me deploy the application to production" }] as any },
       )
+      await hooks.tool!.akm_evolve.execute(
+        { focus: "release workflow" } as any,
+        {
+          sessionID: "session-compact-1",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "build",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
 
       const compactOutput = { context: [] as string[] }
       await hooks["experimental.session.compacting"]!(
@@ -833,6 +972,7 @@ describe("akm-opencode plugin", () => {
       expect(compactOutput.context.join("\n")).toContain("AKM is available in this session")
       expect(compactOutput.context.join("\n")).toContain("AKM stash — assets relevant to this prompt")
       expect(compactOutput.context.join("\n")).toContain("workflow:release")
+      expect(compactOutput.context.join("\n")).toContain("AKM curator report")
 
       const postCompactSystem = { system: [] as string[] }
       await hooks["experimental.chat.system.transform"]!(
@@ -842,6 +982,39 @@ describe("akm-opencode plugin", () => {
 
       expect(postCompactSystem.system.join("\n")).toContain("AKM is available in this session")
       expect(postCompactSystem.system.join("\n")).toContain("workflow:release")
+    })
+
+    it("truncates curator reports before re-injecting them into context", async () => {
+      const longReport = `${"A".repeat(4500)}TAIL`
+      const client = createMockClient()
+      client.session.prompt = mock(async () => ({
+        data: { parts: [{ type: "text", text: longReport }] },
+        error: undefined,
+      }))
+
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      await hooks.tool!.akm_evolve.execute(
+        { focus: "release workflow" } as any,
+        {
+          sessionID: "session-compact-2",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "build",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      const compactOutput = { context: [] as string[] }
+      await hooks["experimental.session.compacting"]!(
+        { sessionID: "session-compact-2" } as any,
+        compactOutput as any,
+      )
+
+      const combined = compactOutput.context.join("\n")
+      expect(combined).toContain("[truncated for context]")
+      expect(combined).not.toContain("TAIL")
     })
 
     it("records auto positive feedback after a successful akm tool invocation", async () => {

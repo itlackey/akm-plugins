@@ -593,7 +593,7 @@ function extractToolRefs(
     }
     if (toolName === "akm_remember" && typeof o.ref === "string") addMatches(o.ref)
     if (
-      (toolName === "akm_agent" || toolName === "akm_cmd")
+      (toolName === "akm_agent" || toolName === "akm_cmd" || toolName === "akm_evolve")
       && typeof o.text === "string"
     ) {
       for (const ref of extractRefsFromText(o.text)) {
@@ -1784,6 +1784,66 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           String(limit ?? 6),
         ]
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_curate" })
+      },
+    }),
+    akm_evolve: tool({
+      description: "Dispatch the AKM curator agent to review recent session activity and propose stash improvements (promote hot assets, flag cold ones, draft missing coverage). Persists the report as a memory and seeds the curator-context cache so it survives compaction.",
+      args: {
+        focus: tool.schema.string().optional().describe("Optional focus area or theme to weight the review toward."),
+        dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the curator with. Defaults to 'akm-curator', or falls back to 'general' when that agent is unavailable."),
+        as_subtask: tool.schema.boolean().optional().describe("Run in a child session with parent context. Defaults to true."),
+      },
+      async execute({ focus, dispatch_agent, as_subtask }, context) {
+        const useSubtask = as_subtask ?? true
+        const requestedAgent = dispatch_agent ?? "akm-curator"
+        const targetAgent = await resolveDispatchAgent(sdkClient, requestedAgent, context.directory)
+        const targetSession = await ensureTargetSessionID({
+          useSubtask,
+          context: { sessionID: context.sessionID, directory: context.directory },
+          title: "akm:curator",
+          client: sdkClient,
+          logClient,
+          toolName: "akm_evolve",
+        })
+        if (!targetSession.ok) return JSON.stringify(targetSession)
+
+        const task = focus && focus.trim()
+          ? `Review recent AKM activity with an emphasis on: ${focus.trim()}. Produce the prioritized action list described in the system prompt.`
+          : "Review recent AKM activity and produce the prioritized action list described in the system prompt."
+
+        const promptResponse = await promptTargetSession({
+          client: sdkClient,
+          logClient,
+          toolName: "akm_evolve",
+          context: { sessionID: context.sessionID, directory: context.directory },
+          targetSessionID: targetSession.sessionID,
+          failureMessage: "Failed to dispatch curator",
+          promptBody: {
+            agent: targetAgent,
+            system: targetAgent === "akm-curator" ? undefined : CURATOR_AGENT_PROMPT,
+            parts: [{ type: "text", text: task }],
+          },
+        })
+        if (!promptResponse.ok) return JSON.stringify(promptResponse)
+
+        const fullText = extractText(promptResponse.data.parts)
+        sessionCuratorReport.set(context.sessionID, summarizeCuratorReportForContext(fullText))
+        markContextEpochDirty(context.sessionID)
+        const dateTag = buildDateTag()
+        const shortSid = context.sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"
+        const curatorMemoryRef = fullText
+          ? rememberTextAsMemory(`akm-curator-${dateTag}-${shortSid}`, fullText)
+          : null
+
+        return JSON.stringify({
+          ok: true,
+          dispatchAgent: targetAgent,
+          usedSubtask: useSubtask,
+          sessionID: targetSession.sessionID,
+          focus: focus ?? null,
+          curatorMemoryRef,
+          text: fullText,
+        })
       },
     }),
     akm_parent_messages: tool({

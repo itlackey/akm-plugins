@@ -23,6 +23,7 @@ Provides a trimmed surface of fourteen tools (down from twenty-six in 0.5.x — 
 - `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
 - `akm_vault` — vault `list`, `show` (key names), and `load` (shell-eval snippet for value injection). `show`/`list` never echo values; writes (`set`, `unset`, `create`) go through raw `akm vault …`
 - `akm_curate` — curate stash assets for a task or topic
+- `akm_evolve` — dispatch the AKM curator subagent (review session activity, propose stash improvements, persist the report as a memory)
 - `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
 - `akm_feedback` — record positive or negative feedback for a stash asset
 - `akm_session_messages` — summarize a specific OpenCode session (restricted for arbitrary session IDs)

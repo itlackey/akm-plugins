@@ -14,7 +14,7 @@ Add to your OpenCode config (`opencode.json`):
 
 ## Tools
 
-The plugin exposes a trimmed surface of **13 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
+The plugin exposes a trimmed surface of **14 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
 
 | Tool | Description |
 |------|-------------|
@@ -25,6 +25,7 @@ The plugin exposes a trimmed surface of **13 high-value tools**. Long-tail verbs
 | `akm_remember` | Record a memory in the default stash |
 | `akm_feedback` | Record positive or negative feedback for a stash asset (skipped automatically for `memory:` and `vault:` refs) |
 | `akm_curate` | Curate the stash for a task or topic and return ranked matches the agent can use |
+| `akm_evolve` | Dispatch the AKM curator subagent into a child session, capture the report as a memory, and seed the curator-context cache so it survives compaction |
 | `akm_parent_messages` | Summarize the parent OpenCode session so dispatched stash subagents can inherit upstream context |
 | `akm_session_messages` | Summarize a specific OpenCode session (arbitrary IDs restricted to `akm-curator`) |
 | `akm_vault` | Vault `list` / `show` (key names) / `create` / `set` / `unset` / `load` (opaque shell-eval text). **Values never surface** through `list`/`show`; `load` output is meant for `eval` and must not be displayed back |
