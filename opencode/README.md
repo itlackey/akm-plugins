@@ -73,6 +73,7 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
 | `AKM_MEMORY_CHECKPOINT_EVERY` | `8` | Number of successful asset-touching tool calls between mid-session checkpoint memories. |
+| `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | `\b(thanks\|perfect\|worked)\b` | Case-insensitive regex used for lightweight positive retrospective feedback on the most recent refs. |
 
 ### Curator agent
 

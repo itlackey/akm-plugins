@@ -17,7 +17,10 @@ const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5")
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
 const AKM_MEMORY_CHECKPOINT_EVERY = Math.max(1, Number(process.env.AKM_MEMORY_CHECKPOINT_EVERY ?? "8") || 8)
-const AKM_RETROSPECTIVE_FEEDBACK_RE = /\b(thanks|perfect|worked)\b/i
+const AKM_RETROSPECTIVE_FEEDBACK_RE = new RegExp(
+  process.env.AKM_RETROSPECTIVE_FEEDBACK_PATTERN ?? "\\b(thanks|perfect|worked)\\b",
+  "i",
+)
 const PLUGIN_VERSION = readPackageVersion()
 
 // Per-session state that drives the compound-engineering loop.
@@ -45,8 +48,7 @@ const sessionSuccessfulAssetTouchCount = new Map<string, number>()
 let cachedAkmStashDir: string | undefined
 
 // Asset-ref grammar matching the stash skill: [origin//]type:name
-const AKM_REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/\-]+/g
-const AKM_EXACT_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/\-]+$/
+const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/\-]+$/
 
 function readPackageVersion(): string {
   try {
@@ -110,9 +112,12 @@ Output shape: end every run with a markdown report that has these sections:
 function loadCuratorAgentPrompt(): string {
   try {
     const raw = readFileSync(path.join(moduleDir, "agent", "akm-curator.md"), "utf8").trim()
-    const body = raw.startsWith("---")
-      ? raw.replace(/^---[\s\S]*?---\s*/, "").trim()
-      : raw
+    let body = raw
+    const lines = raw.split(/\r?\n/)
+    if (lines[0] === "---") {
+      const closingIndex = lines.indexOf("---", 1)
+      if (closingIndex > 0) body = lines.slice(closingIndex + 1).join("\n").trim()
+    }
     return body || CURATOR_AGENT_PROMPT_FALLBACK
   } catch {
     return CURATOR_AGENT_PROMPT_FALLBACK
@@ -206,7 +211,7 @@ function bumpCuratedVersion(sessionID: string) {
 }
 
 function isAkmRef(value: string): boolean {
-  return AKM_EXACT_REF_PATTERN.test(value)
+  return AKM_REF_PATTERN.test(value)
 }
 
 function parseMaybeJson(value: string): unknown {
@@ -518,8 +523,23 @@ function maybeCheckpointSessionMemory(sessionID: string): string | null {
   return captured
 }
 
+const AKM_REF_EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]"])
+
 function normalizeExtractedRef(ref: string): string {
-  return ref.replace(/[.,;:!?)\]]+$/g, "")
+  let start = 0
+  let end = ref.length
+  while (start < end && AKM_REF_EDGE_PUNCTUATION.has(ref[start]!)) start += 1
+  while (end > start && AKM_REF_EDGE_PUNCTUATION.has(ref[end - 1]!)) end -= 1
+  return ref.slice(start, end)
+}
+
+function extractRefsFromText(value: string): string[] {
+  const refs = new Set<string>()
+  for (const token of value.split(/\s+/)) {
+    const normalized = normalizeExtractedRef(token)
+    if (normalized && isAkmRef(normalized)) refs.add(normalized)
+  }
+  return [...refs]
 }
 
 function extractToolRefs(
@@ -531,13 +551,7 @@ function extractToolRefs(
   const positiveOnlyRefs = new Set<string>()
   const addMatches = (value: unknown) => {
     if (typeof value !== "string") return
-    const matches = value.match(AKM_REF_PATTERN)
-    if (matches) {
-      for (const ref of matches) {
-        const normalized = normalizeExtractedRef(ref)
-        if (normalized) refs.add(normalized)
-      }
-    }
+    for (const ref of extractRefsFromText(value)) refs.add(ref)
   }
 
   for (const key of ["ref", "package_ref"]) {
@@ -562,12 +576,9 @@ function extractToolRefs(
       (toolName === "akm_agent" || toolName === "akm_cmd" || toolName === "akm_evolve")
       && typeof o.text === "string"
     ) {
-      const matches = o.text.match(AKM_REF_PATTERN) ?? []
-      for (const ref of matches) {
-        const normalized = normalizeExtractedRef(ref)
-        if (!normalized) continue
-        refs.add(normalized)
-        positiveOnlyRefs.add(normalized)
+      for (const ref of extractRefsFromText(o.text)) {
+        refs.add(ref)
+        positiveOnlyRefs.add(ref)
       }
     }
   }
