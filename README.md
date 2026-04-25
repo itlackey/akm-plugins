@@ -14,33 +14,21 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides twenty-six tools:
-- `akm_search` — search the stash, the registry, or both (now including `workflow`, `vault`, and `wiki` types)
-- `akm_registry_search` — search configured registries for installable kits and optional asset hits
+Provides a trimmed surface of fourteen tools (down from twenty-six in 0.5.x — shipped in commit `9f9620f`). Verbs that are no longer first-class tools (`save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `reindex`, `config`, `upgrade`, `run`, vault writes) are now discoverable through the new `akm_help` tool, which surfaces a curated quick-reference and falls back to live `akm --help` so agents can compose the right CLI invocation and run it via shell:
+- `akm_search` — search the stash, the registry, or both (including `workflow`, `vault`, and `wiki` types)
 - `akm_show` — show a stash asset by ref
-- `akm_index` — build/rebuild the search index
 - `akm_agent` — dispatch stash `agent:*` resources into OpenCode sessions
-- `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
-- `akm_add` — install kits or register external sources (including wikis via `type: "wiki"`)
-- `akm_list` — list configured AKM sources
-- `akm_remove` — remove a configured AKM source
-- `akm_update` — update one or all managed AKM sources
-- `akm_clone` — clone an asset into the working stash or another destination
-- `akm_remember` — record a memory in the default stash
-- `akm_feedback` — record positive or negative feedback for a stash asset
-- `akm_config` — get, set, unset, list, or inspect akm configuration paths
-- `akm_run` — execute a stash script via the `run` field
-- `akm_sources` — backward-compatible alias that lists configured AKM sources
-- `akm_upgrade` — check for or install akm CLI updates
-- `akm_curate` — curate stash assets for a task or topic
-- `akm_evolve` — dispatch the AKM curator agent
-- `akm_parent_messages` — summarize the parent OpenCode session for dispatched stash subagents
-- `akm_session_messages` — summarize a specific OpenCode session (restricted for arbitrary session IDs)
-- `akm_save` — commit (and push, when writable) a git-backed stash
-- `akm_import` — import a file (or stdin content) as a typed asset
-- `akm_vault` — manage vaults (`list`, `show`, `create`, `set`, `unset`, `shell_snippet`). Values never surface in any output channel
-- `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
 - `akm_workflow` — drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`)
+- `akm_add` — install kits or register external sources (including wikis via `type: "wiki"`)
+- `akm_remember` — record a memory in the default stash
+- `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
+- `akm_vault` — read-only vault inspection (`list`, `show` of key names). Values never surface in any output channel; writes go through raw `akm vault …`
+- `akm_curate` — curate stash assets for a task or topic
+- `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
+- `akm_feedback` — record positive or negative feedback for a stash asset
+- `akm_session_messages` — summarize a specific OpenCode session (restricted for arbitrary session IDs)
+- `akm_parent_messages` — summarize the parent OpenCode session for dispatched stash subagents
+- `akm_help` — quick-reference table for non-first-class `akm` verbs, with live `akm --help` fallback (new in 0.6.0)
 
 The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to gate destructive actions, preserve context through compaction, and record user/system feedback and memory usage in OpenCode app logs when relevant.
 
@@ -68,6 +56,8 @@ claude plugin install akm@akm-plugins
 
 Provides:
 - **AKM Skill** — Claude automatically uses the akm CLI when you ask about stash assets
+- **Trimmed slash-command surface (14 verbs)** — `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-add` (new in 0.6.0), `/akm-vault` (new in 0.6.0; read-only `list`/`show`), and `/akm-help` (new in 0.6.0)
+- **`/akm-help` discovery flow** — for verbs no longer first-class (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
 - **Claude hooks** — the plugin refreshes `akm-cli@latest` on session start and records relevant user/system feedback and memory usage events in local state logs
