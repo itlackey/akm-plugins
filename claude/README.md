@@ -25,7 +25,7 @@ claude plugin install akm@akm-plugins
 
 - **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
 - **Agentic hooks** — lifecycle hooks that install `akm`, auto-curate stash matches into every user prompt, auto-record feedback when assets are used, and harvest session memories at stop/compact time
-- **Slash commands** — `/akm-curate`, `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-remember`, `/akm-feedback`, `/akm-evolve` for explicit control of the compound-engineering loop
+- **Slash commands** — a trimmed surface of 12 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault`, `/akm-help`) for explicit control of the compound-engineering loop
 - **`akm-curator` agent** — a self-evolution subagent that reviews session logs and proposes stash improvements
 
 The skill teaches Claude to:
@@ -139,19 +139,26 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 ### Slash commands
 
-- `/akm-curate <task>` — manually curate stash assets for a topic and load them.
+The plugin ships a trimmed surface of 12 first-class verbs. `/akm-add` and `/akm-save` are no longer part of the slash-command surface — both `akm add` and `akm save` are reachable via `/akm-help` (see "When to use what" below).
+
 - `/akm-search <query> [flags]` — run `akm search` directly from Claude.
 - `/akm-show <ref> [view args]` — inspect a stash asset by ref.
 - `/akm-agent <agent-ref-or-query> [task]` — resolve and dispatch a stash agent through the AKM skill flow.
 - `/akm-cmd <command-ref-or-query> [args]` — resolve and execute a stash command template through the AKM skill flow.
+- `/akm-curate <task>` — manually curate stash assets for a topic and load them.
 - `/akm-remember [slug]` — distill the current conversation into a durable memory.
 - `/akm-feedback <ref> <+|-> [note]` — record explicit feedback on an asset.
 - `/akm-evolve [focus]` — dispatch the `akm-curator` agent to review session logs and propose stash improvements.
 - `/akm-wiki <subcommand> [args]` — manage AKM wikis (create, register, list, show, pages, search, stash, lint, ingest, remove).
 - `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
-- `/akm-save [name] [-m "msg"]` — commit (and push, when writable) a git-backed stash.
+- `/akm-vault <list|show|load> [ref]` — vault read paths: enumerate vaults, show key names, or emit a shell-eval `load` snippet. `show`/`list` never echo values; `load` output is opaque shell text meant for `eval` and is never displayed back in chat.
+- `/akm-help [task]` — surface a curated quick-reference for non-first-class `akm` verbs and fall back to live `akm --help`.
 
-Vault management is intentionally not exposed as a slash command — use `akm vault …` in the shell directly so secret values never pass through the chat turn.
+### When to use what
+
+- **Prefer the 12 slash commands above** for the verbs they cover — they wire the AKM skill flow, hooks, and feedback loop together for you.
+- **For everything else** — `add` (install kits / register sources), `save`, `import`, `clone`, `update`, `remove`, `list` (sources), `registry-search`, `reindex`, `config`, `upgrade`, `run-script`, and vault writes (`create`, `set`, `unset`) — call `/akm-help <task>` first to discover the right `akm` CLI invocation, then run it via Bash.
+- **Vault writes still bypass the chat turn entirely.** `/akm-vault` is read-only for displayed output (`list` and `show` of key names; `load` produces shell-eval text that must be piped to `eval` rather than displayed); to create vaults or set/unset values, run `akm vault …` in the shell directly so secret values never pass through the chat turn.
 
 ## Docs
 

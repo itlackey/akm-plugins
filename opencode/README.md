@@ -14,34 +14,24 @@ Add to your OpenCode config (`opencode.json`):
 
 ## Tools
 
+The plugin exposes a trimmed surface of **14 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
+
 | Tool | Description |
 |------|-------------|
 | `akm_search` | Search the local stash, the registry, or both. Type filter accepts `skill`, `command`, `agent`, `knowledge`, `memory`, `script`, `workflow`, `vault`, `wiki`, `any` |
-| `akm_registry_search` | Search configured registries for installable kits and optional asset-level hits |
 | `akm_show` | Show a stash asset by its ref |
-| `akm_index` | Build or rebuild the search index |
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
 | `akm_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
-| `akm_add` | Install kits or register external sources from npm, GitHub, git URLs, URLs, or local dirs (use `type: "wiki"` to register a wiki; `writable`, `trust`, `max_pages`, `max_depth`, `provider`, `options` also supported) |
-| `akm_list` | List configured AKM sources |
-| `akm_remove` | Remove a configured AKM source and reindex |
-| `akm_update` | Update one managed source or all managed sources |
-| `akm_clone` | Clone an asset into the working stash or a custom destination for editing |
 | `akm_remember` | Record a memory in the default stash |
 | `akm_feedback` | Record positive or negative feedback for a stash asset (skipped automatically for `memory:` and `vault:` refs) |
-| `akm_config` | Get, set, unset, list, or inspect akm configuration (including `config path --all`) |
-| `akm_run` | Execute a stash script using its `run` field |
-| `akm_sources` | Backward-compatible alias that lists configured AKM sources |
-| `akm_upgrade` | Check for or install akm CLI updates |
 | `akm_curate` | Curate the stash for a task or topic and return ranked matches the agent can use |
-| `akm_evolve` | Dispatch the AKM curator agent to review recent session activity and propose stash improvements |
+| `akm_evolve` | Dispatch the AKM curator subagent into a child session, capture the report as a memory, and seed the curator-context cache so it survives compaction |
 | `akm_parent_messages` | Summarize the parent OpenCode session so dispatched stash subagents can inherit upstream context |
 | `akm_session_messages` | Summarize a specific OpenCode session (arbitrary IDs restricted to `akm-curator`) |
-| `akm_save` | Commit (and push, when writable) pending changes in a git-backed stash |
-| `akm_import` | Import a file (or stdin content) into the stash as a typed asset |
-| `akm_vault` | Manage vaults (`list`, `show`, `create`, `set`, `unset`, `shell_snippet`). **Values never surface** — `show`/`list` return key names only. `shell_snippet` returns opaque `eval` text |
+| `akm_vault` | Vault `list` / `show` (key names) / `create` / `set` / `unset` / `load` (opaque shell-eval text). **Values never surface** through `list`/`show`; `load` output is meant for `eval` and must not be displayed back |
 | `akm_wiki` | Manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`) |
 | `akm_workflow` | Drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`) |
+| `akm_help` | Discover the right `akm` CLI invocation for non-first-class verbs. Returns a curated quick-reference table plus live `akm <subcommand> --help` output |
 
 ## Compound-engineering hooks
 
@@ -86,12 +76,7 @@ future curator runs can build on it.
 
 ### Registry discovery
 
-Use either:
-
-- `akm_search` with `source: "registry"` or `source: "both"`
-- `akm_registry_search` when you only want installable community kits
-
-Registry hits include `id`, `installRef`, and `action` fields. Use `installRef` when passing a result into `akm_add`; registry-specific IDs are not installable refs. Use `assets: true` when you also want asset-level matches from registry v2 indexes.
+Search registries with `akm_search` using `source: "registry"` or `source: "both"`. Registry hits include `id`, `installRef`, and `action` fields. Use `installRef` when feeding a result into `akm add` (run via `akm_help` topic="add" or directly through bash); registry-specific IDs are not installable refs.
 
 ## Agent Dispatch
 
@@ -170,15 +155,15 @@ AKM CLI itself guarantees vault values never appear in JSON, the search index,
 
 - `action: "list"` / `"show"` return key names and comments only.
 - `action: "set"` / `"unset"` never echo the value.
-- `action: "shell_snippet"` wraps `akm vault load` and returns the raw shell
-  text as-is. Treat it as opaque and hand it straight to a shell via
+- `action: "load"` wraps `akm vault load` and returns the raw shell text
+  as-is. Treat it as opaque and hand it straight to a shell via
   `eval "$(…)"` — do not log it, do not pass it through another tool, and do
   not let the agent inspect it.
 
 Automatic feedback recording (`tool.execute.after`) skips `vault:*` refs so
 that usage signals can't leak which vault was touched.
 
-Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
+Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add` — see `akm_help` topic="add").
 
 ## Docs
 

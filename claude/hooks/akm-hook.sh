@@ -435,7 +435,8 @@ header = "\n".join([
     "",
     "You have an AKM stash on this machine. Before writing anything from scratch, call `akm curate \"<task>\"` or `akm search` to see if the stash already covers it. Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.",
 ])
-body = header + "\n\n" + hints
+footer = "\n\nFor verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, …), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash."
+body = header + "\n\n" + hints + footer
 print(json.dumps({
     "hookSpecificOutput": {
         "hookEventName": "SessionStart",
