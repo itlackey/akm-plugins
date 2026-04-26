@@ -1,7 +1,7 @@
 ## Extended Searching
 
 You have access to a searchable library of tools, skills, commands, agents,
-knowledge, workflows, vaults, and wikis via the `akm` CLI (v0.5.0+).
+knowledge, workflows, vaults, and wikis via the `akm` CLI (v0.6.1+).
 
 > For any AKM verb that isn't a first-class tool/slash-command, agents should call `akm_help` (OpenCode) or `/akm-help` (Claude Code) to discover the right `akm` CLI invocation before reaching for raw flags.
 

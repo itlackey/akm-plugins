@@ -3,7 +3,7 @@ description: Curate AKM stash assets for a task or topic and load the top matche
 argument-hint: <task or topic>
 ---
 
-Run `akm --for-agent --format text --detail summary -q curate "$ARGUMENTS" --limit 6` and report the curated matches back to the user, grouped by asset type.
+Run `akm --detail agent --format text -q curate "$ARGUMENTS" --limit 6` and report the curated matches back to the user, grouped by asset type.
 
 For each non-trivial match, fetch the full payload with `akm --format json show <ref>` and summarize:
 - what the asset does

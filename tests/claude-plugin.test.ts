@@ -172,6 +172,18 @@ describe("Claude plugin metadata", () => {
     // Curated table header (parity with the canonical doc)
     expect(body).toContain("| Task | Command | Notes | Keywords |")
   })
+
+  it("tracks cross-plugin parity work in the root README with current issue numbers", () => {
+    const readmePath = path.join(repoRoot, "README.md")
+    const body = readFileSync(readmePath, "utf8")
+
+    expect(body).toContain("## Feature parity tracker")
+    expect(body).toContain("| Session-start retrieval | #27 | Shipped in both plugins |")
+    expect(body).toContain("| Auto-attach scope | #28 | Open |")
+    expect(body).toContain("| Conversation-derived feedback | #29 | Open |")
+    expect(body).toContain("| Session-end `akm index` | #30 | Shipped in both plugins |")
+    expect(body).toContain("| Harness-provided LLM fallback | #31 | Open |")
+  })
 })
 
 describe("Claude hook scripts", () => {
@@ -437,6 +449,8 @@ exit 0
 
     const invocations = readFileSync(invokeLog, "utf8")
     expect(invocations).toContain("curate")
+    expect(invocations).toContain("--detail agent")
+    expect(invocations).not.toContain("--for-agent")
     expect(invocations).toContain("--run sess-start-1")
   })
 

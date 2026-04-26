@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.5.0+). Registers tools that let your AI agent **search**, **show**, and **manage** stash assets — skills, commands, agents, knowledge, memories, scripts, workflows, vaults, and wikis — plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used, and harvest session memories so the stash improves with every session.
+OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.6.1+). Registers tools that let your AI agent **search**, **show**, and **manage** stash assets — skills, commands, agents, knowledge, memories, scripts, workflows, vaults, and wikis — plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used, and harvest session memories so the stash improves with every session.
 
 ## Installation
 

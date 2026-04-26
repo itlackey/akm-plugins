@@ -277,11 +277,10 @@ function runCurateForPrompt(text: string, sessionID?: string): string | null {
   return runCurate(
     appendRunScopeArgs(
       [
-        "--for-agent",
+        "--detail",
+        "agent",
         "--format",
         "text",
-        "--detail",
-        "summary",
         "-q",
         "curate",
         text,
@@ -297,11 +296,10 @@ function runCurateForSession(sessionID: string): string | null {
   return runCurate(
     appendRunScopeArgs(
       [
-        "--for-agent",
+        "--detail",
+        "agent",
         "--format",
         "text",
-        "--detail",
-        "summary",
         "-q",
         "curate",
         "--limit",
