@@ -8,6 +8,7 @@ const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.sh")
 const pluginJsonPath = path.join(repoRoot, "claude/.claude-plugin/plugin.json")
 const claudePackageJsonPath = path.join(repoRoot, "claude/package.json")
 const marketplaceJsonPath = path.join(repoRoot, ".claude-plugin/marketplace.json")
+const claudeSessionRememberArgsRe = /--format json -q remember --name claude-session-\d{8}-sess-cap/
 
 const tempDirs: string[] = []
 
@@ -442,6 +443,10 @@ exit 0
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
+if [ "$1" = "index" ]; then
+  printf 'index\\n' >> ${quotedLog}
+  exit 0
+fi
 printf '%s\\n' "$*" >> ${quotedLog}
 exit 0
 `,
@@ -621,7 +626,7 @@ exit 0
     })
 
     const commands = readFileSync(commandLog, "utf8").trim().split("\n").filter(Boolean)
-    expect(commands.some((line) => /--format json -q remember --name claude-session-\d{8}-sess-cap/.test(line))).toBe(true)
+    expect(commands.some((line) => claudeSessionRememberArgsRe.test(line))).toBe(true)
     expect(commands.filter((line) => line === "index")).toHaveLength(1)
   })
 

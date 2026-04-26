@@ -52,6 +52,17 @@ function createMockClient() {
   }
 }
 
+async function withEnvVar<T>(name: string, value: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[name]
+  process.env[name] = value
+  try {
+    return await fn()
+  } finally {
+    if (previous === undefined) delete process.env[name]
+    else process.env[name] = previous
+  }
+}
+
 // Minimal stub that satisfies the PluginInput shape
 function createPluginInput(overrides?: Partial<PluginInput>): PluginInput {
   return {
@@ -1204,10 +1215,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("runs akm index after capturing a session memory when enabled", async () => {
-      const previous = process.env.AKM_INDEX_ON_SESSION_END
-      process.env.AKM_INDEX_ON_SESSION_END = "1"
-
-      try {
+      await withEnvVar("AKM_INDEX_ON_SESSION_END", "1", async () => {
         const hooks = await AkmPlugin(createPluginInput())
 
         await hooks["tool.execute.after"]!(
@@ -1229,17 +1237,11 @@ describe("akm-opencode plugin", () => {
         expect(rememberIndex).toBeGreaterThan(-1)
         expect(indexCalls).toHaveLength(1)
         expect(calls.findIndex(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")).toBeGreaterThan(rememberIndex)
-      } finally {
-        if (previous === undefined) delete process.env.AKM_INDEX_ON_SESSION_END
-        else process.env.AKM_INDEX_ON_SESSION_END = previous
-      }
+      })
     })
 
     it("logs akm index failures without aborting session cleanup", async () => {
-      const previous = process.env.AKM_INDEX_ON_SESSION_END
-      process.env.AKM_INDEX_ON_SESSION_END = "1"
-
-      try {
+      await withEnvVar("AKM_INDEX_ON_SESSION_END", "1", async () => {
         const client = createMockClient()
         mockExecFileSync.mockImplementation((_, args) => {
           if (Array.isArray(args) && args.length === 1 && args[0] === "index") {
@@ -1261,17 +1263,14 @@ describe("akm-opencode plugin", () => {
 
         await hooks.stop!({ sessionID: "session-index-2" } as any)
 
-        const logCalls = (client.app.log as ReturnType<typeof mock>).mock.calls as Array<
+        const logCalls = (client.app.log as any).mock.calls as Array<
           [{ body: { level: string; message: string; extra?: Record<string, unknown> } }]
         >
         const failureLog = logCalls.find(([entry]) => entry.body.message === "AKM session indexing failed")
         expect(failureLog).toBeDefined()
         expect(failureLog?.[0].body.level).toBe("warn")
         expect(failureLog?.[0].body.extra?.sessionID).toBe("session-index-2")
-      } finally {
-        if (previous === undefined) delete process.env.AKM_INDEX_ON_SESSION_END
-        else process.env.AKM_INDEX_ON_SESSION_END = previous
-      }
+      })
     })
 
     it("captures checkpoint memories mid-session without losing the final session summary", async () => {
