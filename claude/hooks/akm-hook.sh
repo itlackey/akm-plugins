@@ -13,8 +13,19 @@ MEMORY_LOG="$STATE_DIR/memory.log"
 CURATE_LIMIT="${AKM_CURATE_LIMIT:-5}"
 CURATE_MIN_CHARS="${AKM_CURATE_MIN_CHARS:-16}"
 CURATE_TIMEOUT="${AKM_CURATE_TIMEOUT:-8}"
+CONTEXT_BUDGET_CHARS="${AKM_CONTEXT_BUDGET_CHARS:-4000}"
 AUTO_FEEDBACK="${AKM_AUTO_FEEDBACK:-1}"
 AUTO_MEMORY="${AKM_AUTO_MEMORY:-1}"
+CURATED_PROMPT_HEADER="# AKM stash — assets relevant to this prompt"
+CURATED_SESSION_HEADER="# AKM stash — assets relevant to this session"
+CURATED_CONTEXT_TAIL="Tip: call \`akm show <ref>\` to fetch full content, and record \`akm feedback <ref> --positive|--negative\` once you know whether the asset helped."
+SESSION_START_FOOTER="For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, …), run \`/akm-help\` first to discover the right \`akm\` CLI invocation, then run it via Bash."
+SESSION_START_HEADER="$(cat <<'EOF'
+# AKM is available in this session
+
+You have an AKM stash on this machine. Before writing anything from scratch, call `akm curate "<task>"` or `akm search` to see if the stash already covers it. Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.
+EOF
+)"
 
 mkdir -p "$STATE_DIR" "$SESSIONS_DIR"
 
@@ -126,6 +137,42 @@ akm_run() {
   else
     akm "$@" 2>/dev/null || true
   fi
+}
+
+build_run_scope_args() {
+  sid="$1"
+  if [ -n "$sid" ]; then
+    printf '%s\n' "--run" "$sid"
+  fi
+}
+
+emit_hook_context() {
+  event_name="$1"
+  body="$2"
+  HOOK_EVENT_NAME="$event_name" AKM_HOOK_CONTEXT="$body" AKM_CONTEXT_BUDGET="$CONTEXT_BUDGET_CHARS" python3 -c '
+import json, os, sys
+body = os.environ.get("AKM_HOOK_CONTEXT", "").strip()
+if not body:
+    sys.exit(0)
+event_name = os.environ.get("HOOK_EVENT_NAME", "")
+budget_raw = os.environ.get("AKM_CONTEXT_BUDGET", "1")
+try:
+    budget = max(1, int(budget_raw))
+except Exception:
+    budget = 4000
+marker = "\n\n[truncated for context]"
+if len(body) > budget:
+    if budget <= len(marker):
+        body = body[:budget]
+    else:
+        body = body[: budget - len(marker)] + marker
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": event_name,
+        "additionalContext": body,
+    }
+}))
+'
 }
 
 extract_session_id() {
@@ -394,29 +441,19 @@ curate_prompt() {
 
   akm_available || exit 0
 
-  curated="$(akm_run --for-agent --format text --detail summary -q curate "$text" --limit "$CURATE_LIMIT")"
+  curated="$(akm_run --for-agent --format text --detail summary -q curate "$text" --limit "$CURATE_LIMIT" $(build_run_scope_args "$sid"))"
   [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ] || exit 0
 
   # Emit Claude Code's hookSpecificOutput JSON to inject context into the turn.
-  AKM_CURATED="$curated" python3 -c '
-import json, os, sys
-body = os.environ.get("AKM_CURATED", "").strip()
-if not body:
-    sys.exit(0)
-header = "# AKM stash — assets relevant to this prompt\n"
-tail = "\n\nTip: call `akm show <ref>` to fetch full content, and record `akm feedback <ref> --positive|--negative` once you know whether the asset helped."
-print(json.dumps({
-    "hookSpecificOutput": {
-        "hookEventName": "UserPromptSubmit",
-        "additionalContext": header + body + tail,
-    }
-}))
-'
+  emit_hook_context "UserPromptSubmit" "$(printf '%s\n%s\n\n%s' "$CURATED_PROMPT_HEADER" "$curated" "$CURATED_CONTEXT_TAIL")"
 }
 
 # SessionStart: ensure akm is available, then inject a compact hints block and
 # a fresh index timestamp so Claude knows the stash surface area at turn 0.
 session_start() {
+  raw_input="$(cat)"
+  sid="$(printf '%s' "$raw_input" | extract_session_id)"
+
   ensure_akm
 
   akm_available || exit 0
@@ -425,25 +462,18 @@ session_start() {
   ( akm_run index >/dev/null & ) 2>/dev/null || true
 
   hints="$(akm_run --format text -q hints)"
-  [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ] || exit 0
+  curated="$(akm_run --for-agent --format text --detail summary -q curate --limit "$CURATE_LIMIT" $(build_run_scope_args "$sid"))"
+  [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ] || [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ] || exit 0
 
-  AKM_HINTS="$hints" python3 -c '
-import json, os, sys
-hints = os.environ.get("AKM_HINTS", "").strip()
-header = "\n".join([
-    "# AKM is available in this session",
-    "",
-    "You have an AKM stash on this machine. Before writing anything from scratch, call `akm curate \"<task>\"` or `akm search` to see if the stash already covers it. Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.",
-])
-footer = "\n\nFor verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, …), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash."
-body = header + "\n\n" + hints + footer
-print(json.dumps({
-    "hookSpecificOutput": {
-        "hookEventName": "SessionStart",
-        "additionalContext": body,
-    }
-}))
-'
+  body="$SESSION_START_HEADER"
+  if [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ]; then
+    body="$(printf '%s\n\n%s' "$body" "$hints")"
+  fi
+  if [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ]; then
+    body="$(printf '%s\n\n%s\n\n%s\n\n%s' "$body" "$CURATED_SESSION_HEADER" "$curated" "$CURATED_CONTEXT_TAIL")"
+  fi
+  body="$(printf '%s\n\n%s' "$body" "$SESSION_START_FOOTER")"
+  emit_hook_context "SessionStart" "$body"
 }
 
 # Capture a memory from the session buffer when the session ends or before the
