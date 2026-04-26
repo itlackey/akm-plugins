@@ -390,17 +390,20 @@ echo "[knowledge] should-not-appear"
     expect(stdout.trim()).toBe("")
   })
 
-  it("session-start wraps akm hints output as SessionStart additionalContext", () => {
+  it("session-start injects hints and curated context before the first user message", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
+    const invokeLog = path.join(tempDir, "akm-invocations.log")
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
+    const quotedLog = shellQuote(invokeLog)
 
-    // Fake akm: version/install, index no-op, hints output.
+    // Fake akm: version/install, index no-op, hints + curated output.
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
   --version) echo "akm 9.9.9"; exit 0 ;;
 esac
@@ -408,6 +411,7 @@ for arg in "$@"; do
   case "$arg" in
     hints) echo "# Stash hints"; echo "akm search <query>"; exit 0 ;;
     index) exit 0 ;;
+    curate) echo "# curated"; echo "- skill:deploy"; exit 0 ;;
   esac
 done
 exit 0
@@ -428,6 +432,58 @@ exit 0
     expect(payload.hookSpecificOutput.hookEventName).toBe("SessionStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM is available")
     expect(payload.hookSpecificOutput.additionalContext).toContain("Stash hints")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash — assets relevant to this session")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("skill:deploy")
+
+    const invocations = readFileSync(invokeLog, "utf8")
+    expect(invocations).toContain("curate")
+    expect(invocations).toContain("--run sess-start-1")
+  })
+
+  it("session-start respects AKM_CONTEXT_BUDGET_CHARS", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+case "$1" in
+  --version) echo "akm 9.9.9"; exit 0 ;;
+esac
+for arg in "$@"; do
+  case "$arg" in
+    hints) python3 - <<'PY'
+print("H" * 180)
+PY
+      exit 0 ;;
+    curate) python3 - <<'PY'
+print("C" * 180)
+PY
+      exit 0 ;;
+    index) exit 0 ;;
+  esac
+done
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    const stdout = runHook(["session-start"], {
+      input: JSON.stringify({ session_id: "sess-budget-1" }),
+      env: {
+        AKM_CONTEXT_BUDGET_CHARS: "220",
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.hookSpecificOutput.additionalContext.length).toBeLessThanOrEqual(220)
+    expect(payload.hookSpecificOutput.additionalContext).toContain("[truncated for context]")
   })
 
   it("auto-feedback records positive feedback for successful stash asset usage", () => {
