@@ -119,8 +119,8 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 | Event | What happens |
 | --- | --- |
-| **SessionStart** | Installs/refreshes `akm-cli@latest` (Bun → npm fallback), warms the stash index in the background, and injects `akm hints` into the model context so Claude knows the CLI surface area at turn 0. |
-| **UserPromptSubmit** | Runs `akm curate "<prompt>"` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
+| **SessionStart** | Installs/refreshes `akm-cli@latest` (Bun → npm fallback), warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. |
+| **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
 | **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. |
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
 | **Stop** / **SubagentStop** | Flushes the per-session buffer into a `memory:claude-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. |
@@ -135,6 +135,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
+| `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Max total characters injected into `additionalContext` for a single hook fire. |
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Where session logs and per-session buffers live. |
 
 ### Slash commands

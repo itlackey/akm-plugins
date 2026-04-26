@@ -257,26 +257,56 @@ function runCliSyncRaw(args: string[], timeoutMs: number): { ok: true; stdout: s
   }
 }
 
-function runCurateForPrompt(text: string): string | null {
-  if (!text || text.length < AKM_CURATE_MIN_CHARS) return null
-  const result = runCliSyncRaw(
-    [
-      "--for-agent",
-      "--format",
-      "text",
-      "--detail",
-      "summary",
-      "-q",
-      "curate",
-      text,
-      "--limit",
-      String(AKM_CURATE_LIMIT),
-    ],
-    AKM_CURATE_TIMEOUT_MS,
-  )
+function appendRunScopeArg(args: string[], sessionID: string | undefined): string[] {
+  if (sessionID) args.push("--run", sessionID)
+  return args
+}
+
+function runCurate(args: string[]): string | null {
+  const result = runCliSyncRaw(args, AKM_CURATE_TIMEOUT_MS)
   if (!result.ok) return null
   const body = result.stdout.trim()
   return body || null
+}
+
+function runCurateForPrompt(text: string, sessionID?: string): string | null {
+  if (!text || text.length < AKM_CURATE_MIN_CHARS) return null
+  return runCurate(
+    appendRunScopeArg(
+      [
+        "--for-agent",
+        "--format",
+        "text",
+        "--detail",
+        "summary",
+        "-q",
+        "curate",
+        text,
+        "--limit",
+        String(AKM_CURATE_LIMIT),
+      ],
+      sessionID,
+    ),
+  )
+}
+
+function runCurateForSession(sessionID: string): string | null {
+  return runCurate(
+    appendRunScopeArg(
+      [
+        "--for-agent",
+        "--format",
+        "text",
+        "--detail",
+        "summary",
+        "-q",
+        "curate",
+        "--limit",
+        String(AKM_CURATE_LIMIT),
+      ],
+      sessionID,
+    ),
+  )
 }
 
 function runHintsForSession(): string | null {
@@ -616,6 +646,38 @@ const AKM_HINTS_PREFIX = [
 
 const AKM_CURATED_HEADER = "# AKM stash — assets relevant to this prompt"
 const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content, and record `akm_feedback <ref> positive|negative` once you know whether the asset helped."
+const AKM_CONTEXT_TRUNCATED_MARKER = "\n\n[truncated for context]"
+
+function getContextBudgetChars(): number {
+  return Math.max(1, Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000)
+}
+
+function truncateContextBlock(block: string, maxChars: number): string {
+  if (block.length <= maxChars) return block
+  if (maxChars <= AKM_CONTEXT_TRUNCATED_MARKER.length) return block.slice(0, maxChars)
+  return `${block.slice(0, maxChars - AKM_CONTEXT_TRUNCATED_MARKER.length)}${AKM_CONTEXT_TRUNCATED_MARKER}`
+}
+
+function applyContextBudget(blocks: string[]): string[] {
+  const budget = getContextBudgetChars()
+  const injected: string[] = []
+  let remaining = budget
+  for (const block of blocks) {
+    if (!block) continue
+    const separatorCost = injected.length > 0 ? 1 : 0
+    if (remaining <= separatorCost) break
+    const allowed = remaining - separatorCost
+    if (block.length <= allowed) {
+      injected.push(block)
+      remaining -= separatorCost + block.length
+      continue
+    }
+    const truncated = truncateContextBlock(block, allowed)
+    if (truncated) injected.push(truncated)
+    break
+  }
+  return injected
+}
 
 // Curated quick-reference for the long-tail of `akm` CLI verbs that no longer
 // have a dedicated tool wrapper. Surfaced through akm_help so agents can
@@ -1552,7 +1614,14 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (type === "session.created" || type === "session.updated") {
           if (!sid) return
           if (!sessionContextEpoch.has(sid)) sessionContextEpoch.set(sid, 0)
-          if (type === "session.created") warmIndexInBackground()
+          if (type === "session.created") {
+            warmIndexInBackground()
+            if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
+              const curated = runCurateForSession(sid)
+              if (curated) bumpCuratedVersion(sid)
+              if (curated) sessionCurated.set(sid, curated)
+            }
+          }
           if (AKM_AUTO_HINTS && !sessionHints.has(sid)) {
             const hints = runHintsForSession()
             if (hints) sessionHints.set(sid, hints)
@@ -1619,14 +1688,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (!sid) return
         if (!Array.isArray(output.context)) return
         markContextEpochDirty(sid)
-        const hints = sessionHints.get(sid)
-        if (hints) output.context.push(`${AKM_HINTS_PREFIX}\n\n${hints}`)
-        const curated = sessionCurated.get(sid)
-        if (curated) output.context.push(`${AKM_CURATED_HEADER}\n${curated}${AKM_CURATED_TAIL}`)
-        const workflow = sessionWorkflow.get(sid)
-        if (workflow) output.context.push(formatWorkflowContext(workflow))
-        const curatorReport = sessionCuratorReport.get(sid)
-        if (curatorReport) output.context.push(formatCuratorReportContext(curatorReport))
+        const blocks = [
+          sessionHints.get(sid) ? `${AKM_HINTS_PREFIX}\n\n${sessionHints.get(sid)}` : "",
+          sessionCurated.get(sid) ? `${AKM_CURATED_HEADER}\n${sessionCurated.get(sid)}${AKM_CURATED_TAIL}` : "",
+          sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
+          sessionCuratorReport.get(sid) ? formatCuratorReportContext(sessionCuratorReport.get(sid)!) : "",
+        ]
+        output.context.push(...applyContextBudget(blocks))
       } catch {
         // Never break compaction because of plugin context.
       }
@@ -1644,19 +1712,23 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const epoch = sessionContextEpoch.get(sid) ?? 0
         const injectedEpoch = sessionContextInjectedEpoch.get(sid)
         if (sid && injectedEpoch !== epoch) {
-          const hints = sessionHints.get(sid)
-          if (hints) output.system.push(`${AKM_HINTS_PREFIX}\n\n${hints}`)
-          const workflow = sessionWorkflow.get(sid)
-          if (workflow) output.system.push(formatWorkflowContext(workflow))
-          const curatorReport = sessionCuratorReport.get(sid)
-          if (curatorReport) output.system.push(formatCuratorReportContext(curatorReport))
+          const blocks = [
+            sessionHints.get(sid) ? `${AKM_HINTS_PREFIX}\n\n${sessionHints.get(sid)}` : "",
+            sessionCurated.get(sid) ? `${AKM_CURATED_HEADER}\n${sessionCurated.get(sid)}${AKM_CURATED_TAIL}` : "",
+            sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
+            sessionCuratorReport.get(sid) ? formatCuratorReportContext(sessionCuratorReport.get(sid)!) : "",
+          ]
+          output.system.push(...applyContextBudget(blocks))
           sessionContextInjectedEpoch.set(sid, epoch)
+          if (sessionCurated.has(sid)) {
+            sessionCuratedInjectedVersion.set(sid, sessionCuratedVersion.get(sid) ?? 0)
+          }
         }
         const curated = sid ? sessionCurated.get(sid) : undefined
         const curatedVersion = sessionCuratedVersion.get(sid) ?? 0
         if (curated) {
           if (sessionCuratedInjectedVersion.get(sid) !== curatedVersion) {
-            output.system.push(`${AKM_CURATED_HEADER}\n${curated}${AKM_CURATED_TAIL}`)
+            output.system.push(...applyContextBudget([`${AKM_CURATED_HEADER}\n${curated}${AKM_CURATED_TAIL}`]))
             sessionCuratedInjectedVersion.set(sid, curatedVersion)
           }
         }
@@ -1706,7 +1778,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       // Compound-engineering loop: on every user message, curate the stash and
       // stash the result so experimental.chat.system.transform can inject it.
       if (AKM_AUTO_CURATE && input.sessionID) {
-        const curated = runCurateForPrompt(text)
+        const curated = runCurateForPrompt(text, input.sessionID)
         if (curated) {
           sessionCurated.set(input.sessionID, curated)
           bumpCuratedVersion(input.sessionID)

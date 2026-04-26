@@ -825,6 +825,7 @@ describe("akm-opencode plugin", () => {
       mockExecFileSync.mockImplementation((cmd, args) => {
         if (args[0] === "--version") return "0.1.0"
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
+        if (Array.isArray(args) && args.includes("curate")) return ""
         return "mock output"
       })
 
@@ -852,6 +853,64 @@ describe("akm-opencode plugin", () => {
       expect(second.system).toHaveLength(0)
     })
 
+    it("curates on session.created and injects the result before the first user message", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
+        if (Array.isArray(args) && args.includes("curate") && args.includes("--run")) {
+          return "# skills\n- skill:deploy — ship the app\n"
+        }
+        return "mock output"
+      })
+
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({
+        event: { type: "session.created", properties: { sessionID: "session-start-curate-1" } },
+      } as any)
+
+      const curateCall = (mockExecFileSync.mock.calls as any[]).find(
+        ([, args]) => Array.isArray(args) && args.includes("curate") && args.includes("--run"),
+      )
+      expect(curateCall).toBeDefined()
+      expect(curateCall?.[1]).toContain("session-start-curate-1")
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]!(
+        { sessionID: "session-start-curate-1" } as any,
+        output as any,
+      )
+
+      expect(output.system.join("\n")).toContain("AKM stash — assets relevant to this prompt")
+      expect(output.system.join("\n")).toContain("skill:deploy")
+    })
+
+    it("caps fresh-session injected context to AKM_CONTEXT_BUDGET_CHARS", async () => {
+      process.env.AKM_CONTEXT_BUDGET_CHARS = "220"
+      try {
+        mockExecFileSync.mockImplementation((_cmd, args) => {
+          if (Array.isArray(args) && args.includes("hints")) return "H".repeat(180)
+          if (Array.isArray(args) && args.includes("curate") && args.includes("--run")) return "C".repeat(180)
+          return "mock output"
+        })
+
+        const hooks = await AkmPlugin(createPluginInput())
+        await hooks.event!({
+          event: { type: "session.created", properties: { sessionID: "session-budget-1" } },
+        } as any)
+
+        const output = { system: [] as string[] }
+        await hooks["experimental.chat.system.transform"]!(
+          { sessionID: "session-budget-1" } as any,
+          output as any,
+        )
+
+        const combined = output.system.join("\n")
+        expect(combined.length).toBeLessThanOrEqual(220)
+        expect(combined).toContain("[truncated for context]")
+      } finally {
+        delete process.env.AKM_CONTEXT_BUDGET_CHARS
+      }
+    })
+
     it("curates on chat.message and injects the result once into system transform", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args.includes("curate")) {
@@ -872,6 +931,8 @@ describe("akm-opencode plugin", () => {
         ([, args]) => Array.isArray(args) && args.includes("curate"),
       )
       expect(curateCall).toBeDefined()
+      expect(curateCall?.[1]).toContain("--run")
+      expect(curateCall?.[1]).toContain("session-curate-1")
 
       const output = { system: [] as string[] }
       await hooks["experimental.chat.system.transform"]!(
