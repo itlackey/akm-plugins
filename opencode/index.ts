@@ -34,7 +34,6 @@ const sessionContextInjectedEpoch = new Map<string, number>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
 type ParsedSemver = { core: [number, number, number]; prerelease: Array<string | number> | null }
-type NpmPackageVersionResponse = { version?: string }
 type SessionBufferEntry = {
   timestamp: string
   kind: "memory-intent" | "tool-ref"
@@ -745,7 +744,7 @@ function getCommandStatus(command: string): "ok" | "missing" | "error" {
   }
 }
 
-function extractSemver(value: string): string | null {
+function extractFirstSemverMatch(value: string): string | null {
   return value.match(SEMVER_PATTERN)?.[0] ?? null
 }
 
@@ -755,14 +754,14 @@ function getCommandVersion(command: string): string | null {
       encoding: "utf8",
       timeout: 10_000,
     })
-    return extractSemver(version)
+    return extractFirstSemverMatch(version)
   } catch {
     return null
   }
 }
 
 function parseSemver(version: string): ParsedSemver | null {
-  const normalized = extractSemver(version)
+  const normalized = extractFirstSemverMatch(version)
   if (!normalized) return null
 
   const [release, prereleaseText] = normalized.split("-", 2)
@@ -847,8 +846,9 @@ async function getLatestNpmPackageVersion(packageName: string): Promise<string |
       signal: controller.signal,
     })
     if (!response.ok) return null
-    const body = await response.json() as NpmPackageVersionResponse
-    return typeof body.version === "string" ? extractSemver(body.version) : null
+    const body = await response.json()
+    if (!body || typeof body !== "object") return null
+    return typeof body.version === "string" ? extractFirstSemverMatch(body.version) : null
   } catch {
     return null
   } finally {
@@ -874,18 +874,34 @@ async function ensureLatestAkmInstalled(client: LogCapableClient): Promise<void>
   const installedAkm = getInstalledAkmDetails()
   const latestStable = await getLatestNpmPackageVersion("akm-cli")
 
-  if (installedAkm && (!latestStable || compareSemver(installedAkm.version, latestStable) >= 0)) {
-    resolvedAkmCommand = installedAkm.command
-    await writePluginLog(client, "info", "AKM auto-install skipped", {
-      subsystem: "akm",
-      installer: "bun",
-      package: autoInstallPackageRef,
-      command: resolvedAkmCommand,
-      installedVersion: installedAkm.version,
-      latestStable,
-      reason: latestStable ? "installed_version_not_older" : "latest_version_unavailable",
-    })
-    return
+  if (installedAkm) {
+    if (!latestStable) {
+      resolvedAkmCommand = installedAkm.command
+      await writePluginLog(client, "info", "AKM auto-install skipped", {
+        subsystem: "akm",
+        installer: "bun",
+        package: autoInstallPackageRef,
+        command: resolvedAkmCommand,
+        installedVersion: installedAkm.version,
+        latestStable,
+        reason: "latest_version_unavailable",
+      })
+      return
+    }
+
+    if (compareSemver(installedAkm.version, latestStable) >= 0) {
+      resolvedAkmCommand = installedAkm.command
+      await writePluginLog(client, "info", "AKM auto-install skipped", {
+        subsystem: "akm",
+        installer: "bun",
+        package: autoInstallPackageRef,
+        command: resolvedAkmCommand,
+        installedVersion: installedAkm.version,
+        latestStable,
+        reason: "installed_version_not_older",
+      })
+      return
+    }
   }
 
   try {
