@@ -16,6 +16,16 @@ CURATE_TIMEOUT="${AKM_CURATE_TIMEOUT:-8}"
 CONTEXT_BUDGET_CHARS="${AKM_CONTEXT_BUDGET_CHARS:-4000}"
 AUTO_FEEDBACK="${AKM_AUTO_FEEDBACK:-1}"
 AUTO_MEMORY="${AKM_AUTO_MEMORY:-1}"
+CURATED_PROMPT_HEADER="# AKM stash — assets relevant to this prompt"
+CURATED_SESSION_HEADER="# AKM stash — assets relevant to this session"
+CURATED_CONTEXT_TAIL="Tip: call \`akm show <ref>\` to fetch full content, and record \`akm feedback <ref> --positive|--negative\` once you know whether the asset helped."
+SESSION_START_FOOTER="For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, …), run \`/akm-help\` first to discover the right \`akm\` CLI invocation, then run it via Bash."
+SESSION_START_HEADER="$(cat <<'EOF'
+# AKM is available in this session
+
+You have an AKM stash on this machine. Before writing anything from scratch, call `akm curate "<task>"` or `akm search` to see if the stash already covers it. Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.
+EOF
+)"
 
 mkdir -p "$STATE_DIR" "$SESSIONS_DIR"
 
@@ -139,14 +149,13 @@ build_run_scope_args() {
 emit_hook_context() {
   event_name="$1"
   body="$2"
-  budget="${CONTEXT_BUDGET_CHARS:-4000}"
-  HOOK_EVENT_NAME="$event_name" AKM_HOOK_CONTEXT="$body" AKM_CONTEXT_BUDGET="$budget" python3 -c '
+  HOOK_EVENT_NAME="$event_name" AKM_HOOK_CONTEXT="$body" AKM_CONTEXT_BUDGET="$CONTEXT_BUDGET_CHARS" python3 -c '
 import json, os, sys
 body = os.environ.get("AKM_HOOK_CONTEXT", "").strip()
 if not body:
     sys.exit(0)
 event_name = os.environ.get("HOOK_EVENT_NAME", "")
-budget_raw = os.environ.get("AKM_CONTEXT_BUDGET", "4000")
+budget_raw = os.environ.get("AKM_CONTEXT_BUDGET", "1")
 try:
     budget = max(1, int(budget_raw))
 except Exception:
@@ -436,9 +445,7 @@ curate_prompt() {
   [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ] || exit 0
 
   # Emit Claude Code's hookSpecificOutput JSON to inject context into the turn.
-  header="# AKM stash — assets relevant to this prompt"
-  tail="Tip: call \`akm show <ref>\` to fetch full content, and record \`akm feedback <ref> --positive|--negative\` once you know whether the asset helped."
-  emit_hook_context "UserPromptSubmit" "$(printf '%s\n%s\n\n%s' "$header" "$curated" "$tail")"
+  emit_hook_context "UserPromptSubmit" "$(printf '%s\n%s\n\n%s' "$CURATED_PROMPT_HEADER" "$curated" "$CURATED_CONTEXT_TAIL")"
 }
 
 # SessionStart: ensure akm is available, then inject a compact hints block and
@@ -458,21 +465,14 @@ session_start() {
   curated="$(akm_run --for-agent --format text --detail summary -q curate --limit "$CURATE_LIMIT" $(build_run_scope_args "$sid"))"
   [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ] || [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ] || exit 0
 
-  header="$(cat <<'EOF'
-# AKM is available in this session
-
-You have an AKM stash on this machine. Before writing anything from scratch, call `akm curate "<task>"` or `akm search` to see if the stash already covers it. Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.
-EOF
-)"
-  footer="For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, …), run \`/akm-help\` first to discover the right \`akm\` CLI invocation, then run it via Bash."
-  body="$header"
+  body="$SESSION_START_HEADER"
   if [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ]; then
     body="$(printf '%s\n\n%s' "$body" "$hints")"
   fi
   if [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ]; then
-    body="$(printf '%s\n\n# AKM stash — assets relevant to this session\n%s' "$body" "$curated")"
+    body="$(printf '%s\n\n%s\n%s' "$body" "$CURATED_SESSION_HEADER" "$curated")"
   fi
-  body="$(printf '%s\n\n%s' "$body" "$footer")"
+  body="$(printf '%s\n\n%s' "$body" "$SESSION_START_FOOTER")"
   emit_hook_context "SessionStart" "$body"
 }
 

@@ -257,7 +257,7 @@ function runCliSyncRaw(args: string[], timeoutMs: number): { ok: true; stdout: s
   }
 }
 
-function appendRunScopeArg(args: string[], sessionID: string | undefined): string[] {
+function appendRunScopeArgs(args: string[], sessionID: string | undefined): string[] {
   return sessionID ? [...args, "--run", sessionID] : args
 }
 
@@ -271,7 +271,7 @@ function runCurate(args: string[]): string | null {
 function runCurateForPrompt(text: string, sessionID?: string): string | null {
   if (!text || text.length < AKM_CURATE_MIN_CHARS) return null
   return runCurate(
-    appendRunScopeArg(
+    appendRunScopeArgs(
       [
         "--for-agent",
         "--format",
@@ -291,7 +291,7 @@ function runCurateForPrompt(text: string, sessionID?: string): string | null {
 
 function runCurateForSession(sessionID: string): string | null {
   return runCurate(
-    appendRunScopeArg(
+    appendRunScopeArgs(
       [
         "--for-agent",
         "--format",
@@ -1617,8 +1617,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             warmIndexInBackground()
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
               const curated = runCurateForSession(sid)
-              if (curated) bumpCuratedVersion(sid)
-              if (curated) sessionCurated.set(sid, curated)
+              if (curated) {
+                bumpCuratedVersion(sid)
+                sessionCurated.set(sid, curated)
+              }
             }
           }
           if (AKM_AUTO_HINTS && !sessionHints.has(sid)) {
@@ -1720,6 +1722,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           output.system.push(...applyContextBudget(blocks))
           sessionContextInjectedEpoch.set(sid, epoch)
           if (sessionCurated.has(sid)) {
+            // Startup curation is already included in the epoch-scoped block,
+            // so mark that version as consumed to avoid a duplicate inject below.
             sessionCuratedInjectedVersion.set(sid, sessionCuratedVersion.get(sid) ?? 0)
           }
         }
