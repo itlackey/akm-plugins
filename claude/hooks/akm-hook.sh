@@ -15,6 +15,7 @@ CURATE_MIN_CHARS="${AKM_CURATE_MIN_CHARS:-16}"
 CURATE_TIMEOUT="${AKM_CURATE_TIMEOUT:-8}"
 AUTO_FEEDBACK="${AKM_AUTO_FEEDBACK:-1}"
 AUTO_MEMORY="${AKM_AUTO_MEMORY:-1}"
+INDEX_ON_SESSION_END="${AKM_INDEX_ON_SESSION_END:-0}"
 
 mkdir -p "$STATE_DIR" "$SESSIONS_DIR"
 
@@ -126,6 +127,26 @@ akm_run() {
   else
     akm "$@" 2>/dev/null || true
   fi
+}
+
+run_index_on_session_end() {
+  reason="$1"
+  sid="$2"
+  ref="$3"
+
+  [ "$INDEX_ON_SESSION_END" = "1" ] || return 0
+  akm_available || return 0
+
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout --preserve-status "$CURATE_TIMEOUT" akm index >/dev/null 2>&1; then
+      return 0
+    fi
+  elif akm index >/dev/null 2>&1; then
+    return 0
+  fi
+
+  append_log "$SESSION_LOG" "akm_index_failed" "$reason" "$sid" "$ref"
+  return 0
 }
 
 extract_session_id() {
@@ -481,6 +502,7 @@ capture_memory() {
   } | akm_run --format json -q remember --name "$name" --force >/dev/null
 
   append_log "$MEMORY_LOG" "system" "captured" "memory:$name" "$reason"
+  run_index_on_session_end "$reason" "$sid" "memory:$name"
   rm -f "$buffer"
 }
 

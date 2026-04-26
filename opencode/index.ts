@@ -207,6 +207,10 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+function shouldIndexOnSessionEnd(): boolean {
+  return (process.env.AKM_INDEX_ON_SESSION_END ?? "0") === "1"
+}
+
 function buildDateTag(options?: { includeTime?: boolean }): string {
   const compactIso = new Date().toISOString().replace(/[-:]/g, "")
   return compactIso.slice(0, options?.includeTime ? CHECKPOINT_DATE_TAG_LENGTH : SESSION_DATE_TAG_LENGTH)
@@ -543,6 +547,25 @@ function maybeCheckpointSessionMemory(sessionID: string): string | null {
     sessionSuccessfulAssetTouchCount.set(sessionID, 0)
   }
   return captured
+}
+
+async function maybeIndexSessionMemory(
+  client: LogCapableClient,
+  sessionID: string,
+  reason: string,
+  ref: string,
+): Promise<void> {
+  if (!shouldIndexOnSessionEnd()) return
+  const result = runCliSyncRaw(["index"], AKM_CURATE_TIMEOUT_MS)
+  if (result.ok) return
+  await writePluginLog(client, "warn", "AKM session indexing failed", {
+    subsystem: "memory",
+    actor: "system",
+    sessionID,
+    reason,
+    ref,
+    error: result.error,
+  })
 }
 
 const AKM_REF_EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"])
@@ -1571,6 +1594,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               reason: type,
               ref: captured,
             })
+            await maybeIndexSessionMemory(logClient, sid, type, captured)
           }
           // Drop per-session state so a re-created session does not inherit
           // stale hints/curation.
@@ -1608,6 +1632,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             reason: "stop",
             ref: captured,
           })
+          await maybeIndexSessionMemory(logClient, sid, "stop", captured)
         }
       } catch {
         // Best-effort only.
