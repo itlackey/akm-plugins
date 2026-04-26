@@ -402,7 +402,7 @@ describe("akm-opencode plugin", () => {
       )
     })
 
-    it("akm_curate shells out to 'akm curate' with for-agent flags", async () => {
+    it("akm_curate shells out to 'akm curate' with JSON output like the direct CLI", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_curate.execute(
         { query: "deploy the app", limit: 4 } as any,
@@ -411,19 +411,36 @@ describe("akm-opencode plugin", () => {
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
         [
-          "--for-agent",
-          "--format",
-          "text",
-          "--detail",
-          "summary",
-          "-q",
           "curate",
           "deploy the app",
           "--limit",
           "4",
+          "--format",
+          "json",
         ],
         expect.objectContaining({ encoding: "utf8" }),
       )
+    })
+
+    it("akm_curate preserves a single explicit detail flag without injecting duplicate formats", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_curate.execute(
+        { query: "deploy the app", limit: 8, detail: "normal" } as any,
+        {} as any,
+      )
+
+      const [, args] = mockExecFileSync.mock.calls.at(-1) as [string, string[]]
+      expect(args).toEqual([
+        "curate",
+        "deploy the app",
+        "--limit",
+        "8",
+        "--detail",
+        "normal",
+        "--format",
+        "json",
+      ])
+      expect(args.filter((value) => value === "--format")).toHaveLength(1)
     })
 
     it("akm_evolve dispatches the curator prompt through a child session", async () => {
