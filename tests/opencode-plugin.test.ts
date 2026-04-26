@@ -2159,6 +2159,7 @@ describe("akm-opencode plugin", () => {
       let installComplete = false
       mockExecFileSync.mockImplementation((cmd, args) => {
         if (cmd === "bun" && args[0] === "--version") return "1.3.5"
+        // Before install the Bun-managed CLI is older than npm latest; after install it matches latest.
         if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version") return installComplete ? "0.5.0" : "0.4.0"
         if (cmd === "bun" && args[0] === "install") {
           installComplete = true

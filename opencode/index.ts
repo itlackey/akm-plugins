@@ -764,14 +764,16 @@ function parseSemver(version: string): ParsedSemver | null {
   const normalized = extractFirstSemverMatch(version)
   if (!normalized) return null
 
-  const [release, prereleaseText] = normalized.split("-", 2)
+  const [withoutBuildMetadata] = normalized.split("+", 1)
+  const [release, prereleaseText] = withoutBuildMetadata.split("-", 2)
   const parts = release.split(".").map((part) => Number(part))
   if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
     return null
   }
+  const core = [parts[0], parts[1], parts[2]] as [number, number, number]
 
   return {
-    core: [parts[0], parts[1], parts[2]],
+    core,
     prerelease: prereleaseText
       ? prereleaseText.split(".").map((part) => (/^\d+$/.test(part) ? Number(part) : part))
       : null,
