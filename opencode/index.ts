@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 let resolvedAkmCommand = "akm"
 const autoInstallPackageRef = "akm-cli@latest"
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
+const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b/
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
@@ -32,6 +33,7 @@ const sessionContextEpoch = new Map<string, number>()
 const sessionContextInjectedEpoch = new Map<string, number>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
+type ParsedSemver = { core: [number, number, number]; prerelease: Array<string | number> | null }
 type SessionBufferEntry = {
   timestamp: string
   kind: "memory-intent" | "tool-ref"
@@ -742,6 +744,72 @@ function getCommandStatus(command: string): "ok" | "missing" | "error" {
   }
 }
 
+function extractFirstSemverMatch(value: string): string | null {
+  return value.match(SEMVER_PATTERN)?.[0] ?? null
+}
+
+function getCommandVersion(command: string): string | null {
+  try {
+    const version = execFileSync(command, ["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+    return extractFirstSemverMatch(version)
+  } catch {
+    return null
+  }
+}
+
+function parseSemver(version: string): ParsedSemver | null {
+  const normalized = extractFirstSemverMatch(version)
+  if (!normalized) return null
+
+  const [withoutBuildMetadata] = normalized.split("+", 1)
+  const [release, prereleaseText] = withoutBuildMetadata.split("-", 2)
+  const parts = release.split(".").map((part) => Number(part))
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
+    return null
+  }
+  const core = [parts[0], parts[1], parts[2]] as [number, number, number]
+
+  return {
+    core,
+    prerelease: prereleaseText
+      ? prereleaseText.split(".").map((part) => (/^\d+$/.test(part) ? Number(part) : part))
+      : null,
+  }
+}
+
+function compareSemver(left: string, right: string): number {
+  const leftParsed = parseSemver(left)
+  const rightParsed = parseSemver(right)
+  if (!leftParsed || !rightParsed) return left.localeCompare(right)
+
+  for (let index = 0; index < leftParsed.core.length; index += 1) {
+    const delta = leftParsed.core[index] - rightParsed.core[index]
+    if (delta !== 0) return delta
+  }
+
+  if (!leftParsed.prerelease && !rightParsed.prerelease) return 0
+  if (!leftParsed.prerelease) return 1
+  if (!rightParsed.prerelease) return -1
+
+  const length = Math.max(leftParsed.prerelease.length, rightParsed.prerelease.length)
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParsed.prerelease[index]
+    const rightPart = rightParsed.prerelease[index]
+    if (leftPart === undefined) return -1
+    if (rightPart === undefined) return 1
+    if (leftPart === rightPart) continue
+    if (typeof leftPart === "number" && typeof rightPart === "number") return leftPart - rightPart
+    if (typeof leftPart === "number") return -1
+    if (typeof rightPart === "number") return 1
+    return leftPart.localeCompare(rightPart)
+  }
+
+  return 0
+}
+
 function getBunGlobalAkmCommand(): string | null {
   try {
     const globalBin = execFileSync("bun", ["pm", "bin", "-g"], {
@@ -754,6 +822,39 @@ function getBunGlobalAkmCommand(): string | null {
       : path.join(globalBin, "akm")
   } catch {
     return null
+  }
+}
+
+function getInstalledAkmDetails(): { command: string; version: string } | null {
+  const candidates = [resolvedAkmCommand, getBunGlobalAkmCommand(), "akm"]
+  const seen = new Set<string>()
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate)) continue
+    seen.add(candidate)
+    const version = getCommandVersion(candidate)
+    if (version) return { command: candidate, version }
+  }
+  return null
+}
+
+async function getLatestNpmPackageVersion(packageName: string): Promise<string | null> {
+  if (typeof fetch !== "function") return null
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10_000)
+  try {
+    const response = await fetch(`https://registry.npmjs.org/${packageName}/latest`, {
+      headers: { accept: "application/json" },
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+    const body = await response.json()
+    if (!body || typeof body !== "object") return null
+    return typeof body.version === "string" ? extractFirstSemverMatch(body.version) : null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -770,6 +871,39 @@ async function ensureLatestAkmInstalled(client: LogCapableClient): Promise<void>
       error: `Bun is not available: ${formatCliError(error)}`,
     })
     return
+  }
+
+  const installedAkm = getInstalledAkmDetails()
+  const latestStable = await getLatestNpmPackageVersion("akm-cli")
+
+  if (installedAkm) {
+    if (!latestStable) {
+      resolvedAkmCommand = installedAkm.command
+      await writePluginLog(client, "info", "AKM auto-install skipped", {
+        subsystem: "akm",
+        installer: "bun",
+        package: autoInstallPackageRef,
+        command: resolvedAkmCommand,
+        installedVersion: installedAkm.version,
+        latestStable,
+        reason: "latest_version_unavailable",
+      })
+      return
+    }
+
+    if (compareSemver(installedAkm.version, latestStable) >= 0) {
+      resolvedAkmCommand = installedAkm.command
+      await writePluginLog(client, "info", "AKM auto-install skipped", {
+        subsystem: "akm",
+        installer: "bun",
+        package: autoInstallPackageRef,
+        command: resolvedAkmCommand,
+        installedVersion: installedAkm.version,
+        latestStable,
+        reason: "installed_version_not_older",
+      })
+      return
+    }
   }
 
   try {
@@ -791,6 +925,8 @@ async function ensureLatestAkmInstalled(client: LogCapableClient): Promise<void>
         installer: "bun",
         package: autoInstallPackageRef,
         command: resolvedAkmCommand,
+        installedVersion: installedAkm?.version ?? null,
+        latestStable,
       })
   } catch (error: unknown) {
     await writePluginLog(client, "warn", "AKM auto-install failed", {
