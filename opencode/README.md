@@ -48,7 +48,7 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, checkpoints memories every `AKM_MEMORY_CHECKPOINT_EVERY` successful asset-touching tool calls, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
 | **`shell.env`** | Exposes `AKM_STASH_DIR`, `AKM_PROJECT`, and `AKM_PLUGIN_VERSION` to shell tools so plain `akm` calls inherit the right context. |
-| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Flushes the per-session buffer into a `memory:opencode-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. Requires at least two observations before persisting. |
+| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Flushes the per-session buffer into a `memory:opencode-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. Requires at least two observations before persisting. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows a successful flush with `akm index` so upstream inference/graph passes run immediately. |
 
 ### Environment overrides
 
@@ -58,6 +58,7 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip injecting `akm hints` at session start. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
+| `AKM_INDEX_ON_SESSION_END` | `0` | Set to `1` to run `akm index` after a session-end memory is captured. |
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |

@@ -16,6 +16,7 @@ CURATE_TIMEOUT="${AKM_CURATE_TIMEOUT:-8}"
 CONTEXT_BUDGET_CHARS="${AKM_CONTEXT_BUDGET_CHARS:-4000}"
 AUTO_FEEDBACK="${AKM_AUTO_FEEDBACK:-1}"
 AUTO_MEMORY="${AKM_AUTO_MEMORY:-1}"
+INDEX_ON_SESSION_END="${AKM_INDEX_ON_SESSION_END:-0}"
 CURATED_PROMPT_HEADER="# AKM stash — assets relevant to this prompt"
 CURATED_SESSION_HEADER="# AKM stash — assets relevant to this session"
 CURATED_CONTEXT_TAIL="Tip: call \`akm show <ref>\` to fetch full content, and record \`akm feedback <ref> --positive|--negative\` once you know whether the asset helped."
@@ -139,6 +140,24 @@ akm_run() {
   fi
 }
 
+run_index_on_session_end() {
+  reason="$1"
+  sid="$2"
+  ref="$3"
+
+  [ "$INDEX_ON_SESSION_END" = "1" ] || return 0
+  akm_available || return 0
+
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout --preserve-status "$CURATE_TIMEOUT" akm index >/dev/null 2>&1; then
+      return 0
+    fi
+  elif akm index >/dev/null 2>&1; then
+    return 0
+  fi
+
+  append_log "$SESSION_LOG" "akm_index_failed" "$reason" "$sid" "$ref"
+  return 0
 build_run_scope_args() {
   sid="$1"
   if [ -n "$sid" ]; then
@@ -511,6 +530,7 @@ capture_memory() {
   } | akm_run --format json -q remember --name "$name" --force >/dev/null
 
   append_log "$MEMORY_LOG" "system" "captured" "memory:$name" "$reason"
+  run_index_on_session_end "$reason" "$sid" "memory:$name"
   rm -f "$buffer"
 }
 

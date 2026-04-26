@@ -123,8 +123,8 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
 | **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. |
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
-| **Stop** / **SubagentStop** | Flushes the per-session buffer into a `memory:claude-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. |
-| **PreCompact** | Same memory capture before Claude Code compacts the transcript, so learnings survive compaction. |
+| **Stop** / **SubagentStop** | Flushes the per-session buffer into a `memory:claude-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows that flush with `akm index` so upstream inference/graph passes run immediately. |
+| **PreCompact** | Same memory capture before Claude Code compacts the transcript, with the same optional post-flush `akm index` run when `AKM_INDEX_ON_SESSION_END=1`. |
 
 ### Environment overrides
 
@@ -132,6 +132,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | --- | --- | --- |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
+| `AKM_INDEX_ON_SESSION_END` | `0` | Set to `1` to run `akm index` after a session-end memory is captured. |
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |

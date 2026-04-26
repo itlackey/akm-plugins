@@ -8,6 +8,7 @@ const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.sh")
 const pluginJsonPath = path.join(repoRoot, "claude/.claude-plugin/plugin.json")
 const claudePackageJsonPath = path.join(repoRoot, "claude/package.json")
 const marketplaceJsonPath = path.join(repoRoot, ".claude-plugin/marketplace.json")
+const claudeSessionRememberArgsRe = /--format json -q remember --name claude-session-\d{8}-sess-cap/
 
 const tempDirs: string[] = []
 
@@ -498,6 +499,10 @@ exit 0
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
+if [ "$1" = "index" ]; then
+  printf 'index\\n' >> ${quotedLog}
+  exit 0
+fi
 printf '%s\\n' "$*" >> ${quotedLog}
 exit 0
 `,
@@ -639,6 +644,85 @@ exit 0
     expect(body).toContain("# Session summary")
     expect(body).toContain("Reason: session-end")
     expect(body).toContain("- ref: skill:rollout")
+    expect(existsSync(bufferPath)).toBe(false)
+  })
+
+  it("capture-memory optionally runs akm index after a session-end flush", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const commandLog = path.join(tempDir, "commands.log")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    writeFileSync(
+      path.join(sessionsDir, "sess-cap-idx.md"),
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember the rollout\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    const quotedLog = shellQuote(commandLog)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "session-end"], {
+      input: JSON.stringify({ session_id: "sess-cap-idx" }),
+      env: {
+        AKM_INDEX_ON_SESSION_END: "1",
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const commands = readFileSync(commandLog, "utf8").trim().split("\n").filter(Boolean)
+    expect(commands.some((line) => claudeSessionRememberArgsRe.test(line))).toBe(true)
+    expect(commands.filter((line) => line === "index")).toHaveLength(1)
+  })
+
+  it("capture-memory logs index failures without aborting cleanup", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    const bufferPath = path.join(sessionsDir, "sess-cap-fail.md")
+    writeFileSync(
+      bufferPath,
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember the rollout\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+if [ "$1" = "index" ]; then
+  exit 1
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "session-end"], {
+      input: JSON.stringify({ session_id: "sess-cap-fail" }),
+      env: {
+        AKM_INDEX_ON_SESSION_END: "1",
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("\takm_index_failed\tsession-end\tsess-cap-fail\tmemory:claude-session-"))).toBe(true)
     expect(existsSync(bufferPath)).toBe(false)
   })
 

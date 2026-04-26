@@ -52,6 +52,17 @@ function createMockClient() {
   }
 }
 
+async function withEnvVar<T>(name: string, value: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[name]
+  process.env[name] = value
+  try {
+    return await fn()
+  } finally {
+    if (previous === undefined) delete process.env[name]
+    else process.env[name] = previous
+  }
+}
+
 // Minimal stub that satisfies the PluginInput shape
 function createPluginInput(overrides?: Partial<PluginInput>): PluginInput {
   return {
@@ -1262,6 +1273,65 @@ describe("akm-opencode plugin", () => {
       expect(nameFlag).toBeGreaterThan(-1)
       expect(rememberArgs[nameFlag + 1]).toMatch(/^opencode-session-/)
       expect(rememberArgs).toContain("--force")
+    })
+
+    it("runs akm index after capturing a session memory when enabled", async () => {
+      await withEnvVar("AKM_INDEX_ON_SESSION_END", "1", async () => {
+        const hooks = await AkmPlugin(createPluginInput())
+
+        await hooks["tool.execute.after"]!(
+          { tool: "akm_show", sessionID: "session-index-1", callID: "c1", args: { ref: "skill:alpha" } } as any,
+          { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:alpha" }), metadata: {} } as any,
+        )
+        await hooks["tool.execute.after"]!(
+          { tool: "akm_show", sessionID: "session-index-1", callID: "c2", args: { ref: "skill:beta" } } as any,
+          { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:beta" }), metadata: {} } as any,
+        )
+
+        mockExecFileSync.mockClear()
+        await hooks.stop!({ sessionID: "session-index-1" } as any)
+
+        const calls = mockExecFileSync.mock.calls as Array<[string, string[]]>
+        const rememberIndex = calls.findIndex(([, args]) => Array.isArray(args) && args.includes("remember"))
+        const indexCalls = calls.filter(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")
+
+        expect(rememberIndex).toBeGreaterThan(-1)
+        expect(indexCalls).toHaveLength(1)
+        expect(calls.findIndex(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")).toBeGreaterThan(rememberIndex)
+      })
+    })
+
+    it("logs akm index failures without aborting session cleanup", async () => {
+      await withEnvVar("AKM_INDEX_ON_SESSION_END", "1", async () => {
+        const client = createMockClient()
+        mockExecFileSync.mockImplementation((_, args) => {
+          if (Array.isArray(args) && args.length === 1 && args[0] === "index") {
+            throw new Error("index failed")
+          }
+          return "mock output"
+        })
+
+        const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+
+        await hooks["tool.execute.after"]!(
+          { tool: "akm_show", sessionID: "session-index-2", callID: "c1", args: { ref: "skill:alpha" } } as any,
+          { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:alpha" }), metadata: {} } as any,
+        )
+        await hooks["tool.execute.after"]!(
+          { tool: "akm_show", sessionID: "session-index-2", callID: "c2", args: { ref: "skill:beta" } } as any,
+          { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:beta" }), metadata: {} } as any,
+        )
+
+        await hooks.stop!({ sessionID: "session-index-2" } as any)
+
+        const logCalls = (client.app.log as any).mock.calls as Array<
+          [{ body: { level: string; message: string; extra?: Record<string, unknown> } }]
+        >
+        const failureLog = logCalls.find(([entry]) => entry.body.message === "AKM session indexing failed")
+        expect(failureLog).toBeDefined()
+        expect(failureLog?.[0].body.level).toBe("warn")
+        expect(failureLog?.[0].body.extra?.sessionID).toBe("session-index-2")
+      })
     })
 
     it("captures checkpoint memories mid-session without losing the final session summary", async () => {
