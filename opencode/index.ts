@@ -258,8 +258,7 @@ function runCliSyncRaw(args: string[], timeoutMs: number): { ok: true; stdout: s
 }
 
 function appendRunScopeArg(args: string[], sessionID: string | undefined): string[] {
-  if (sessionID) args.push("--run", sessionID)
-  return args
+  return sessionID ? [...args, "--run", sessionID] : args
 }
 
 function runCurate(args: string[]): string | null {
@@ -649,7 +648,7 @@ const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content, 
 const AKM_CONTEXT_TRUNCATED_MARKER = "\n\n[truncated for context]"
 
 function getContextBudgetChars(): number {
-  return Math.max(1, Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000)
+  return Math.max(1, Number(process.env.AKM_CONTEXT_BUDGET_CHARS) || 4000)
 }
 
 function truncateContextBlock(block: string, maxChars: number): string {
