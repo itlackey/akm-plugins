@@ -470,7 +470,7 @@ session_start() {
     body="$(printf '%s\n\n%s' "$body" "$hints")"
   fi
   if [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ]; then
-    body="$(printf '%s\n\n%s\n%s' "$body" "$CURATED_SESSION_HEADER" "$curated")"
+    body="$(printf '%s\n\n%s\n\n%s\n\n%s' "$body" "$CURATED_SESSION_HEADER" "$curated" "$CURATED_CONTEXT_TAIL")"
   fi
   body="$(printf '%s\n\n%s' "$body" "$SESSION_START_FOOTER")"
   emit_hook_context "SessionStart" "$body"

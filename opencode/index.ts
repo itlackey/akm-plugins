@@ -648,7 +648,8 @@ const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content, 
 const AKM_CONTEXT_TRUNCATED_MARKER = "\n\n[truncated for context]"
 
 function getContextBudgetChars(): number {
-  return Math.max(1, Number(process.env.AKM_CONTEXT_BUDGET_CHARS) || 4000)
+  const parsed = Number(process.env.AKM_CONTEXT_BUDGET_CHARS)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 4000
 }
 
 function truncateContextBlock(block: string, maxChars: number): string {
@@ -663,6 +664,8 @@ function applyContextBudget(blocks: string[]): string[] {
   let remaining = budget
   for (const block of blocks) {
     if (!block) continue
+    // The host effectively concatenates injected blocks into one prompt body;
+    // we budget for a single newline separator between adjacent blocks.
     const separatorCost = injected.length > 0 ? 1 : 0
     if (remaining <= separatorCost) break
     const allowed = remaining - separatorCost
