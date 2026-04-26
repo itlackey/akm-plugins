@@ -33,6 +33,8 @@ const sessionContextEpoch = new Map<string, number>()
 const sessionContextInjectedEpoch = new Map<string, number>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
+type ParsedSemver = { core: [number, number, number]; prerelease: Array<string | number> | null }
+type NpmPackageVersionResponse = { version?: string }
 type SessionBufferEntry = {
   timestamp: string
   kind: "memory-intent" | "tool-ref"
@@ -759,7 +761,7 @@ function getCommandVersion(command: string): string | null {
   }
 }
 
-function parseSemver(version: string): { core: [number, number, number]; prerelease: Array<string | number> | null } | null {
+function parseSemver(version: string): ParsedSemver | null {
   const normalized = extractSemver(version)
   if (!normalized) return null
 
@@ -845,7 +847,7 @@ async function getLatestNpmPackageVersion(packageName: string): Promise<string |
       signal: controller.signal,
     })
     if (!response.ok) return null
-    const body = await response.json() as { version?: unknown }
+    const body = await response.json() as NpmPackageVersionResponse
     return typeof body.version === "string" ? extractSemver(body.version) : null
   } catch {
     return null
