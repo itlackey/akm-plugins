@@ -8,6 +8,7 @@ const mockSpawn = mock(() => ({
   on: mock(() => undefined),
   unref: mock(() => undefined),
 }))
+const mockFetch = mock(async () => new Response(JSON.stringify({ version: "0.5.0" }), { status: 200 }))
 mock.module("node:child_process", () => ({
   execFileSync: mockExecFileSync,
   execSync: mockExecSync,
@@ -71,6 +72,9 @@ describe("akm-opencode plugin", () => {
     mockExecSync.mockClear()
     mockExecSync.mockReturnValue("exec output")
     mockSpawn.mockClear()
+    mockFetch.mockClear()
+    mockFetch.mockImplementation(async () => new Response(JSON.stringify({ version: "0.5.0" }), { status: 200 }))
+    globalThis.fetch = mockFetch as typeof fetch
   })
 
   describe("plugin loading", () => {
@@ -2151,16 +2155,16 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("akm CLI availability", () => {
-    it("installs the latest akm-cli package with Bun when the plugin loads", async () => {
+    it("installs the latest akm-cli package with Bun when the installed version is older than npm latest", async () => {
       let installComplete = false
       mockExecFileSync.mockImplementation((cmd, args) => {
         if (cmd === "bun" && args[0] === "--version") return "1.3.5"
+        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version") return installComplete ? "0.5.0" : "0.4.0"
         if (cmd === "bun" && args[0] === "install") {
           installComplete = true
           return "installed"
         }
         if (cmd === "bun" && args[0] === "pm") return "/tmp/.bun/bin\n"
-        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version" && installComplete) return "0.1.0"
         if (cmd === "/tmp/.bun/bin/akm" && args[0] === "search" && installComplete) {
           return JSON.stringify({ hits: [] })
         }
@@ -2176,6 +2180,40 @@ describe("akm-opencode plugin", () => {
         ["install", "-g", "akm-cli@latest"],
         expect.objectContaining({ encoding: "utf8", timeout: 120_000, stdio: "pipe" }),
       )
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://registry.npmjs.org/akm-cli/latest",
+        expect.objectContaining({ headers: { accept: "application/json" } }),
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "/tmp/.bun/bin/akm",
+        ["search", "anything", "--detail", "normal", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8", timeout: 60_000 }),
+      )
+    })
+
+    it("does not downgrade a newer pre-release that is already installed", async () => {
+      mockExecFileSync.mockImplementation((cmd, args) => {
+        if (cmd === "bun" && args[0] === "--version") return "1.3.5"
+        if (cmd === "bun" && args[0] === "pm") return "/tmp/.bun/bin\n"
+        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version") return "0.6.0-rc2"
+        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "search") {
+          return JSON.stringify({ hits: [] })
+        }
+        if (cmd === "bun" && args[0] === "install") {
+          throw new Error("auto-install should not run")
+        }
+        return "mock output"
+      })
+
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
+
+      expect(JSON.parse(result)).toEqual({ hits: [] })
+      expect(
+        mockExecFileSync.mock.calls.some(
+          ([cmd, args]) => cmd === "bun" && Array.isArray(args) && args[0] === "install",
+        ),
+      ).toBe(false)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "/tmp/.bun/bin/akm",
         ["search", "anything", "--detail", "normal", "--format", "json"],
