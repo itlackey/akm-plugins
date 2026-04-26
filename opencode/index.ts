@@ -2010,18 +2010,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         detail: tool.schema.enum(["summary", "normal", "full"]).optional().describe("Detail level for each match. Defaults to 'summary'."),
       },
       async execute({ query, limit, detail }) {
-        const args = [
-          "--for-agent",
-          "--format",
-          "text",
-          "--detail",
-          detail ?? "summary",
-          "-q",
-          "curate",
-          query,
-          "--limit",
-          String(limit ?? 6),
-        ]
+        const args = ["curate", query, "--limit", String(limit ?? 6)]
+        if (detail) args.push("--detail", detail)
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_curate" })
       },
     }),
