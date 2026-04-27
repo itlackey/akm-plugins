@@ -1,7 +1,7 @@
 {
   "name": "akm",
   "description": "Search, show, curate, and manage akm stash assets (skills, commands, agents, knowledge, memories, scripts, workflows, vaults, wikis) from local directories and registries, with agentic hooks that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "author": {
     "name": "itlackey",
     "url": "https://github.com/itlackey"
