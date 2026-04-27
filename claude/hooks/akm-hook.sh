@@ -158,6 +158,8 @@ run_index_on_session_end() {
 
   append_log "$SESSION_LOG" "akm_index_failed" "$reason" "$sid" "$ref"
   return 0
+}
+
 build_run_scope_args() {
   sid="$1"
   if [ -n "$sid" ]; then
