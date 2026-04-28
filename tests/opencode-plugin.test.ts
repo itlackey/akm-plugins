@@ -1,5 +1,6 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test"
 import type { PluginInput } from "@opencode-ai/plugin"
+import opencodePackage from "../opencode/package.json"
 
 // Mock execFileSync and execSync before importing the plugin
 const mockExecFileSync = mock(() => "mock output")
@@ -74,6 +75,20 @@ function createPluginInput(overrides?: Partial<PluginInput>): PluginInput {
     $: {} as any,
     ...overrides,
   }
+}
+
+function createToolContext(overrides?: Record<string, unknown>) {
+  return {
+    sessionID: "parent-session-1",
+    messageID: "message-1",
+    agent: "build",
+    directory: "/tmp/test-project",
+    worktree: "/tmp/test-project",
+    abort: new AbortController().signal,
+    metadata: () => {},
+    ask: async () => {},
+    ...overrides,
+  } as any
 }
 
 describe("akm-opencode plugin", () => {
@@ -337,6 +352,33 @@ describe("akm-opencode plugin", () => {
       )
     })
 
+    it("akm_search supports lessons and include_proposed", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "search") {
+          return JSON.stringify({
+            hits: [{ type: "lesson", ref: "lesson:avoid-drift", quality: "proposed" }],
+            warnings: ["existing warning"],
+          })
+        }
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_search.execute(
+        { query: "drift", type: "lesson", include_proposed: true } as any,
+        createToolContext(),
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["search", "drift", "--type", "lesson", "--include-proposed", "--detail", "normal", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+      const parsed = JSON.parse(result)
+      expect(parsed.hits[0].type).toBe("lesson")
+      expect(parsed.hits[0].quality).toBe("proposed")
+      expect(parsed.warnings).toContain("existing warning")
+      expect(parsed.warnings).toContain("Do not treat proposed assets as curated until accepted.")
+    })
+
     it("akm_show calls CLI with ref", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_show.execute(
@@ -389,6 +431,19 @@ describe("akm-opencode plugin", () => {
       )
     })
 
+    it("akm_remember passes harness scope flags", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_remember.execute(
+        { content: "remember this" } as any,
+        createToolContext({ userID: "user-9", agent: "general", sessionID: "run-1", channel: "review" }),
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["remember", "remember this", "--user", "user-9", "--agent", "general", "--run", "run-1", "--channel", "review", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
     it("akm_feedback records positive feedback with a note", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_feedback.execute(
@@ -400,6 +455,23 @@ describe("akm-opencode plugin", () => {
         ["feedback", "skill:code-review", "--positive", "--note", "Worked perfectly", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
+    })
+
+    it("akm_feedback records positive feedback for lesson refs with scope", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      await hooks.tool!.akm_feedback.execute(
+        { ref: "lesson:review-first", sentiment: "positive", note: "helped" } as any,
+        createToolContext({ userID: "u1", channel: "review" }),
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["feedback", "lesson:review-first", "--positive", "--note", "helped", "--user", "u1", "--agent", "build", "--run", "parent-session-1", "--channel", "review", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
+        body: expect.objectContaining({ message: "akm.feedback.recorded" }),
+      }))
     })
 
     it("akm_curate shells out to 'akm curate' with JSON output like the direct CLI", async () => {
@@ -798,6 +870,36 @@ describe("akm-opencode plugin", () => {
       })
     })
 
+    it("records retrospective negative feedback for an explicit correction", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "feedback") return JSON.stringify({ ok: true })
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["tool.execute.after"]!(
+        {
+          tool: "akm_show",
+          sessionID: "session-neg-1",
+          callID: "c1",
+          args: { ref: "lesson:bad-guidance" },
+        } as any,
+        {
+          title: "show",
+          output: JSON.stringify({ type: "lesson", ref: "lesson:bad-guidance" }),
+          metadata: {},
+        } as any,
+      )
+      await hooks["chat.message"]!(
+        { sessionID: "session-neg-1", messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "This was wrong" }] as any },
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["feedback", "lesson:bad-guidance", "--negative", "--note", "This was wrong", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
     it("records system feedback and memory usage through the tool.execute.after hook", async () => {
       const client = createMockClient()
       const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
@@ -854,6 +956,7 @@ describe("akm-opencode plugin", () => {
         if (args[0] === "--version") return "0.1.0"
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate")) return ""
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
         return "mock output"
       })
 
@@ -870,6 +973,8 @@ describe("akm-opencode plugin", () => {
 
       expect(output.system).toHaveLength(1)
       expect(output.system[0]).toContain("AKM is available in this session")
+      expect(output.system[0]).toContain("# AKM workflow")
+      expect(output.system[0]).toContain("Treat `lesson:*` as first-class durable learning assets")
       expect(output.system[0]).toContain("Use `akm curate` first.")
 
       // Hints should only inject once per session.
@@ -887,6 +992,7 @@ describe("akm-opencode plugin", () => {
         if (Array.isArray(args) && args.includes("curate") && args.includes("--run")) {
           return "# skills\n- skill:deploy — ship the app\n"
         }
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
         return "mock output"
       })
 
@@ -911,6 +1017,69 @@ describe("akm-opencode plugin", () => {
 
       expect(output.system.join("\n")).toContain("AKM stash — assets relevant to this prompt")
       expect(output.system.join("\n")).toContain("skill:deploy")
+    })
+
+    it("injects a pending proposal summary when proposals exist", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
+          return JSON.stringify({ proposals: [{ id: "p1" }, { id: "p2" }] })
+        }
+        if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
+        if (Array.isArray(args) && args.includes("curate")) return ""
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "session-proposals" } } } as any)
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "session-proposals" } as any, output as any)
+      expect(output.system.join("\n\n")).toContain("There are 2 pending AKM proposals.")
+      expect(output.system.join("\n\n")).toContain("/akm-review-proposals")
+      expect(output.system.join("\n\n")).toContain("Do not treat proposed assets as curated until accepted.")
+    })
+
+    it("preserves pending proposal summaries through compaction", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
+          return JSON.stringify({ proposals: [{ id: "p1" }] })
+        }
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+      const output = { context: [] as string[] }
+      await hooks["experimental.session.compacting"]!({ sessionID: "session-compact" } as any, output as any)
+      expect(output.context.join("\n\n")).toContain("There is 1 pending AKM proposal.")
+    })
+
+    it("denies risky raw akm shell commands", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const output = { status: "ask" as "ask" | "deny" | "allow" }
+      await hooks["permission.ask"]?.({
+        sessionID: "session-1",
+        permission: "bash",
+        patterns: ["akm proposal accept 123"],
+        metadata: { command: "akm proposal accept 123" },
+      } as any, output)
+      expect(output.status).toBe("deny")
+      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
+        body: expect.objectContaining({
+          message: "akm.raw_cli.blocked",
+          extra: expect.objectContaining({ category: "proposal-accept" }),
+        }),
+      }))
+    })
+
+    it("blocks risky command.execute.before raw akm commands with explanatory text", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const output = { parts: [] as Array<{ type: string; text: string }> }
+      await hooks["command.execute.before"]?.({
+        sessionID: "session-1",
+        command: "akm",
+        arguments: "upgrade",
+      } as any, output as any)
+      expect(output.parts[0].text).toContain("Blocked risky AKM command: akm upgrade")
+      expect(output.parts[0].text).toContain("approve the exact `akm upgrade` command")
     })
 
     it("caps fresh-session injected context to AKM_CONTEXT_BUDGET_CHARS", async () => {
@@ -2303,6 +2472,29 @@ describe("akm-opencode plugin", () => {
       expect(feedbackRefs).toContain("skill:review")
       // Vault refs MUST NOT receive automatic feedback.
       expect(feedbackRefs).not.toContain("vault:prod")
+    })
+
+    it("extracts lesson refs from tool output and records feedback", async () => {
+      const input = createPluginInput()
+      const hooks = await AkmPlugin(input)
+      mockSpawn.mockClear()
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_search", args: {}, sessionID: "s2", callID: "c2" } as any,
+        { title: "t", output: JSON.stringify({ ok: true, hits: [{ ref: "lesson:review-first" }] }), metadata: {} } as any,
+      )
+      const feedbackRefs = mockSpawn.mock.calls
+        .filter((call: any[]) => Array.isArray(call[1]) && call[1].includes("feedback"))
+        .map((call: any[]) => {
+          const args = call[1] as string[]
+          return args[args.indexOf("feedback") + 1]
+        })
+      expect(feedbackRefs).toContain("lesson:review-first")
+    })
+  })
+
+  describe("packaging", () => {
+    it("ships workflow command docs in the package", () => {
+      expect(opencodePackage.files).toContain("commands/")
     })
   })
 

@@ -13,6 +13,7 @@ const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
 const AKM_AUTO_HINTS = (process.env.AKM_AUTO_HINTS ?? "1") !== "0"
+const AKM_PENDING_PROPOSAL_TIMEOUT_MS = Math.max(500, (Number(process.env.AKM_PENDING_PROPOSAL_TIMEOUT ?? "2") || 2) * 1_000)
 const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
@@ -21,6 +22,8 @@ const AKM_CURATOR_CONTEXT_MAX_CHARS = Math.max(500, Number(process.env.AKM_CURAT
 const SESSION_DATE_TAG_LENGTH = 8
 const CHECKPOINT_DATE_TAG_LENGTH = 15
 const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
+const AKM_RETROSPECTIVE_NEGATIVE_RE = createRetrospectiveNegativeRegex()
+const AKM_EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
 const PLUGIN_VERSION = readPackageVersion()
 
 // Per-session state that drives the compound-engineering loop.
@@ -46,12 +49,29 @@ type SessionBufferEntry = {
 const sessionBuffer = new Map<string, SessionBufferEntry[]>()
 const sessionFinalMemoryCaptured = new Set<string>()
 const sessionSuccessfulAssetTouchCount = new Map<string, number>()
+const pendingProposalSummaryCache = new Map<string, { count: number; expiresAt: number; unsupported?: boolean }>()
+const retrospectiveState = new Map<string, { recentRefs: string[]; lastNegativeSignalAt?: number }>()
 let cachedAkmStashDir: string | undefined
 
 // Asset-ref grammar matching the stash skill: [origin//]type:name.
 // We validate normalized tokens individually instead of running a global regex
 // over arbitrary tool output to keep extraction predictable and ReDoS-safe.
-const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/\-]+$/
+const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/
+const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
+const AKM_WORKFLOW_INSTRUCTION = [
+  "# AKM workflow",
+  "",
+  "Use AKM as a reusable knowledge and workflow stash.",
+  "",
+  "Before writing from scratch:",
+  "1. Use `akm_search` or `akm_curate`.",
+  "2. Use `akm_show <ref>` before relying on an asset.",
+  "3. Record `akm_feedback` after the result is known.",
+  "4. Use `akm_help` to route long-tail AKM CLI workflows such as `proposal`, `distill`, `reflect`, and `propose`.",
+  "5. Treat `lesson:*` as first-class durable learning assets.",
+  `6. ${PROPOSED_QUALITY_WARNING}`,
+  "7. Never accept or reject proposals, push saves, remove sources, or access vault values without explicit user approval.",
+].join("\n")
 
 function readPackageVersion(): string {
   try {
@@ -72,6 +92,19 @@ function createRetrospectiveFeedbackRegex(): RegExp {
   }
 }
 
+function createRetrospectiveNegativeRegex(): RegExp {
+  const pattern = process.env.AKM_RETROSPECTIVE_NEGATIVE_PATTERN ?? "\\b(wrong|failed|broken|didn't work|did not work|bad)\\b"
+  try {
+    return new RegExp(pattern, "i")
+  } catch {
+    return /\b(wrong|failed|broken|didn't work|did not work|bad)\b/i
+  }
+}
+
+function createExplicitCorrectionRegex(): RegExp {
+  return /\b(this was wrong|that was wrong|you were wrong|incorrect|not correct)\b/i
+}
+
 const CURATOR_AGENT_PROMPT_FALLBACK = `You are the AKM curator — a compound-engineering agent that keeps the user's AKM stash improving every time the main agent finishes a task.
 
 Inputs you should inspect:
@@ -83,7 +116,9 @@ Inputs you should inspect:
 Signals to act on:
 - Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --note "curator: consistently useful" to reinforce.
 - Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --note "<excerpt>" and open the asset for review.
+- Lesson candidates: repeated memories or failures that should become a proposed lesson. Use akm_help topic="distill" before raw CLI distill commands.
 - Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see akm_help topic="reindex").
+- Pending proposals: list or diff them via akm_help topic="proposal" and recommend accept, reject, or revise. Never accept or reject without explicit user approval.
 - Duplicates / drift: near-identical descriptions or overlapping responsibilities. Propose a consolidation.
 - Stale memories: session summaries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
@@ -105,8 +140,14 @@ Output shape: end every run with a markdown report that has these sections:
 ## Cold assets (investigate)
 - <ref> — failure signal — proposed fix
 
+## Lesson candidates
+- <theme> — evidence refs — distill or reflect command to run
+
 ## Coverage gaps
 - <theme> — proposed asset (type, name, one-line description)
+
+## Pending proposals
+- <proposal id> — summary — accept/reject/revise recommendation
 
 ## Duplicates / drift
 - <ref a> vs <ref b> — consolidation proposal
@@ -265,6 +306,38 @@ function appendRunScopeArgs(args: string[], sessionID: string | undefined): stri
   return sessionID ? [...args, "--run", sessionID] : args
 }
 
+function getScopeFields(): Array<"user" | "agent" | "run" | "channel"> {
+  const configured = process.env.AKM_SCOPE_KEYS?.split(",").map((part) => part.trim()).filter(Boolean)
+  const values = configured && configured.length > 0 ? configured : ["user", "agent", "run", "channel"]
+  return values.filter((value): value is "user" | "agent" | "run" | "channel" =>
+    value === "user" || value === "agent" || value === "run" || value === "channel",
+  )
+}
+
+function buildScopedArgs(context: Record<string, unknown> | undefined): string[] {
+  if (!context) return []
+  const scopeFields = new Set(getScopeFields())
+  const args: string[] = []
+  const user = typeof context.userID === "string"
+    ? context.userID
+    : typeof context.user === "string"
+      ? context.user
+      : undefined
+  const agent = typeof context.agent === "string" ? context.agent : undefined
+  const run = typeof context.sessionID === "string" ? context.sessionID : typeof context.run === "string" ? context.run : undefined
+  const channel = typeof context.channel === "string"
+    ? context.channel
+    : typeof context.variant === "string"
+      ? context.variant
+      : undefined
+
+  if (scopeFields.has("user") && user) args.push("--user", user)
+  if (scopeFields.has("agent") && agent) args.push("--agent", agent)
+  if (scopeFields.has("run") && run) args.push("--run", run)
+  if (scopeFields.has("channel") && channel) args.push("--channel", channel)
+  return args
+}
+
 function runCurate(args: string[]): string | null {
   const result = runCliSyncRaw(args, AKM_CURATE_TIMEOUT_MS)
   if (!result.ok) return null
@@ -372,6 +445,17 @@ function formatCuratorReportContext(report: string): string {
   return `# AKM curator report\n${report}`
 }
 
+function formatPendingProposalContext(count: number): string {
+  const summaryLine = count === 1 ? "There is 1 pending AKM proposal." : `There are ${count} pending AKM proposals.`
+  return [
+    "# AKM pending proposals",
+    "",
+    summaryLine,
+    "Use `/akm-review-proposals` or `akm_help topic=proposal` to review them.",
+    PROPOSED_QUALITY_WARNING,
+  ].join("\n")
+}
+
 function summarizeCuratorReportForContext(report: string): string {
   if (report.length <= AKM_CURATOR_CONTEXT_MAX_CHARS) return report
   return `${report.slice(0, AKM_CURATOR_CONTEXT_MAX_CHARS).trimEnd()}\n\n[truncated for context]`
@@ -413,6 +497,139 @@ function warmIndexInBackground(): void {
   } catch {
     // Intentionally ignore — warming is best-effort.
   }
+}
+
+function safeJsonParse<T>(raw: string): T | undefined {
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return undefined
+  }
+}
+
+function emitWorkflowTelemetry(client: LogCapableClient, level: LogLevel, eventType: string, extra: Record<string, unknown>) {
+  return writePluginLog(client, level, eventType, {
+    subsystem: "workflow-compliance",
+    eventType,
+    pluginVersion: PLUGIN_VERSION,
+    ...extra,
+  })
+}
+
+function noteRecentRefs(sessionID: string | undefined, refs: string[]) {
+  if (!sessionID || refs.length === 0) return
+  const state = retrospectiveState.get(sessionID) ?? { recentRefs: [] }
+  state.recentRefs = [...new Set([...state.recentRefs, ...refs])].slice(-8)
+  retrospectiveState.set(sessionID, state)
+}
+
+async function getPendingProposalCount(client: LogCapableClient, sessionID?: string): Promise<{ count: number; unsupported?: boolean }> {
+  const cacheKey = sessionID ?? "global"
+  const cached = pendingProposalSummaryCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached
+
+  const command = resolveAkmCommand()
+  if (typeof command !== "string") return { count: 0, unsupported: true }
+  try {
+    const stdout = execFileSync(command, ["proposal", "list", "--status", "pending", "--format", "json"], {
+      encoding: "utf8",
+      timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
+    })
+    const parsed = safeJsonParse<{ proposals?: unknown[]; hits?: unknown[] }>(stdout)
+    const count = Array.isArray(parsed?.proposals) ? parsed.proposals.length : Array.isArray(parsed?.hits) ? parsed.hits.length : 0
+    const result = { count, expiresAt: Date.now() + 60_000 }
+    pendingProposalSummaryCache.set(cacheKey, result)
+    return result
+  } catch (error: unknown) {
+    const message = formatCliError(error)
+    const unsupported = /unknown|unsupported|not found|invalid/i.test(message)
+    const result = { count: 0, unsupported, expiresAt: Date.now() + 60_000 }
+    pendingProposalSummaryCache.set(cacheKey, result)
+    return result
+  }
+}
+
+async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: string | undefined, text: string) {
+  if (!sessionID) return
+  const state = retrospectiveState.get(sessionID)
+  const recentRefs = state?.recentRefs ?? []
+  if (recentRefs.length === 0) return
+
+  const explicitCorrection = AKM_EXPLICIT_CORRECTION_RE.test(text)
+  const negative = explicitCorrection || AKM_RETROSPECTIVE_NEGATIVE_RE.test(text)
+  if (!negative) return
+
+  if (!explicitCorrection) {
+    const now = Date.now()
+    if (!state?.lastNegativeSignalAt || now - state.lastNegativeSignalAt > 2 * 60 * 1000) {
+      retrospectiveState.set(sessionID, { recentRefs, lastNegativeSignalAt: now })
+      return
+    }
+  }
+
+  const targetRef = recentRefs[recentRefs.length - 1]
+  const raw = await runCli(client, ["feedback", targetRef, "--negative", "--note", text.slice(0, 280)], {
+    toolName: "akm_feedback",
+    sessionID,
+  })
+  const parsed = safeJsonParse<{ ok?: boolean }>(raw)
+  if (parsed?.ok !== false) {
+    await emitWorkflowTelemetry(client, "info", "akm.feedback.recorded", {
+      sessionID,
+      toolName: "akm_feedback",
+      assetRef: targetRef,
+      outcome: "success",
+      reason: explicitCorrection ? "explicit correction" : "negative retrospective signal",
+    })
+  }
+  retrospectiveState.set(sessionID, { recentRefs })
+}
+
+type RiskyCommandAssessment = {
+  category: string
+  reason: string
+  approval: string
+}
+
+function assessRiskyAkmCommand(command: string): RiskyCommandAssessment | undefined {
+  const args = splitArguments(command)
+  const akmIndex = args.findIndex((arg) => arg === "akm" || arg.endsWith("/akm") || arg.endsWith("\\akm.exe"))
+  if (akmIndex === -1) return undefined
+  const tokens = args.slice(akmIndex + 1)
+  if (tokens[0] === "proposal" && tokens[1] === "accept") {
+    return { category: "proposal-accept", reason: "Proposal acceptance changes curated AKM content.", approval: "Ask the user to approve `akm proposal accept <id>`." }
+  }
+  if (tokens[0] === "proposal" && tokens[1] === "reject") {
+    return { category: "proposal-reject", reason: "Proposal rejection is a durable curation decision.", approval: "Ask the user to approve `akm proposal reject <id> --reason \"...\"`." }
+  }
+  if (tokens[0] === "save" && tokens.includes("--push")) {
+    return { category: "save-push", reason: "Pushing stash changes must be explicitly approved.", approval: "Ask the user to approve `akm save --push`." }
+  }
+  if (tokens[0] === "remove") {
+    return { category: "remove", reason: "Removing AKM sources is destructive.", approval: "Ask the user to approve the exact `akm remove ...` command." }
+  }
+  if (tokens[0] === "vault" && ["show", "load", "set", "unset"].includes(tokens[1] ?? "")) {
+    return { category: `vault-${tokens[1]}`, reason: "Vault access or mutation is sensitive.", approval: `Ask the user to approve the exact \`akm vault ${tokens[1]} ...\` command.` }
+  }
+  if (tokens[0] === "config" && tokens[1] === "set" && (tokens[2]?.startsWith("llm.features.") ?? false)) {
+    return { category: "config-llm-features", reason: "Changing AKM LLM feature flags alters autonomous behavior.", approval: "Ask the user to approve the exact `akm config set llm.features.* ...` command." }
+  }
+  if (tokens[0] === "update" && tokens.includes("--all")) {
+    return { category: "update-all", reason: "Updating all AKM kits changes many assets at once.", approval: "Ask the user to approve `akm update --all`." }
+  }
+  if (tokens[0] === "upgrade") {
+    return { category: "upgrade", reason: "Upgrading the AKM CLI changes the toolchain.", approval: "Ask the user to approve the exact `akm upgrade` command." }
+  }
+  return undefined
+}
+
+function blockedCommandMessage(command: string, assessment: RiskyCommandAssessment): string {
+  return [
+    `Blocked risky AKM command: ${command}`,
+    assessment.reason,
+    assessment.approval,
+    "Retry only after explicit user approval in this conversation.",
+  ].join("\n")
 }
 
 function queueFeedback(
@@ -662,6 +879,8 @@ const AKM_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
   "You have an AKM stash on this machine. Before writing anything from scratch, call `akm_search` or `akm_curate` to see if the stash already covers it. Record `akm_feedback <ref> positive|negative` whenever an asset materially helps or misses, and use `akm_remember` to persist durable learnings so future sessions inherit them.",
+  "",
+  AKM_WORKFLOW_INSTRUCTION,
 ].join("\n")
 
 const AKM_CURATED_HEADER = "# AKM stash — assets relevant to this prompt"
@@ -713,6 +932,35 @@ type AkmHelpEntry = {
 }
 
 const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
+  {
+    task: "Review pending proposals and decide whether to accept, reject, or revise them",
+    command: "akm proposal list --status pending --format json; akm proposal show <id>; akm proposal diff <id>",
+    notes: "Accept/reject requires explicit user approval.",
+    keywords: ["proposal", "review proposals", "pending proposals", "accept proposal", "reject proposal"],
+  },
+  {
+    task: "Distill repeated evidence into a proposed lesson",
+    command: "akm distill <ref>",
+    notes: "Distill creates a proposal; proposed assets are not curated until accepted.",
+    keywords: ["distill", "lesson", "proposed lesson"],
+  },
+  {
+    task: "Reflect on an existing asset after failure or drift",
+    command: "akm reflect <ref> --task \"...\"",
+    keywords: ["reflect", "drift", "failure"],
+  },
+  {
+    task: "Create a proposed asset for a coverage gap",
+    command: "akm propose <type> <name> --task \"...\"",
+    notes: PROPOSED_QUALITY_WARNING,
+    keywords: ["propose", "coverage gap", "proposed asset"],
+  },
+  {
+    task: "Search including proposed-quality assets",
+    command: "akm search <query> --include-proposed",
+    notes: PROPOSED_QUALITY_WARNING,
+    keywords: ["include-proposed", "proposed quality", "lesson"],
+  },
   {
     task: "Install a kit or register an external source (npm, GitHub, git, URL, local dir)",
     command: "akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]",
@@ -1062,6 +1310,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
   }
 
   const fullArgs = args.includes("--format") ? [...args] : [...args, "--format", "json"]
+  const proposalId = args[0] === "proposal" && typeof args[2] === "string" ? args[2] : null
 
   try {
     const stdout = execFileSync(command, fullArgs, {
@@ -1079,6 +1328,59 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       stdout,
       stderr: "",
     })
+    const parsed = safeJsonParse<SearchResponse>(stdout)
+    const refs = args[0] === "search" || args[0] === "curate"
+      ? [...new Set([...(parsed?.hits?.flatMap((hit) => hit.ref ? [hit.ref] : []) ?? []), ...extractRefsFromText(stdout)])]
+      : extractRefsFromText(stdout)
+    noteRecentRefs(meta.sessionID, refs)
+    if (meta.toolName === "akm_search") {
+      await emitWorkflowTelemetry(client, "info", "akm.search.invoked", {
+        sessionID: meta.sessionID,
+        toolName: meta.toolName,
+        assetRef: refs[0] ?? null,
+        proposalId: null,
+        outcome: "success",
+        directory: meta.directory,
+      })
+    }
+    if (meta.toolName === "akm_curate") {
+      await emitWorkflowTelemetry(client, "info", "akm.curate.invoked", {
+        sessionID: meta.sessionID,
+        toolName: meta.toolName,
+        assetRef: refs[0] ?? null,
+        proposalId: null,
+        outcome: "success",
+        directory: meta.directory,
+      })
+    }
+    if (meta.toolName === "akm_show") {
+      await emitWorkflowTelemetry(client, "info", "akm.show.invoked", {
+        sessionID: meta.sessionID,
+        toolName: meta.toolName,
+        assetRef: args[1] ?? refs[0] ?? null,
+        proposalId,
+        outcome: "success",
+        directory: meta.directory,
+      })
+    }
+    if (args[0] === "proposal" && ["show", "diff"].includes(args[1] ?? "")) {
+      await emitWorkflowTelemetry(client, "info", "akm.proposal.reviewed", {
+        sessionID: meta.sessionID,
+        toolName: meta.toolName,
+        proposalId,
+        outcome: "requested",
+        directory: meta.directory,
+      })
+    }
+    if (args[0] === "proposal" && ["accept", "reject"].includes(args[1] ?? "")) {
+      await emitWorkflowTelemetry(client, "info", args[1] === "accept" ? "akm.proposal.accept.requested" : "akm.proposal.reject.requested", {
+        sessionID: meta.sessionID,
+        toolName: meta.toolName,
+        proposalId,
+        outcome: "requested",
+        directory: meta.directory,
+      })
+    }
     return stdout
   } catch (error: unknown) {
     const message = formatCliError(error)
@@ -1093,6 +1395,16 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       stdout: toLogString((error as { stdout?: unknown }).stdout) ?? "",
       stderr: toLogString((error as { stderr?: unknown }).stderr) ?? message,
     })
+    if (meta.toolName.startsWith("akm_")) {
+      await emitWorkflowTelemetry(client, "warn", `${meta.toolName}.failed`, {
+        sessionID: meta.sessionID,
+        toolName: meta.toolName,
+        proposalId,
+        outcome: "error",
+        reason: message,
+        directory: meta.directory,
+      })
+    }
     return JSON.stringify({ ok: false, error: message })
   }
 }
@@ -1102,6 +1414,7 @@ type AssetType =
   | "agent"
   | "command"
   | "knowledge"
+  | "lesson"
   | "memory"
   | "script"
   | "skill"
@@ -1113,6 +1426,7 @@ const ASSET_TYPES = [
   "agent",
   "command",
   "knowledge",
+  "lesson",
   "memory",
   "script",
   "skill",
@@ -1180,6 +1494,7 @@ type SearchHit = {
   action?: string
   editHint?: string
   curated?: boolean
+  quality?: string
 }
 
 type SearchResponse = {
@@ -1337,6 +1652,18 @@ function classifyToolFeedback(value: unknown): "positive" | "negative" | undefin
   if ("ok" in value && (value as { ok?: unknown }).ok === true) return "positive"
   if ("type" in value || "hits" in value || "assetHits" in value || "sources" in value) return "positive"
   return undefined
+}
+
+function withProposedWarnings(raw: string): string {
+  const parsed = safeJsonParse<SearchResponse>(raw)
+  if (!parsed) return raw
+  const hasProposed = parsed.hits?.some((hit) => hit.quality === "proposed") ?? false
+  if (!hasProposed) return raw
+  const warnings = parsed.warnings ?? []
+  return JSON.stringify({
+    ...parsed,
+    warnings: warnings.includes(PROPOSED_QUALITY_WARNING) ? warnings : [...warnings, PROPOSED_QUALITY_WARNING],
+  })
 }
 
 function truncateLogText(value: string, limit = 1_000): string {
@@ -1581,6 +1908,7 @@ function createSearchArgs(input: {
   limit?: number
   source?: "local" | "stash" | "registry" | "both"
   defaultSource?: "local" | "stash" | "registry" | "both"
+  includeProposed?: boolean
 }): string[] {
   const args = ["search", input.query]
   if (input.type) args.push("--type", input.type)
@@ -1590,6 +1918,7 @@ function createSearchArgs(input: {
   } else if (input.defaultSource) {
     args.push("--source", normalizeSearchSource(input.defaultSource))
   }
+  if (input.includeProposed) args.push("--include-proposed")
   args.push("--detail", "normal")
   return args
 }
@@ -1653,6 +1982,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
           if (!sessionWorkflow.has(sid)) {
             sessionWorkflow.set(sid, runWorkflowSummaryForSession() ?? "")
+          }
+          const proposalSummary = await getPendingProposalCount(logClient, sid)
+          if (!proposalSummary.unsupported && proposalSummary.count > 0) {
+            markContextEpochDirty(sid)
           }
         } else if (type === "session.compacted" || type === "session.idle" || type === "session.deleted") {
           if (!sid) return
@@ -1719,6 +2052,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           sessionHints.get(sid) ? `${AKM_HINTS_PREFIX}\n\n${sessionHints.get(sid)}` : "",
           sessionCurated.get(sid) ? `${AKM_CURATED_HEADER}\n${sessionCurated.get(sid)}${AKM_CURATED_TAIL}` : "",
           sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
+          (await getPendingProposalCount(logClient, sid)).count > 0 && !(await getPendingProposalCount(logClient, sid)).unsupported ? formatPendingProposalContext((await getPendingProposalCount(logClient, sid)).count) : "",
           sessionCuratorReport.get(sid) ? formatCuratorReportContext(sessionCuratorReport.get(sid)!) : "",
         ]
         output.context.push(...applyContextBudget(blocks))
@@ -1743,6 +2077,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             sessionHints.get(sid) ? `${AKM_HINTS_PREFIX}\n\n${sessionHints.get(sid)}` : "",
             sessionCurated.get(sid) ? `${AKM_CURATED_HEADER}\n${sessionCurated.get(sid)}${AKM_CURATED_TAIL}` : "",
             sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
+            (await getPendingProposalCount(logClient, sid)).count > 0 && !(await getPendingProposalCount(logClient, sid)).unsupported ? formatPendingProposalContext((await getPendingProposalCount(logClient, sid)).count) : "",
             sessionCuratorReport.get(sid) ? formatCuratorReportContext(sessionCuratorReport.get(sid)!) : "",
           ]
           output.system.push(...applyContextBudget(blocks))
@@ -1780,6 +2115,53 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         output.args = args
       } catch {
         // Never break tool execution from the pre-hook.
+      }
+    },
+    "permission.ask": async (input, output) => {
+      try {
+        const command = typeof input?.metadata?.command === "string"
+          ? input.metadata.command
+          : Array.isArray(input?.patterns)
+            ? input.patterns.join(" && ")
+            : ""
+        if (!command.includes("akm")) return
+        await emitWorkflowTelemetry(logClient, "info", "akm.raw_cli.invoked", {
+          sessionID: input.sessionID,
+          toolName: "bash",
+          outcome: "requested",
+          command,
+        })
+        const assessment = assessRiskyAkmCommand(command)
+        if (!assessment) return
+        output.status = "deny"
+        await emitWorkflowTelemetry(logClient, "warn", "akm.raw_cli.blocked", {
+          sessionID: input.sessionID,
+          toolName: "bash",
+          outcome: "blocked",
+          reason: assessment.reason,
+          command,
+          category: assessment.category,
+        })
+      } catch {
+        // Best-effort only.
+      }
+    },
+    "command.execute.before": async (input, output) => {
+      try {
+        const command = `${input.command ?? ""} ${input.arguments ?? ""}`.trim()
+        const assessment = assessRiskyAkmCommand(command)
+        if (!assessment) return
+        output.parts = [{ type: "text", text: blockedCommandMessage(command, assessment) }]
+        await emitWorkflowTelemetry(logClient, "warn", "akm.raw_cli.blocked", {
+          sessionID: input.sessionID,
+          toolName: String(input.command ?? "bash"),
+          outcome: "blocked",
+          reason: assessment.reason,
+          command,
+          category: assessment.category,
+        })
+      } catch {
+        // Best-effort only.
       }
     },
     "shell.env": async (_input, output) => {
@@ -1837,6 +2219,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }, dedupe)
         }
       }
+      await recordRetrospectiveFeedback(logClient, input.sessionID, text)
     },
     "tool.execute.after": async (input, output) => {
       if (!input.tool.startsWith("akm_")) return
@@ -1872,8 +2255,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       // Auto-feedback + session buffering: record every asset ref the tool
       // touched so the stash ranking improves over time and so Stop/Compact
       // has material to flush into a session summary memory.
-      const refResult = extractToolRefs(input.tool, input.args as Record<string, unknown>, parsed)
-      if (refResult.refs.length > 0 && input.sessionID) {
+        const refResult = extractToolRefs(input.tool, input.args as Record<string, unknown>, parsed)
+        noteRecentRefs(input.sessionID, refResult.refs)
+        if (refResult.refs.length > 0 && input.sessionID) {
         for (const ref of refResult.refs) {
           addBufferEntry(input.sessionID, {
             kind: "tool-ref",
@@ -1940,9 +2324,15 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           .enum(["local", "stash", "registry", "both"])
           .optional()
           .describe("Search source. 'stash' searches local stash directories, 'registry' searches registries, and 'both' searches all sources. 'local' remains a backward-compatible alias for 'stash'."),
+        include_proposed: tool.schema.boolean().optional().describe("Include proposed-quality results. Proposed assets are not curated until accepted."),
       },
-      async execute({ query, type, limit, source }) {
-        return runCli(client as unknown as LogCapableClient, createSearchArgs({ query, type, limit, source }), { toolName: "akm_search" })
+      async execute({ query, type, limit, source, include_proposed }, context) {
+        const raw = await runCli(
+          client as unknown as LogCapableClient,
+          createSearchArgs({ query, type, limit, source, includeProposed: include_proposed }),
+          { toolName: "akm_search", sessionID: context.sessionID, directory: context.directory },
+        )
+        return withProposedWarnings(raw)
       },
     }),
     akm_show: tool({
@@ -1980,11 +2370,12 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         name: tool.schema.string().optional().describe("Optional memory name."),
         force: tool.schema.boolean().optional().describe("Overwrite an existing memory with the same name."),
       },
-      async execute({ content, name, force }) {
+      async execute({ content, name, force }, context) {
         const args = ["remember", content]
         if (name) args.push("--name", name)
         if (force) args.push("--force")
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_remember" })
+        args.push(...buildScopedArgs(context as unknown as Record<string, unknown>))
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_remember", sessionID: context.sessionID, directory: context.directory })
       },
     }),
     akm_feedback: tool({
@@ -1994,10 +2385,20 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         sentiment: tool.schema.enum(["positive", "negative"]).describe("Whether the feedback is positive or negative."),
         note: tool.schema.string().optional().describe("Optional note to attach to the feedback."),
       },
-      async execute({ ref, sentiment, note }) {
+      async execute({ ref, sentiment, note }, context) {
         const args = ["feedback", ref, sentiment === "positive" ? "--positive" : "--negative"]
         if (note) args.push("--note", note)
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_feedback" })
+        args.push(...buildScopedArgs(context as unknown as Record<string, unknown>))
+        const raw = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_feedback", sessionID: context.sessionID, directory: context.directory })
+        await emitWorkflowTelemetry(logClient, "info", "akm.feedback.recorded", {
+          sessionID: context.sessionID,
+          toolName: "akm_feedback",
+          assetRef: ref,
+          outcome: "success",
+          reason: sentiment,
+          directory: context.directory,
+        })
+        return raw
       },
     }),
     akm_curate: tool({
@@ -2581,6 +2982,16 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           hints: topic ? lookupAkmHelpHint(topic) : [],
           quickReference: AKM_HELP_QUICK_REFERENCE,
           help: helpText,
+          workflowTopics: [
+            "proposal",
+            "distill",
+            "reflect",
+            "propose",
+            "lesson",
+            "include-proposed",
+            "llm-features",
+            "vault-safety",
+          ],
         })
       },
     }),
