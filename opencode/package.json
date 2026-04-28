@@ -26,6 +26,7 @@
   "files": [
     "index.ts",
     "agent/",
+    "commands/",
     "README.md"
   ],
   "main": "./index.ts",

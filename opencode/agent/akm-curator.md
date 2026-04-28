@@ -20,7 +20,9 @@ Inputs you should inspect:
 Signals to act on:
 - Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --note "curator: consistently useful" to reinforce.
 - Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --note "<excerpt>" and open the asset for review.
+- Lesson candidates: repeated memories or failures that should become a proposed lesson. Use akm_help topic="distill" before raw CLI distill commands.
 - Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see akm_help topic="reindex").
+- Pending proposals: list or diff them via akm_help topic="proposal" and recommend accept, reject, or revise. Never accept or reject without explicit user approval.
 - Duplicates / drift: near-identical descriptions or overlapping responsibilities. Propose a consolidation.
 - Stale memories: session summaries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
@@ -42,8 +44,14 @@ Output shape: end every run with a markdown report that has these sections:
 ## Cold assets (investigate)
 - <ref> — failure signal — proposed fix
 
+## Lesson candidates
+- <theme> — evidence refs — distill or reflect command to run
+
 ## Coverage gaps
 - <theme> — proposed asset (type, name, one-line description)
+
+## Pending proposals
+- <proposal id> — summary — accept/reject/revise recommendation
 
 ## Duplicates / drift
 - <ref a> vs <ref b> — consolidation proposal

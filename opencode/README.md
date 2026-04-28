@@ -14,11 +14,11 @@ Add to your OpenCode config (`opencode.json`):
 
 ## Tools
 
-The plugin exposes a trimmed surface of **14 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
+The plugin exposes a trimmed surface of **14 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`, `proposal`, `distill`, `reflect`, `propose`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
 
 | Tool | Description |
 |------|-------------|
-| `akm_search` | Search the local stash, the registry, or both. Type filter accepts `skill`, `command`, `agent`, `knowledge`, `memory`, `script`, `workflow`, `vault`, `wiki`, `any` |
+| `akm_search` | Search the local stash, the registry, or both. Type filter accepts `skill`, `command`, `agent`, `knowledge`, `lesson`, `memory`, `script`, `workflow`, `vault`, `wiki`, `any`; proposed hits can be included explicitly |
 | `akm_show` | Show a stash asset by its ref |
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
 | `akm_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
@@ -43,8 +43,9 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | --- | --- |
 | **`session.created`** (event hook) | Warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions see relevant stash context before the first user message. |
 | **`chat.message`** | Runs `akm curate "<prompt>" --run <sessionID>` on each user message (prompts shorter than `AKM_CURATE_MIN_CHARS` are skipped). The top matches are stored for injection. Memory intents (prompts mentioning "remember" / "memory") are tracked in the session buffer. |
-| **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
+| **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, pending proposal summaries, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
 | **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations until `confirm:true` is provided. |
+| **`permission.ask`** / **`command.execute.before`** | Detects risky raw `akm` CLI commands executed through shell/commands and denies them until the user explicitly approves the exact operation. |
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, checkpoints memories every `AKM_MEMORY_CHECKPOINT_EVERY` successful asset-touching tool calls, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
 | **`shell.env`** | Exposes `AKM_STASH_DIR`, `AKM_PROJECT`, and `AKM_PLUGIN_VERSION` to shell tools so plain `akm` calls inherit the right context. |
@@ -66,6 +67,8 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | `AKM_CURATOR_CONTEXT_MAX_CHARS` | `4000` | Max cached curator-report characters re-injected into system/compaction context; the full report is still persisted as memory. |
 | `AKM_MEMORY_CHECKPOINT_EVERY` | `8` | Number of successful asset-touching tool calls between mid-session checkpoint memories. |
 | `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | `\b(thanks|perfect|worked)\b` | Case-insensitive regex used for lightweight positive retrospective feedback on the most recent refs. |
+| `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong|failed|broken|didn't work|did not work|bad)\b` | Case-insensitive regex used for negative retrospective feedback signals. |
+| `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Seconds allowed for lightweight pending-proposal count checks during context injection. |
 
 ### Curator agent
 
@@ -75,6 +78,27 @@ The curator reviews recent AKM activity (OpenCode app logs, session-summary
 memories, parent-session context, live stash), produces a prioritized action
 list, and persists its latest report as `memory:akm-curator-YYYYMMDD-<sid>` so
 future curator runs can build on it.
+
+## AKM v1 workflows
+
+The plugin injects a concise AKM workflow instruction pack into context so agents:
+
+- search or curate before writing from scratch;
+- show an asset before relying on it;
+- record feedback after the result is known;
+- treat `lesson:*` as first-class durable assets;
+- treat proposed-quality assets as uncurated until accepted;
+- use `akm_help` to route `proposal`, `distill`, `reflect`, and `propose` CLI workflows;
+- require explicit user approval before proposal acceptance/rejection, push saves, source removal, CLI upgrades, update-all, or vault value access.
+
+The package also ships OpenCode command docs for common workflows:
+
+- `/akm-review-proposals`
+- `/akm-distill-lesson`
+- `/akm-reflect-on-failure`
+- `/akm-propose-asset`
+- `/akm-evolve-session`
+- `/akm-workflow-status`
 
 ### Registry discovery
 
