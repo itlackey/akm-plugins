@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0.5.0+). Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, and **access vaults** from a stash directory.
+Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0.6.1+). Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, and **access vaults** from a stash directory.
 
 ## OpenCode
 
@@ -31,6 +31,16 @@ Provides a trimmed surface of fourteen tools (down from twenty-six in 0.5.x — 
 - `akm_help` — quick-reference table for non-first-class `akm` verbs, with live `akm --help` fallback
 
 The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to gate destructive actions, preserve context through compaction, and record user/system feedback and memory usage in OpenCode app logs when relevant.
+
+## Feature parity tracker
+
+| Feature | Tracking issue | Status |
+| --- | --- | --- |
+| Session-start retrieval | #27 | Shipped in both plugins |
+| Auto-attach scope | #28 | Open |
+| Conversation-derived feedback | #29 | Open |
+| Session-end `akm index` | #30 | Shipped in both plugins |
+| Harness-provided LLM fallback | #31 | Open |
 
 
 ### Claude Code

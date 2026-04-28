@@ -462,7 +462,7 @@ curate_prompt() {
 
   akm_available || exit 0
 
-  curated="$(akm_run --for-agent --format text --detail summary -q curate "$text" --limit "$CURATE_LIMIT" $(build_run_scope_args "$sid"))"
+  curated="$(akm_run --detail agent --format text -q curate "$text" --limit "$CURATE_LIMIT" $(build_run_scope_args "$sid"))"
   [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ] || exit 0
 
   # Emit Claude Code's hookSpecificOutput JSON to inject context into the turn.
@@ -483,7 +483,7 @@ session_start() {
   ( akm_run index >/dev/null & ) 2>/dev/null || true
 
   hints="$(akm_run --format text -q hints)"
-  curated="$(akm_run --for-agent --format text --detail summary -q curate --limit "$CURATE_LIMIT" $(build_run_scope_args "$sid"))"
+  curated="$(akm_run --detail agent --format text -q curate --limit "$CURATE_LIMIT" $(build_run_scope_args "$sid"))"
   [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ] || [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ] || exit 0
 
   body="$SESSION_START_HEADER"

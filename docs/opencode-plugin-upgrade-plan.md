@@ -81,8 +81,8 @@ without blocking the TUI.
 (`akm_curate`).
 
 `runCli` always appends `--format json` after the caller's args. The
-`akm_curate` tool builds args starting with `--for-agent --format text
---detail summary -q curate ...`. The duplicate flag is argv-last-wins, so
+`akm_curate` tool builds args starting with `--detail agent --format text
+-q curate ...`. The duplicate flag is argv-last-wins, so
 the tool currently returns JSON despite the prose description and despite
 `runCurateForPrompt` (the in-hook helper at `opencode/index.ts:176`) which
 correctly emits text.

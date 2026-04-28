@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.5.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, and **handle vaults safely** — plus **agentic hooks** that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.6.1+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, and **handle vaults safely** — plus **agentic hooks** that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.
 
 ## Installation
 

@@ -5,7 +5,7 @@ description: Search, show, dispatch agents, execute commands, run workflows, man
 
 # AKM Stash
 
-You have access to the `akm` CLI (AKM, v0.5.0+) to manage extension assets from a stash directory.
+You have access to the `akm` CLI (AKM, v0.6.1+) to manage extension assets from a stash directory.
 
 ## Tool surface vs. CLI
 
@@ -194,7 +194,7 @@ When the user wants to browse community kits:
 5. Search the registry when needed: `akm search "deploy" --source registry`
 6. Install kits: `akm add <package>` (optional)
 
-Default output format is JSON. When you need the most compact machine-readable output, prefer `--format json --for-agent`.
+Default output format is JSON. When you need the most compact machine-readable output, prefer `--format json --detail agent`.
 
 ## Memories and Feedback
 

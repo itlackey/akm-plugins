@@ -900,6 +900,8 @@ describe("akm-opencode plugin", () => {
       )
       expect(curateCall).toBeDefined()
       expect(curateCall?.[1]).toContain("session-start-curate-1")
+      expect(curateCall?.[1]).toEqual(expect.arrayContaining(["--detail", "agent"]))
+      expect(curateCall?.[1]).not.toContain("--for-agent")
 
       const output = { system: [] as string[] }
       await hooks["experimental.chat.system.transform"]!(
@@ -959,6 +961,8 @@ describe("akm-opencode plugin", () => {
         ([, args]) => Array.isArray(args) && args.includes("curate"),
       )
       expect(curateCall).toBeDefined()
+      expect(curateCall?.[1]).toEqual(expect.arrayContaining(["--detail", "agent"]))
+      expect(curateCall?.[1]).not.toContain("--for-agent")
       expect(curateCall?.[1]).toContain("--run")
       expect(curateCall?.[1]).toContain("session-curate-1")
 
