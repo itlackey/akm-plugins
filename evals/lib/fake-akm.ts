@@ -1,0 +1,376 @@
+// Deterministic fake `akm` CLI shim, written into a temp PATH dir at runtime.
+// Tier-2 evals invoke the real plugin hooks, but stub the akm binary so
+// retrieval is reproducible. Plugin changes that drop refs, truncate
+// curation output, or break the hook → akm wiring will surface as metric
+// regressions even though the underlying retrieval is held constant.
+//
+// The shim ranks fixture assets against the prompt with a tiny TF-IDF-ish
+// keyword match (computed in the shim's parent process and baked into the
+// shell script as a static lookup table). It also implements the subset of
+// `akm` verbs the hooks actually call: `curate`, `feedback`, `remember`,
+// `index`, `hints`, `search`, `--version`.
+
+import { mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync } from "node:fs"
+import path from "node:path"
+
+export type FakeAkmAsset = {
+  ref: string
+  type: string
+  name: string
+  description: string
+  keywords: string[]
+}
+
+export type FakeAkmConfig = {
+  // Directory the shim will be installed into (usually a temp bin/).
+  binDir: string
+  // Path the shim writes call records to (one tab-separated line per call).
+  callLog: string
+  // The fixture stash to rank against. Either a parsed asset list or a
+  // directory the loader can scan.
+  assets: FakeAkmAsset[] | { stashDir: string }
+  // Optional: how many results `curate` returns by default. Hook overrides via --limit.
+  defaultLimit?: number
+}
+
+export type LoadedFakeAkm = {
+  binDir: string
+  akmPath: string
+  callLog: string
+  assets: FakeAkmAsset[]
+}
+
+const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---/
+
+function parseFrontmatter(body: string): Record<string, string | string[]> {
+  const match = FRONTMATTER_RE.exec(body)
+  if (!match) return {}
+  const out: Record<string, string | string[]> = {}
+  for (const line of match[1].split("\n")) {
+    const colon = line.indexOf(":")
+    if (colon < 0) continue
+    const key = line.slice(0, colon).trim()
+    const raw = line.slice(colon + 1).trim()
+    if (!key) continue
+    if (raw.startsWith("[") && raw.endsWith("]")) {
+      out[key] = raw
+        .slice(1, -1)
+        .split(",")
+        .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean)
+    } else {
+      out[key] = raw.replace(/^["']|["']$/g, "")
+    }
+  }
+  return out
+}
+
+function fileToAsset(filePath: string, type: string, name: string): FakeAkmAsset | null {
+  let body = ""
+  try {
+    body = readFileSync(filePath, "utf8")
+  } catch {
+    return null
+  }
+  const fm = parseFrontmatter(body)
+  const description =
+    typeof fm.description === "string"
+      ? fm.description
+      : Array.isArray(fm.description)
+        ? fm.description.join(" ")
+        : ""
+  const keywords = Array.isArray(fm.keywords)
+    ? fm.keywords
+    : typeof fm.keywords === "string" && fm.keywords
+      ? fm.keywords.split(/\s+/)
+      : []
+  return {
+    ref: `${type}:${name}`,
+    type,
+    name,
+    description,
+    keywords,
+  }
+}
+
+// Walk a fixture stash directory and produce an asset inventory the shim
+// can rank against. Mirrors the AKM stash layout (skills/, commands/, …).
+export function loadFixtureStash(stashDir: string): FakeAkmAsset[] {
+  const out: FakeAkmAsset[] = []
+  const types: Array<{ dir: string; type: string; layout: "file" | "skill-dir" | "wiki-dir" }> = [
+    { dir: "skills", type: "skill", layout: "skill-dir" },
+    { dir: "commands", type: "command", layout: "file" },
+    { dir: "agents", type: "agent", layout: "file" },
+    { dir: "knowledge", type: "knowledge", layout: "file" },
+    { dir: "memories", type: "memory", layout: "file" },
+    { dir: "scripts", type: "script", layout: "file" },
+    { dir: "workflows", type: "workflow", layout: "file" },
+    { dir: "vaults", type: "vault", layout: "file" },
+    { dir: "wikis", type: "wiki", layout: "wiki-dir" },
+  ]
+  for (const t of types) {
+    const root = path.join(stashDir, t.dir)
+    let entries: string[]
+    try {
+      entries = readdirSync(root)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(root, entry)
+      let stat
+      try {
+        stat = statSync(entryPath)
+      } catch {
+        continue
+      }
+      if (t.layout === "skill-dir" && stat.isDirectory()) {
+        const asset = fileToAsset(path.join(entryPath, "SKILL.md"), t.type, entry)
+        if (asset) out.push(asset)
+      } else if (t.layout === "wiki-dir" && stat.isDirectory()) {
+        const asset = fileToAsset(path.join(entryPath, "index.md"), t.type, entry)
+        if (asset) out.push(asset)
+      } else if (t.layout === "file" && stat.isFile()) {
+        const name = entry.replace(/\.[^.]+$/, "")
+        const asset = fileToAsset(entryPath, t.type, name)
+        if (asset) out.push(asset)
+      }
+    }
+  }
+  return out
+}
+
+// Public API: install a fake `akm` binary into binDir. Returns metadata
+// the harness uses to assemble PATH and inspect call logs.
+export function installFakeAkm(config: FakeAkmConfig): LoadedFakeAkm {
+  mkdirSync(config.binDir, { recursive: true })
+  const assets = Array.isArray(config.assets)
+    ? config.assets
+    : loadFixtureStash(config.assets.stashDir)
+  const defaultLimit = config.defaultLimit ?? 5
+  const indexPath = path.join(config.binDir, "akm-index.json")
+  writeFileSync(
+    indexPath,
+    JSON.stringify(
+      {
+        defaultLimit,
+        callLog: config.callLog,
+        assets,
+      },
+      null,
+      2,
+    ),
+  )
+
+  // The shim is a tiny POSIX shell script that delegates ranking to a
+  // node helper. Keeping it shell-shaped means the existing hook can
+  // invoke `akm` exactly as in production — including the
+  // `--format json -q ...` global flags Claude's hook uses.
+  const akmPath = path.join(config.binDir, "akm")
+  const helperPath = path.join(config.binDir, "akm-rank.mjs")
+  writeFileSync(helperPath, RANK_HELPER_JS)
+  writeFileSync(
+    akmPath,
+    `#!/usr/bin/env sh
+INDEX="${indexPath}"
+HELPER="${helperPath}"
+exec node "$HELPER" "$INDEX" "$@"
+`,
+  )
+  chmodSync(akmPath, 0o755)
+  return {
+    binDir: config.binDir,
+    akmPath,
+    callLog: config.callLog,
+    assets,
+  }
+}
+
+// Read the call-log file produced by the shim into a structured list.
+// The on-disk format is:  <ts>\t<callId>\t<argv0>\t<argv1>\t…
+// callId is a random per-invocation token used by readStdinForCall to
+// fetch the captured stdin (when the verb piped one).
+export function readCallLog(callLog: string): Array<{ ts: string; callId: string; argv: string[] }> {
+  let body: string
+  try {
+    body = readFileSync(callLog, "utf8")
+  } catch {
+    return []
+  }
+  return body
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [ts, callId, ...argv] = line.split("\t")
+      return { ts, callId, argv }
+    })
+}
+
+// For a given call (by callId), return the stdin the hook piped to akm.
+// Returns null if no stdin was captured (verbs other than `remember`,
+// or if the stdin write failed).
+export function readStdinForCall(callLog: string, callId: string): string | null {
+  const stdinPath = path.join(path.dirname(callLog), "stdin", callId + ".txt")
+  try {
+    return readFileSync(stdinPath, "utf8")
+  } catch {
+    return null
+  }
+}
+
+// The ranking helper is shipped as a string so the shim is self-contained.
+// It reads the prompt from argv (after stripping global flags & verb-args
+// the hooks pass), scores each asset by keyword/description overlap with
+// simple lowercase token-set matching, and prints the top-K refs.
+//
+// The shim ALSO captures stdin to a sibling file (akm-stdin-<ts>.txt)
+// when invoked with verbs that pipe content (notably `remember`). This
+// lets tier-2's memory metric verify the actual payload the hook
+// committed, which catches plugin-side regressions like buffer
+// truncation or stripping that earlier versions of this framework would
+// silently miss.
+const RANK_HELPER_JS = `#!/usr/bin/env node
+import { readFileSync, appendFileSync, mkdirSync, existsSync, writeFileSync } from "node:fs"
+import path from "node:path"
+
+const indexPath = process.argv[2]
+const argv = process.argv.slice(3)
+const idx = JSON.parse(readFileSync(indexPath, "utf8"))
+
+// Append a tab-separated call record so tests can assert what the hook called.
+const callId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6)
+try {
+  const dir = path.dirname(idx.callLog)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  appendFileSync(idx.callLog, [new Date().toISOString(), callId, ...argv].join("\\t") + "\\n")
+} catch {}
+
+// Strip global flags so we can find the verb. Mirrors the akm CLI surface
+// the hooks invoke: \`akm [--format X] [-q] [--detail Y] <verb> [args...]\`.
+const args = []
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i]
+  if (a === "--format" || a === "--detail") {
+    i++
+    continue
+  }
+  if (a === "-q" || a === "--quiet") continue
+  args.push(a)
+}
+
+const verb = args[0] || ""
+const tail = args.slice(1)
+
+function tokens(s) {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\\s+/)
+    .filter((t) => t && t.length > 2)
+}
+
+function rank(query, limit) {
+  const q = new Set(tokens(query))
+  if (q.size === 0) return []
+  const scored = idx.assets.map((a) => {
+    const haystack = new Set([...tokens(a.description), ...a.keywords.flatMap(tokens), ...tokens(a.name)])
+    let score = 0
+    for (const t of q) if (haystack.has(t)) score += 1
+    // Tie-break on keyword density so docs with denser hits beat ones that
+    // mention the term once in passing.
+    score += haystack.size > 0 ? Math.min(0.5, q.size / haystack.size) * 0.01 : 0
+    return { ref: a.ref, type: a.type, name: a.name, description: a.description, score }
+  })
+  scored.sort((a, b) => b.score - a.score || a.ref.localeCompare(b.ref))
+  return scored.filter((s) => s.score > 0).slice(0, limit)
+}
+
+function emitText(hits) {
+  if (hits.length === 0) return
+  for (const h of hits) {
+    process.stdout.write(\`[\${h.type}] \${h.name} — \${h.description}\\n\`)
+    process.stdout.write(\`  ref: \${h.ref}\\n\`)
+  }
+}
+
+function emitJson(hits) {
+  process.stdout.write(JSON.stringify({ ok: true, hits }))
+}
+
+function getLimit(defaultLimit) {
+  const i = tail.indexOf("--limit")
+  if (i >= 0 && tail[i + 1]) {
+    const n = parseInt(tail[i + 1], 10)
+    if (!Number.isNaN(n) && n > 0) return n
+  }
+  return defaultLimit ?? idx.defaultLimit ?? 5
+}
+
+function nonFlagArgs() {
+  const out = []
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i]
+    if (a === "--limit" || a === "--type" || a === "--source" || a === "--name" || a === "--note" || a === "--run" || a === "--scope") {
+      i++
+      continue
+    }
+    if (a === "--positive" || a === "--negative" || a === "--force" || a === "--push" || a === "--all" || a === "--check") continue
+    if (a.startsWith("--")) continue
+    out.push(a)
+  }
+  return out
+}
+
+if (verb === "curate" || verb === "search") {
+  const query = nonFlagArgs().join(" ")
+  const hits = rank(query, getLimit())
+  if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
+    emitJson(hits)
+  } else {
+    emitText(hits)
+  }
+  process.exit(0)
+}
+
+if (verb === "hints") {
+  // SessionStart calls this. Emit a small static blurb so the hook has
+  // something to inject; keeps the pipeline exercised.
+  process.stdout.write("Stash health: 15 assets. Run \`akm search <query>\`.\\n")
+  process.exit(0)
+}
+
+if (verb === "remember") {
+  // Capture the piped buffer body so tier-2's memory metric can score
+  // what the hook actually flushed (rather than just whether it called
+  // remember). The plugin pipes the session buffer to akm via stdin.
+  let stdin = ""
+  try {
+    stdin = readFileSync(0, "utf8")
+  } catch {}
+  const stdinDir = path.join(path.dirname(idx.callLog), "stdin")
+  try {
+    if (!existsSync(stdinDir)) mkdirSync(stdinDir, { recursive: true })
+    writeFileSync(path.join(stdinDir, callId + ".txt"), stdin)
+  } catch {}
+  if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
+    process.stdout.write(JSON.stringify({ ok: true, verb, args: tail }))
+  }
+  process.exit(0)
+}
+
+if (verb === "feedback" || verb === "index" || verb === "show") {
+  // The hooks call these for side effects; we just ack.
+  if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
+    process.stdout.write(JSON.stringify({ ok: true, verb, args: tail }))
+  }
+  process.exit(0)
+}
+
+if (verb === "--version" || verb === "-V") {
+  process.stdout.write("fake-akm 0.6.1\\n")
+  process.exit(0)
+}
+
+// Unknown verb: silent no-op, exit 0 so the hook never sees a hard failure.
+process.exit(0)
+`

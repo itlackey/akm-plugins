@@ -1,0 +1,40 @@
+{"id":"cur-001","prompt":"Help me review this pull request for style issues and bugs","expected":["skill:code-review","agent:reviewer"],"k":5}
+{"id":"cur-002","prompt":"Walk me through the diff in src/api/handlers and flag style and security issues","expected":["skill:code-review","agent:reviewer"],"k":5}
+{"id":"cur-003","prompt":"Refactor this messy python module to add type hints and split big functions","expected":["skill:refactor-py"],"k":5}
+{"id":"cur-004","prompt":"Clean up this python file for readability and add typing","expected":["skill:refactor-py"],"k":5}
+{"id":"cur-005","prompt":"I have a stack trace from a runtime crash, can you help me debug it","expected":["skill:debug-runtime"],"k":5}
+{"id":"cur-006","prompt":"Diagnose this exception traceback and propose a fix","expected":["skill:debug-runtime"],"k":5}
+{"id":"cur-007","prompt":"Summarize the diff between main and the release branch as a changelog entry","expected":["command:summarize-diff"],"k":5}
+{"id":"cur-008","prompt":"Generate release notes from the staged commits","expected":["command:summarize-diff","workflow:release"],"k":5}
+{"id":"cur-009","prompt":"Scaffold a unit test for src/utils/parser.ts","expected":["command:scaffold-test"],"k":5}
+{"id":"cur-010","prompt":"I need a quick test scaffold for the new module covering the happy path","expected":["command:scaffold-test"],"k":5}
+{"id":"cur-011","prompt":"Bump version to 1.4.0 across all package manifests and tag the release","expected":["command:bump-version","workflow:release"],"k":5}
+{"id":"cur-012","prompt":"Cut a new semver release and publish","expected":["command:bump-version","workflow:release"],"k":5}
+{"id":"cur-013","prompt":"Walk through the deployment runbook for tonight's rollout","expected":["knowledge:deployment-runbook","workflow:release"],"k":5}
+{"id":"cur-014","prompt":"What are the rollback steps if the production deploy fails","expected":["knowledge:deployment-runbook"],"k":5}
+{"id":"cur-015","prompt":"What does HTTP 422 mean from our public API and how do I fix it","expected":["knowledge:api-error-codes"],"k":5}
+{"id":"cur-016","prompt":"Look up what API error code 503 means in our reference","expected":["knowledge:api-error-codes"],"k":5}
+{"id":"cur-017","prompt":"Run the linters across the codebase and report errors","expected":["script:lint"],"k":5}
+{"id":"cur-018","prompt":"Check formatting and lint everything","expected":["script:lint"],"k":5}
+{"id":"cur-019","prompt":"Run smoke tests after the deploy finishes","expected":["script:smoke","knowledge:deployment-runbook"],"k":5}
+{"id":"cur-020","prompt":"Verify the production endpoints respond with a healthcheck","expected":["script:smoke"],"k":5}
+{"id":"cur-021","prompt":"What are our naming conventions for new files","expected":["knowledge:repo-conventions"],"k":5}
+{"id":"cur-022","prompt":"Read me the house style guide for comments and PR descriptions","expected":["knowledge:repo-conventions"],"k":5}
+{"id":"cur-023","prompt":"Plan the implementation for a new caching layer","expected":["agent:planner"],"k":5}
+{"id":"cur-024","prompt":"Design an architecture for the new feature with tradeoffs","expected":["agent:planner"],"k":5}
+{"id":"cur-025","prompt":"Walk me through onboarding for a new hire this week","expected":["wiki:onboarding"],"k":5}
+{"id":"cur-026","prompt":"Set up my devenv as a new engineer joining the team","expected":["wiki:onboarding"],"k":5}
+{"id":"cur-027","prompt":"Load staging API keys into my shell","expected":["vault:staging"],"k":5}
+{"id":"cur-028","prompt":"Pull the staging environment secrets","expected":["vault:staging"],"k":5}
+{"id":"cur-029","prompt":"Drive the multi-step release workflow from start to finish","expected":["workflow:release","command:bump-version"],"k":5}
+{"id":"cur-030","prompt":"Resume the release workflow that was paused yesterday","expected":["workflow:release"],"k":5}
+{"id":"cur-031","prompt":"How do I review a PR diff for security issues","expected":["skill:code-review","agent:reviewer"],"k":5}
+{"id":"cur-032","prompt":"What's the recommended way to handle exceptions in this codebase","expected":["knowledge:repo-conventions","skill:debug-runtime"],"k":5}
+{"id":"cur-033","prompt":"Format and lint before pushing","expected":["script:lint"],"k":5}
+{"id":"cur-034","prompt":"Write tests for the new parser module","expected":["command:scaffold-test"],"k":5}
+{"id":"cur-035","prompt":"Make this Python script more readable","expected":["skill:refactor-py"],"k":5}
+{"id":"cur-036","prompt":"What's the rollback procedure documented in the runbook","expected":["knowledge:deployment-runbook"],"k":5}
+{"id":"cur-037","prompt":"Generate a one-paragraph release note from the diff","expected":["command:summarize-diff"],"k":5}
+{"id":"cur-038","prompt":"Help me debug this traceback from the production logs","expected":["skill:debug-runtime"],"k":5}
+{"id":"cur-039","prompt":"Set up onboarding wiki tour for a new joiner","expected":["wiki:onboarding"],"k":5}
+{"id":"cur-040","prompt":"Plan a refactor of the payments module with tradeoffs","expected":["agent:planner","skill:refactor-py"],"k":5}

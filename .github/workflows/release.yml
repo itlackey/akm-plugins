@@ -25,6 +25,10 @@ jobs:
       - name: Run integration tests
         run: bun test tests/
 
+      - name: Run tier-2 evals against checked-in baseline
+        working-directory: evals
+        run: bun tier2/runner.ts --baseline tier2/baseline/tier2.json --out ../eval-results/release
+
   version:
     needs: test
     runs-on: ubuntu-latest
