@@ -4,23 +4,26 @@ set -eu
 
 COMMAND="${1:-}"
 MODE="${2:-}"
-PACKAGE_REF="akm-cli@latest"
+PACKAGE_REF="${AKM_PACKAGE_REF:-akm-cli@latest}"
 STATE_DIR="${AKM_PLUGIN_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-.}/.local/state}/akm-claude}"
 SESSIONS_DIR="$STATE_DIR/sessions"
 SESSION_LOG="$STATE_DIR/session.log"
 FEEDBACK_LOG="$STATE_DIR/feedback.log"
 MEMORY_LOG="$STATE_DIR/memory.log"
+QUALITY_CACHE="$STATE_DIR/quality-cache.tsv"
+SETUP_STAMP="$STATE_DIR/setup.stamp"
 CURATE_LIMIT="${AKM_CURATE_LIMIT:-5}"
 CURATE_MIN_CHARS="${AKM_CURATE_MIN_CHARS:-16}"
 CURATE_TIMEOUT="${AKM_CURATE_TIMEOUT:-8}"
 CONTEXT_BUDGET_CHARS="${AKM_CONTEXT_BUDGET_CHARS:-4000}"
 AUTO_FEEDBACK="${AKM_AUTO_FEEDBACK:-1}"
 AUTO_MEMORY="${AKM_AUTO_MEMORY:-1}"
+AUTO_SETUP="${AKM_AUTO_SETUP:-1}"
 INDEX_ON_SESSION_END="${AKM_INDEX_ON_SESSION_END:-0}"
 CURATED_PROMPT_HEADER="# AKM stash — assets relevant to this prompt"
 CURATED_SESSION_HEADER="# AKM stash — assets relevant to this session"
 CURATED_CONTEXT_TAIL="Tip: call \`akm show <ref>\` to fetch full content, and record \`akm feedback <ref> --positive|--negative\` once you know whether the asset helped."
-SESSION_START_FOOTER="For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, …), run \`/akm-help\` first to discover the right \`akm\` CLI invocation, then run it via Bash."
+SESSION_START_FOOTER="For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, agent, setup, …), run \`/akm-help\` first to discover the right \`akm\` CLI invocation, then run it via Bash. v0.7.0 adds the \`/akm-proposal\`, \`/akm-reflect\`, \`/akm-propose\`, \`/akm-distill\`, \`/akm-review-proposals\`, and \`/akm-setup\` slash commands for the proposal queue and agent-CLI integration."
 SESSION_START_HEADER="$(cat <<'EOF'
 # AKM is available in this session
 
@@ -138,6 +141,100 @@ akm_run() {
   else
     akm "$@" 2>/dev/null || true
   fi
+}
+
+# Resolve the asset quality for a ref via `akm show <ref> --format json`.
+# Echoes one of {generated, curated, proposed, unknown}. Caches results in
+# QUALITY_CACHE so a single hook process doesn't re-shell out per ref. We do
+# not crash on parse errors — unknown values pass through (parse-warn-include
+# is the v0.7.0 contract).
+ref_quality() {
+  ref="$1"
+  [ -n "$ref" ] || { printf 'unknown\n'; return 0; }
+
+  if [ -f "$QUALITY_CACHE" ]; then
+    cached="$(grep -F "	$ref	" "$QUALITY_CACHE" 2>/dev/null | tail -n 1 | cut -f3)"
+    if [ -n "$cached" ]; then
+      printf '%s\n' "$cached"
+      return 0
+    fi
+  fi
+
+  raw="$(akm_run --format json -q show "$ref")"
+  quality="$(printf '%s' "$raw" | python3 -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    print("unknown")
+    sys.exit(0)
+q = data.get("quality") if isinstance(data, dict) else None
+if not isinstance(q, str) or not q:
+    print("unknown")
+else:
+    print(q)
+' 2>/dev/null || printf 'unknown')"
+
+  printf '%s\t%s\t%s\n' "$(timestamp)" "$ref" "$quality" >> "$QUALITY_CACHE" 2>/dev/null || true
+  printf '%s\n' "$quality"
+}
+
+# Detect and persist agent.default via `akm setup`. Idempotent — guarded by a
+# stamp file so we only run once per machine unless AKM_AUTO_SETUP=force.
+detect_agent_default() {
+  akm_available || { printf '\n'; return 0; }
+
+  current="$(akm_run --format json -q config get agent.default 2>/dev/null | python3 -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or "null")
+except Exception:
+    print("")
+    sys.exit(0)
+if isinstance(data, str):
+    print(data)
+elif isinstance(data, dict):
+    val = data.get("value") or data.get("agent.default") or ""
+    print(val if isinstance(val, str) else "")
+else:
+    print("")
+' 2>/dev/null || printf '')"
+
+  if [ -n "$current" ]; then
+    printf '%s\n' "$current"
+    return 0
+  fi
+
+  if [ "$AUTO_SETUP" != "1" ] && [ "$AUTO_SETUP" != "force" ]; then
+    printf '\n'
+    return 0
+  fi
+
+  if [ -f "$SETUP_STAMP" ] && [ "$AUTO_SETUP" != "force" ]; then
+    printf '\n'
+    return 0
+  fi
+
+  akm_run --format json -q setup >/dev/null
+  printf '%s' "$(timestamp)" > "$SETUP_STAMP" 2>/dev/null || true
+  append_log "$SESSION_LOG" "akm_setup" "auto"
+
+  detected="$(akm_run --format json -q config get agent.default 2>/dev/null | python3 -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or "null")
+except Exception:
+    print("")
+    sys.exit(0)
+if isinstance(data, str):
+    print(data)
+elif isinstance(data, dict):
+    val = data.get("value") or data.get("agent.default") or ""
+    print(val if isinstance(val, str) else "")
+else:
+    print("")
+' 2>/dev/null || printf '')"
+  printf '%s\n' "$detected"
 }
 
 run_index_on_session_end() {
@@ -316,8 +413,9 @@ combined = "\n".join(part for part in (command, output) if part)
 
 # Detect any asset ref that akm might know about. Ref grammar from the skill:
 #   [origin//]type:name   where type ∈ {skill, command, agent, knowledge, memory,
-#                                       script, workflow, vault, wiki}
-ref_pattern = re.compile(r"(?:[A-Za-z0-9@._+/-]+//)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._/-]+")
+#                                       lesson, script, workflow, vault, wiki}
+# `lesson` is the v0.7.0 first-class type produced by `akm distill`.
+ref_pattern = re.compile(r"(?:[A-Za-z0-9@._+/-]+//)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+")
 refs = set(ref_pattern.findall(combined))
 
 if not refs and "akm remember" in command:
@@ -427,7 +525,16 @@ auto_feedback() {
     case "$ref" in
       memory:*) continue ;;  # memories don't take feedback today
       vault:*) continue ;;   # vault values never surface — feedback is noise
+      lesson:*) continue ;;  # lessons land via the proposal queue; feedback flows through `akm proposal`
+      *//memory:*|*//vault:*|*//lesson:*) continue ;;
     esac
+    quality="$(ref_quality "$ref")"
+    if [ "$quality" = "proposed" ]; then
+      # Proposed assets aren't curated content yet — feedback would route to a
+      # draft that may be rejected. Skip until promotion via `akm proposal accept`.
+      append_log "$FEEDBACK_LOG" "system" "skip_proposed" "$ref" "$status_text"
+      continue
+    fi
     akm_run --format json -q feedback "$ref" "$sentiment_flag" --note "$note" >/dev/null
   done
   IFS="${OLD_IFS}"
@@ -482,11 +589,41 @@ session_start() {
   # Keep the index warm in the background — never block session start.
   ( akm_run index >/dev/null & ) 2>/dev/null || true
 
+  agent_default="$(detect_agent_default)"
   hints="$(akm_run --format text -q hints)"
   curated="$(akm_run --detail agent --format text -q curate --limit "$CURATE_LIMIT" $(build_run_scope_args "$sid"))"
-  [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ] || [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ] || exit 0
+  pending_summary="$(akm_run --format json -q proposal list --status pending 2>/dev/null | python3 -c '
+import json, sys
+try:
+    data = json.loads(sys.stdin.read() or "null")
+except Exception:
+    print("")
+    sys.exit(0)
+if not isinstance(data, dict):
+    print("")
+    sys.exit(0)
+items = data.get("proposals") or data.get("hits") or []
+n = len(items) if isinstance(items, list) else 0
+if n <= 0:
+    print("")
+elif n == 1:
+    print("There is 1 pending AKM proposal — review with `/akm-review-proposals` or `/akm-proposal list`.")
+else:
+    print(f"There are {n} pending AKM proposals — review with `/akm-review-proposals` or `/akm-proposal list`.")
+' 2>/dev/null || printf '')"
+  [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ] \
+    || [ -n "$(printf '%s' "$curated" | tr -d ' \t\n\r')" ] \
+    || [ -n "$agent_default" ] \
+    || [ -n "$pending_summary" ] \
+    || exit 0
 
   body="$SESSION_START_HEADER"
+  if [ -n "$agent_default" ]; then
+    body="$(printf '%s\n\nAgent CLI: %s (configured via `akm setup`).' "$body" "$agent_default")"
+  fi
+  if [ -n "$pending_summary" ]; then
+    body="$(printf '%s\n\n%s' "$body" "$pending_summary")"
+  fi
   if [ -n "$(printf '%s' "$hints" | tr -d ' \t\n\r')" ]; then
     body="$(printf '%s\n\n%s' "$body" "$hints")"
   fi
