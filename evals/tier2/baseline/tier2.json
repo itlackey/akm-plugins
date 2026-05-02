@@ -1,0 +1,1008 @@
+{
+  "version": "1",
+  "tier": "tier2",
+  "pluginVersion": "0.6.0",
+  "gitSha": "825d7bdf55790b18c1169c963f9a414eb61ea29a",
+  "ranAt": "2026-05-02T05:56:37.047Z",
+  "durationMs": 34280,
+  "metrics": {
+    "surface": {
+      "name": "surface",
+      "values": {
+        "tools": [
+          "opencode:akm_agent",
+          "opencode:akm_cmd",
+          "opencode:akm_curate",
+          "opencode:akm_evolve",
+          "opencode:akm_feedback",
+          "opencode:akm_help",
+          "opencode:akm_parent_messages",
+          "opencode:akm_remember",
+          "opencode:akm_search",
+          "opencode:akm_session_messages",
+          "opencode:akm_show",
+          "opencode:akm_vault",
+          "opencode:akm_wiki",
+          "opencode:akm_workflow"
+        ],
+        "commands": [
+          "claude:akm-agent",
+          "claude:akm-cmd",
+          "claude:akm-curate",
+          "claude:akm-evolve",
+          "claude:akm-feedback",
+          "claude:akm-help",
+          "claude:akm-remember",
+          "claude:akm-search",
+          "claude:akm-show",
+          "claude:akm-vault",
+          "claude:akm-wiki",
+          "claude:akm-workflow",
+          "opencode:akm-distill-lesson",
+          "opencode:akm-evolve-session",
+          "opencode:akm-propose-asset",
+          "opencode:akm-reflect-on-failure",
+          "opencode:akm-review-proposals",
+          "opencode:akm-workflow-status"
+        ],
+        "hooks": [
+          "claude:PostToolUse",
+          "claude:PostToolUseFailure",
+          "claude:PreCompact",
+          "claude:SessionStart",
+          "claude:Stop",
+          "claude:SubagentStop",
+          "claude:UserPromptSubmit"
+        ],
+        "claudeSkills": [
+          "akm"
+        ],
+        "claudeAgents": [
+          "akm-curator"
+        ],
+        "opencodeAgents": [
+          "akm-curator"
+        ],
+        "toolCount": 14,
+        "commandCount": 18,
+        "hookCount": 7
+      },
+      "table": {
+        "headers": [
+          "Component",
+          "Count",
+          "Items"
+        ],
+        "rows": [
+          [
+            "claude commands",
+            12,
+            "akm-agent, akm-cmd, akm-curate, akm-evolve, akm-feedback, akm-help, akm-remember, akm-search, akm-show, akm-vault, akm-wiki, akm-workflow"
+          ],
+          [
+            "claude agents",
+            1,
+            "akm-curator"
+          ],
+          [
+            "claude hooks",
+            7,
+            "PostToolUse, PostToolUseFailure, PreCompact, SessionStart, Stop, SubagentStop, UserPromptSubmit"
+          ],
+          [
+            "claude skills",
+            1,
+            "akm"
+          ],
+          [
+            "opencode tools",
+            14,
+            "akm_agent, akm_cmd, akm_curate, akm_evolve, akm_feedback, akm_help, akm_parent_messages, akm_remember, akm_search, akm_session_messages, akm_show, akm_vault, akm_wiki, akm_workflow"
+          ],
+          [
+            "opencode commands",
+            6,
+            "akm-distill-lesson, akm-evolve-session, akm-propose-asset, akm-reflect-on-failure, akm-review-proposals, akm-workflow-status"
+          ],
+          [
+            "opencode agents",
+            1,
+            "akm-curator"
+          ]
+        ]
+      }
+    },
+    "curation": {
+      "name": "curation",
+      "values": {
+        "n": 40,
+        "p_at_5": 0.225,
+        "r_at_5": 0.9125,
+        "mrr": 0.9208333333333332,
+        "zero_hit_rate": 0,
+        "per_entry": [
+          {
+            "id": "cur-001",
+            "prompt": "Help me review this pull request for style issues and bugs",
+            "expected": [
+              "skill:code-review",
+              "agent:reviewer"
+            ],
+            "retrieved": [
+              "skill:code-review",
+              "agent:reviewer",
+              "agent:planner",
+              "command:scaffold-test",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.4,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-002",
+            "prompt": "Walk me through the diff in src/api/handlers and flag style and security issues",
+            "expected": [
+              "skill:code-review",
+              "agent:reviewer"
+            ],
+            "retrieved": [
+              "skill:code-review",
+              "knowledge:api-error-codes",
+              "agent:reviewer",
+              "command:bump-version",
+              "knowledge:repo-conventions"
+            ],
+            "pAtK": 0.4,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-003",
+            "prompt": "Refactor this messy python module to add type hints and split big functions",
+            "expected": [
+              "skill:refactor-py"
+            ],
+            "retrieved": [
+              "skill:refactor-py",
+              "agent:planner",
+              "agent:reviewer",
+              "command:bump-version",
+              "command:scaffold-test"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-004",
+            "prompt": "Clean up this python file for readability and add typing",
+            "expected": [
+              "skill:refactor-py"
+            ],
+            "retrieved": [
+              "skill:refactor-py",
+              "command:scaffold-test",
+              "skill:code-review",
+              "agent:planner",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-005",
+            "prompt": "I have a stack trace from a runtime crash, can you help me debug it",
+            "expected": [
+              "skill:debug-runtime"
+            ],
+            "retrieved": [
+              "skill:debug-runtime",
+              "vault:staging",
+              "agent:planner",
+              "agent:reviewer",
+              "command:bump-version"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-006",
+            "prompt": "Diagnose this exception traceback and propose a fix",
+            "expected": [
+              "skill:debug-runtime"
+            ],
+            "retrieved": [
+              "skill:debug-runtime",
+              "agent:reviewer",
+              "command:bump-version",
+              "knowledge:api-error-codes",
+              "knowledge:repo-conventions"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-007",
+            "prompt": "Summarize the diff between main and the release branch as a changelog entry",
+            "expected": [
+              "command:summarize-diff"
+            ],
+            "retrieved": [
+              "command:summarize-diff",
+              "command:bump-version",
+              "skill:code-review",
+              "agent:reviewer",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-008",
+            "prompt": "Generate release notes from the staged commits",
+            "expected": [
+              "command:summarize-diff",
+              "workflow:release"
+            ],
+            "retrieved": [
+              "command:bump-version",
+              "command:summarize-diff",
+              "script:smoke",
+              "knowledge:api-error-codes",
+              "script:lint"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 0.5,
+            "rr": 0.5,
+            "k": 5
+          },
+          {
+            "id": "cur-009",
+            "prompt": "Scaffold a unit test for src/utils/parser.ts",
+            "expected": [
+              "command:scaffold-test"
+            ],
+            "retrieved": [
+              "command:scaffold-test",
+              "command:summarize-diff",
+              "knowledge:api-error-codes",
+              "script:smoke",
+              "vault:staging"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-010",
+            "prompt": "I need a quick test scaffold for the new module covering the happy path",
+            "expected": [
+              "command:scaffold-test"
+            ],
+            "retrieved": [
+              "command:scaffold-test",
+              "knowledge:api-error-codes",
+              "script:smoke",
+              "skill:code-review",
+              "vault:staging"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-011",
+            "prompt": "Bump version to 1.4.0 across all package manifests and tag the release",
+            "expected": [
+              "command:bump-version",
+              "workflow:release"
+            ],
+            "retrieved": [
+              "command:bump-version",
+              "workflow:release",
+              "script:lint",
+              "knowledge:api-error-codes",
+              "script:smoke"
+            ],
+            "pAtK": 0.4,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-012",
+            "prompt": "Cut a new semver release and publish",
+            "expected": [
+              "command:bump-version",
+              "workflow:release"
+            ],
+            "retrieved": [
+              "command:bump-version",
+              "workflow:release",
+              "wiki:onboarding",
+              "agent:reviewer",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.4,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-013",
+            "prompt": "Walk through the deployment runbook for tonight's rollout",
+            "expected": [
+              "knowledge:deployment-runbook",
+              "workflow:release"
+            ],
+            "retrieved": [
+              "knowledge:deployment-runbook",
+              "knowledge:api-error-codes",
+              "vault:staging",
+              "skill:code-review",
+              "agent:planner"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 0.5,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-014",
+            "prompt": "What are the rollback steps if the production deploy fails",
+            "expected": [
+              "knowledge:deployment-runbook"
+            ],
+            "retrieved": [
+              "knowledge:deployment-runbook",
+              "script:smoke",
+              "command:bump-version",
+              "knowledge:api-error-codes",
+              "script:lint"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-015",
+            "prompt": "What does HTTP 422 mean from our public API and how do I fix it",
+            "expected": [
+              "knowledge:api-error-codes"
+            ],
+            "retrieved": [
+              "knowledge:api-error-codes",
+              "skill:debug-runtime",
+              "agent:planner",
+              "agent:reviewer",
+              "command:bump-version"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-016",
+            "prompt": "Look up what API error code 503 means in our reference",
+            "expected": [
+              "knowledge:api-error-codes"
+            ],
+            "retrieved": [
+              "knowledge:api-error-codes",
+              "knowledge:repo-conventions",
+              "vault:staging",
+              "skill:refactor-py",
+              "skill:debug-runtime"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-017",
+            "prompt": "Run the linters across the codebase and report errors",
+            "expected": [
+              "script:lint"
+            ],
+            "retrieved": [
+              "script:lint",
+              "command:bump-version",
+              "skill:debug-runtime",
+              "knowledge:api-error-codes",
+              "skill:code-review"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-018",
+            "prompt": "Check formatting and lint everything",
+            "expected": [
+              "script:lint"
+            ],
+            "retrieved": [
+              "script:lint",
+              "skill:code-review",
+              "command:bump-version",
+              "agent:reviewer",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-019",
+            "prompt": "Run smoke tests after the deploy finishes",
+            "expected": [
+              "script:smoke",
+              "knowledge:deployment-runbook"
+            ],
+            "retrieved": [
+              "script:smoke",
+              "knowledge:deployment-runbook",
+              "script:lint",
+              "workflow:release",
+              "skill:code-review"
+            ],
+            "pAtK": 0.4,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-020",
+            "prompt": "Verify the production endpoints respond with a healthcheck",
+            "expected": [
+              "script:smoke"
+            ],
+            "retrieved": [
+              "script:smoke",
+              "skill:code-review",
+              "command:bump-version",
+              "knowledge:api-error-codes",
+              "script:lint"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-021",
+            "prompt": "What are our naming conventions for new files",
+            "expected": [
+              "knowledge:repo-conventions"
+            ],
+            "retrieved": [
+              "knowledge:repo-conventions",
+              "agent:planner",
+              "command:bump-version",
+              "command:summarize-diff",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-022",
+            "prompt": "Read me the house style guide for comments and PR descriptions",
+            "expected": [
+              "knowledge:repo-conventions"
+            ],
+            "retrieved": [
+              "knowledge:repo-conventions",
+              "skill:code-review",
+              "knowledge:api-error-codes",
+              "agent:planner",
+              "command:bump-version"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-023",
+            "prompt": "Plan the implementation for a new caching layer",
+            "expected": [
+              "agent:planner"
+            ],
+            "retrieved": [
+              "agent:planner",
+              "knowledge:api-error-codes",
+              "vault:staging",
+              "skill:code-review",
+              "command:bump-version"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-024",
+            "prompt": "Design an architecture for the new feature with tradeoffs",
+            "expected": [
+              "agent:planner"
+            ],
+            "retrieved": [
+              "agent:planner",
+              "skill:code-review",
+              "knowledge:api-error-codes",
+              "vault:staging",
+              "command:scaffold-test"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-025",
+            "prompt": "Walk me through onboarding for a new hire this week",
+            "expected": [
+              "wiki:onboarding"
+            ],
+            "retrieved": [
+              "wiki:onboarding",
+              "agent:planner",
+              "command:summarize-diff",
+              "knowledge:api-error-codes",
+              "vault:staging"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-026",
+            "prompt": "Set up my devenv as a new engineer joining the team",
+            "expected": [
+              "wiki:onboarding"
+            ],
+            "retrieved": [
+              "wiki:onboarding",
+              "command:bump-version",
+              "knowledge:api-error-codes",
+              "script:lint",
+              "script:smoke"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-027",
+            "prompt": "Load staging API keys into my shell",
+            "expected": [
+              "vault:staging"
+            ],
+            "retrieved": [
+              "vault:staging",
+              "knowledge:api-error-codes",
+              "command:summarize-diff",
+              "command:bump-version",
+              "agent:reviewer"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-028",
+            "prompt": "Pull the staging environment secrets",
+            "expected": [
+              "vault:staging"
+            ],
+            "retrieved": [
+              "vault:staging",
+              "skill:code-review",
+              "command:bump-version",
+              "agent:reviewer",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-029",
+            "prompt": "Drive the multi-step release workflow from start to finish",
+            "expected": [
+              "workflow:release",
+              "command:bump-version"
+            ],
+            "retrieved": [
+              "workflow:release",
+              "command:bump-version",
+              "script:smoke",
+              "command:summarize-diff",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.4,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-030",
+            "prompt": "Resume the release workflow that was paused yesterday",
+            "expected": [
+              "workflow:release"
+            ],
+            "retrieved": [
+              "command:bump-version",
+              "script:smoke",
+              "workflow:release",
+              "command:summarize-diff",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 0.3333333333333333,
+            "k": 5
+          },
+          {
+            "id": "cur-031",
+            "prompt": "How do I review a PR diff for security issues",
+            "expected": [
+              "skill:code-review",
+              "agent:reviewer"
+            ],
+            "retrieved": [
+              "skill:code-review",
+              "agent:reviewer",
+              "command:summarize-diff",
+              "vault:staging",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.4,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-032",
+            "prompt": "What's the recommended way to handle exceptions in this codebase",
+            "expected": [
+              "knowledge:repo-conventions",
+              "skill:debug-runtime"
+            ],
+            "retrieved": [
+              "script:lint",
+              "command:bump-version",
+              "knowledge:api-error-codes",
+              "script:smoke",
+              "vault:staging"
+            ],
+            "pAtK": 0,
+            "rAtK": 0,
+            "rr": 0,
+            "k": 5
+          },
+          {
+            "id": "cur-033",
+            "prompt": "Format and lint before pushing",
+            "expected": [
+              "script:lint"
+            ],
+            "retrieved": [
+              "script:lint",
+              "knowledge:repo-conventions",
+              "skill:code-review",
+              "command:bump-version",
+              "agent:reviewer"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-034",
+            "prompt": "Write tests for the new parser module",
+            "expected": [
+              "command:scaffold-test"
+            ],
+            "retrieved": [
+              "skill:code-review",
+              "knowledge:api-error-codes",
+              "vault:staging",
+              "command:bump-version",
+              "command:summarize-diff"
+            ],
+            "pAtK": 0,
+            "rAtK": 0,
+            "rr": 0,
+            "k": 5
+          },
+          {
+            "id": "cur-035",
+            "prompt": "Make this Python script more readable",
+            "expected": [
+              "skill:refactor-py"
+            ],
+            "retrieved": [
+              "skill:refactor-py",
+              "command:bump-version",
+              "vault:staging",
+              "agent:reviewer",
+              "knowledge:api-error-codes"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-036",
+            "prompt": "What's the rollback procedure documented in the runbook",
+            "expected": [
+              "knowledge:deployment-runbook"
+            ],
+            "retrieved": [
+              "knowledge:deployment-runbook",
+              "command:bump-version",
+              "vault:staging",
+              "knowledge:api-error-codes",
+              "script:lint"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-037",
+            "prompt": "Generate a one-paragraph release note from the diff",
+            "expected": [
+              "command:summarize-diff"
+            ],
+            "retrieved": [
+              "command:summarize-diff",
+              "command:bump-version",
+              "script:smoke",
+              "skill:code-review",
+              "agent:reviewer"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-038",
+            "prompt": "Help me debug this traceback from the production logs",
+            "expected": [
+              "skill:debug-runtime"
+            ],
+            "retrieved": [
+              "skill:debug-runtime",
+              "command:bump-version",
+              "knowledge:api-error-codes",
+              "knowledge:deployment-runbook",
+              "script:lint"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-039",
+            "prompt": "Set up onboarding wiki tour for a new joiner",
+            "expected": [
+              "wiki:onboarding"
+            ],
+            "retrieved": [
+              "wiki:onboarding",
+              "command:summarize-diff",
+              "knowledge:api-error-codes",
+              "vault:staging",
+              "agent:planner"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 1,
+            "rr": 1,
+            "k": 5
+          },
+          {
+            "id": "cur-040",
+            "prompt": "Plan a refactor of the payments module with tradeoffs",
+            "expected": [
+              "agent:planner",
+              "skill:refactor-py"
+            ],
+            "retrieved": [
+              "agent:planner",
+              "skill:code-review",
+              "command:bump-version",
+              "knowledge:api-error-codes",
+              "script:lint"
+            ],
+            "pAtK": 0.2,
+            "rAtK": 0.5,
+            "rr": 1,
+            "k": 5
+          }
+        ]
+      },
+      "table": {
+        "headers": [
+          "id",
+          "prompt",
+          "expected",
+          "top-3 retrieved",
+          "p@k",
+          "r@k",
+          "rr"
+        ],
+        "rows": [
+          [
+            "cur-032",
+            "What's the recommended way to handle exceptions in this c...",
+            "knowledge:repo-conventions,skill:debug-runtime",
+            "script:lint,command:bump-version,knowledge:api-error-codes",
+            "0.00",
+            "0.00",
+            "0.00"
+          ],
+          [
+            "cur-034",
+            "Write tests for the new parser module",
+            "command:scaffold-test",
+            "skill:code-review,knowledge:api-error-codes,vault:staging",
+            "0.00",
+            "0.00",
+            "0.00"
+          ],
+          [
+            "cur-030",
+            "Resume the release workflow that was paused yesterday",
+            "workflow:release",
+            "command:bump-version,script:smoke,workflow:release",
+            "0.20",
+            "1.00",
+            "0.33"
+          ],
+          [
+            "cur-008",
+            "Generate release notes from the staged commits",
+            "command:summarize-diff,workflow:release",
+            "command:bump-version,command:summarize-diff,script:smoke",
+            "0.20",
+            "0.50",
+            "0.50"
+          ],
+          [
+            "cur-001",
+            "Help me review this pull request for style issues and bugs",
+            "skill:code-review,agent:reviewer",
+            "skill:code-review,agent:reviewer,agent:planner",
+            "0.40",
+            "1.00",
+            "1.00"
+          ]
+        ]
+      },
+      "notes": [
+        "n=40 prompts, k=5. Worst 5 entries shown below; full per-entry breakdown is in the JSON report under `metrics.curation.values.per_entry`."
+      ]
+    },
+    "latency": {
+      "name": "latency",
+      "values": {
+        "curate_prompt_p50_ms": 167,
+        "curate_prompt_p95_ms": 188,
+        "curate_prompt_p99_ms": 205,
+        "curate_prompt_mean_ms": 169,
+        "curate_prompt_n": 24,
+        "session_start_p50_ms": 593,
+        "session_start_p95_ms": 682,
+        "session_start_p99_ms": 711,
+        "session_start_mean_ms": 607,
+        "session_start_n": 24,
+        "post_tool_p50_ms": 49,
+        "post_tool_p95_ms": 58,
+        "post_tool_p99_ms": 63,
+        "post_tool_mean_ms": 50,
+        "post_tool_n": 24,
+        "summaries": {
+          "curate_prompt": {
+            "n": 24,
+            "p50": 167.38520100000005,
+            "p95": 188.18859804999974,
+            "p99": 204.7008488200001,
+            "min": 147.47708700000112,
+            "max": 209.5605340000002,
+            "mean": 168.9531324166666
+          },
+          "session_start": {
+            "n": 24,
+            "p50": 592.8130134999992,
+            "p95": 682.4001275000026,
+            "p99": 710.7910593100004,
+            "min": 539.2085260000003,
+            "max": 718.7596169999997,
+            "mean": 606.6646556250001
+          },
+          "post_tool": {
+            "n": 24,
+            "p50": 49.30875400000514,
+            "p95": 58.09129935000128,
+            "p99": 63.22591263000271,
+            "min": 42.910527,
+            "max": 64.63749600000301,
+            "mean": 49.60834991666676
+          }
+        }
+      },
+      "table": {
+        "headers": [
+          "verb",
+          "n",
+          "p50 ms",
+          "p95 ms",
+          "p99 ms",
+          "mean ms"
+        ],
+        "rows": [
+          [
+            "curate_prompt",
+            24,
+            167,
+            188,
+            205,
+            169
+          ],
+          [
+            "session_start",
+            24,
+            593,
+            682,
+            711,
+            607
+          ],
+          [
+            "post_tool",
+            24,
+            49,
+            58,
+            63,
+            50
+          ]
+        ]
+      },
+      "notes": [
+        "Each verb sampled across 8 prompts × 3 iterations (first iteration per prompt dropped as cold start)."
+      ]
+    }
+  }
+}

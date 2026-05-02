@@ -1,0 +1,88 @@
+name: Evals
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      update_baseline:
+        description: "Promote this run to evals/tier2/baseline/ (commits to the dispatched branch)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  tier2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install opencode deps (needed for unit tests + harness imports)
+        working-directory: opencode
+        run: bun install
+
+      - name: Run unit tests
+        run: bun test tests/
+
+      - name: Run tier-2 evals against checked-in baseline
+        id: tier2
+        working-directory: evals
+        run: |
+          set +e
+          bun tier2/runner.ts --baseline tier2/baseline/tier2.json --out ../eval-results/ci
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier2-${{ github.run_id }}
+          path: eval-results/ci/
+
+      - name: Comment diff on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = 'eval-results/ci/diff.md'
+            if (!fs.existsSync(path)) {
+              core.warning('No diff.md produced; skipping PR comment.')
+              return
+            }
+            const body = `<!-- akm-evals -->\n${fs.readFileSync(path, 'utf8')}`
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            })
+            const prior = comments.find((c) => c.body && c.body.startsWith('<!-- akm-evals -->'))
+            if (prior) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prior.id,
+                body,
+              })
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              })
+            }
+
+      - name: Fail job on regression
+        if: steps.tier2.outputs.exit_code != '0'
+        run: |
+          echo "tier-2 evals exited with code ${{ steps.tier2.outputs.exit_code }}"
+          exit 1

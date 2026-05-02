@@ -1,0 +1,15 @@
+{
+  "name": "akm-plugins-evals",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Evaluation framework for the akm Claude Code and OpenCode plugins. Measures curation quality, hook latency, and surface stability across plugin versions.",
+  "scripts": {
+    "tier2": "bun tier2/runner.ts",
+    "tier2:curation": "bun tier2/runner.ts --metric curation",
+    "tier2:latency": "bun tier2/runner.ts --metric latency",
+    "tier2:surface": "bun tier2/runner.ts --metric surface",
+    "diff": "bun lib/cli-diff.ts",
+    "baseline:update": "bun tier2/runner.ts --out tier2/baseline --no-fail"
+  }
+}
