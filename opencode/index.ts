@@ -5,7 +5,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 let resolvedAkmCommand = "akm"
-const autoInstallPackageRef = "akm-cli@latest"
+const autoInstallPackageRef = process.env.AKM_PACKAGE_REF ?? "akm-cli@latest"
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b/
 
@@ -59,7 +59,7 @@ let cachedAkmStashDir: string | undefined
 const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/
 const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
 const AKM_WORKFLOW_INSTRUCTION = [
-  "# AKM workflow",
+  "# AKM workflow (v0.7.0)",
   "",
   "Use AKM as a reusable knowledge and workflow stash.",
   "",
@@ -67,10 +67,11 @@ const AKM_WORKFLOW_INSTRUCTION = [
   "1. Use `akm_search` or `akm_curate`.",
   "2. Use `akm_show <ref>` before relying on an asset.",
   "3. Record `akm_feedback` after the result is known.",
-  "4. Use `akm_help` to route long-tail AKM CLI workflows such as `proposal`, `distill`, `reflect`, and `propose`.",
-  "5. Treat `lesson:*` as first-class durable learning assets.",
-  `6. ${PROPOSED_QUALITY_WARNING}`,
-  "7. Never accept or reject proposals, push saves, remove sources, or access vault values without explicit user approval.",
+  "4. Use the dedicated v0.7.0 tools for the proposal flow: `akm_proposal` (list/show/diff/accept/reject), `akm_reflect`, `akm_propose`, and `akm_distill`. Fall back to `akm_help` for any verb without a dedicated tool.",
+  "5. Treat `lesson:*` as first-class durable learning assets — they are produced by `akm_distill <ref>` as proposals and accepted via `akm_proposal action=accept`.",
+  "6. Run `akm_setup` once on a fresh machine to detect installed agent CLIs and persist `agent.default`. Reflect/propose require it.",
+  `7. ${PROPOSED_QUALITY_WARNING}`,
+  "8. Never accept or reject proposals, push saves, remove sources, or access vault values without explicit user approval.",
 ].join("\n")
 
 function readPackageVersion(): string {
@@ -2952,6 +2953,89 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             return runCli(client as unknown as LogCapableClient, ["workflow", "resume", run_id], logMeta)
           }
         }
+      },
+    }),
+    akm_proposal: tool({
+      description: "Operate the AKM v0.7.0 proposal queue — list/show/diff/accept/reject pending drafts. All proposal-producing commands (reflect, propose, distill, plus plugin-emitted proposals) write through this queue. Acceptance runs full validation before promoting; rejection archives the draft. Always confirm with the user before action='accept' or 'reject'.",
+      args: {
+        action: tool.schema.enum(["list", "show", "diff", "accept", "reject"]).describe("Proposal subcommand."),
+        id: tool.schema.string().optional().describe("Proposal id. Required for show/diff/accept/reject."),
+        status: tool.schema.enum(["pending", "accepted", "rejected"]).optional().describe("Filter for action='list'."),
+        reason: tool.schema.string().optional().describe("Required for action='reject'. Recorded with the archived proposal."),
+      },
+      async execute({ action, id, status, reason }) {
+        const logMeta = { toolName: "akm_proposal" }
+        switch (action) {
+          case "list": {
+            const args = ["proposal", "list"]
+            if (status) args.push("--status", status)
+            return runCli(client as unknown as LogCapableClient, args, logMeta)
+          }
+          case "show": {
+            if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='show'." })
+            return runCli(client as unknown as LogCapableClient, ["proposal", "show", id], logMeta)
+          }
+          case "diff": {
+            if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='diff'." })
+            return runCli(client as unknown as LogCapableClient, ["proposal", "diff", id], logMeta)
+          }
+          case "accept": {
+            if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='accept'. Confirm with the user before accepting." })
+            return runCli(client as unknown as LogCapableClient, ["proposal", "accept", id], logMeta)
+          }
+          case "reject": {
+            if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='reject'. Confirm with the user before rejecting." })
+            if (!reason || !reason.trim()) return JSON.stringify({ ok: false, error: "'reason' is required for action='reject'. Ask the user why the proposal is being rejected." })
+            return runCli(client as unknown as LogCapableClient, ["proposal", "reject", id, "--reason", reason], logMeta)
+          }
+        }
+      },
+    }),
+    akm_reflect: tool({
+      description: "Generate a reflection proposal for an AKM ref via the configured agent CLI. Output lands in the proposal queue only — never mutates live stash content. Requires `agent.default` to be set (run akm_setup first if missing).",
+      args: {
+        ref: tool.schema.string().optional().describe("[origin//]type:name ref to reflect on. Optional — when omitted the agent reflects on overall session signal."),
+        task: tool.schema.string().optional().describe("Free-form task description guiding the reflection."),
+      },
+      async execute({ ref, task }) {
+        const args = ["reflect"]
+        if (ref) args.push(ref)
+        if (task) args.push("--task", task)
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_reflect" })
+      },
+    }),
+    akm_propose: tool({
+      description: "Generate a new-asset proposal via the configured agent CLI. The asset is drafted as `quality:\"proposed\"` and lands in the proposal queue — never directly into curated content. Requires `agent.default` (run akm_setup first if missing).",
+      args: {
+        type: tool.schema.enum(["skill", "command", "agent", "knowledge", "lesson", "script", "workflow", "wiki"]).describe("Asset type for the new proposal."),
+        name: tool.schema.string().describe("Slug for the new asset (matches the standard ref grammar)."),
+        task: tool.schema.string().describe("Required. Describes what the asset should do."),
+      },
+      async execute({ type, name, task }) {
+        if (!task || !task.trim()) return JSON.stringify({ ok: false, error: "'task' is required for akm_propose." })
+        const args = ["propose", type, name, "--task", task]
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_propose" })
+      },
+    }),
+    akm_distill: tool({
+      description: "Distill an AKM ref into a proposed `lesson` using the bounded in-tree LLM. Gated by `llm.features.feedback_distillation` (default false); when the gate is off the call returns a fallback warning instead of a proposal. Lessons require `description` and `when_to_use` frontmatter and are stored under `lessons/<name>.md` after acceptance.",
+      args: {
+        ref: tool.schema.string().describe("[origin//]type:name ref to distill — most often memory:<name> or knowledge:<name>."),
+      },
+      async execute({ ref }) {
+        if (!ref || !ref.trim()) return JSON.stringify({ ok: false, error: "'ref' is required for akm_distill." })
+        return runCli(client as unknown as LogCapableClient, ["distill", ref], { toolName: "akm_distill" })
+      },
+    }),
+    akm_setup: tool({
+      description: "Detect installed agent CLIs (opencode, claude, codex, gemini, aider) and persist `agent.default`. Required once per machine before akm_reflect / akm_propose can shell out. Idempotent — pass force=true to re-run detection even when agent.default is already set.",
+      args: {
+        force: tool.schema.boolean().optional().describe("Re-run detection even when agent.default is already configured."),
+      },
+      async execute({ force }) {
+        const args = ["setup"]
+        if (force) args.push("--force")
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_setup" })
       },
     }),
     akm_help: tool({

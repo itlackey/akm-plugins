@@ -1,15 +1,15 @@
 ---
 name: akm
-description: Search, show, dispatch agents, execute commands, run workflows, manage wikis and vaults, and curate stash assets via the akm CLI. Use when the user wants to find or use tools, skills, commands, agents, knowledge, wikis, vaults, or workflows.
+description: Search, show, dispatch agents, execute commands, run workflows, manage wikis and vaults, route the proposal queue, distill lessons, and curate stash assets via the akm CLI. Use when the user wants to find or use tools, skills, commands, agents, knowledge, lessons, wikis, vaults, or workflows.
 ---
 
 # AKM Stash
 
-You have access to the `akm` CLI (AKM, v0.6.1+) to manage extension assets from a stash directory.
+You have access to the `akm` CLI (AKM, v0.7.0+) to manage extension assets from a stash directory.
 
 ## Tool surface vs. CLI
 
-The Claude AKM plugin exposes **12 first-class slash commands** for the high-value verbs:
+The Claude AKM plugin exposes **18 first-class slash commands** for the high-value verbs:
 
 - `/akm-search` — search the stash or registry
 - `/akm-show` — fetch the full payload for a ref
@@ -22,13 +22,19 @@ The Claude AKM plugin exposes **12 first-class slash commands** for the high-val
 - `/akm-wiki` — wiki create/register/list/show/pages/search/stash/lint/ingest/remove
 - `/akm-workflow` — start/next/complete/status/list/create/resume/template
 - `/akm-vault` — vault `list` / `show` (key names) / `load` (shell-eval snippet)
+- `/akm-proposal` — operate the v0.7.0 proposal queue (list/show/diff/accept/reject)
+- `/akm-review-proposals` — list and diff every pending proposal in one pass
+- `/akm-reflect` — generate a reflection proposal via the configured agent CLI
+- `/akm-propose` — generate a new-asset proposal via the configured agent CLI
+- `/akm-distill` — distill a ref into a `lesson` proposal (gated by `llm.features.feedback_distillation`)
+- `/akm-setup` — detect installed agent CLIs and persist `agent.default`
 - `/akm-help` — discover the right raw `akm` invocation for the long tail
 
 For every other verb — `add` (install kits / register sources), `save`, `import`, `clone`,
 `update`, `remove` (uninstall a source), `list` (configured sources), `registry search`,
-`index` (reindex), `config`, `upgrade`, ad-hoc `run`, vault writes (`set` / `unset`), and
-any flag not exposed by the slash commands above — **call `/akm-help` first** to discover
-the right `akm` CLI form, then run it via Bash.
+`index` (reindex), `config`, `upgrade`, ad-hoc `run`, `agent` (raw agent-CLI shell-out),
+vault writes (`set` / `unset`), and any flag not exposed by the slash commands above —
+**call `/akm-help` first** to discover the right `akm` CLI form, then run it via Bash.
 
 ### akm_help quick reference
 
@@ -67,10 +73,12 @@ The stash directory contains:
 - **agents/** — markdown agent definition files
 - **knowledge/** — markdown knowledge files
 - **memories/** — markdown memory files recorded with `akm remember`
+- **lessons/** — markdown lesson files (`lesson:<name>`) with required `description` and `when_to_use` frontmatter; normally produced by `akm distill <ref>` as a proposed-quality proposal and promoted via `akm proposal accept`
 - **scripts/** — executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
 - **workflows/** — multi-step procedures (`workflow:<name>`) driven by `akm workflow`
 - **vaults/** — `.env` files (`vault:<name>`) whose values are managed by `akm vault` and **never** surface in JSON, logs, or search indexes
 - **wikis/** — per-wiki directories (`<stashDir>/wikis/<name>/`) containing `schema.md`, `index.md`, `log.md`, `raw/`, and agent-authored pages referenced as `wiki:<name>/<page>`
+- **.akm/proposals/** — v0.7.0 proposal queue (one directory per proposal). Drafts here never leak into search or commits; promote them with `akm proposal accept <id>`.
 
 ### Multi-source resolution
 
@@ -87,7 +95,16 @@ Assets are classified using a multi-signal matcher system that considers file ex
 
 ### Refs
 
-Refs use the format `[origin//]type:name`. Simple refs like `script:deploy.sh` search all sources. Origin-qualified refs like `npm:@scope/pkg//script:deploy.sh` or `local//script:deploy.sh` target a specific source.
+Refs use the format `[origin//]type:name`. The known types are `skill`, `command`, `agent`, `knowledge`, `memory`, `lesson`, `script`, `workflow`, `vault`, and `wiki`. Simple refs like `script:deploy.sh` search all sources. Origin-qualified refs like `npm:@scope/pkg//script:deploy.sh` or `local//script:deploy.sh` target a specific source.
+
+### Quality
+
+`SearchHit.quality` is an open string set with three well-known values:
+- `"curated"` — accepted into the stash; included in default search.
+- `"generated"` — auto-generated but accepted; included in default search.
+- `"proposed"` — drafts in the proposal queue; **excluded from default search** and only surface via `akm search ... --include-proposed` or `akm proposal *`.
+
+Unknown quality values parse-warn-include (they remain searchable). Treat `proposed` assets as candidates only — never feed them through `akm feedback` until they are promoted via `/akm-proposal accept`. The plugin's auto-feedback hook automatically skips proposed-quality refs.
 
 ## Commands
 
@@ -106,16 +123,17 @@ Use `--full` to force a full reindex instead of incremental. Run this after addi
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type skill|command|agent|knowledge|memory|script|workflow|vault|wiki|any] [--limit N] [--source stash|local|registry|both]
+akm search [query] [--type skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki|any] [--limit N] [--source stash|local|registry|both] [--include-proposed]
 ```
 
 Square brackets denote optional arguments; pipe-separated values denote allowed choices for a single flag.
 
 The response includes `hits` (ranked results), plus diagnostic fields: `timing` (totalMs, rankMs, embedMs), `warnings` (string array of non-fatal issues), and `tip` (contextual usage hint).
 
-- Local and installed stash hits include `ref`, which you pass to `akm show`.
-- Registry hits include `id`, `installRef`, `action` (contains install guidance), and `curated` fields.
+- Local and installed stash hits include `ref`, which you pass to `akm show`. Hits also include optional `quality?` (`curated` / `generated` / `proposed` / unknown) and `warnings?` (string array of non-fatal issues).
+- Registry hits live under a separate `registryHits` key and include `id`, `installRef`, `action` (contains install guidance). The legacy `curated` boolean is removed in v0.7.0; use the per-asset `quality` field instead.
 - Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once. Note: `local` remains a backward-compatible alias for `stash`.
+- `--include-proposed` merges `quality:"proposed"` rows into `hits`; without it, drafts in the proposal queue are hidden from default search.
 
 ### Show an asset
 
@@ -214,6 +232,98 @@ akm feedback skill:code-review --positive
 akm feedback command:release --negative --note "Outdated for the current repo layout"
 ```
 
+Auto-feedback (recorded by the plugin hooks on Bash tool success/failure) skips
+`memory:*`, `vault:*`, `lesson:*`, and any ref the indexer reports as
+`quality:"proposed"`. Lessons take feedback through the proposal queue, not via
+direct `akm feedback`. Override an automatic signal by running `akm feedback`
+explicitly.
+
+## Proposal queue (v0.7.0)
+
+All proposal-producing commands (`akm reflect`, `akm propose`, `akm distill`,
+plus any plugin-emitted proposals) write through one durable queue at
+`<stashRoot>/.akm/proposals/`. Drafts there never leak into search or commits;
+acceptance runs full validation before routing through the same single write
+path used by `akm remember` and `akm import`.
+
+```bash
+akm proposal list                       # all pending drafts
+akm proposal list --status pending --format json
+akm proposal show <id>                  # render the draft
+akm proposal diff <id>                  # diff vs. the live ref
+akm proposal accept <id>                # validate, then promote
+akm proposal reject <id> --reason "…"   # archive with reason
+```
+
+Use the slash commands rather than the raw CLI:
+
+- `/akm-review-proposals` — list every pending proposal and diff each one.
+- `/akm-proposal list|show|diff` — read-only operations.
+- `/akm-proposal accept|reject` — **always confirm with the user before running.** Acceptance promotes a draft into curated content; rejection archives it.
+
+Multiple proposals for the same `ref` coexist without filesystem collisions.
+The default `quality` for promoted proposals is set by the proposal itself (most
+commonly `curated` after acceptance). To search drafts directly, run
+`akm search "<query>" --include-proposed`.
+
+## Lessons
+
+`lesson` is a first-class v0.7.0 asset type stored under `<stashDir>/lessons/<name>.md`.
+Frontmatter is required:
+
+```markdown
+---
+description: One-line summary of the lesson.
+when_to_use: When this insight applies (problem context, signals, etc.).
+---
+
+Body in markdown.
+```
+
+The canonical creation path is **`/akm-distill <ref>`** — run it on a memory,
+knowledge doc, or session summary that contains repeated evidence. `distill`
+emits a `lesson` proposal at `quality:"proposed"` which the user then reviews
+via `/akm-proposal accept`. Direct authoring via `akm import` and `akm
+remember`-style flows is also supported.
+
+Distill is gated behind `llm.features.feedback_distillation` (default `false`).
+If the gate is off, `/akm-distill` falls back gracefully — confirm with the
+user before flipping the gate via `akm config set llm.features.feedback_distillation true`.
+
+## Reflect / Propose
+
+`/akm-reflect` and `/akm-propose` shell out to the configured agent CLI
+(`agent.default`, set up via `/akm-setup`) and write **only** to the proposal
+queue — they never mutate live stash content. Use them when:
+
+- An asset misbehaved and you want a corrective draft → `/akm-reflect <ref> [--task "..."]`.
+- A coverage gap appeared in the conversation and you want a new draft asset → `/akm-propose <type> <name> --task "..."`.
+
+If `agent.default` is unset, run `/akm-setup` first; the plugin's SessionStart
+hook does this automatically on first run when an agent CLI is detected on
+PATH.
+
+## In-tree LLM gates
+
+Every bounded in-tree LLM call site is gated behind exactly one feature flag
+in `llm.features.*`. All defaults are `false`. The seven keys:
+
+| Key | Use site |
+| --- | --- |
+| `curate_rerank` | LLM rerank in `akm curate` |
+| `tag_dedup` | LLM tag dedup during indexer enrichment |
+| `memory_consolidation` | `akm remember --enrich` consolidation |
+| `feedback_distillation` | `akm distill <ref>` |
+| `embedding_fallback_score` | scorer fallback when embeddings unavailable |
+| `memory_inference` | indexer split of pending memories into atomic facts |
+| `graph_extraction` | indexer entity/relation extraction → `graph.json` |
+
+Every gated call site uses `tryLlmFeature(...)` from akm core: when the gate
+is `false`, the function never runs; when it throws or times out (30 s
+default), the caller's fallback runs and a `warnings` entry is emitted. Don't
+flip these flags without the user's explicit consent — they cost LLM tokens
+and may emit network traffic.
+
 ## Compound engineering loop
 
 This plugin closes the loop between **using** assets and **improving** them so
@@ -223,15 +333,17 @@ intent-bearing parts.
 
 | Phase | Automatic (hooks) | Your responsibility |
 | --- | --- | --- |
-| Session start | `akm` installed/refreshed; `akm hints` injected as context; index warmed in the background. | Skim the hints so you know which asset types are available. |
+| Session start | `akm` installed/refreshed; `agent.default` detected and persisted via `akm setup` on first run; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. |
 | Each user prompt | `akm curate "<prompt>"` runs and its top matches are injected into context as `additionalContext`. | Prefer the curated assets over writing new code; fetch full payloads with `akm show <ref>` before using. |
-| Each Bash tool call | Asset refs in the command/output are logged and positive/negative feedback is recorded automatically on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
-| Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings from that memory into a named skill/knowledge doc via `/akm-remember` or the `akm-curator` agent. |
+| Each Bash tool call | Asset refs in the command/output are logged. Auto-feedback skips `memory:*` / `vault:*` / `lesson:*` / `quality:"proposed"` refs and records positive/negative feedback for everything else on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
+| Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings — distill the session memory into a `lesson` via `/akm-distill memory:<name>`, review the resulting proposal, and accept it via `/akm-proposal accept <id>`. |
 
 When you discover a pattern worth keeping, **write it back to the stash**
 rather than only answering the user. Options:
 
 - `/akm-remember` (or `akm remember --name <slug>`) — short markdown note (reads stdin).
+- `/akm-distill <ref>` — distill repeated evidence into a `lesson` proposal; review and accept via `/akm-proposal accept`.
+- `/akm-reflect <ref>` / `/akm-propose <type> <name> --task "..."` — generate a corrective or new-asset proposal via the configured agent CLI. Both write only to the proposal queue.
 - `akm import <file>` — promote a drafted file into the knowledge index. Run `/akm-help`
   topic="import" if you need a refresher on the flag surface.
 - `akm clone <ref>` + edit — fork an existing asset, then rewrite with your

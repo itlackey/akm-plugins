@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.6.1+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, and **handle vaults safely** — plus **agentic hooks** that auto-load relevant assets, record memories, and feed asset-usage feedback back into the stash so it improves with every session.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.7.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle vaults safely**, **operate the v0.7.0 proposal queue**, and **distill lessons** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, run `akm setup` to detect the agent CLI, and feed asset-usage feedback back into the stash so it improves with every session.
 
 ## Installation
 
@@ -24,8 +24,8 @@ claude plugin install akm@akm-plugins
 ## What's included
 
 - **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
-- **Agentic hooks** — lifecycle hooks that install `akm`, auto-curate stash matches into every user prompt, auto-record feedback when assets are used, and harvest session memories at stop/compact time
-- **Slash commands** — a trimmed surface of 12 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault`, `/akm-help`) for explicit control of the compound-engineering loop
+- **Agentic hooks** — lifecycle hooks that install `akm`, run `akm setup` once to detect the agent CLI, auto-curate stash matches into every user prompt, auto-record feedback when assets are used (skipping proposed-quality drafts and `lesson:*` refs), surface pending-proposal counts in the SessionStart header, and harvest session memories at stop/compact time
+- **Slash commands** — 18 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault`, `/akm-proposal`, `/akm-review-proposals`, `/akm-reflect`, `/akm-propose`, `/akm-distill`, `/akm-setup`, `/akm-help`) for explicit control of the compound-engineering loop
 - **`akm-curator` agent** — a self-evolution subagent that reviews session logs and proposes stash improvements
 
 The skill teaches Claude to:
@@ -104,9 +104,11 @@ stash/
 ├── agents/     # markdown files
 ├── knowledge/  # markdown files
 ├── memories/   # markdown memory files (akm remember)
+├── lessons/    # first-class durable learnings (lesson:<name>) — produced by akm distill, accepted via akm proposal accept
 ├── workflows/  # multi-step procedures (workflow:<name>)
 ├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
-└── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
+├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
+└── .akm/proposals/  # v0.7.0 proposal queue — drafts that never leak into search or commits
 ```
 
 Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
@@ -119,9 +121,9 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 | Event | What happens |
 | --- | --- |
-| **SessionStart** | Installs/refreshes `akm-cli@latest` (Bun → npm fallback), warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. |
+| **SessionStart** | Installs/refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`; Bun → npm fallback), runs `akm setup` once per machine to detect the configured agent CLI, surfaces it plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. |
 | **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
-| **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. |
+| **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs (including `lesson:*`) from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. Skips `memory:*`, `vault:*`, `lesson:*`, and any ref the indexer reports as `quality:"proposed"`. |
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
 | **Stop** / **SubagentStop** | Flushes the per-session buffer into a `memory:claude-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows that flush with `akm index` so upstream inference/graph passes run immediately. |
 | **PreCompact** | Same memory capture before Claude Code compacts the transcript, with the same optional post-flush `akm index` run when `AKM_INDEX_ON_SESSION_END=1`. |
@@ -130,18 +132,20 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `AKM_PACKAGE_REF` | `akm-cli@latest` | Override the npm/bun package spec used by SessionStart auto-install (e.g. pin to `akm-cli@0.7.0` in CI). |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
+| `AKM_AUTO_SETUP` | `1` | Set to `0` to disable the automatic `akm setup` run on first SessionStart. Set to `force` to re-run on every SessionStart. |
 | `AKM_INDEX_ON_SESSION_END` | `0` | Set to `1` to run `akm index` after a session-end memory is captured. |
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
 | `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Max total characters injected into `additionalContext` for a single hook fire. |
-| `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Where session logs and per-session buffers live. |
+| `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Where session logs and per-session buffers live. Also holds the `setup.stamp` and `quality-cache.tsv` files. |
 
 ### Slash commands
 
-The plugin ships a trimmed surface of 12 first-class verbs. `/akm-add` and `/akm-save` are no longer part of the slash-command surface — both `akm add` and `akm save` are reachable via `/akm-help` (see "When to use what" below).
+The plugin ships 18 first-class verbs. `/akm-add` and `/akm-save` are not part of the slash-command surface — both `akm add` and `akm save` are reachable via `/akm-help` (see "When to use what" below).
 
 - `/akm-search <query> [flags]` — run `akm search` directly from Claude.
 - `/akm-show <ref> [view args]` — inspect a stash asset by ref.
@@ -154,12 +158,18 @@ The plugin ships a trimmed surface of 12 first-class verbs. `/akm-add` and `/akm
 - `/akm-wiki <subcommand> [args]` — manage AKM wikis (create, register, list, show, pages, search, stash, lint, ingest, remove).
 - `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
 - `/akm-vault <list|show|load> [ref]` — vault read paths: enumerate vaults, show key names, or emit a shell-eval `load` snippet. `show`/`list` never echo values; `load` output is opaque shell text meant for `eval` and is never displayed back in chat.
+- `/akm-proposal <list|show|diff|accept|reject> [id] [--reason "..."]` — operate the v0.7.0 proposal queue. Always confirms with the user before `accept`/`reject`.
+- `/akm-review-proposals [--limit N]` — list every pending proposal and diff each one in a single pass for review.
+- `/akm-reflect [ref] [--task "..."]` — generate a reflection proposal via the configured agent CLI; output lands in the proposal queue.
+- `/akm-propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.
+- `/akm-distill <ref>` — distill a ref into a proposed `lesson` (gated by `llm.features.feedback_distillation`).
+- `/akm-setup [--force]` — detect installed agent CLIs and persist `agent.default`. Required once per machine for reflect/propose.
 - `/akm-help [task]` — surface a curated quick-reference for non-first-class `akm` verbs and fall back to live `akm --help`.
 
 ### When to use what
 
-- **Prefer the 12 slash commands above** for the verbs they cover — they wire the AKM skill flow, hooks, and feedback loop together for you.
-- **For everything else** — `add` (install kits / register sources), `save`, `import`, `clone`, `update`, `remove`, `list` (sources), `registry-search`, `reindex`, `config`, `upgrade`, `run-script`, and vault writes (`create`, `set`, `unset`) — call `/akm-help <task>` first to discover the right `akm` CLI invocation, then run it via Bash.
+- **Prefer the 18 slash commands above** for the verbs they cover — they wire the AKM skill flow, hooks, and feedback loop together for you.
+- **For everything else** — `add` (install kits / register sources), `save`, `import`, `clone`, `update`, `remove`, `list` (sources), `registry-search`, `reindex`, `config`, `upgrade`, `run-script`, raw `agent` (one-shot agent shell-out), and vault writes (`create`, `set`, `unset`) — call `/akm-help <task>` first to discover the right `akm` CLI invocation, then run it via Bash.
 - **Vault writes still bypass the chat turn entirely.** `/akm-vault` is read-only for displayed output (`list` and `show` of key names; `load` produces shell-eval text that must be piped to `eval` rather than displayed); to create vaults or set/unset values, run `akm vault …` in the shell directly so secret values never pass through the chat turn.
 
 ## Docs

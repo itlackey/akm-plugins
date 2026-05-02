@@ -122,6 +122,12 @@ describe("Claude plugin metadata", () => {
       "akm-wiki",
       "akm-workflow",
       "akm-vault",
+      "akm-proposal",
+      "akm-review-proposals",
+      "akm-reflect",
+      "akm-propose",
+      "akm-distill",
+      "akm-setup",
       "akm-help",
     ]) {
       const file = path.join(commandsDir, `${name}.md`)
@@ -131,6 +137,26 @@ describe("Claude plugin metadata", () => {
     expect(existsSync(path.join(commandsDir, "akm-save.md"))).toBe(false)
     expect(existsSync(path.join(commandsDir, "akm-add.md"))).toBe(false)
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
+  })
+
+  it("v0.7.0 slash commands carry the canonical proposal-flow guard rails", () => {
+    const commandsDir = path.join(repoRoot, "claude/commands")
+    const proposal = readFileSync(path.join(commandsDir, "akm-proposal.md"), "utf8")
+    expect(proposal).toContain("proposal list")
+    expect(proposal).toContain("proposal accept")
+    expect(proposal).toContain("proposal reject")
+    expect(proposal).toMatch(/[Cc]onfirm with the user/)
+
+    const review = readFileSync(path.join(commandsDir, "akm-review-proposals.md"), "utf8")
+    expect(review).toContain("proposal list --status pending")
+    expect(review).toMatch(/[Dd]o not call `?akm proposal accept/)
+
+    const distill = readFileSync(path.join(commandsDir, "akm-distill.md"), "utf8")
+    expect(distill).toContain("llm.features.feedback_distillation")
+    expect(distill).toContain("distill <ref>")
+
+    const setup = readFileSync(path.join(commandsDir, "akm-setup.md"), "utf8")
+    expect(setup).toContain("agent.default")
   })
 
   it("keeps the curated akm_help registry table in parity across embeds", () => {
@@ -577,6 +603,112 @@ exit 0
     const recorded = readFileSync(feedbackLog, "utf8")
     expect(recorded).toContain("feedback command:release --negative")
     expect(recorded).not.toContain("feedback memory:notes")
+  })
+
+  it("post-tool recognizes lesson:* refs (v0.7.0)", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["post-tool", "success"], {
+      input: JSON.stringify({
+        tool: "Bash",
+        session_id: "sess-lesson-1",
+        input: { command: "akm show lesson:rollback-pattern" },
+        output: "{\"type\":\"lesson\",\"ref\":\"lesson:rollback-pattern\"}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    expect(getFirstLogEntry(stateDir, "memory.log")).toContain("lesson:rollback-pattern")
+  })
+
+  it("auto-feedback skips lesson:* refs (v0.7.0)", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const feedbackLog = path.join(tempDir, "akm-feedback.log")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    const quotedLog = shellQuote(feedbackLog)
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["auto-feedback", "success"], {
+      input: JSON.stringify({
+        tool: "Bash",
+        input: { command: "akm show lesson:rollback-pattern" },
+        output: "{\"type\":\"lesson\",\"ref\":\"lesson:rollback-pattern\"}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const recorded = existsSync(feedbackLog) ? readFileSync(feedbackLog, "utf8") : ""
+    expect(recorded).not.toContain("feedback lesson:rollback-pattern")
+  })
+
+  it("auto-feedback skips proposed-quality refs (v0.7.0)", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    const quotedLog = shellQuote(callLog)
+
+    // Fake akm: when asked to `show <ref>`, return a JSON body with
+    // quality:"proposed". Record every invocation so we can confirm no
+    // feedback call was made.
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+case "$*" in
+  *show*skill:draft-rollback*)
+    echo '{"type":"skill","ref":"skill:draft-rollback","quality":"proposed"}'
+    exit 0
+    ;;
+esac
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["auto-feedback", "success"], {
+      input: JSON.stringify({
+        tool: "Bash",
+        input: { command: "akm show skill:draft-rollback" },
+        output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"proposed\"}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const calls = readFileSync(callLog, "utf8")
+    // The probe call must have happened, but no feedback call should follow.
+    expect(calls).toContain("show skill:draft-rollback")
+    expect(calls).not.toContain("feedback skill:draft-rollback")
+
+    const skipLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
+    expect(skipLog.some((line) => line.includes("skip_proposed\tskill:draft-rollback"))).toBe(true)
   })
 
   it("auto-feedback is a no-op when the command did not invoke akm", () => {

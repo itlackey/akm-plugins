@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.6.1+). Registers tools that let your AI agent **search**, **show**, and **manage** stash assets — skills, commands, agents, knowledge, memories, scripts, workflows, vaults, and wikis — plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used, and harvest session memories so the stash improves with every session.
+OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.7.0+). Registers tools that let your AI agent **search**, **show**, and **manage** stash assets — skills, commands, agents, knowledge, memories, lessons, scripts, workflows, vaults, and wikis — **operate the v0.7.0 proposal queue** and **distill lessons** through dedicated tools, plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used (skipping proposed-quality drafts), and harvest session memories so the stash improves with every session.
 
 ## Installation
 
@@ -14,7 +14,7 @@ Add to your OpenCode config (`opencode.json`):
 
 ## Tools
 
-The plugin exposes a trimmed surface of **14 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`, `proposal`, `distill`, `reflect`, `propose`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
+The plugin exposes **19 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`, raw `agent`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
 
 | Tool | Description |
 |------|-------------|
@@ -23,7 +23,7 @@ The plugin exposes a trimmed surface of **14 high-value tools**. Long-tail verbs
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
 | `akm_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
 | `akm_remember` | Record a memory in the default stash |
-| `akm_feedback` | Record positive or negative feedback for a stash asset (skipped automatically for `memory:` and `vault:` refs) |
+| `akm_feedback` | Record positive or negative feedback for a stash asset (skipped automatically for `memory:`, `vault:`, `lesson:`, and proposed-quality refs) |
 | `akm_curate` | Curate the stash for a task or topic and return ranked matches the agent can use |
 | `akm_evolve` | Dispatch the AKM curator subagent into a child session, capture the report as a memory, and seed the curator-context cache so it survives compaction |
 | `akm_parent_messages` | Summarize the parent OpenCode session so dispatched stash subagents can inherit upstream context |
@@ -31,6 +31,11 @@ The plugin exposes a trimmed surface of **14 high-value tools**. Long-tail verbs
 | `akm_vault` | Vault `list` / `show` (key names) / `create` / `set` / `unset` / `load` (opaque shell-eval text). **Values never surface** through `list`/`show`; `load` output is meant for `eval` and must not be displayed back |
 | `akm_wiki` | Manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`) |
 | `akm_workflow` | Drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`) |
+| `akm_proposal` | Operate the v0.7.0 proposal queue (`list` / `show` / `diff` / `accept` / `reject`). Always confirm with the user before `accept`/`reject` — those operations require explicit approval |
+| `akm_reflect` | Generate a reflection proposal via the configured agent CLI; output lands in the proposal queue only |
+| `akm_propose` | Generate a new-asset proposal via the configured agent CLI; the result is `quality:"proposed"` until accepted |
+| `akm_distill` | Distill an AKM ref (typically `memory:*` or `knowledge:*`) into a proposed `lesson` (gated by `llm.features.feedback_distillation`) |
+| `akm_setup` | Detect installed agent CLIs (`opencode`, `claude`, `codex`, `gemini`, `aider`) and persist `agent.default`. Required once per machine for `akm_reflect` / `akm_propose` |
 | `akm_help` | Discover the right `akm` CLI invocation for non-first-class verbs. Returns a curated quick-reference table plus live `akm <subcommand> --help` output |
 
 ## Compound-engineering hooks
@@ -69,6 +74,7 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | `\b(thanks|perfect|worked)\b` | Case-insensitive regex used for lightweight positive retrospective feedback on the most recent refs. |
 | `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong|failed|broken|didn't work|did not work|bad)\b` | Case-insensitive regex used for negative retrospective feedback signals. |
 | `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Seconds allowed for lightweight pending-proposal count checks during context injection. |
+| `AKM_PACKAGE_REF` | `akm-cli@latest` | Override the npm/bun package spec used for auto-install (e.g. pin to `akm-cli@0.7.0` in CI). |
 
 ### Curator agent
 
@@ -168,9 +174,11 @@ stash/
 ├── agents/     # markdown files
 ├── knowledge/  # markdown files
 ├── memories/   # markdown memory files (akm remember)
+├── lessons/    # first-class durable learnings (lesson:<name>) — produced by akm distill, accepted via akm_proposal accept
 ├── workflows/  # multi-step procedures (workflow:<name>)
 ├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
-└── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
+├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
+└── .akm/proposals/  # v0.7.0 proposal queue — drafts that never leak into search or commits
 ```
 
 ## Vaults
