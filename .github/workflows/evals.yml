@@ -6,11 +6,22 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      update_baseline:
-        description: "Promote this run to evals/tier2/baseline/ (commits to the dispatched branch)"
+      tier:
+        description: "Which tier to run: tier2 (deterministic) or tier3 (LLM judge)"
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options: [tier2, tier3]
+        default: tier2
+      scenarios:
+        description: "Tier-3 scenario glob (e.g. 'curate-skill-*'). Empty = all."
+        required: false
+        type: string
+        default: ""
+      budget_usd:
+        description: "Tier-3 budget cap in USD"
+        required: false
+        type: string
+        default: "5"
 
 permissions:
   contents: read
@@ -18,6 +29,7 @@ permissions:
 
 jobs:
   tier2:
+    if: github.event_name != 'workflow_dispatch' || inputs.tier == 'tier2'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +38,10 @@ jobs:
 
       - name: Install opencode deps (needed for unit tests + harness imports)
         working-directory: opencode
+        run: bun install
+
+      - name: Install evals deps (yaml, anthropic SDK)
+        working-directory: evals
         run: bun install
 
       - name: Run unit tests
@@ -86,3 +102,37 @@ jobs:
         run: |
           echo "tier-2 evals exited with code ${{ steps.tier2.outputs.exit_code }}"
           exit 1
+
+  tier3:
+    if: github.event_name == 'workflow_dispatch' && inputs.tier == 'tier3'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install opencode deps
+        working-directory: opencode
+        run: bun install
+
+      - name: Install evals deps
+        working-directory: evals
+        run: bun install
+
+      - name: Run tier-3 scenarios with judge
+        working-directory: evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          ARGS="--budget ${{ inputs.budget_usd }} --out ../eval-results/tier3"
+          if [ -n "${{ inputs.scenarios }}" ]; then
+            ARGS="$ARGS --scenarios ${{ inputs.scenarios }}"
+          fi
+          bun tier3/runner.ts $ARGS
+
+      - name: Upload tier-3 artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier3-${{ github.run_id }}
+          path: eval-results/tier3/

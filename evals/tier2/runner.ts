@@ -13,6 +13,9 @@ import { writeReport, type EvalReport } from "../lib/report"
 import { runSurfaceMetric } from "./metrics/surface"
 import { runCurationMetric } from "./metrics/curation"
 import { runLatencyMetric } from "./metrics/latency"
+import { runContextBudgetMetric } from "./metrics/context-budget"
+import { runFeedbackMetric } from "./metrics/feedback"
+import { runMemoryMetric } from "./metrics/memory"
 import { diffReports, renderDiffMarkdown, loadReport } from "../lib/diff"
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../..")
@@ -27,7 +30,7 @@ type CliOptions = {
 
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
-    metrics: new Set(["surface", "curation", "latency"]),
+    metrics: new Set(["surface", "curation", "latency", "context_budget", "feedback", "memory"]),
     outDir: "",
     baseline: null,
     failOnRegression: true,
@@ -77,6 +80,8 @@ async function main() {
 
   const stashDir = path.join(EVALS_ROOT, "fixtures/stash")
   const goldPath = path.join(EVALS_ROOT, "fixtures/prompts/curation.jsonl")
+  const feedbackFixturesPath = path.join(EVALS_ROOT, "fixtures/tool-outputs/feedback.jsonl")
+  const sessionLogsDir = path.join(EVALS_ROOT, "fixtures/session-logs")
 
   const start = performance.now()
   const report: EvalReport = {
@@ -106,6 +111,18 @@ async function main() {
       .slice(0, 8)
       .map((l) => JSON.parse(l).prompt as string)
     report.metrics.latency = runLatencyMetric({ stashDir, prompts, iterations: 3 })
+  }
+  if (opts.metrics.has("context_budget")) {
+    console.log("→ context_budget")
+    report.metrics.context_budget = await runContextBudgetMetric({ goldPath, stashDir })
+  }
+  if (opts.metrics.has("feedback")) {
+    console.log("→ feedback")
+    report.metrics.feedback = await runFeedbackMetric({ fixturesPath: feedbackFixturesPath, stashDir })
+  }
+  if (opts.metrics.has("memory")) {
+    console.log("→ memory")
+    report.metrics.memory = await runMemoryMetric({ sessionLogsDir, stashDir })
   }
 
   report.durationMs = Math.round(performance.now() - start)

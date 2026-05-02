@@ -2,9 +2,9 @@
   "version": "1",
   "tier": "tier2",
   "pluginVersion": "0.6.0",
-  "gitSha": "825d7bdf55790b18c1169c963f9a414eb61ea29a",
-  "ranAt": "2026-05-02T05:56:37.047Z",
-  "durationMs": 34280,
+  "gitSha": "2e54fa05c87b152484e395f2ff6057a933aa2f13",
+  "ranAt": "2026-05-02T15:31:23.927Z",
+  "durationMs": 33020,
   "metrics": {
     "surface": {
       "name": "surface",
@@ -919,48 +919,48 @@
     "latency": {
       "name": "latency",
       "values": {
-        "curate_prompt_p50_ms": 167,
-        "curate_prompt_p95_ms": 188,
-        "curate_prompt_p99_ms": 205,
-        "curate_prompt_mean_ms": 169,
+        "curate_prompt_p50_ms": 130,
+        "curate_prompt_p95_ms": 140,
+        "curate_prompt_p99_ms": 146,
+        "curate_prompt_mean_ms": 132,
         "curate_prompt_n": 24,
-        "session_start_p50_ms": 593,
-        "session_start_p95_ms": 682,
-        "session_start_p99_ms": 711,
-        "session_start_mean_ms": 607,
+        "session_start_p50_ms": 474,
+        "session_start_p95_ms": 501,
+        "session_start_p99_ms": 504,
+        "session_start_mean_ms": 477,
         "session_start_n": 24,
-        "post_tool_p50_ms": 49,
-        "post_tool_p95_ms": 58,
-        "post_tool_p99_ms": 63,
-        "post_tool_mean_ms": 50,
+        "post_tool_p50_ms": 41,
+        "post_tool_p95_ms": 44,
+        "post_tool_p99_ms": 45,
+        "post_tool_mean_ms": 41,
         "post_tool_n": 24,
         "summaries": {
           "curate_prompt": {
             "n": 24,
-            "p50": 167.38520100000005,
-            "p95": 188.18859804999974,
-            "p99": 204.7008488200001,
-            "min": 147.47708700000112,
-            "max": 209.5605340000002,
-            "mean": 168.9531324166666
+            "p50": 130.24544199999946,
+            "p95": 139.57773809999966,
+            "p99": 145.50633821000028,
+            "min": 126.25213900000017,
+            "max": 147.1793290000005,
+            "mean": 131.66082499999996
           },
           "session_start": {
             "n": 24,
-            "p50": 592.8130134999992,
-            "p95": 682.4001275000026,
-            "p99": 710.7910593100004,
-            "min": 539.2085260000003,
-            "max": 718.7596169999997,
-            "mean": 606.6646556250001
+            "p50": 474.45814549999886,
+            "p95": 501.3686209000005,
+            "p99": 504.2104420200004,
+            "min": 458.23826700000063,
+            "max": 504.93168200000036,
+            "mean": 476.5742502916665
           },
           "post_tool": {
             "n": 24,
-            "p50": 49.30875400000514,
-            "p95": 58.09129935000128,
-            "p99": 63.22591263000271,
-            "min": 42.910527,
-            "max": 64.63749600000301,
-            "mean": 49.60834991666676
+            "p50": 41.04989150000256,
+            "p95": 43.81340795000233,
+            "p99": 45.15546846000052,
+            "min": 39.40359499999977,
+            "max": 45.55431099999987,
+            "mean": 41.46426087500049
           }
         }
       },
@@ -977,31 +977,258 @@
           [
             "curate_prompt",
             24,
-            167,
-            188,
-            205,
-            169
+            130,
+            140,
+            146,
+            132
           ],
           [
             "session_start",
             24,
-            593,
-            682,
-            711,
-            607
+            474,
+            501,
+            504,
+            477
           ],
           [
             "post_tool",
             24,
-            49,
-            58,
-            63,
-            50
+            41,
+            44,
+            45,
+            41
           ]
         ]
       },
       "notes": [
         "Each verb sampled across 8 prompts × 3 iterations (first iteration per prompt dropped as cold start)."
+      ]
+    },
+    "context_budget": {
+      "name": "context_budget",
+      "values": {
+        "budget": 4000,
+        "claude_n": 12,
+        "claude_avg_chars": 867,
+        "claude_max_chars": 960,
+        "claude_violations": 0,
+        "claude_drop_rate": 0,
+        "opencode_n": 12,
+        "opencode_avg_chars": 863,
+        "opencode_max_chars": 956,
+        "opencode_violations": 0,
+        "opencode_drop_rate": 0,
+        "opencode_available": true
+      },
+      "table": {
+        "headers": [
+          "plugin",
+          "n",
+          "avg chars",
+          "max chars",
+          "violations",
+          "drop rate"
+        ],
+        "rows": [
+          [
+            "claude",
+            12,
+            867,
+            960,
+            0,
+            "0.0000"
+          ],
+          [
+            "opencode",
+            12,
+            863,
+            956,
+            0,
+            "0.0000"
+          ]
+        ]
+      },
+      "notes": [
+        "Budget: 4000 chars. Drop rate is the fraction of expected refs that did not survive truncation, averaged across prompts."
+      ]
+    },
+    "feedback": {
+      "name": "feedback",
+      "values": {
+        "n": 12,
+        "claude_tp": 9,
+        "claude_fp": 0,
+        "claude_fn": 0,
+        "claude_tn": 3,
+        "claude_precision": 1,
+        "claude_recall": 1,
+        "claude_polarity_flips": 0,
+        "opencode_available": true,
+        "opencode_tp": 9,
+        "opencode_fp": 2,
+        "opencode_fn": 0,
+        "opencode_tn": 1,
+        "opencode_precision": 0.8181818181818182,
+        "opencode_recall": 1,
+        "opencode_polarity_flips": 0,
+        "disagreements": [
+          "fb-008: claude=neither opencode=positive (truth=neither)",
+          "fb-009: claude=neither opencode=positive (truth=neither)"
+        ]
+      },
+      "table": {
+        "headers": [
+          "plugin",
+          "tp",
+          "fp",
+          "fn",
+          "tn",
+          "precision",
+          "recall",
+          "polarity flips"
+        ],
+        "rows": [
+          [
+            "claude",
+            9,
+            0,
+            0,
+            3,
+            "1.0000",
+            "1.0000",
+            0
+          ],
+          [
+            "opencode",
+            9,
+            2,
+            0,
+            1,
+            "0.8182",
+            "1.0000",
+            0
+          ]
+        ]
+      },
+      "notes": [
+        "n=12 synthetic tool outputs. \"Polarity flips\" counts cases where the plugin fired feedback with the wrong sign (positive output classified negative or vice versa)."
+      ]
+    },
+    "memory": {
+      "name": "memory",
+      "values": {
+        "n": 4,
+        "claude_captured": 3,
+        "claude_avg_chars": 359,
+        "claude_ref_coverage": 1,
+        "claude_trivial_rate": 0.25,
+        "claude_vault_leaks": 0,
+        "opencode_available": true,
+        "opencode_captured": true,
+        "opencode_memory_logs": 1,
+        "per_fixture": [
+          {
+            "fixtureId": "rich-multi-asset",
+            "capturedName": "claude-session-20260502-sess-ric",
+            "capturedBody": "## 2026-04-22T12:00:00Z — user memory intent\nplease remember the steps we used to ship the akm release\n\n## 2026-04-22T12:01:30Z — tool ref\nBash → akm show skill:code-review (ref: skill:code-review, status: positive)\n\n## 2026-04-22T12:02:10Z — tool ref\nBash → akm show command:summarize-diff (ref: command:summarize-diff, status: positive)\n\n## 2026-04-22T12:03:00Z — tool ref\nBash → akm workflow start workflow:release (ref: workflow:release, status: positive)\n\n## 2026-04-22T12:05:00Z — user memory intent\nremember to run smoke tests after the deploy\n",
+            "bufferRefs": [
+              "skill:code-review",
+              "command:summarize-diff",
+              "workflow:release"
+            ],
+            "capturedRefs": [
+              "skill:code-review",
+              "command:summarize-diff",
+              "workflow:release"
+            ],
+            "refCoverage": 1,
+            "chars": 551,
+            "trivial": false,
+            "vaultLeak": false
+          },
+          {
+            "fixtureId": "memory-intent-only",
+            "capturedName": "claude-session-20260502-sess-int",
+            "capturedBody": "## 2026-04-22T12:00:00Z — user memory intent\nremember the rollback procedure documented in the runbook\n\n## 2026-04-22T12:01:00Z — user memory intent\nalso remember that smoke tests should run before traffic ramp\n",
+            "bufferRefs": [],
+            "capturedRefs": [],
+            "refCoverage": 1,
+            "chars": 211,
+            "trivial": false,
+            "vaultLeak": false
+          },
+          {
+            "fixtureId": "sparse-single-entry",
+            "capturedName": null,
+            "capturedBody": "",
+            "bufferRefs": [],
+            "capturedRefs": [],
+            "refCoverage": 1,
+            "chars": 0,
+            "trivial": true,
+            "vaultLeak": false
+          },
+          {
+            "fixtureId": "vault-leak-attempt",
+            "capturedName": "claude-session-20260502-sess-vau",
+            "capturedBody": "## 2026-04-22T12:00:00Z — user memory intent\nremember the staging deploy steps\n\n## 2026-04-22T12:01:00Z — tool ref\nBash → akm vault show vault:staging (ref: vault:staging, keys: DATABASE_URL, API_KEY)\n\n## 2026-04-22T12:02:00Z — tool ref\nBash → akm show skill:code-review (ref: skill:code-review, status: positive)\n",
+            "bufferRefs": [
+              "vault:staging",
+              "skill:code-review"
+            ],
+            "capturedRefs": [
+              "vault:staging",
+              "skill:code-review"
+            ],
+            "refCoverage": 1,
+            "chars": 314,
+            "trivial": false,
+            "vaultLeak": false
+          }
+        ]
+      },
+      "table": {
+        "headers": [
+          "fixture",
+          "captured?",
+          "chars",
+          "ref coverage",
+          "vault leak?"
+        ],
+        "rows": [
+          [
+            "rich-multi-asset",
+            "yes",
+            551,
+            "1.00",
+            "no"
+          ],
+          [
+            "memory-intent-only",
+            "yes",
+            211,
+            "1.00",
+            "no"
+          ],
+          [
+            "sparse-single-entry",
+            "no (trivial)",
+            0,
+            "1.00",
+            "no"
+          ],
+          [
+            "vault-leak-attempt",
+            "yes",
+            314,
+            "1.00",
+            "no"
+          ]
+        ]
+      },
+      "notes": [
+        "Sparse fixtures (< 2 buffer entries) are expected to be trivial-rate dropped.",
+        "Vault leak fires when the captured memory body contains a non-empty value for known secret keys; since the hook pipes the buffer untouched into akm remember, the test indirectly validates that vault VALUES never enter the buffer in the first place."
       ]
     }
   }

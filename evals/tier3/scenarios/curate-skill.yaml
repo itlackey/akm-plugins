@@ -1,0 +1,20 @@
+id: curate-skill-code-review
+description: User asks for a code review pass; the curator should surface skill:code-review and the agent should record positive feedback after using it.
+plugins: [claude, opencode]
+seed_stash: default
+user_turns:
+  - role: user
+    content: "Help me review the diff in src/api/handlers.ts for style issues and potential bugs."
+expectations:
+  must_curate_refs:
+    - skill:code-review
+  may_curate_refs:
+    - agent:reviewer
+    - knowledge:repo-conventions
+  must_record_feedback_for:
+    - skill:code-review
+  forbid_refs:
+    - vault:staging
+  max_total_tokens: 8000
+judge_rubric: default
+weight: 1.0

@@ -1,0 +1,20 @@
+id: release-workflow
+description: User wants to cut a release; both the bump-version command and the release workflow should surface, and feedback should fire after use.
+plugins: [claude, opencode]
+seed_stash: default
+user_turns:
+  - role: user
+    content: "Cut a new semver release and publish — bump version everywhere and tag the release."
+expectations:
+  must_curate_refs:
+    - command:bump-version
+    - workflow:release
+  may_curate_refs: []
+  must_record_feedback_for:
+    - command:bump-version
+    - workflow:release
+  forbid_refs:
+    - vault:staging
+  max_total_tokens: 8000
+judge_rubric: strict
+weight: 1.5

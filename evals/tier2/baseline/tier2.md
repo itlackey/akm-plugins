@@ -1,9 +1,9 @@
 # AKM plugin eval — tier2
 
 - Plugin version: `0.6.0`
-- Git SHA: `825d7bdf55790b18c1169c963f9a414eb61ea29a`
-- Ran at: 2026-05-02T05:56:37.047Z
-- Duration: 34280 ms
+- Git SHA: `2e54fa05c87b152484e395f2ff6057a933aa2f13`
+- Ran at: 2026-05-02T15:31:23.927Z
+- Duration: 33020 ms
 
 ## surface
 
@@ -35,7 +35,37 @@
 
 | verb | n | p50 ms | p95 ms | p99 ms | mean ms |
 | --- | --- | --- | --- | --- | --- |
-| curate_prompt | 24 | 167 | 188 | 205 | 169 |
-| session_start | 24 | 593 | 682 | 711 | 607 |
-| post_tool | 24 | 49 | 58 | 63 | 50 |
+| curate_prompt | 24 | 130 | 140 | 146 | 132 |
+| session_start | 24 | 474 | 501 | 504 | 477 |
+| post_tool | 24 | 41 | 44 | 45 | 41 |
+
+## context_budget
+
+> Budget: 4000 chars. Drop rate is the fraction of expected refs that did not survive truncation, averaged across prompts.
+
+| plugin | n | avg chars | max chars | violations | drop rate |
+| --- | --- | --- | --- | --- | --- |
+| claude | 12 | 867 | 960 | 0 | 0.0000 |
+| opencode | 12 | 863 | 956 | 0 | 0.0000 |
+
+## feedback
+
+> n=12 synthetic tool outputs. "Polarity flips" counts cases where the plugin fired feedback with the wrong sign (positive output classified negative or vice versa).
+
+| plugin | tp | fp | fn | tn | precision | recall | polarity flips |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| claude | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
+| opencode | 9 | 2 | 0 | 1 | 0.8182 | 1.0000 | 0 |
+
+## memory
+
+> Sparse fixtures (< 2 buffer entries) are expected to be trivial-rate dropped.
+> Vault leak fires when the captured memory body contains a non-empty value for known secret keys; since the hook pipes the buffer untouched into akm remember, the test indirectly validates that vault VALUES never enter the buffer in the first place.
+
+| fixture | captured? | chars | ref coverage | vault leak? |
+| --- | --- | --- | --- | --- |
+| rich-multi-asset | yes | 551 | 1.00 | no |
+| memory-intent-only | yes | 211 | 1.00 | no |
+| sparse-single-entry | no (trivial) | 0 | 1.00 | no |
+| vault-leak-attempt | yes | 314 | 1.00 | no |
 

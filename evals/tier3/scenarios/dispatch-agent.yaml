@@ -1,0 +1,19 @@
+id: dispatch-reviewer-agent
+description: User asks for an architectural review; the planner agent should be surfaced so the user can dispatch it.
+plugins: [claude, opencode]
+seed_stash: default
+user_turns:
+  - role: user
+    content: "Plan an implementation for a new caching layer with tradeoffs and critical files I should look at first."
+expectations:
+  must_curate_refs:
+    - agent:planner
+  may_curate_refs:
+    - knowledge:repo-conventions
+  must_record_feedback_for:
+    - agent:planner
+  forbid_refs:
+    - vault:staging
+  max_total_tokens: 6000
+judge_rubric: default
+weight: 1.0

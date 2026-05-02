@@ -25,17 +25,19 @@ Reports are JSON + markdown so two runs can be cleanly diffed.
 |---|---|---|---|
 | 1 — correctness | Existing `tests/` (Bun) | every PR | free |
 | 2 — deterministic effectiveness | this framework, no LLM | every PR | seconds |
-| 3 — LLM-in-the-loop scenarios | Claude judge, scenario YAMLs | manual / nightly | $$ |
+| 3 — LLM-in-the-loop scenarios | Claude judge, scenario YAMLs | manual / `workflow_dispatch` | dollars |
 
-Tier 3 is scaffolded under `tier3/` but not yet implemented. See the
-plan in the design doc for the rollout phases.
+Tier 2 ships six metrics: `surface`, `curation`, `latency`,
+`context_budget`, `feedback`, and `memory`. Tier 3 ships a YAML
+scenario format, an Anthropic SDK judge with prompt caching, and
+pairwise A/B between two git refs. See `tier3/README.md` for details.
 
 ## Quick start
 
 ```sh
 # from repo root
 cd evals
-bun install   # nothing to install yet, but reserves the workspace
+bun install
 
 # run all tier-2 metrics
 bun run tier2
@@ -44,9 +46,18 @@ bun run tier2
 bun run tier2:curation
 bun run tier2:latency
 bun run tier2:surface
+bun run tier2:context-budget
+bun run tier2:feedback
+bun run tier2:memory
 
 # diff a candidate run against the checked-in baseline
 bun run diff tier2/baseline/tier2.json ../eval-results/<ts>/tier2.json
+
+# tier-3 (requires ANTHROPIC_API_KEY for the judge)
+bun run tier3 -- --no-judge          # validates harness without spending
+bun run tier3                        # runs all scenarios, scores them
+bun run tier3 -- --scenarios "curate-skill-*" --budget 1
+bun run tier3:ab -- main HEAD --trials 3 --budget 5
 ```
 
 Reports land in `eval-results/<timestamp>/tier2.{json,md}` at the repo
@@ -85,13 +96,22 @@ evals/
 │   └── cli-diff.ts          # CLI: bun run diff <a> <b>
 ├── fixtures/
 │   ├── stash/               # ~15 seeded assets (stable refs)
-│   └── prompts/curation.jsonl  # gold set: prompt → expected refs
+│   ├── prompts/curation.jsonl       # gold set: prompt → expected refs
+│   ├── tool-outputs/feedback.jsonl  # synthetic outputs for feedback metric
+│   └── session-logs/        # per-fixture session buffers for memory metric
 ├── tier2/
 │   ├── runner.ts            # orchestrator
-│   ├── harness/claude.ts    # Bun.spawnSync wrapper for the hook
-│   ├── metrics/{curation,latency,surface}.ts
+│   ├── harness/{claude,opencode}.ts  # plugin invocation harnesses
+│   ├── metrics/{surface,curation,latency,context-budget,feedback,memory}.ts
 │   └── baseline/            # checked-in baseline JSON
-└── tier3/                   # scaffolded, see the design doc
+└── tier3/
+    ├── runner.ts            # scenario orchestrator + judge driver
+    ├── ab.ts                # pairwise A/B with git worktree
+    ├── scenarios.ts         # YAML loader + types
+    ├── scenarios/*.yaml     # scenario definitions
+    ├── harness/run-scenario.ts  # plugin-driving stub agent
+    ├── judge/{client,rubric}.ts # Anthropic SDK + rubric
+    └── README.md
 ```
 
 ## Adding a metric
@@ -121,7 +141,10 @@ a new prompt usually means tweaking those fields too.
 - The akm CLI's actual retrieval quality. The shim is held constant; if
   you want to evaluate a new akm-cli ranking algorithm, evaluate it in
   the akm-cli repo.
-- End-to-end "did the LLM use the right asset" effectiveness. That's
-  tier 3 (scaffolded, not yet implemented).
-- OpenCode plugin behavior. The MVP is Claude-only; the OpenCode
-  harness lives at `tier2/harness/opencode.ts` (planned phase 2).
+- A real Claude API agent driving the plugin end-to-end. Tier-3 uses a
+  deterministic stub agent (the harness simulates the agent's reaction
+  to curated context). A real-loop variant is a future enhancement —
+  the transcript shape would stay the same.
+- The `akm-curator` sub-agent's own performance. That would need a
+  separate scenario class with longer multi-turn fixtures and a
+  different rubric. Listed as future work in the design doc.

@@ -32,6 +32,18 @@ export const DEFAULT_POLICY: DiffPolicy = {
     { metric: "latency", key: "curate_prompt_p95_ms", direction: "lower-is-better", epsilon: 5, regressionPct: 0.25 },
     { metric: "latency", key: "session_start_p95_ms", direction: "lower-is-better", epsilon: 10, regressionPct: 0.25 },
     { metric: "latency", key: "post_tool_p95_ms", direction: "lower-is-better", epsilon: 5, regressionPct: 0.25 },
+    { metric: "context_budget", key: "claude_violations", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
+    { metric: "context_budget", key: "opencode_violations", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
+    { metric: "context_budget", key: "claude_drop_rate", direction: "lower-is-better", epsilon: 0.01, regressionPct: 0.10 },
+    { metric: "context_budget", key: "opencode_drop_rate", direction: "lower-is-better", epsilon: 0.01, regressionPct: 0.10 },
+    { metric: "feedback", key: "claude_precision", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
+    { metric: "feedback", key: "claude_recall", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
+    { metric: "feedback", key: "claude_polarity_flips", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
+    { metric: "feedback", key: "opencode_precision", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
+    { metric: "feedback", key: "opencode_recall", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
+    { metric: "feedback", key: "opencode_polarity_flips", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
+    { metric: "memory", key: "claude_ref_coverage", direction: "higher-is-better", epsilon: 0.01, regressionPct: 0.05 },
+    { metric: "memory", key: "claude_vault_leaks", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
   ],
 }
 
