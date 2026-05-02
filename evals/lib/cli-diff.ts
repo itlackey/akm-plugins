@@ -2,18 +2,28 @@
 // Exits nonzero on regression so CI can gate on it.
 
 import { writeFileSync } from "node:fs"
-import path from "node:path"
-import { diffReports, renderDiffMarkdown, loadReport } from "./diff"
+import { diffReports, renderDiffMarkdown, loadReport, policyWithLatency, DEFAULT_POLICY } from "./diff"
 
 function main() {
-  const [baselinePath, candidatePath, outPath] = process.argv.slice(2)
+  const args = process.argv.slice(2)
+  let includeLatency = false
+  const positional: string[] = []
+  for (const a of args) {
+    if (a === "--include-latency") includeLatency = true
+    else if (a === "--help" || a === "-h") {
+      console.error("Usage: bun evals/lib/cli-diff.ts [--include-latency] <baseline.json> <candidate.json> [diff.md]")
+      process.exit(0)
+    } else positional.push(a)
+  }
+  const [baselinePath, candidatePath, outPath] = positional
   if (!baselinePath || !candidatePath) {
-    console.error("Usage: bun evals/lib/cli-diff.ts <baseline.json> <candidate.json> [diff.md]")
+    console.error("Usage: bun evals/lib/cli-diff.ts [--include-latency] <baseline.json> <candidate.json> [diff.md]")
     process.exit(64)
   }
   const baseline = loadReport(baselinePath)
   const candidate = loadReport(candidatePath)
-  const summary = diffReports(baseline, candidate)
+  const policy = includeLatency ? policyWithLatency(DEFAULT_POLICY) : DEFAULT_POLICY
+  const summary = diffReports(baseline, candidate, policy)
   summary.baselinePath = baselinePath
   summary.candidatePath = candidatePath
   const md = renderDiffMarkdown(summary)

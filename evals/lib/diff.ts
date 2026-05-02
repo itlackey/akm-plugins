@@ -24,14 +24,32 @@ export type DiffPolicy = {
   }>
 }
 
+// Opt-in latency rules — usable when you've regenerated the baseline on
+// the same hardware as the candidate. Pass `policyWithLatency()` to
+// `diffReports` instead of the default to gate on latency too.
+export const LATENCY_RULES: DiffPolicy["rules"] = [
+  { metric: "latency", key: "curate_prompt_p95_ms", direction: "lower-is-better", epsilon: 5, regressionPct: 0.25 },
+  { metric: "latency", key: "session_start_p95_ms", direction: "lower-is-better", epsilon: 10, regressionPct: 0.25 },
+  { metric: "latency", key: "post_tool_p95_ms", direction: "lower-is-better", epsilon: 5, regressionPct: 0.25 },
+]
+
+export function policyWithLatency(base: DiffPolicy = DEFAULT_POLICY): DiffPolicy {
+  return { rules: [...base.rules, ...LATENCY_RULES] }
+}
+
 export const DEFAULT_POLICY: DiffPolicy = {
   rules: [
-    { metric: "curation", key: "p_at_5", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
-    { metric: "curation", key: "r_at_5", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.05 },
-    { metric: "curation", key: "mrr", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.05 },
-    { metric: "latency", key: "curate_prompt_p95_ms", direction: "lower-is-better", epsilon: 5, regressionPct: 0.25 },
-    { metric: "latency", key: "session_start_p95_ms", direction: "lower-is-better", epsilon: 10, regressionPct: 0.25 },
-    { metric: "latency", key: "post_tool_p95_ms", direction: "lower-is-better", epsilon: 5, regressionPct: 0.25 },
+    { metric: "curation", key: "mean_expected_coverage", direction: "higher-is-better", epsilon: 0.01, regressionPct: 0.05 },
+    { metric: "curation", key: "mean_reciprocal_rank", direction: "higher-is-better", epsilon: 0.01, regressionPct: 0.05 },
+    { metric: "curation", key: "zero_hit_rate", direction: "lower-is-better", epsilon: 0.01, regressionPct: 0.03 },
+    // Latency is intentionally excluded from regression gating: the
+    // baseline is captured on whoever's machine ran `baseline:update`,
+    // and CI hardware is wildly different (often 2-5x slower than dev
+    // machines). The latency metric is still computed, reported, and
+    // diffable on demand via `bun run diff --include-latency`, but it
+    // doesn't fail the run by default. To compare latency
+    // apples-to-apples, regenerate the baseline IN the same environment
+    // as the candidate run.
     { metric: "context_budget", key: "claude_violations", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
     { metric: "context_budget", key: "opencode_violations", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
     { metric: "context_budget", key: "claude_drop_rate", direction: "lower-is-better", epsilon: 0.01, regressionPct: 0.10 },
@@ -42,8 +60,9 @@ export const DEFAULT_POLICY: DiffPolicy = {
     { metric: "feedback", key: "opencode_precision", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
     { metric: "feedback", key: "opencode_recall", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
     { metric: "feedback", key: "opencode_polarity_flips", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
-    { metric: "memory", key: "claude_ref_coverage", direction: "higher-is-better", epsilon: 0.01, regressionPct: 0.05 },
-    { metric: "memory", key: "claude_vault_leaks", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
+    { metric: "memory", key: "claude_avg_body_chars", direction: "higher-is-better", epsilon: 20, regressionPct: 0.20 },
+    { metric: "memory", key: "claude_name_format_violations", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
+    { metric: "memory", key: "claude_secret_leakages", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
   ],
 }
 

@@ -187,7 +187,10 @@ exec node "$HELPER" "$INDEX" "$@"
 }
 
 // Read the call-log file produced by the shim into a structured list.
-export function readCallLog(callLog: string): Array<{ ts: string; argv: string[] }> {
+// The on-disk format is:  <ts>\t<callId>\t<argv0>\t<argv1>\t…
+// callId is a random per-invocation token used by readStdinForCall to
+// fetch the captured stdin (when the verb piped one).
+export function readCallLog(callLog: string): Array<{ ts: string; callId: string; argv: string[] }> {
   let body: string
   try {
     body = readFileSync(callLog, "utf8")
@@ -198,17 +201,36 @@ export function readCallLog(callLog: string): Array<{ ts: string; argv: string[]
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [ts, ...argv] = line.split("\t")
-      return { ts, argv }
+      const [ts, callId, ...argv] = line.split("\t")
+      return { ts, callId, argv }
     })
+}
+
+// For a given call (by callId), return the stdin the hook piped to akm.
+// Returns null if no stdin was captured (verbs other than `remember`,
+// or if the stdin write failed).
+export function readStdinForCall(callLog: string, callId: string): string | null {
+  const stdinPath = path.join(path.dirname(callLog), "stdin", callId + ".txt")
+  try {
+    return readFileSync(stdinPath, "utf8")
+  } catch {
+    return null
+  }
 }
 
 // The ranking helper is shipped as a string so the shim is self-contained.
 // It reads the prompt from argv (after stripping global flags & verb-args
 // the hooks pass), scores each asset by keyword/description overlap with
 // simple lowercase token-set matching, and prints the top-K refs.
+//
+// The shim ALSO captures stdin to a sibling file (akm-stdin-<ts>.txt)
+// when invoked with verbs that pipe content (notably `remember`). This
+// lets tier-2's memory metric verify the actual payload the hook
+// committed, which catches plugin-side regressions like buffer
+// truncation or stripping that earlier versions of this framework would
+// silently miss.
 const RANK_HELPER_JS = `#!/usr/bin/env node
-import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs"
+import { readFileSync, appendFileSync, mkdirSync, existsSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 const indexPath = process.argv[2]
@@ -216,10 +238,11 @@ const argv = process.argv.slice(3)
 const idx = JSON.parse(readFileSync(indexPath, "utf8"))
 
 // Append a tab-separated call record so tests can assert what the hook called.
+const callId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6)
 try {
   const dir = path.dirname(idx.callLog)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  appendFileSync(idx.callLog, [new Date().toISOString(), ...argv].join("\\t") + "\\n")
+  appendFileSync(idx.callLog, [new Date().toISOString(), callId, ...argv].join("\\t") + "\\n")
 } catch {}
 
 // Strip global flags so we can find the verb. Mirrors the akm CLI surface
@@ -316,7 +339,26 @@ if (verb === "hints") {
   process.exit(0)
 }
 
-if (verb === "feedback" || verb === "remember" || verb === "index" || verb === "show") {
+if (verb === "remember") {
+  // Capture the piped buffer body so tier-2's memory metric can score
+  // what the hook actually flushed (rather than just whether it called
+  // remember). The plugin pipes the session buffer to akm via stdin.
+  let stdin = ""
+  try {
+    stdin = readFileSync(0, "utf8")
+  } catch {}
+  const stdinDir = path.join(path.dirname(idx.callLog), "stdin")
+  try {
+    if (!existsSync(stdinDir)) mkdirSync(stdinDir, { recursive: true })
+    writeFileSync(path.join(stdinDir, callId + ".txt"), stdin)
+  } catch {}
+  if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
+    process.stdout.write(JSON.stringify({ ok: true, verb, args: tail }))
+  }
+  process.exit(0)
+}
+
+if (verb === "feedback" || verb === "index" || verb === "show") {
   // The hooks call these for side effects; we just ack.
   if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
     process.stdout.write(JSON.stringify({ ok: true, verb, args: tail }))

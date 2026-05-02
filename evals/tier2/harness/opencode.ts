@@ -20,24 +20,44 @@ import type { Plugin, PluginInput } from "@opencode-ai/plugin"
 
 let cachedPlugin: any | null = null
 let envPatched = false
+let envPatchOriginals: Record<string, Function> | null = null
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..")
 
-// Bun caches process.env at startup, so child_process spawns ignore env
-// mutations made after import unless callers pass env explicitly. We
-// monkey-patch the CJS instance of node:child_process to inject the live
-// process.env when callers omit it. The plugin only ever uses the CJS
-// build via its own `import { execFileSync } from "node:child_process"`,
-// which Bun resolves to the same underlying object — so this patch
-// reaches every callsite transparently.
+// In Bun, child_process functions invoked WITHOUT an explicit `env`
+// option inherit the env captured at process startup, not the current
+// process.env. (Node's docs say the default is process.env, but the
+// runtime difference is real and observable — see fixture
+// `tests/opencode-plugin.test.ts` mocking pattern.) Mutations our
+// harness makes to process.env therefore do not reach the plugin's
+// execFileSync/spawn calls — including the PATH override needed to
+// route `akm` invocations to the fake-akm shim.
+//
+// The fix is a thin shim that fills in `options.env = process.env` when
+// callers omit it. We patch the CJS module instance so plugin code that
+// imports from "node:child_process" sees the patched functions.
+//
+// Scope concerns: every caller in this eval framework that spawns child
+// processes WANTS the live process.env (the alternative — spawning with
+// stale startup env — is what we're working around). The patch is
+// installed once and is idempotent. uninstallEnvPatch() restores the
+// originals, useful in tests or in long-lived processes that load the
+// harness multiple times.
+//
+// What we DON'T do: replace this with subprocess-per-scenario. That
+// would cold-start the plugin (~500ms × scenarios) and require a
+// JSON-RPC protocol for hook IO, with no upside other than avoiding
+// this monkey-patch.
 function patchChildProcessEnv() {
   if (envPatched) return
   envPatched = true
+  envPatchOriginals = {}
   const requireCjs = createRequire(import.meta.url)
   const cp = requireCjs("node:child_process") as Record<string, any>
   for (const name of ["execFileSync", "execSync", "spawn", "spawnSync", "execFile", "exec"]) {
     const original = cp[name] as Function
     if (typeof original !== "function") continue
+    envPatchOriginals[name] = original
     cp[name] = function patched(...args: any[]) {
       let optionsIdx = -1
       for (let i = args.length - 1; i >= 0; i--) {
@@ -47,12 +67,27 @@ function patchChildProcessEnv() {
         }
       }
       const options = optionsIdx >= 0 ? { ...args[optionsIdx] } : {}
+      // Fill in env when caller omitted it OR set it to undefined (both
+      // mean "use default" in Node's docs; we just want the default to
+      // be the live process.env, which is what Node intends and Bun
+      // doesn't deliver).
       if (!options.env) options.env = { ...process.env }
       if (optionsIdx >= 0) args[optionsIdx] = options
       else args.push(options)
       return original.apply(this, args)
     }
   }
+}
+
+export function uninstallEnvPatch() {
+  if (!envPatched || !envPatchOriginals) return
+  const requireCjs = createRequire(import.meta.url)
+  const cp = requireCjs("node:child_process") as Record<string, any>
+  for (const [name, original] of Object.entries(envPatchOriginals)) {
+    cp[name] = original
+  }
+  envPatched = false
+  envPatchOriginals = null
 }
 
 // Stub fetch so ensureLatestAkmInstalled doesn't try to hit the real

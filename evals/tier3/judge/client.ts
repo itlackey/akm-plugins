@@ -5,13 +5,17 @@
 //     scoring; tier-3 will run many scenarios).
 //   - Structured output via tool use forcing — guarantees the verdict
 //     parses cleanly into the rubric shape.
-//   - Prompt caching on the (frozen) rubric system prompt + scenario
-//     metadata — every run for the same scenario shares the same prefix,
-//     so cache hits are routine.
-//   - Verdict cache keyed on sha256(scenario.id + transcript) — re-running
-//     against an unchanged candidate doesn't pay the API again.
-//   - Per-run dollar cap: the runner aborts and reports if the cumulative
-//     judge spend exceeds the configured ceiling.
+//   - Verdict cache keyed on sha256(scenario.id + plugin + transcript)
+//     — re-running against an unchanged candidate doesn't pay the API
+//     again.
+//   - Per-run dollar cap: the runner aborts and reports if the
+//     cumulative judge spend exceeds the configured ceiling.
+//
+// Note on prompt caching: an earlier version of this client placed a
+// cache_control marker on the rubric system prompt. With Sonnet 4.6's
+// 2048-token minimum cacheable prefix and a ~600-token rubric, the
+// marker silently never fired. Removed. If/when the rubric grows
+// (e.g. with worked examples), we should re-add the marker.
 
 import Anthropic from "@anthropic-ai/sdk"
 import { createHash } from "node:crypto"
@@ -167,13 +171,7 @@ export class Judge {
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: 1024,
-      system: [
-        {
-          type: "text",
-          text: rubric.systemPrompt,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
+      system: rubric.systemPrompt,
       tools: [
         {
           name: rubric.responseSchema.name,

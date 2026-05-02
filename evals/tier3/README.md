@@ -71,20 +71,37 @@ weight: 1.0                               # multiplier in aggregate scores
 
 ## How the harness works
 
-The harness is a deterministic stub agent. It:
-1. Sends each user turn through the plugin's curation hook.
-2. Parses the refs the plugin injected.
-3. For each `must_curate_refs` ref that surfaced, simulates a tool call
-   (`akm show <ref>`) and drives the plugin's auto-feedback hook to
-   record a positive feedback signal.
-4. Synthesizes a brief agent summary so the judge has something to
-   score.
+Two agent modes:
 
-This is intentionally narrow. The point of tier 3 is to score the
-**plugin's behavior surface as observed by an agent** — what context
-did it inject, did the right refs surface, did the agent get the data
-it needed to fire the expected feedback. A real Claude API loop driving
-the plugin is a future enhancement; the transcript shape is the same.
+### Real agent (default when `ANTHROPIC_API_KEY` is set)
+
+`tier3/harness/claude-agent.ts` runs an actual Claude API loop. The
+agent receives the curated context the plugin would inject, has a Bash
+tool whose `akm ...` invocations are routed through the sandbox PATH
+(hitting fake-akm, just like the rest of the framework), and decides
+what to do. It can:
+
+- pick the right asset from curation, or pick a wrong one, or pick none
+- successfully invoke `akm show` and `akm feedback`, or hallucinate refs
+- skip recording feedback when it should have, or fire on the wrong ref
+- ignore curation entirely and try to answer from memory
+
+The judge then scores a transcript that has REAL variance to disagree
+with. This is the only mode that produces meaningful tier-3
+effectiveness numbers.
+
+### Stub agent (when no API key, or `--agent stub`)
+
+A deterministic projection of `must_curate_refs ⊆ retrieved`. For each
+expected ref that surfaced, it synthesizes a `tool_use → tool_result →
+feedback` triple. It hardcodes the plugins' documented skip rule (no
+auto-feedback for `memory:`/`vault:` refs) so the transcript matches
+what the real plugins would emit. **Stub-mode judge scores are
+smoke-test signal only** — the transcript is mechanically derived from
+the expectations, so the judge has nothing meaningful to disagree with.
+Reports tag every run with `agent_mode: "real" | "stub"` and emit a
+WARNING block in the markdown when any stub runs are present, so
+consumers can't accidentally treat smoke runs as effectiveness data.
 
 ## Cost control
 
@@ -114,12 +131,12 @@ baseline ref before running.
 
 ## Limits / future work
 
-- Stub agent — no real Claude loop yet. The harness simulates the
-  agent's reaction to curation; the judge scores the simulated
-  transcript.
 - Single judge model — currently `claude-sonnet-4-6`. The model can be
   overridden via `Judge({ model: ... })` when the runner instantiates
   it.
+- Single agent model — `claude-sonnet-4-6` by default; override via
+  `--agent-model claude-opus-4-7` (the plugins are most relevant when
+  driving Opus-tier agents in production).
 - Curator sub-agent eval — not yet wired up; would need a separate
   scenario class with longer multi-turn fixtures and a different
   rubric.

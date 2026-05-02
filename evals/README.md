@@ -10,14 +10,33 @@ tests under `tests/`.
 `tests/` answers "does the hook still parse stdin and emit valid JSON?".
 This framework answers different questions:
 
-- **Did this change degrade curation quality?** (precision/recall/MRR
-  against a gold set of prompt → expected-refs pairs)
+- **Did this change drop refs from the curation pipeline?**
+  (`mean_expected_coverage` against a gold set of prompt → expected-refs
+  pairs — note: holds the akm CLI ranker constant via a fake; this
+  measures the plugin's pipeline, not akm's retrieval quality)
+- **Did it break the auto-feedback path on either plugin?**
+  (precision/recall over actual `akm feedback` calls in the call log,
+  measured symmetrically on both Claude and OpenCode)
+- **Did the session-end memory capture start leaking secrets the user
+  typed by accident?** (`claude_secret_leakages` over labeled fixtures)
 - **Did it slow the hook down on the user's prompt path?** (p50/p95/p99
-  per hook verb across a synthetic prompt corpus)
+  per hook verb — observation only; not gated in CI because latency is
+  hardware-dependent)
 - **Did it remove or rename a public surface element?** (tool, command,
   hook diff vs a checked-in baseline)
 
 Reports are JSON + markdown so two runs can be cleanly diffed.
+
+### What this framework does NOT measure
+
+- **akm CLI retrieval quality.** The fake-akm shim is held constant; if
+  you want to evaluate a new akm-cli ranking algorithm, evaluate it in
+  the akm-cli repo. Tier-2 curation deltas reflect plugin behavior
+  (truncation, scope filters, parsing) — NOT retrieval.
+- **Hook latency in CI.** Latency baselines are environment-dependent
+  (dev machine vs GitHub runner can differ 2-5x); CI doesn't gate on
+  latency. Use `--include-latency` against a baseline regenerated on
+  the same hardware to compare apples-to-apples.
 
 ## Tiers
 
@@ -53,9 +72,9 @@ bun run tier2:memory
 # diff a candidate run against the checked-in baseline
 bun run diff tier2/baseline/tier2.json ../eval-results/<ts>/tier2.json
 
-# tier-3 (requires ANTHROPIC_API_KEY for the judge)
-bun run tier3 -- --no-judge          # validates harness without spending
-bun run tier3                        # runs all scenarios, scores them
+# tier-3 (requires ANTHROPIC_API_KEY for the real agent + judge)
+bun run tier3 -- --no-judge --agent stub    # smoke test, no API spend
+bun run tier3                               # real agent + judge (recommended)
 bun run tier3 -- --scenarios "curate-skill-*" --budget 1
 bun run tier3:ab -- main HEAD --trials 3 --budget 5
 ```

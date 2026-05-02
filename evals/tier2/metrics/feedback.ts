@@ -1,20 +1,27 @@
-// Auto-feedback classification metric.
+// Auto-feedback emission metric.
 //
-// Both plugins inspect tool outputs after they run and classify the
-// outcome as positive (success) or negative (failure), then call
-// `akm feedback <ref> --positive|--negative` for any asset refs they
-// see. We test this by feeding a labeled corpus of synthetic tool
-// outputs through:
-//   - Claude: `auto-feedback success|failure` shell verb (writes to
-//     feedback.log + spawns akm feedback calls)
-//   - OpenCode: tool.execute.after hook (queues feedback via the
-//     plugin's queueFeedback helper, captured via mock client logs +
-//     our fake-akm call log)
+// Both plugins inspect tool outputs and decide whether to fire
+// `akm feedback <ref> --positive|--negative` on any refs they see. We
+// hold both sides to the SAME measurement: actual akm CLI calls in the
+// fake-akm call log, NOT the in-process classification signal that
+// earlier versions of this metric inspected. Classification without
+// emission is invisible to the user; emission is what matters.
 //
-// We score each plugin's classification with precision/recall vs the
-// fixture labels and flag samples where the plugins disagree.
+// For each labeled fixture (label ∈ {positive, negative, neither}):
+//   - Drive the appropriate plugin's auto-feedback path with the
+//     fixture's tool output.
+//   - Inspect the call log for any akm-feedback calls that fired.
+//   - Score:
+//       * label=positive AND fired --positive on the right ref → TP
+//       * label=negative AND fired --negative on the right ref → TP
+//       * label=neither AND no fire                            → TN
+//       * fire when label=neither                              → FP
+//       * no fire when label≠neither                           → FN
+//       * fire with the wrong sentiment                        → polarity flip
+//   - "neither"-labeled fixtures cover the documented skip list:
+//     memory:* and vault:* refs MUST NOT receive auto-feedback.
 
-import { readFileSync, existsSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import path from "node:path"
 import { createSandbox } from "../../lib/stash-sandbox"
 import { runClaudeHook } from "../harness/claude"
@@ -24,9 +31,7 @@ import type { MetricResult } from "../../lib/report"
 
 export type FeedbackFixture = {
   id: string
-  // What the plugin should classify as. "neither" means no feedback should fire.
   label: "positive" | "negative" | "neither"
-  // The akm refs that appear in the output (used to score "did the plugin fire on the right refs").
   refs: string[]
   tool: string
   command?: string
@@ -46,83 +51,67 @@ function loadFixtures(p: string): FeedbackFixture[] {
     .map((l) => JSON.parse(l) as FeedbackFixture)
 }
 
+const REF_RE = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._\/-]+$/
+
+// Inspect the call log for any `akm feedback <ref> --positive|--negative` calls.
+function readEmittedFeedback(callLog: string): Array<{ ref: string; sentiment: "positive" | "negative" }> {
+  const calls = readCallLog(callLog)
+  const out: Array<{ ref: string; sentiment: "positive" | "negative" }> = []
+  for (const call of calls) {
+    if (!call.argv.includes("feedback")) continue
+    const positive = call.argv.includes("--positive")
+    const negative = call.argv.includes("--negative")
+    if (!positive && !negative) continue
+    const ref = call.argv.find((a) => REF_RE.test(a))
+    if (!ref) continue
+    out.push({ ref, sentiment: positive ? "positive" : "negative" })
+  }
+  return out
+}
+
 type Outcome = {
   id: string
   label: "positive" | "negative" | "neither"
-  predicted: "positive" | "negative" | "neither"
-  refsFiredOn: string[]
+  emitted: Array<{ ref: string; sentiment: "positive" | "negative" }>
+  // Classification of this fixture's outcome:
+  result: "tp" | "fp" | "fn" | "tn" | "polarity_flip"
 }
 
-function confusion(outcomes: Outcome[]) {
-  // Treat "any feedback recorded" as the positive class for the
-  // precision/recall numbers; the per-class breakdown is included in
-  // the values bag for diagnostic purposes.
-  let tp = 0
-  let fp = 0
-  let fn = 0
-  let tn = 0
-  let posAsNeg = 0
-  let negAsPos = 0
-  for (const o of outcomes) {
-    const truthFires = o.label !== "neither"
-    const predFires = o.predicted !== "neither"
-    if (truthFires && predFires) {
-      tp++
-      if (o.label === "positive" && o.predicted === "negative") posAsNeg++
-      if (o.label === "negative" && o.predicted === "positive") negAsPos++
-    } else if (!truthFires && predFires) fp++
-    else if (truthFires && !predFires) fn++
-    else tn++
-  }
+function classify(fixture: FeedbackFixture, emitted: Array<{ ref: string; sentiment: "positive" | "negative" }>): Outcome["result"] {
+  const targetRefs = new Set(fixture.refs)
+  const matchingEmissions = emitted.filter((e) => targetRefs.has(e.ref))
+  const fired = matchingEmissions.length > 0
+  if (fixture.label === "neither") return fired ? "fp" : "tn"
+  if (!fired) return "fn"
+  // Fired — check sentiment matches label.
+  const wrongSentiment = matchingEmissions.some((e) => (e.sentiment === "positive") !== (fixture.label === "positive"))
+  return wrongSentiment ? "polarity_flip" : "tp"
+}
+
+function summarize(outcomes: Outcome[]) {
+  const tp = outcomes.filter((o) => o.result === "tp").length
+  const fp = outcomes.filter((o) => o.result === "fp").length
+  const fn = outcomes.filter((o) => o.result === "fn").length
+  const tn = outcomes.filter((o) => o.result === "tn").length
+  const polarity = outcomes.filter((o) => o.result === "polarity_flip").length
   const precision = tp + fp === 0 ? 1 : tp / (tp + fp)
-  const recall = tp + fn === 0 ? 1 : tp / (tp + fn)
-  return { tp, fp, fn, tn, precision, recall, polarityFlips: posAsNeg + negAsPos }
-}
-
-function classifyClaude(stateDir: string): { predicted: "positive" | "negative" | "neither"; refsFired: string[] } {
-  // Claude's auto-feedback verb writes one tab-separated line per ref to
-  // feedback.log of the form: <ts>\tsystem\tsuccess|failure\tBash\t<cmd>
-  // (and a separate "remember" line). Refs come from the akm CLI calls
-  // it makes — we sniff those from the fake-akm call log too.
-  const feedbackLog = path.join(stateDir, "akm-claude/feedback.log")
-  let predicted: "positive" | "negative" | "neither" = "neither"
-  if (existsSync(feedbackLog)) {
-    const body = readFileSync(feedbackLog, "utf8")
-    if (/system\tsuccess\b/.test(body)) predicted = "positive"
-    else if (/system\tfailure\b/.test(body)) predicted = "negative"
-  }
-  return { predicted, refsFired: [] }
-}
-
-function refsFromCallLog(callLog: string, sentiment: "positive" | "negative"): string[] {
-  const calls = readCallLog(callLog)
-  const refs: string[] = []
-  const flag = `--${sentiment}`
-  for (const call of calls) {
-    if (call.argv.includes("feedback") && call.argv.includes(flag)) {
-      // Ref is the argv element that looks like "type:name".
-      const ref = call.argv.find((a) => /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):/.test(a))
-      if (ref) refs.push(ref)
-    }
-  }
-  return refs
+  const recall = tp + fn === 0 ? 1 : tp / (tp + fn + polarity)
+  return { tp, fp, fn, tn, polarity_flips: polarity, precision, recall }
 }
 
 export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricResult> {
   const fixtures = loadFixtures(opts.fixturesPath)
 
-  // Claude: each fixture runs in its own sandbox; we invoke `auto-feedback
-  // success` for label=positive and `auto-feedback failure` for label=negative.
-  // For label=neither we run both and check that no feedback fires.
+  // Claude side — drive `auto-feedback success|failure` per fixture.
   const claudeOutcomes: Outcome[] = []
   for (const f of fixtures) {
     const sandbox = createSandbox({ sourceStash: opts.stashDir })
     try {
+      // For "neither", invoke both success and failure to verify the
+      // plugin skips both. For positive/negative, just the matching one.
       const sentiments: Array<"success" | "failure"> = f.label === "neither" ? ["success", "failure"] : [f.label === "positive" ? "success" : "failure"]
-      let predicted: "positive" | "negative" | "neither" = "neither"
-      const fired: string[] = []
       for (const s of sentiments) {
-        const result = runClaudeHook(["auto-feedback", s], {
+        runClaudeHook(["auto-feedback", s], {
           input: JSON.stringify({
             tool: f.tool,
             input: { command: f.command ?? "" },
@@ -130,66 +119,66 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
           }),
           env: sandbox.env,
         })
-        // Inspect call log to see which refs the hook recorded feedback on.
-        const refs = refsFromCallLog(sandbox.callLog, s === "success" ? "positive" : "negative")
-        if (refs.length > 0) {
-          predicted = s === "success" ? "positive" : "negative"
-          fired.push(...refs)
-        }
-        // Suppress the unused result warning — stdout is empty for auto-feedback.
-        void result
       }
-      claudeOutcomes.push({ id: f.id, label: f.label, predicted, refsFiredOn: [...new Set(fired)] })
+      const emitted = readEmittedFeedback(sandbox.callLog)
+      claudeOutcomes.push({ id: f.id, label: f.label, emitted, result: classify(f, emitted) })
     } finally {
       sandbox.cleanup()
     }
   }
-  const claudeStats = confusion(claudeOutcomes)
 
-  // OpenCode: drive tool.execute.after with synthetic output. The plugin
-  // inspects output, classifies feedback, and records via writePluginLog
-  // (captured by mock client). We read the captured logs to determine
-  // whether the plugin classified the output as positive/negative.
+  // OpenCode side — drive `tool.execute.after` per fixture. The plugin's
+  // queueFeedback path eventually calls execFileSync('akm', ['feedback', ...])
+  // which our fake-akm captures in the call log — same measurement
+  // surface as Claude.
   const opencodeOutcomes: Outcome[] = []
   let opencodeAvailable = true
   try {
-    const sandbox = createSandbox({ sourceStash: opts.stashDir })
-    try {
-      const harness = await createOpenCodeHarness(sandbox.env)
-      for (const f of fixtures) {
-        const before = harness.client.__logs.length
-        await harness.toolAfter({
-          sessionID: `fb-${f.id}`,
-          tool: f.tool.startsWith("akm_") ? f.tool : "akm_show",
-          toolArgs: f.toolArgs ?? {},
-          output: f.output,
-        })
-        const newLogs = harness.client.__logs.slice(before)
-        const fbLog = newLogs.find((l) => l.extra?.subsystem === "feedback")
-        let predicted: "positive" | "negative" | "neither" = "neither"
-        if (fbLog?.extra?.feedback === "positive") predicted = "positive"
-        else if (fbLog?.extra?.feedback === "negative") predicted = "negative"
-        opencodeOutcomes.push({ id: f.id, label: f.label, predicted, refsFiredOn: [] })
+    for (const f of fixtures) {
+      const sandbox = createSandbox({ sourceStash: opts.stashDir })
+      try {
+        const harness = await createOpenCodeHarness(sandbox.env)
+        const outputForLabel = (label: string) =>
+          label === "negative"
+            ? `{"ok":false,"error":"failure","ref":"${f.refs[0] ?? ""}"}`
+            : f.output
+        const labels: Array<"positive" | "negative" | "neither"> = f.label === "neither" ? ["positive", "negative"] : [f.label]
+        for (const label of labels) {
+          await harness.toolAfter({
+            sessionID: `fb-oc-${f.id}-${label}`,
+            tool: f.tool.startsWith("akm_") ? f.tool : "akm_show",
+            toolArgs: f.toolArgs ?? {},
+            output: outputForLabel(label),
+          })
+        }
+        // OpenCode's queueFeedback uses detached spawn — the akm child
+        // runs async after toolAfter returns. Wait for the call log to
+        // settle. 250ms is enough on typical hardware for the shim
+        // (which is just a node process appending to a file) to land.
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        const emitted = readEmittedFeedback(sandbox.callLog)
+        opencodeOutcomes.push({ id: f.id, label: f.label, emitted, result: classify(f, emitted) })
+      } finally {
+        sandbox.cleanup()
       }
-    } finally {
-      sandbox.cleanup()
     }
   } catch (err) {
     opencodeAvailable = false
     console.error(`! OpenCode feedback harness failed: ${(err as Error).message}`)
   }
-  const opencodeStats = opencodeAvailable
-    ? confusion(opencodeOutcomes)
-    : { tp: 0, fp: 0, fn: 0, tn: 0, precision: 0, recall: 0, polarityFlips: 0 }
 
-  // Disagreement: cases where claude and opencode classified differently.
+  const claudeStats = summarize(claudeOutcomes)
+  const opencodeStats = opencodeAvailable
+    ? summarize(opencodeOutcomes)
+    : { tp: 0, fp: 0, fn: 0, tn: 0, polarity_flips: 0, precision: 0, recall: 0 }
+
   const disagreements: string[] = []
   if (opencodeAvailable) {
     const ocById = new Map(opencodeOutcomes.map((o) => [o.id, o]))
     for (const c of claudeOutcomes) {
       const oc = ocById.get(c.id)
-      if (oc && oc.predicted !== c.predicted) {
-        disagreements.push(`${c.id}: claude=${c.predicted} opencode=${oc.predicted} (truth=${c.label})`)
+      if (oc && oc.result !== c.result) {
+        disagreements.push(`${c.id}: claude=${c.result} opencode=${oc.result} (truth=${c.label})`)
       }
     }
   }
@@ -204,7 +193,7 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
       claude_tn: claudeStats.tn,
       claude_precision: claudeStats.precision,
       claude_recall: claudeStats.recall,
-      claude_polarity_flips: claudeStats.polarityFlips,
+      claude_polarity_flips: claudeStats.polarity_flips,
       opencode_available: opencodeAvailable,
       opencode_tp: opencodeStats.tp,
       opencode_fp: opencodeStats.fp,
@@ -212,7 +201,7 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
       opencode_tn: opencodeStats.tn,
       opencode_precision: opencodeStats.precision,
       opencode_recall: opencodeStats.recall,
-      opencode_polarity_flips: opencodeStats.polarityFlips,
+      opencode_polarity_flips: opencodeStats.polarity_flips,
       disagreements,
     },
     table: {
@@ -226,7 +215,7 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
           claudeStats.tn,
           claudeStats.precision.toFixed(4),
           claudeStats.recall.toFixed(4),
-          claudeStats.polarityFlips,
+          claudeStats.polarity_flips,
         ],
         opencodeAvailable
           ? [
@@ -237,13 +226,14 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
               opencodeStats.tn,
               opencodeStats.precision.toFixed(4),
               opencodeStats.recall.toFixed(4),
-              opencodeStats.polarityFlips,
+              opencodeStats.polarity_flips,
             ]
           : ["opencode", "—", "—", "—", "—", "—", "—", "skipped"],
       ],
     },
     notes: [
-      `n=${fixtures.length} synthetic tool outputs. "Polarity flips" counts cases where the plugin fired feedback with the wrong sign (positive output classified negative or vice versa).`,
+      `Both plugins measured by actual \`akm feedback\` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).`,
+      `n=${fixtures.length} synthetic tool outputs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for memory: and vault: refs.`,
     ],
   }
 }

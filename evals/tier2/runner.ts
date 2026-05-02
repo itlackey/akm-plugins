@@ -16,7 +16,7 @@ import { runLatencyMetric } from "./metrics/latency"
 import { runContextBudgetMetric } from "./metrics/context-budget"
 import { runFeedbackMetric } from "./metrics/feedback"
 import { runMemoryMetric } from "./metrics/memory"
-import { diffReports, renderDiffMarkdown, loadReport } from "../lib/diff"
+import { diffReports, renderDiffMarkdown, loadReport, policyWithLatency, DEFAULT_POLICY } from "../lib/diff"
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../..")
 const EVALS_ROOT = path.resolve(import.meta.dir, "..")
@@ -26,6 +26,7 @@ type CliOptions = {
   outDir: string
   baseline: string | null
   failOnRegression: boolean
+  includeLatencyInDiff: boolean
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -34,6 +35,7 @@ function parseArgs(argv: string[]): CliOptions {
     outDir: "",
     baseline: null,
     failOnRegression: true,
+    includeLatencyInDiff: false,
   }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
@@ -45,9 +47,16 @@ function parseArgs(argv: string[]): CliOptions {
       opts.baseline = argv[++i]
     } else if (a === "--no-fail") {
       opts.failOnRegression = false
+    } else if (a === "--include-latency") {
+      opts.includeLatencyInDiff = true
     } else if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: bun evals/tier2/runner.ts [--metric a,b] [--out DIR] [--baseline FILE] [--no-fail]",
+        `Usage: bun evals/tier2/runner.ts [options]
+  --metric a,b         Subset of metrics (default: all 6)
+  --out DIR            Output dir
+  --baseline FILE      Diff against this baseline
+  --include-latency    Gate on latency rules in diff (only valid when baseline was captured on the same hardware)
+  --no-fail            Don't exit nonzero on regression`,
       )
       process.exit(0)
     }
@@ -138,7 +147,8 @@ async function main() {
       exitCode = 2
     } else {
       const baseline = loadReport(opts.baseline)
-      const summary = diffReports(baseline, report)
+      const policy = opts.includeLatencyInDiff ? policyWithLatency(DEFAULT_POLICY) : DEFAULT_POLICY
+      const summary = diffReports(baseline, report, policy)
       summary.baselinePath = opts.baseline
       summary.candidatePath = jsonPath
       const diffMd = renderDiffMarkdown(summary)

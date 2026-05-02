@@ -2,9 +2,9 @@
   "version": "1",
   "tier": "tier2",
   "pluginVersion": "0.6.0",
-  "gitSha": "2e54fa05c87b152484e395f2ff6057a933aa2f13",
-  "ranAt": "2026-05-02T15:31:23.927Z",
-  "durationMs": 33020,
+  "gitSha": "2aafb1681325dd87afbcd2fdea90b98c99d4e643",
+  "ranAt": "2026-05-02T15:54:10.150Z",
+  "durationMs": 37194,
   "metrics": {
     "surface": {
       "name": "surface",
@@ -116,10 +116,9 @@
       "name": "curation",
       "values": {
         "n": 40,
-        "p_at_5": 0.225,
-        "r_at_5": 0.9125,
-        "mrr": 0.9208333333333332,
-        "zero_hit_rate": 0,
+        "mean_expected_coverage": 0.9125,
+        "mean_reciprocal_rank": 0.9208333333333332,
+        "zero_hit_rate": 0.05,
         "per_entry": [
           {
             "id": "cur-001",
@@ -135,10 +134,9 @@
               "command:scaffold-test",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.4,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 3
           },
           {
             "id": "cur-002",
@@ -154,10 +152,9 @@
               "command:bump-version",
               "knowledge:repo-conventions"
             ],
-            "pAtK": 0.4,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 3
           },
           {
             "id": "cur-003",
@@ -172,10 +169,9 @@
               "command:bump-version",
               "command:scaffold-test"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-004",
@@ -190,10 +186,9 @@
               "agent:planner",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-005",
@@ -208,10 +203,9 @@
               "agent:reviewer",
               "command:bump-version"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-006",
@@ -226,10 +220,9 @@
               "knowledge:api-error-codes",
               "knowledge:repo-conventions"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-007",
@@ -244,10 +237,9 @@
               "agent:reviewer",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-008",
@@ -263,10 +255,9 @@
               "knowledge:api-error-codes",
               "script:lint"
             ],
-            "pAtK": 0.2,
-            "rAtK": 0.5,
-            "rr": 0.5,
-            "k": 5
+            "expected_coverage": 0.5,
+            "top_rank_of_expected": 2,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-009",
@@ -281,10 +272,9 @@
               "script:smoke",
               "vault:staging"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-010",
@@ -299,10 +289,9 @@
               "skill:code-review",
               "vault:staging"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-011",
@@ -318,10 +307,9 @@
               "knowledge:api-error-codes",
               "script:smoke"
             ],
-            "pAtK": 0.4,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 3
           },
           {
             "id": "cur-012",
@@ -337,10 +325,9 @@
               "agent:reviewer",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.4,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 3
           },
           {
             "id": "cur-013",
@@ -356,10 +343,9 @@
               "skill:code-review",
               "agent:planner"
             ],
-            "pAtK": 0.2,
-            "rAtK": 0.5,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 0.5,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-014",
@@ -374,10 +360,9 @@
               "knowledge:api-error-codes",
               "script:lint"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-015",
@@ -392,10 +377,9 @@
               "agent:reviewer",
               "command:bump-version"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-016",
@@ -410,10 +394,9 @@
               "skill:refactor-py",
               "skill:debug-runtime"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-017",
@@ -428,10 +411,9 @@
               "knowledge:api-error-codes",
               "skill:code-review"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-018",
@@ -446,10 +428,9 @@
               "agent:reviewer",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-019",
@@ -465,10 +446,9 @@
               "workflow:release",
               "skill:code-review"
             ],
-            "pAtK": 0.4,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 3
           },
           {
             "id": "cur-020",
@@ -483,10 +463,9 @@
               "knowledge:api-error-codes",
               "script:lint"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-021",
@@ -501,10 +480,9 @@
               "command:summarize-diff",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-022",
@@ -519,10 +497,9 @@
               "agent:planner",
               "command:bump-version"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-023",
@@ -537,10 +514,9 @@
               "skill:code-review",
               "command:bump-version"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-024",
@@ -555,10 +531,9 @@
               "vault:staging",
               "command:scaffold-test"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-025",
@@ -573,10 +548,9 @@
               "knowledge:api-error-codes",
               "vault:staging"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-026",
@@ -591,10 +565,9 @@
               "script:lint",
               "script:smoke"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-027",
@@ -609,10 +582,9 @@
               "command:bump-version",
               "agent:reviewer"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-028",
@@ -627,10 +599,9 @@
               "agent:reviewer",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-029",
@@ -646,10 +617,9 @@
               "command:summarize-diff",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.4,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 3
           },
           {
             "id": "cur-030",
@@ -664,10 +634,9 @@
               "command:summarize-diff",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 0.3333333333333333,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 3,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-031",
@@ -683,10 +652,9 @@
               "vault:staging",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.4,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 3
           },
           {
             "id": "cur-032",
@@ -702,10 +670,9 @@
               "script:smoke",
               "vault:staging"
             ],
-            "pAtK": 0,
-            "rAtK": 0,
-            "rr": 0,
-            "k": 5
+            "expected_coverage": 0,
+            "top_rank_of_expected": 0,
+            "extra_refs_returned": 5
           },
           {
             "id": "cur-033",
@@ -720,10 +687,9 @@
               "command:bump-version",
               "agent:reviewer"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-034",
@@ -738,10 +704,9 @@
               "command:bump-version",
               "command:summarize-diff"
             ],
-            "pAtK": 0,
-            "rAtK": 0,
-            "rr": 0,
-            "k": 5
+            "expected_coverage": 0,
+            "top_rank_of_expected": 0,
+            "extra_refs_returned": 5
           },
           {
             "id": "cur-035",
@@ -756,10 +721,9 @@
               "agent:reviewer",
               "knowledge:api-error-codes"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-036",
@@ -774,10 +738,9 @@
               "knowledge:api-error-codes",
               "script:lint"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-037",
@@ -792,10 +755,9 @@
               "skill:code-review",
               "agent:reviewer"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-038",
@@ -810,10 +772,9 @@
               "knowledge:deployment-runbook",
               "script:lint"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-039",
@@ -828,10 +789,9 @@
               "vault:staging",
               "agent:planner"
             ],
-            "pAtK": 0.2,
-            "rAtK": 1,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 1,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           },
           {
             "id": "cur-040",
@@ -847,10 +807,9 @@
               "knowledge:api-error-codes",
               "script:lint"
             ],
-            "pAtK": 0.2,
-            "rAtK": 0.5,
-            "rr": 1,
-            "k": 5
+            "expected_coverage": 0.5,
+            "top_rank_of_expected": 1,
+            "extra_refs_returned": 4
           }
         ]
       },
@@ -860,9 +819,8 @@
           "prompt",
           "expected",
           "top-3 retrieved",
-          "p@k",
-          "r@k",
-          "rr"
+          "coverage",
+          "top rank"
         ],
         "rows": [
           [
@@ -871,8 +829,7 @@
             "knowledge:repo-conventions,skill:debug-runtime",
             "script:lint,command:bump-version,knowledge:api-error-codes",
             "0.00",
-            "0.00",
-            "0.00"
+            "—"
           ],
           [
             "cur-034",
@@ -880,87 +837,84 @@
             "command:scaffold-test",
             "skill:code-review,knowledge:api-error-codes,vault:staging",
             "0.00",
-            "0.00",
-            "0.00"
-          ],
-          [
-            "cur-030",
-            "Resume the release workflow that was paused yesterday",
-            "workflow:release",
-            "command:bump-version,script:smoke,workflow:release",
-            "0.20",
-            "1.00",
-            "0.33"
+            "—"
           ],
           [
             "cur-008",
             "Generate release notes from the staged commits",
             "command:summarize-diff,workflow:release",
             "command:bump-version,command:summarize-diff,script:smoke",
-            "0.20",
             "0.50",
-            "0.50"
+            2
           ],
           [
-            "cur-001",
-            "Help me review this pull request for style issues and bugs",
-            "skill:code-review,agent:reviewer",
-            "skill:code-review,agent:reviewer,agent:planner",
-            "0.40",
-            "1.00",
-            "1.00"
+            "cur-013",
+            "Walk through the deployment runbook for tonight's rollout",
+            "knowledge:deployment-runbook,workflow:release",
+            "knowledge:deployment-runbook,knowledge:api-error-codes,vault:staging",
+            "0.50",
+            1
+          ],
+          [
+            "cur-040",
+            "Plan a refactor of the payments module with tradeoffs",
+            "agent:planner,skill:refactor-py",
+            "agent:planner,skill:code-review,command:bump-version",
+            "0.50",
+            1
           ]
         ]
       },
       "notes": [
-        "n=40 prompts, k=5. Worst 5 entries shown below; full per-entry breakdown is in the JSON report under `metrics.curation.values.per_entry`."
+        "n=40 prompts. Worst 5 by coverage shown; full per-entry breakdown in metrics.curation.values.per_entry.",
+        "This metric measures plugin-pipeline integrity (did refs returned by akm survive the hook's processing?), NOT akm retrieval quality. The fake-akm shim is held constant."
       ]
     },
     "latency": {
       "name": "latency",
       "values": {
-        "curate_prompt_p50_ms": 130,
-        "curate_prompt_p95_ms": 140,
-        "curate_prompt_p99_ms": 146,
-        "curate_prompt_mean_ms": 132,
+        "curate_prompt_p50_ms": 129,
+        "curate_prompt_p95_ms": 134,
+        "curate_prompt_p99_ms": 135,
+        "curate_prompt_mean_ms": 130,
         "curate_prompt_n": 24,
-        "session_start_p50_ms": 474,
-        "session_start_p95_ms": 501,
-        "session_start_p99_ms": 504,
-        "session_start_mean_ms": 477,
+        "session_start_p50_ms": 486,
+        "session_start_p95_ms": 507,
+        "session_start_p99_ms": 529,
+        "session_start_mean_ms": 486,
         "session_start_n": 24,
-        "post_tool_p50_ms": 41,
-        "post_tool_p95_ms": 44,
-        "post_tool_p99_ms": 45,
-        "post_tool_mean_ms": 41,
+        "post_tool_p50_ms": 42,
+        "post_tool_p95_ms": 46,
+        "post_tool_p99_ms": 47,
+        "post_tool_mean_ms": 43,
         "post_tool_n": 24,
         "summaries": {
           "curate_prompt": {
             "n": 24,
-            "p50": 130.24544199999946,
-            "p95": 139.57773809999966,
-            "p99": 145.50633821000028,
-            "min": 126.25213900000017,
-            "max": 147.1793290000005,
-            "mean": 131.66082499999996
+            "p50": 129.47089099999994,
+            "p95": 133.59431794999995,
+            "p99": 134.71431741999993,
+            "min": 126.00494600000002,
+            "max": 135.03303899999992,
+            "mean": 129.69968941666664
           },
           "session_start": {
             "n": 24,
-            "p50": 474.45814549999886,
-            "p95": 501.3686209000005,
-            "p99": 504.2104420200004,
-            "min": 458.23826700000063,
-            "max": 504.93168200000036,
-            "mean": 476.5742502916665
+            "p50": 485.6489524999997,
+            "p95": 506.77695660000063,
+            "p99": 529.3189633500007,
+            "min": 469.4890839999971,
+            "max": 535.4492580000006,
+            "mean": 486.1145290416668
           },
           "post_tool": {
             "n": 24,
-            "p50": 41.04989150000256,
-            "p95": 43.81340795000233,
-            "p99": 45.15546846000052,
-            "min": 39.40359499999977,
-            "max": 45.55431099999987,
-            "mean": 41.46426087500049
+            "p50": 42.47171100000196,
+            "p95": 46.09759880000201,
+            "p99": 47.134920190002376,
+            "min": 40.602382999997644,
+            "max": 47.419464000002336,
+            "mean": 42.910668416666795
           }
         }
       },
@@ -977,26 +931,26 @@
           [
             "curate_prompt",
             24,
-            130,
-            140,
-            146,
-            132
+            129,
+            134,
+            135,
+            130
           ],
           [
             "session_start",
             24,
-            474,
-            501,
-            504,
-            477
+            486,
+            507,
+            529,
+            486
           ],
           [
             "post_tool",
             24,
-            41,
-            44,
-            45,
-            41
+            42,
+            46,
+            47,
+            43
           ]
         ]
       },
@@ -1065,16 +1019,13 @@
         "claude_polarity_flips": 0,
         "opencode_available": true,
         "opencode_tp": 9,
-        "opencode_fp": 2,
+        "opencode_fp": 0,
         "opencode_fn": 0,
-        "opencode_tn": 1,
-        "opencode_precision": 0.8181818181818182,
+        "opencode_tn": 3,
+        "opencode_precision": 1,
         "opencode_recall": 1,
         "opencode_polarity_flips": 0,
-        "disagreements": [
-          "fb-008: claude=neither opencode=positive (truth=neither)",
-          "fb-009: claude=neither opencode=positive (truth=neither)"
-        ]
+        "disagreements": []
       },
       "table": {
         "headers": [
@@ -1101,17 +1052,18 @@
           [
             "opencode",
             9,
-            2,
             0,
-            1,
-            "0.8182",
+            0,
+            3,
+            "1.0000",
             "1.0000",
             0
           ]
         ]
       },
       "notes": [
-        "n=12 synthetic tool outputs. \"Polarity flips\" counts cases where the plugin fired feedback with the wrong sign (positive output classified negative or vice versa)."
+        "Both plugins measured by actual `akm feedback` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).",
+        "n=12 synthetic tool outputs. \"neither\"-labeled fixtures verify the plugins correctly skip auto-feedback for memory: and vault: refs."
       ]
     },
     "memory": {
@@ -1119,10 +1071,10 @@
       "values": {
         "n": 4,
         "claude_captured": 3,
-        "claude_avg_chars": 359,
-        "claude_ref_coverage": 1,
+        "claude_avg_body_chars": 479,
         "claude_trivial_rate": 0.25,
-        "claude_vault_leaks": 0,
+        "claude_name_format_violations": 0,
+        "claude_secret_leakages": 1,
         "opencode_available": true,
         "opencode_captured": true,
         "opencode_memory_logs": 1,
@@ -1130,60 +1082,39 @@
           {
             "fixtureId": "rich-multi-asset",
             "capturedName": "claude-session-20260502-sess-ric",
-            "capturedBody": "## 2026-04-22T12:00:00Z — user memory intent\nplease remember the steps we used to ship the akm release\n\n## 2026-04-22T12:01:30Z — tool ref\nBash → akm show skill:code-review (ref: skill:code-review, status: positive)\n\n## 2026-04-22T12:02:10Z — tool ref\nBash → akm show command:summarize-diff (ref: command:summarize-diff, status: positive)\n\n## 2026-04-22T12:03:00Z — tool ref\nBash → akm workflow start workflow:release (ref: workflow:release, status: positive)\n\n## 2026-04-22T12:05:00Z — user memory intent\nremember to run smoke tests after the deploy\n",
-            "bufferRefs": [
-              "skill:code-review",
-              "command:summarize-diff",
-              "workflow:release"
-            ],
-            "capturedRefs": [
-              "skill:code-review",
-              "command:summarize-diff",
-              "workflow:release"
-            ],
-            "refCoverage": 1,
-            "chars": 551,
+            "bodyChars": 632,
+            "bodyHeadings": 5,
             "trivial": false,
-            "vaultLeak": false
+            "nameFormatOk": true,
+            "secretLeakageDetected": false
           },
           {
             "fixtureId": "memory-intent-only",
             "capturedName": "claude-session-20260502-sess-int",
-            "capturedBody": "## 2026-04-22T12:00:00Z — user memory intent\nremember the rollback procedure documented in the runbook\n\n## 2026-04-22T12:01:00Z — user memory intent\nalso remember that smoke tests should run before traffic ramp\n",
-            "bufferRefs": [],
-            "capturedRefs": [],
-            "refCoverage": 1,
-            "chars": 211,
+            "bodyChars": 294,
+            "bodyHeadings": 2,
             "trivial": false,
-            "vaultLeak": false
+            "nameFormatOk": true,
+            "secretLeakageDetected": false
           },
           {
             "fixtureId": "sparse-single-entry",
             "capturedName": null,
-            "capturedBody": "",
-            "bufferRefs": [],
-            "capturedRefs": [],
-            "refCoverage": 1,
-            "chars": 0,
+            "bodyChars": 0,
+            "bodyHeadings": 0,
             "trivial": true,
-            "vaultLeak": false
+            "nameFormatOk": true,
+            "secretLeakageDetected": false
           },
           {
             "fixtureId": "vault-leak-attempt",
             "capturedName": "claude-session-20260502-sess-vau",
-            "capturedBody": "## 2026-04-22T12:00:00Z — user memory intent\nremember the staging deploy steps\n\n## 2026-04-22T12:01:00Z — tool ref\nBash → akm vault show vault:staging (ref: vault:staging, keys: DATABASE_URL, API_KEY)\n\n## 2026-04-22T12:02:00Z — tool ref\nBash → akm show skill:code-review (ref: skill:code-review, status: positive)\n",
-            "bufferRefs": [
-              "vault:staging",
-              "skill:code-review"
-            ],
-            "capturedRefs": [
-              "vault:staging",
-              "skill:code-review"
-            ],
-            "refCoverage": 1,
-            "chars": 314,
+            "bodyChars": 511,
+            "bodyHeadings": 3,
             "trivial": false,
-            "vaultLeak": false
+            "nameFormatOk": true,
+            "secretLeakageDetected": true,
+            "secretEvidence": "DATABASE_URL=postgres://staging-pw-DO-NOT-LEAK@db.example.co"
           }
         ]
       },
@@ -1191,44 +1122,44 @@
         "headers": [
           "fixture",
           "captured?",
-          "chars",
-          "ref coverage",
-          "vault leak?"
+          "body chars",
+          "name format",
+          "secret leakage?"
         ],
         "rows": [
           [
             "rich-multi-asset",
             "yes",
-            551,
-            "1.00",
-            "no"
+            632,
+            "ok",
+            "—"
           ],
           [
             "memory-intent-only",
             "yes",
-            211,
-            "1.00",
-            "no"
+            294,
+            "ok",
+            "—"
           ],
           [
             "sparse-single-entry",
             "no (trivial)",
             0,
-            "1.00",
-            "no"
+            "—",
+            "—"
           ],
           [
             "vault-leak-attempt",
             "yes",
-            314,
-            "1.00",
-            "no"
+            511,
+            "ok",
+            "LEAK: DATABASE_URL=postgres://staging-pw-DO-NOT-LEAK@db.example.co"
           ]
         ]
       },
       "notes": [
         "Sparse fixtures (< 2 buffer entries) are expected to be trivial-rate dropped.",
-        "Vault leak fires when the captured memory body contains a non-empty value for known secret keys; since the hook pipes the buffer untouched into akm remember, the test indirectly validates that vault VALUES never enter the buffer in the first place."
+        "claude_secret_leakages > 0 means the plugin committed a buffer containing a secret-shaped value (e.g. KEY=value). This is a finding about the plugin's lack of buffer scrubbing — vault values stored via the akm CLI are protected, but raw user prompts captured into the buffer are not."
       ]
     }
   }

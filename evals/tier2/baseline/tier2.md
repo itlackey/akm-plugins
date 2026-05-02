@@ -1,9 +1,9 @@
 # AKM plugin eval — tier2
 
 - Plugin version: `0.6.0`
-- Git SHA: `2e54fa05c87b152484e395f2ff6057a933aa2f13`
-- Ran at: 2026-05-02T15:31:23.927Z
-- Duration: 33020 ms
+- Git SHA: `2aafb1681325dd87afbcd2fdea90b98c99d4e643`
+- Ran at: 2026-05-02T15:54:10.150Z
+- Duration: 37194 ms
 
 ## surface
 
@@ -19,15 +19,16 @@
 
 ## curation
 
-> n=40 prompts, k=5. Worst 5 entries shown below; full per-entry breakdown is in the JSON report under `metrics.curation.values.per_entry`.
+> n=40 prompts. Worst 5 by coverage shown; full per-entry breakdown in metrics.curation.values.per_entry.
+> This metric measures plugin-pipeline integrity (did refs returned by akm survive the hook's processing?), NOT akm retrieval quality. The fake-akm shim is held constant.
 
-| id | prompt | expected | top-3 retrieved | p@k | r@k | rr |
-| --- | --- | --- | --- | --- | --- | --- |
-| cur-032 | What's the recommended way to handle exceptions in this c... | knowledge:repo-conventions,skill:debug-runtime | script:lint,command:bump-version,knowledge:api-error-codes | 0.00 | 0.00 | 0.00 |
-| cur-034 | Write tests for the new parser module | command:scaffold-test | skill:code-review,knowledge:api-error-codes,vault:staging | 0.00 | 0.00 | 0.00 |
-| cur-030 | Resume the release workflow that was paused yesterday | workflow:release | command:bump-version,script:smoke,workflow:release | 0.20 | 1.00 | 0.33 |
-| cur-008 | Generate release notes from the staged commits | command:summarize-diff,workflow:release | command:bump-version,command:summarize-diff,script:smoke | 0.20 | 0.50 | 0.50 |
-| cur-001 | Help me review this pull request for style issues and bugs | skill:code-review,agent:reviewer | skill:code-review,agent:reviewer,agent:planner | 0.40 | 1.00 | 1.00 |
+| id | prompt | expected | top-3 retrieved | coverage | top rank |
+| --- | --- | --- | --- | --- | --- |
+| cur-032 | What's the recommended way to handle exceptions in this c... | knowledge:repo-conventions,skill:debug-runtime | script:lint,command:bump-version,knowledge:api-error-codes | 0.00 | — |
+| cur-034 | Write tests for the new parser module | command:scaffold-test | skill:code-review,knowledge:api-error-codes,vault:staging | 0.00 | — |
+| cur-008 | Generate release notes from the staged commits | command:summarize-diff,workflow:release | command:bump-version,command:summarize-diff,script:smoke | 0.50 | 2 |
+| cur-013 | Walk through the deployment runbook for tonight's rollout | knowledge:deployment-runbook,workflow:release | knowledge:deployment-runbook,knowledge:api-error-codes,vault:staging | 0.50 | 1 |
+| cur-040 | Plan a refactor of the payments module with tradeoffs | agent:planner,skill:refactor-py | agent:planner,skill:code-review,command:bump-version | 0.50 | 1 |
 
 ## latency
 
@@ -35,9 +36,9 @@
 
 | verb | n | p50 ms | p95 ms | p99 ms | mean ms |
 | --- | --- | --- | --- | --- | --- |
-| curate_prompt | 24 | 130 | 140 | 146 | 132 |
-| session_start | 24 | 474 | 501 | 504 | 477 |
-| post_tool | 24 | 41 | 44 | 45 | 41 |
+| curate_prompt | 24 | 129 | 134 | 135 | 130 |
+| session_start | 24 | 486 | 507 | 529 | 486 |
+| post_tool | 24 | 42 | 46 | 47 | 43 |
 
 ## context_budget
 
@@ -50,22 +51,23 @@
 
 ## feedback
 
-> n=12 synthetic tool outputs. "Polarity flips" counts cases where the plugin fired feedback with the wrong sign (positive output classified negative or vice versa).
+> Both plugins measured by actual `akm feedback` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).
+> n=12 synthetic tool outputs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for memory: and vault: refs.
 
 | plugin | tp | fp | fn | tn | precision | recall | polarity flips |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | claude | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
-| opencode | 9 | 2 | 0 | 1 | 0.8182 | 1.0000 | 0 |
+| opencode | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
 
 ## memory
 
 > Sparse fixtures (< 2 buffer entries) are expected to be trivial-rate dropped.
-> Vault leak fires when the captured memory body contains a non-empty value for known secret keys; since the hook pipes the buffer untouched into akm remember, the test indirectly validates that vault VALUES never enter the buffer in the first place.
+> claude_secret_leakages > 0 means the plugin committed a buffer containing a secret-shaped value (e.g. KEY=value). This is a finding about the plugin's lack of buffer scrubbing — vault values stored via the akm CLI are protected, but raw user prompts captured into the buffer are not.
 
-| fixture | captured? | chars | ref coverage | vault leak? |
+| fixture | captured? | body chars | name format | secret leakage? |
 | --- | --- | --- | --- | --- |
-| rich-multi-asset | yes | 551 | 1.00 | no |
-| memory-intent-only | yes | 211 | 1.00 | no |
-| sparse-single-entry | no (trivial) | 0 | 1.00 | no |
-| vault-leak-attempt | yes | 314 | 1.00 | no |
+| rich-multi-asset | yes | 632 | ok | — |
+| memory-intent-only | yes | 294 | ok | — |
+| sparse-single-entry | no (trivial) | 0 | — | — |
+| vault-leak-attempt | yes | 511 | ok | LEAK: DATABASE_URL=postgres://staging-pw-DO-NOT-LEAK@db.example.co |
 

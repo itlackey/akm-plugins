@@ -135,10 +135,16 @@ function shuffle<T>(items: T[]): T[] {
 }
 
 // Wilson score interval at 95% confidence for a binomial proportion.
-function wilsonInterval(wins: number, n: number): { lower: number; upper: number; point: number } {
-  if (n === 0) return { lower: 0, upper: 0, point: 0 }
+// Ties are folded into the denominator as 0.5-of-each: if the judge
+// genuinely can't pick, that's information about the candidate's
+// strength, not a sample to discard. With 3 trials and 1 tie, the old
+// code computed a CI over n=2 which was meaningless; this gives a
+// stable n=3 estimate.
+function wilsonInterval(candidateWins: number, baselineWins: number, ties: number): { lower: number; upper: number; point: number; n: number } {
+  const n = candidateWins + baselineWins + ties
+  if (n === 0) return { lower: 0, upper: 0, point: 0, n: 0 }
   const z = 1.96
-  const p = wins / n
+  const p = (candidateWins + ties / 2) / n
   const denom = 1 + (z * z) / n
   const center = p + (z * z) / (2 * n)
   const margin = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))
@@ -146,6 +152,7 @@ function wilsonInterval(wins: number, n: number): { lower: number; upper: number
     point: p,
     lower: Math.max(0, (center - margin) / denom),
     upper: Math.min(1, (center + margin) / denom),
+    n,
   }
 }
 
@@ -208,7 +215,9 @@ async function judgePair(
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 512,
-    system: [{ type: "text", text: PAIRWISE_SYSTEM, cache_control: { type: "ephemeral" } }],
+    // No cache_control: system prompt is well below Sonnet 4.6's
+    // 2048-token cacheable minimum — the marker silently never fires.
+    system: PAIRWISE_SYSTEM,
     tools: [{ name: "pick_winner", description: "Record which transcript better fulfilled the scenario.", input_schema: PAIRWISE_SCHEMA as Anthropic.Tool["input_schema"] }],
     tool_choice: { type: "tool", name: "pick_winner" },
     messages: [{ role: "user", content: userPrompt }],
@@ -288,8 +297,7 @@ async function main() {
           else result.ties++
           result.trials.push({ winner, reasoning, aLabel: order[0], bLabel: order[1], costUsd })
         }
-        const total = result.baselineWins + result.candidateWins
-        const candidateInterval = wilsonInterval(result.candidateWins, total)
+        const candidateInterval = wilsonInterval(result.candidateWins, result.baselineWins, result.ties)
         console.log(`  baseline=${result.baselineWins} candidate=${result.candidateWins} ties=${result.ties} candidate_winrate=${(candidateInterval.point * 100).toFixed(0)}% [${(candidateInterval.lower * 100).toFixed(0)}-${(candidateInterval.upper * 100).toFixed(0)}%]`)
         pairResults.push(result)
       }
@@ -302,8 +310,7 @@ async function main() {
   const totalBaseline = pairResults.reduce((a, p) => a + p.baselineWins, 0)
   const totalCandidate = pairResults.reduce((a, p) => a + p.candidateWins, 0)
   const totalTies = pairResults.reduce((a, p) => a + p.ties, 0)
-  const decided = totalBaseline + totalCandidate
-  const overallWinrate = wilsonInterval(totalCandidate, decided)
+  const overallWinrate = wilsonInterval(totalCandidate, totalBaseline, totalTies)
 
   const report: EvalReport = {
     version: "1",
@@ -346,7 +353,7 @@ async function main() {
           ]),
         },
         notes: [
-          `Candidate (${opts.candidateRef}) win-rate: ${(overallWinrate.point * 100).toFixed(1)}% [${(overallWinrate.lower * 100).toFixed(1)}-${(overallWinrate.upper * 100).toFixed(1)}%] (Wilson 95% CI, ties excluded).`,
+          `Candidate (${opts.candidateRef}) win-rate: ${(overallWinrate.point * 100).toFixed(1)}% [${(overallWinrate.lower * 100).toFixed(1)}-${(overallWinrate.upper * 100).toFixed(1)}%] (Wilson 95% CI, ties counted as 0.5 each, n=${overallWinrate.n}).`,
           `Total judge cost: $${totalCost.toFixed(4)}.`,
         ],
       } as MetricResult,
