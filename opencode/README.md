@@ -14,10 +14,11 @@ Add to your OpenCode config (`opencode.json`):
 
 ## Tools
 
-The plugin exposes **19 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`, raw `agent`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
+The plugin exposes **20 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`, raw `agent`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
 
 | Tool | Description |
 |------|-------------|
+| `akm_info` | Show `akm info` output together with the installed `akm-opencode` plugin version and install location |
 | `akm_search` | Search the local stash, the registry, or both. Type filter accepts `skill`, `command`, `agent`, `knowledge`, `lesson`, `memory`, `script`, `workflow`, `vault`, `wiki`, `any`; proposed hits can be included explicitly |
 | `akm_show` | Show a stash asset by its ref |
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
