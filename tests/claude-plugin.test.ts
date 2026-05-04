@@ -205,7 +205,7 @@ describe("Claude plugin metadata", () => {
 
     expect(body).toContain("## Feature parity tracker")
     expect(body).toContain("| Session-start retrieval | #27 | Shipped in both plugins |")
-    expect(body).toContain("| Auto-attach scope | #28 | Open |")
+    expect(body).toContain("| Auto-attach scope | #28 | Shipped in both plugins |")
     expect(body).toContain("| Conversation-derived feedback | #29 | Open |")
     expect(body).toContain("| Session-end `akm index` | #30 | Shipped in both plugins |")
     expect(body).toContain("| Harness-provided LLM fallback | #31 | Open |")
@@ -927,5 +927,203 @@ exit 0
     })
 
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemory:release-retro\takm remember --name release-retro")
+  })
+
+  it("auto-feedback passes run scope from session_id", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const feedbackLog = path.join(tempDir, "akm-feedback.log")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    const quotedLog = shellQuote(feedbackLog)
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["auto-feedback", "success"], {
+      input: JSON.stringify({
+        session_id: "sess-scope-1",
+        tool: "Bash",
+        input: { command: "akm show skill:deploy" },
+        output: "{\"ref\":\"skill:deploy\"}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const recorded = readFileSync(feedbackLog, "utf8")
+    expect(recorded).toContain("feedback skill:deploy --positive")
+    expect(recorded).toContain("--run sess-scope-1")
+  })
+
+  it("auto-feedback passes user/agent/channel scope from env vars", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const feedbackLog = path.join(tempDir, "akm-feedback.log")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    const quotedLog = shellQuote(feedbackLog)
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["auto-feedback", "success"], {
+      input: JSON.stringify({
+        session_id: "sess-scope-2",
+        tool: "Bash",
+        input: { command: "akm show skill:deploy" },
+        output: "{\"ref\":\"skill:deploy\"}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_USER_ID: "alice",
+        AKM_AGENT_ID: "reviewer",
+        AKM_CHANNEL: "pr-42",
+      },
+    })
+
+    const recorded = readFileSync(feedbackLog, "utf8")
+    expect(recorded).toContain("--user alice")
+    expect(recorded).toContain("--agent reviewer")
+    expect(recorded).toContain("--run sess-scope-2")
+    expect(recorded).toContain("--channel pr-42")
+  })
+
+  it("auto-feedback respects AKM_SCOPE_KEYS to limit which scope flags are passed", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const feedbackLog = path.join(tempDir, "akm-feedback.log")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    const quotedLog = shellQuote(feedbackLog)
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["auto-feedback", "success"], {
+      input: JSON.stringify({
+        session_id: "sess-scope-3",
+        tool: "Bash",
+        input: { command: "akm show skill:deploy" },
+        output: "{\"ref\":\"skill:deploy\"}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_USER_ID: "alice",
+        AKM_SCOPE_KEYS: "run",
+      },
+    })
+
+    const recorded = readFileSync(feedbackLog, "utf8")
+    expect(recorded).toContain("--run sess-scope-3")
+    expect(recorded).not.toContain("--user alice")
+  })
+
+  it("capture-memory passes run scope from session_id", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const rememberLog = path.join(tempDir, "remember.log")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    const bufferPath = path.join(sessionsDir, "sess-scope-mem.md")
+    writeFileSync(
+      bufferPath,
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember the rollout\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    const quotedLog = shellQuote(rememberLog)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "session-end"], {
+      input: JSON.stringify({ session_id: "sess-scope-mem" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const args = readFileSync(rememberLog, "utf8")
+    expect(args).toContain("--run sess-scope-mem")
+  })
+
+  it("capture-memory passes user/channel scope from env vars", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const rememberLog = path.join(tempDir, "remember.log")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    const bufferPath = path.join(sessionsDir, "sess-scope-env.md")
+    writeFileSync(
+      bufferPath,
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember the rollout\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    const quotedLog = shellQuote(rememberLog)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "session-end"], {
+      input: JSON.stringify({ session_id: "sess-scope-env" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_USER_ID: "bob",
+        AKM_CHANNEL: "nightly",
+      },
+    })
+
+    const args = readFileSync(rememberLog, "utf8")
+    expect(args).toContain("--user bob")
+    expect(args).toContain("--run sess-scope-env")
+    expect(args).toContain("--channel nightly")
   })
 })

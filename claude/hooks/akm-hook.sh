@@ -20,6 +20,7 @@ AUTO_FEEDBACK="${AKM_AUTO_FEEDBACK:-1}"
 AUTO_MEMORY="${AKM_AUTO_MEMORY:-1}"
 AUTO_SETUP="${AKM_AUTO_SETUP:-1}"
 INDEX_ON_SESSION_END="${AKM_INDEX_ON_SESSION_END:-0}"
+SCOPE_KEYS="${AKM_SCOPE_KEYS:-user,agent,run,channel}"
 CURATED_PROMPT_HEADER="# AKM stash — assets relevant to this prompt"
 CURATED_SESSION_HEADER="# AKM stash — assets relevant to this session"
 CURATED_CONTEXT_TAIL="Tip: call \`akm show <ref>\` to fetch full content, and record \`akm feedback <ref> --positive|--negative\` once you know whether the asset helped."
@@ -259,9 +260,34 @@ run_index_on_session_end() {
 
 build_run_scope_args() {
   sid="$1"
-  if [ -n "$sid" ]; then
-    printf '%s\n' "--run" "$sid"
-  fi
+  case ",$SCOPE_KEYS," in
+    *,run,*)
+      if [ -n "$sid" ]; then
+        printf '%s\n' "--run" "$sid"
+      fi
+      ;;
+  esac
+  case ",$SCOPE_KEYS," in
+    *,user,*)
+      if [ -n "${AKM_USER_ID:-}" ]; then
+        printf '%s\n' "--user" "$AKM_USER_ID"
+      fi
+      ;;
+  esac
+  case ",$SCOPE_KEYS," in
+    *,agent,*)
+      if [ -n "${AKM_AGENT_ID:-}" ]; then
+        printf '%s\n' "--agent" "$AKM_AGENT_ID"
+      fi
+      ;;
+  esac
+  case ",$SCOPE_KEYS," in
+    *,channel,*)
+      if [ -n "${AKM_CHANNEL:-}" ]; then
+        printf '%s\n' "--channel" "$AKM_CHANNEL"
+      fi
+      ;;
+  esac
 }
 
 emit_hook_context() {
@@ -496,6 +522,7 @@ auto_feedback() {
   command_text="$(printf '%s\n' "$fields" | sed -n '2p' | sanitize)"
   status_text="$(printf '%s\n' "$fields" | sed -n '3p' | sanitize)"
   refs_csv="$(printf '%s\n' "$fields" | sed -n '4p' | sanitize)"
+  sid="$(printf '%s\n' "$fields" | sed -n '5p' | sanitize)"
 
   # Only react when the command actually invoked akm — otherwise refs in a
   # generic tool output are likely discussion, not usage.
@@ -518,6 +545,10 @@ auto_feedback() {
     note="claude-code auto: tool failed"
   fi
 
+  # Pre-capture scope args while IFS is still the default so word-splitting
+  # works correctly. Store as positional params; "$$@" passes them unchanged.
+  set -- $(build_run_scope_args "$sid")
+
   OLD_IFS="${IFS}"
   IFS=","
   for ref in $refs_csv; do
@@ -535,7 +566,7 @@ auto_feedback() {
       append_log "$FEEDBACK_LOG" "system" "skip_proposed" "$ref" "$status_text"
       continue
     fi
-    akm_run --format json -q feedback "$ref" "$sentiment_flag" --note "$note" >/dev/null
+    akm_run --format json -q feedback "$ref" "$sentiment_flag" --note "$note" "$@" >/dev/null
   done
   IFS="${OLD_IFS}"
 }
@@ -666,7 +697,7 @@ capture_memory() {
     printf 'Reason: %s\n' "$reason"
     printf 'Session: %s\n\n' "$sid"
     cat "$buffer"
-  } | akm_run --format json -q remember --name "$name" --force >/dev/null
+  } | akm_run --format json -q remember --name "$name" --force $(build_run_scope_args "$sid") >/dev/null
 
   append_log "$MEMORY_LOG" "system" "captured" "memory:$name" "$reason"
   run_index_on_session_end "$reason" "$sid" "memory:$name"
