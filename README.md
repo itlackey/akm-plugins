@@ -54,7 +54,7 @@ The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.exec
 | Feature | Tracking issue | Status |
 | --- | --- | --- |
 | Session-start retrieval | #27 | Shipped in both plugins |
-| Auto-attach scope | #28 | Open |
+| Auto-attach scope | #28 | Shipped in both plugins |
 | Conversation-derived feedback | #29 | Open |
 | Session-end `akm index` | #30 | Shipped in both plugins |
 | Harness-provided LLM fallback | #31 | Open |

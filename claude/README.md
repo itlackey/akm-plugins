@@ -142,6 +142,10 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
 | `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Max total characters injected into `additionalContext` for a single hook fire. |
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Where session logs and per-session buffers live. Also holds the `setup.stamp` and `quality-cache.tsv` files. |
+| `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Comma-separated list of scope fields to attach on every `akm curate`, `akm feedback`, and `akm remember` CLI call. Remove a key to opt out of that dimension (e.g. `run,channel` to omit user/agent). |
+| `AKM_USER_ID` | _(unset)_ | User identifier forwarded as `--user` on scoped calls. Set in your shell environment or Claude Code settings for multi-user deployments. |
+| `AKM_AGENT_ID` | _(unset)_ | Agent identifier forwarded as `--agent` on scoped calls. |
+| `AKM_CHANNEL` | _(unset)_ | Channel or variant name forwarded as `--channel` on scoped calls (e.g. a PR branch name or pipeline stage). |
 
 ### Slash commands
 

@@ -535,6 +535,19 @@ describe("akm-opencode plugin", () => {
       )
     })
 
+    it("akm_curate passes harness scope flags", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_curate.execute(
+        { query: "deploy the app", limit: 3 } as any,
+        createToolContext({ userID: "user-9", agent: "general", sessionID: "run-1", channel: "review" }),
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["curate", "deploy the app", "--limit", "3", "--user", "user-9", "--agent", "general", "--run", "run-1", "--channel", "review", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
     it("akm_curate preserves a single explicit detail flag without injecting duplicate formats", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_curate.execute(

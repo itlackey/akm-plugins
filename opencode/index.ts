@@ -2409,10 +2409,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         limit: tool.schema.number().optional().describe("Maximum number of curated matches to return. Defaults to 6."),
         detail: tool.schema.enum(["summary", "normal", "full"]).optional().describe("Detail level for each match. Defaults to 'summary'."),
       },
-      async execute({ query, limit, detail }) {
+      async execute({ query, limit, detail }, context) {
         const args = ["curate", query, "--limit", String(limit ?? 6)]
         if (detail) args.push("--detail", detail)
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_curate" })
+        args.push(...buildScopedArgs(context as unknown as Record<string, unknown>))
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_curate", sessionID: context.sessionID, directory: context.directory })
       },
     }),
     akm_evolve: tool({

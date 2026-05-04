@@ -73,6 +73,7 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | `AKM_MEMORY_CHECKPOINT_EVERY` | `8` | Number of successful asset-touching tool calls between mid-session checkpoint memories. |
 | `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | `\b(thanks|perfect|worked)\b` | Case-insensitive regex used for lightweight positive retrospective feedback on the most recent refs. |
 | `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong|failed|broken|didn't work|did not work|bad)\b` | Case-insensitive regex used for negative retrospective feedback signals. |
+| `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Comma-separated list of scope fields to attach on every `akm_remember`, `akm_curate`, and `akm_feedback` call. Remove a key to opt out of that dimension. |
 | `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Seconds allowed for lightweight pending-proposal count checks during context injection. |
 | `AKM_PACKAGE_REF` | `akm-cli@latest` | Override the npm/bun package spec used for auto-install (e.g. pin to `akm-cli@0.7.0` in CI). |
 
