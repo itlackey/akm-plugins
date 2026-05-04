@@ -1,6 +1,9 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 import type { PluginInput } from "@opencode-ai/plugin"
 import opencodePackage from "../opencode/package.json"
+import { mkdtempSync, rmSync, existsSync, statSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 
 // Mock execFileSync and execSync before importing the plugin
 const mockExecFileSync = mock(() => "mock output")
@@ -2732,5 +2735,157 @@ describe("akm-opencode plugin", () => {
         expect.objectContaining({ encoding: "utf8", timeout: 60_000 }),
       )
     })
+  })
+})
+
+describe("akm-opencode plugin > LLM proxy shim", () => {
+  const tempDirs: string[] = []
+
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+    mockExecFileSync.mockClear()
+    mockExecFileSync.mockReturnValue("mock output")
+  })
+
+  function makeTempDir() {
+    const dir = mkdtempSync(path.join(tmpdir(), "akm-proxy-test-"))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  it("sets AKM_LLM_PROXY_CMD when akm.llm is not configured", async () => {
+    const stateDir = makeTempDir()
+
+    mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
+      if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
+        return "null"
+      }
+      return "mock output"
+    })
+
+    const hooks = await AkmPlugin(createPluginInput())
+    const output = { env: {} as Record<string, string> }
+    await withEnvVar("AKM_PLUGIN_STATE_DIR", stateDir, async () => {
+      await hooks["shell.env"]!(
+        { cwd: "/tmp/test-project", sessionID: "session-proxy-1", callID: "call-1" } as any,
+        output as any,
+      )
+    })
+
+    expect(output.env.AKM_LLM_PROXY_CMD).toBeTruthy()
+    expect(existsSync(output.env.AKM_LLM_PROXY_CMD)).toBe(true)
+    const stat = statSync(output.env.AKM_LLM_PROXY_CMD)
+    // shim must be executable
+    expect(stat.mode & 0o111).toBeTruthy()
+  })
+
+  it("does not set AKM_LLM_PROXY_CMD when akm.llm is configured", async () => {
+    const stateDir = makeTempDir()
+
+    mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
+      if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
+        return JSON.stringify({ provider: "anthropic", model: "claude-3-haiku-20240307" })
+      }
+      return "mock output"
+    })
+
+    const hooks = await AkmPlugin(createPluginInput())
+    const output = { env: {} as Record<string, string> }
+    await withEnvVar("AKM_PLUGIN_STATE_DIR", stateDir, async () => {
+      await hooks["shell.env"]!(
+        { cwd: "/tmp/test-project", sessionID: "session-proxy-2", callID: "call-1" } as any,
+        output as any,
+      )
+    })
+
+    expect(output.env.AKM_LLM_PROXY_CMD).toBeUndefined()
+  })
+
+  it("includes AKM_LLM_PROXY_MODEL hint from session model when known", async () => {
+    const stateDir = makeTempDir()
+
+    mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
+      if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
+        return "null"
+      }
+      return "mock output"
+    })
+
+    const hooks = await AkmPlugin(createPluginInput())
+
+    // Simulate a system transform that captures the session model.
+    const systemOutput = { system: [] as string[] }
+    await hooks["experimental.chat.system.transform"]!(
+      { sessionID: "session-proxy-model-1", model: { providerID: "anthropic", modelID: "claude-3-opus-20240229" } } as any,
+      systemOutput as any,
+    )
+
+    const envOutput = { env: {} as Record<string, string> }
+    await withEnvVar("AKM_PLUGIN_STATE_DIR", stateDir, async () => {
+      await hooks["shell.env"]!(
+        { cwd: "/tmp/test-project", sessionID: "session-proxy-model-1", callID: "call-2" } as any,
+        envOutput as any,
+      )
+    })
+
+    expect(envOutput.env.AKM_LLM_PROXY_CMD).toBeTruthy()
+    expect(envOutput.env.AKM_LLM_PROXY_MODEL).toBe("claude-3-opus-20240229")
+  })
+
+  it("proxy shim content includes Anthropic and OpenAI provider logic", async () => {
+    const stateDir = makeTempDir()
+
+    mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
+      if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
+        return "null"
+      }
+      return "mock output"
+    })
+
+    const hooks = await AkmPlugin(createPluginInput())
+    const output = { env: {} as Record<string, string> }
+    await withEnvVar("AKM_PLUGIN_STATE_DIR", stateDir, async () => {
+      await hooks["shell.env"]!(
+        { cwd: "/tmp/test-project", sessionID: "session-proxy-content", callID: "call-1" } as any,
+        output as any,
+      )
+    })
+
+    const { readFileSync } = await import("node:fs")
+    const content = readFileSync(output.env.AKM_LLM_PROXY_CMD, "utf8")
+    expect(content).toContain("ANTHROPIC_API_KEY")
+    expect(content).toContain("OPENAI_API_KEY")
+    expect(content).toContain("api.anthropic.com")
+    expect(content).toContain("api.openai.com")
+    expect(content).toContain("exit 1")
+  })
+
+  it("does not set AKM_LLM_PROXY_CMD when akm cli is unavailable", async () => {
+    const stateDir = makeTempDir()
+
+    mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
+      if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
+        const err = new Error("ENOENT: not found")
+        ;(err as NodeJS.ErrnoException).code = "ENOENT"
+        throw err
+      }
+      return "mock output"
+    })
+
+    const hooks = await AkmPlugin(createPluginInput())
+    const output = { env: {} as Record<string, string> }
+    await withEnvVar("AKM_PLUGIN_STATE_DIR", stateDir, async () => {
+      await hooks["shell.env"]!(
+        { cwd: "/tmp/test-project", sessionID: "session-proxy-unavail", callID: "call-1" } as any,
+        output as any,
+      )
+    })
+
+    // fail-open: when akm is unavailable, we don't know whether llm is
+    // configured, so we treat it as configured and skip proxy installation.
+    expect(output.env.AKM_LLM_PROXY_CMD).toBeUndefined()
   })
 })

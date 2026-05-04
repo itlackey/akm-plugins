@@ -929,3 +929,130 @@ exit 0
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemory:release-retro\takm remember --name release-retro")
   })
 })
+
+describe("Claude hook scripts > LLM proxy shim", () => {
+  it("session-start installs the proxy shim when akm.llm is not configured", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    // Fake akm: handles --version, index, hints, curate, proposal list, and
+    // config get llm (returns null = not configured).
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+for arg in "$@"; do
+  case "$arg" in
+    --version) echo "akm 9.9.9"; exit 0 ;;
+    llm) printf 'null\\n'; exit 0 ;;
+    index) exit 0 ;;
+    hints) echo "# Stash hints"; exit 0 ;;
+    curate) exit 0 ;;
+    list) printf '{"proposals":[]}\\n'; exit 0 ;;
+  esac
+done
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["session-start"], {
+      input: JSON.stringify({ session_id: "sess-proxy-1" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const shimPath = path.join(stateDir, "akm-claude/akm-llm-proxy.sh")
+    expect(existsSync(shimPath)).toBe(true)
+
+    const content = readFileSync(shimPath, "utf8")
+    expect(content).toContain("ANTHROPIC_API_KEY")
+    expect(content).toContain("OPENAI_API_KEY")
+    expect(content).toContain("api.anthropic.com")
+    expect(content).toContain("api.openai.com")
+    expect(content).toContain("exit 1")
+  })
+
+  it("session-start does not install the proxy shim when akm.llm is configured", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    // Fake akm: config get llm returns a configured block.
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+for arg in "$@"; do
+  case "$arg" in
+    --version) echo "akm 9.9.9"; exit 0 ;;
+    llm) printf '{"provider":"anthropic","model":"claude-3-haiku-20240307"}\\n'; exit 0 ;;
+    index) exit 0 ;;
+    hints) echo "# Stash hints"; exit 0 ;;
+    curate) exit 0 ;;
+    list) printf '{"proposals":[]}\\n'; exit 0 ;;
+  esac
+done
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["session-start"], {
+      input: JSON.stringify({ session_id: "sess-proxy-2" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const shimPath = path.join(stateDir, "akm-claude/akm-llm-proxy.sh")
+    expect(existsSync(shimPath)).toBe(false)
+  })
+
+  it("session-start prefers claude CLI in the proxy shim when available", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+for arg in "$@"; do
+  case "$arg" in
+    --version) echo "akm 9.9.9"; exit 0 ;;
+    llm) printf 'null\\n'; exit 0 ;;
+    index|hints|curate|list) exit 0 ;;
+  esac
+done
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["session-start"], {
+      input: JSON.stringify({ session_id: "sess-proxy-claude" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const shimPath = path.join(stateDir, "akm-claude/akm-llm-proxy.sh")
+    expect(existsSync(shimPath)).toBe(true)
+    const content = readFileSync(shimPath, "utf8")
+    // The shim should check for the claude CLI first.
+    expect(content).toContain("command -v claude")
+    expect(content).toContain("claude -p")
+  })
+})
