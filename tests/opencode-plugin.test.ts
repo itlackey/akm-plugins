@@ -2750,14 +2750,14 @@ describe("akm-opencode plugin > LLM proxy shim", () => {
     mockExecFileSync.mockReturnValue("mock output")
   })
 
-  function makeTempDir() {
+  function makeShimTempDir() {
     const dir = mkdtempSync(path.join(tmpdir(), "akm-proxy-test-"))
     tempDirs.push(dir)
     return dir
   }
 
   it("sets AKM_LLM_PROXY_CMD when akm.llm is not configured", async () => {
-    const stateDir = makeTempDir()
+    const stateDir = makeShimTempDir()
 
     mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
       if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
@@ -2783,7 +2783,7 @@ describe("akm-opencode plugin > LLM proxy shim", () => {
   })
 
   it("does not set AKM_LLM_PROXY_CMD when akm.llm is configured", async () => {
-    const stateDir = makeTempDir()
+    const stateDir = makeShimTempDir()
 
     mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
       if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
@@ -2805,7 +2805,7 @@ describe("akm-opencode plugin > LLM proxy shim", () => {
   })
 
   it("includes AKM_LLM_PROXY_MODEL hint from session model when known", async () => {
-    const stateDir = makeTempDir()
+    const stateDir = makeShimTempDir()
 
     mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
       if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
@@ -2836,7 +2836,7 @@ describe("akm-opencode plugin > LLM proxy shim", () => {
   })
 
   it("proxy shim content includes Anthropic and OpenAI provider logic", async () => {
-    const stateDir = makeTempDir()
+    const stateDir = makeShimTempDir()
 
     mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
       if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
@@ -2864,7 +2864,7 @@ describe("akm-opencode plugin > LLM proxy shim", () => {
   })
 
   it("does not set AKM_LLM_PROXY_CMD when akm cli is unavailable", async () => {
-    const stateDir = makeTempDir()
+    const stateDir = makeShimTempDir()
 
     mockExecFileSync.mockImplementation((_cmd: unknown, args: unknown) => {
       if (Array.isArray(args) && args.includes("config") && args.includes("llm")) {
