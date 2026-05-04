@@ -546,7 +546,7 @@ auto_feedback() {
   fi
 
   # Pre-capture scope args while IFS is still the default so word-splitting
-  # works correctly. Store as positional params; "$$@" passes them unchanged.
+  # works correctly. Store as positional params; "$@" passes them unchanged.
   set -- $(build_run_scope_args "$sid")
 
   OLD_IFS="${IFS}"
