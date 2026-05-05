@@ -16,9 +16,9 @@
 
 import path from "node:path"
 import { createRequire } from "node:module"
+import { pathToFileURL } from "node:url"
 import type { Plugin, PluginInput } from "@opencode-ai/plugin"
 
-let cachedPlugin: any | null = null
 let envPatched = false
 let envPatchOriginals: Record<string, Function> | null = null
 
@@ -54,27 +54,95 @@ function patchChildProcessEnv() {
   envPatchOriginals = {}
   const requireCjs = createRequire(import.meta.url)
   const cp = requireCjs("node:child_process") as Record<string, any>
+  const mergeEnv = (options: Record<string, any>) => ({ ...process.env, ...(options.env ?? {}) })
+  const normalizeOutput = (value: string | Uint8Array<ArrayBufferLike> | null | undefined, encoding?: string) => {
+    const buffer = typeof value === "string" ? Buffer.from(value) : Buffer.from(value ?? [])
+    return encoding ? buffer.toString(encoding === "buffer" ? "utf8" : encoding) : buffer
+  }
+  const buildError = (
+    commandLabel: string,
+    stdout: Buffer,
+    stderr: Buffer,
+    status: number,
+    code?: string,
+  ) => {
+    const error = new Error(stderr.toString("utf8") || stdout.toString("utf8") || `Command failed: ${commandLabel}`) as Error & {
+      status?: number
+      code?: string
+      stdout?: Buffer
+      stderr?: Buffer
+    }
+    error.status = status
+    if (code) error.code = code
+    error.stdout = stdout
+    error.stderr = stderr
+    return error
+  }
   for (const name of ["execFileSync", "execSync", "spawn", "spawnSync", "execFile", "exec"]) {
     const original = cp[name] as Function
     if (typeof original !== "function") continue
     envPatchOriginals[name] = original
-    cp[name] = function patched(...args: any[]) {
-      let optionsIdx = -1
-      for (let i = args.length - 1; i >= 0; i--) {
-        if (args[i] && typeof args[i] === "object" && !Array.isArray(args[i]) && typeof args[i] !== "function") {
-          optionsIdx = i
-          break
+    if (name === "execFileSync") {
+      cp[name] = function patchedExecFileSync(command: string, args: string[] = [], options: Record<string, any> = {}) {
+        const merged = { ...options, env: mergeEnv(options) }
+        const result = Bun.spawnSync([command, ...args], {
+          cwd: merged.cwd,
+          env: merged.env,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const stdout = Buffer.from(result.stdout ?? [])
+        const stderr = Buffer.from(result.stderr ?? [])
+        if (result.exitCode !== 0) throw buildError([command, ...args].join(" "), stdout, stderr, result.exitCode ?? 1, result.signalCode ?? undefined)
+        return normalizeOutput(stdout, merged.encoding)
+      }
+      continue
+    }
+    if (name === "execSync") {
+      cp[name] = function patchedExecSync(command: string, options: Record<string, any> = {}) {
+        const merged = { ...options, env: mergeEnv(options) }
+        const result = Bun.spawnSync(["sh", "-lc", command], {
+          cwd: merged.cwd,
+          env: merged.env,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const stdout = Buffer.from(result.stdout ?? [])
+        const stderr = Buffer.from(result.stderr ?? [])
+        if (result.exitCode !== 0) throw buildError(command, stdout, stderr, result.exitCode ?? 1, result.signalCode ?? undefined)
+        return normalizeOutput(stdout, merged.encoding)
+      }
+      continue
+    }
+    if (name === "spawn") {
+      cp[name] = function patchedSpawn(command: string, args: string[] = [], options: Record<string, any> = {}) {
+        const merged = { ...options, env: mergeEnv(options) }
+        const subprocess = Bun.spawn([command, ...args], {
+          cwd: merged.cwd,
+          env: merged.env,
+          stdin: "ignore",
+          stdout: merged.stdio === "ignore" ? "ignore" : "pipe",
+          stderr: merged.stdio === "ignore" ? "ignore" : "pipe",
+        })
+        return {
+          on(event: string, handler: (...handlerArgs: any[]) => void) {
+            if (event === "error") {
+              subprocess.exited.then((code) => {
+                if ((code ?? 0) !== 0) {
+                  handler(buildError([command, ...args].join(" "), Buffer.alloc(0), Buffer.alloc(0), code ?? 1))
+                }
+              }).catch((error) => handler(error))
+            }
+            return this
+          },
+          unref() {
+            return this
+          },
         }
       }
-      const options = optionsIdx >= 0 ? { ...args[optionsIdx] } : {}
-      // Fill in env when caller omitted it OR set it to undefined (both
-      // mean "use default" in Node's docs; we just want the default to
-      // be the live process.env, which is what Node intends and Bun
-      // doesn't deliver).
-      if (!options.env) options.env = { ...process.env }
-      if (optionsIdx >= 0) args[optionsIdx] = options
-      else args.push(options)
-      return original.apply(this, args)
+      continue
     }
   }
 }
@@ -104,15 +172,14 @@ function stubFetch() {
 }
 
 async function loadPlugin(): Promise<{ AkmPlugin: Plugin }> {
-  if (cachedPlugin) return cachedPlugin
   patchChildProcessEnv()
   const restore = stubFetch()
   try {
-    cachedPlugin = await import(path.join(REPO_ROOT, "opencode/index.ts"))
+    const pluginUrl = pathToFileURL(path.join(REPO_ROOT, "opencode/index.ts"))
+    return await import(`${pluginUrl.href}?eval-harness=${Date.now()}`)
   } finally {
     restore()
   }
-  return cachedPlugin
 }
 
 export type CapturedLogEntry = {

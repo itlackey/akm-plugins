@@ -755,6 +755,44 @@ describe("akm-opencode plugin", () => {
       })
     })
 
+    it("akm_parent_messages logs thrown SDK errors instead of throwing", async () => {
+      const client = createMockClient()
+      client.session.messages = mock(async () => {
+        throw new Error("messages exploded")
+      }) as any
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+
+      const result = await hooks.tool!.akm_parent_messages.execute(
+        {} as any,
+        {
+          sessionID: "child-session-1",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "akm-curator",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      expect(JSON.parse(result)).toEqual({ ok: false, error: "Failed to read parent session messages." })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM parent session read failed",
+          extra: expect.objectContaining({
+            subsystem: "session",
+            toolName: "akm_parent_messages",
+            sessionID: "child-session-1",
+            directory: "/tmp/test-project",
+            error: "messages exploded",
+          }),
+        },
+      })
+    })
+
     it("akm_session_messages restricts arbitrary session IDs for non-curator agents", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_session_messages.execute(
@@ -796,6 +834,45 @@ describe("akm-opencode plugin", () => {
         ok: true,
         sessionID: "another-session",
         messages: [{ role: "user", agent: "build", text: "Parent context" }],
+      })
+    })
+
+    it("akm_session_messages logs thrown SDK errors instead of throwing", async () => {
+      const client = createMockClient()
+      client.session.messages = mock(async () => {
+        throw new Error("messages exploded")
+      }) as any
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+
+      const result = await hooks.tool!.akm_session_messages.execute(
+        { session_id: "another-session" } as any,
+        {
+          sessionID: "child-session-1",
+          directory: "/tmp/test-project",
+          worktree: "/tmp/test-project",
+          agent: "akm-curator",
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        } as any,
+      )
+
+      expect(JSON.parse(result)).toEqual({ ok: false, error: "Failed to read messages for session 'another-session'." })
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: { directory: "/tmp/test-project" },
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM session messages read failed",
+          extra: expect.objectContaining({
+            subsystem: "session",
+            toolName: "akm_session_messages",
+            sessionID: "child-session-1",
+            directory: "/tmp/test-project",
+            targetSessionID: "another-session",
+            error: "messages exploded",
+          }),
+        },
       })
     })
 
@@ -958,6 +1035,42 @@ describe("akm-opencode plugin", () => {
       })
     })
 
+    it("logs and swallows unexpected chat.message hook failures", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+
+      await hooks["chat.message"]!(
+        {
+          sessionID: "parent-session-1",
+          messageID: "message-1",
+          agent: "build",
+        },
+        {
+          message: {} as any,
+          get parts() {
+            throw new Error("parts exploded")
+          },
+        } as any,
+      )
+
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: undefined,
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM chat.message hook failed",
+          extra: expect.objectContaining({
+            subsystem: "hook",
+            hook: "chat.message",
+            sessionID: "parent-session-1",
+            messageID: "message-1",
+            agent: "build",
+            error: "parts exploded",
+          }),
+        },
+      })
+    })
+
     it("records retrospective negative feedback for an explicit correction", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args[0] === "feedback") return JSON.stringify({ ok: true })
@@ -1039,6 +1152,44 @@ describe("akm-opencode plugin", () => {
       })
     })
 
+    it("logs and swallows unexpected tool.execute.after hook failures", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+
+      await hooks["tool.execute.after"]!(
+        {
+          tool: "akm_show",
+          sessionID: "parent-session-1",
+          callID: "call-1",
+          get args() {
+            throw new Error("args exploded")
+          },
+        } as any,
+        {
+          title: "show",
+          output: JSON.stringify({ type: "memory", ref: "memory:release-retro" }),
+          metadata: {},
+        } as any,
+      )
+
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: undefined,
+        body: {
+          service: "akm-opencode",
+          level: "error",
+          message: "AKM tool.execute.after hook failed",
+          extra: expect.objectContaining({
+            subsystem: "hook",
+            hook: "tool.execute.after",
+            toolName: "akm_show",
+            sessionID: "parent-session-1",
+            callID: "call-1",
+            error: "args exploded",
+          }),
+        },
+      })
+    })
+
     it("injects akm hints into the system prompt after session.created fires", async () => {
       mockExecFileSync.mockImplementation((cmd, args) => {
         if (args[0] === "--version") return "0.1.0"
@@ -1076,6 +1227,7 @@ describe("akm-opencode plugin", () => {
 
     it("curates on session.created and injects the result before the first user message", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "setup") return JSON.stringify({ ok: true, default: "opencode" })
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate") && args.includes("--run")) {
           return "# skills\n- skill:deploy — ship the app\n"
@@ -1096,6 +1248,9 @@ describe("akm-opencode plugin", () => {
       expect(curateCall?.[1]).toContain("session-start-curate-1")
       expect(curateCall?.[1]).toEqual(expect.arrayContaining(["--detail", "agent"]))
       expect(curateCall?.[1]).not.toContain("--for-agent")
+      expect((mockExecFileSync.mock.calls as any[]).some(
+        ([, args]) => Array.isArray(args) && args[0] === "setup" && args.includes("--format") && args.includes("json"),
+      )).toBe(true)
 
       const output = { system: [] as string[] }
       await hooks["experimental.chat.system.transform"]!(
@@ -1401,6 +1556,54 @@ describe("akm-opencode plugin", () => {
       expect(feedbackCall).toBeDefined()
       expect(feedbackCall[1]).toContain("skill:deploy")
       expect(feedbackCall[1]).toContain("--positive")
+    })
+
+    it("logs auto-feedback subprocess exit failures through OpenCode logging", async () => {
+      const client = createMockClient()
+      const exitHandlers: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = []
+      mockSpawn.mockImplementation(() => ({
+        on: mock((event: string, handler: (...args: any[]) => void) => {
+          if (event === "exit") exitHandlers.push(handler as (code: number | null, signal: NodeJS.Signals | null) => void)
+          return undefined
+        }),
+        unref: mock(() => undefined),
+      }))
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+
+      await hooks["tool.execute.after"]!(
+        {
+          tool: "akm_show",
+          sessionID: "session-feedback-exit",
+          callID: "call-1",
+          args: { ref: "skill:deploy" },
+        } as any,
+        {
+          title: "show skill",
+          output: JSON.stringify({ type: "skill", ref: "skill:deploy" }),
+          metadata: {},
+        } as any,
+      )
+
+      expect(exitHandlers).toHaveLength(1)
+      exitHandlers[0](1, null)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(client.app.log).toHaveBeenCalledWith({
+        query: undefined,
+        body: {
+          service: "akm-opencode",
+          level: "warn",
+          message: "AKM auto-feedback failed",
+          extra: expect.objectContaining({
+            subsystem: "feedback",
+            toolName: "akm_show",
+            sessionID: "session-feedback-exit",
+            ref: "skill:deploy",
+            sentiment: "positive",
+            error: "akm feedback exited with code 1",
+          }),
+        },
+      })
     })
 
     it("scans child-agent free-text refs and only negative-feeds structured refs", async () => {
@@ -2288,6 +2491,62 @@ describe("akm-opencode plugin", () => {
         ["propose", "skill", "release-checks", "--task", "fail loudly when CI is red", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
+    })
+
+    it("akm_propose retries once after akm setup when agent config is missing", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      let proposeCalls = 0
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (!Array.isArray(args)) return "mock output"
+        if (args[0] === "propose") {
+          proposeCalls += 1
+          if (proposeCalls === 1) {
+            const error = new Error("agent commands are disabled: no `agent` block in config.json") as Error & { status?: number }
+            error.status = 1
+            throw error
+          }
+          return JSON.stringify({ ok: true, id: "proposal-1" })
+        }
+        if (args[0] === "setup") return JSON.stringify({ ok: true, default: "opencode" })
+        return "mock output"
+      })
+
+      const raw = await hooks.tool!.akm_propose.execute(
+        { type: "lesson", name: "avoid-agent-drift", task: "capture the setup precondition for akm propose" } as any,
+        createToolContext(),
+      )
+
+      expect(JSON.parse(raw)).toEqual({ ok: true, id: "proposal-1" })
+      expect(proposeCalls).toBe(2)
+      expect((mockExecFileSync.mock.calls as any[]).some(
+        ([, args]) => Array.isArray(args) && args[0] === "setup" && args.includes("--force"),
+      )).toBe(true)
+    })
+
+    it("akm_propose returns setup guidance when agent config is still missing", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      let proposeCalls = 0
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (!Array.isArray(args)) return "mock output"
+        if (args[0] === "propose") {
+          proposeCalls += 1
+          const error = new Error("agent commands are disabled: no `agent` block in config.json") as Error & { status?: number }
+          error.status = 1
+          throw error
+        }
+        if (args[0] === "setup") return JSON.stringify({ ok: false, error: "no supported agent CLI found" })
+        return "mock output"
+      })
+
+      const raw = await hooks.tool!.akm_propose.execute(
+        { type: "lesson", name: "avoid-agent-drift", task: "capture the setup precondition for akm propose" } as any,
+        createToolContext(),
+      )
+
+      const parsed = JSON.parse(raw)
+      expect(parsed.ok).toBe(false)
+      expect(parsed.error).toContain("Run akm_setup")
+      expect(proposeCalls).toBe(1)
     })
 
     it("akm_distill requires a ref", async () => {

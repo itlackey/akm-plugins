@@ -60,7 +60,6 @@ The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.exec
 | Session-end `akm index` | #30 | Shipped in both plugins |
 | Harness-provided LLM fallback | #31 | Open |
 
-
 ### Claude Code
 
 Claude Code plugin providing a skill for stash asset management, dynamic agent dispatch, and command execution.

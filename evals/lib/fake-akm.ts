@@ -223,6 +223,9 @@ export function readStdinForCall(callLog: string, callId: string): string | null
 // the hooks pass), scores each asset by keyword/description overlap with
 // simple lowercase token-set matching, and prints the top-K refs.
 //
+// This helper is a deliberate CLI shim used by evals. Its stdout writes are
+// the emulated terminal contract under test, not plugin runtime logging.
+//
 // The shim ALSO captures stdin to a sibling file (akm-stdin-<ts>.txt)
 // when invoked with verbs that pipe content (notably `remember`). This
 // lets tier-2's memory metric verify the actual payload the hook

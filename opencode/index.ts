@@ -53,6 +53,7 @@ const sessionSuccessfulAssetTouchCount = new Map<string, number>()
 const pendingProposalSummaryCache = new Map<string, { count: number; expiresAt: number; unsupported?: boolean }>()
 const retrospectiveState = new Map<string, { recentRefs: string[]; lastNegativeSignalAt?: number }>()
 let cachedAkmStashDir: string | undefined
+let agentSetupPromise: Promise<boolean> | null = null
 
 // Asset-ref grammar matching the stash skill: [origin//]type:name.
 // We validate normalized tokens individually instead of running a global regex
@@ -218,6 +219,16 @@ function formatCliError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function needsAgentSetup(message: string): boolean {
+  return /(agent commands are disabled|agent not configured|no [`'"]?agent[`'"]? block in config\.json)/i.test(message)
+}
+
+function addAgentSetupGuidance(message: string): string {
+  if (!needsAgentSetup(message)) return message
+  if (/\bakm_setup\b|\bakm setup\b/i.test(message)) return message
+  return `${message}. Run akm_setup to detect an installed agent CLI and persist agent.default. If none is installed yet, install one of: opencode, claude, codex, gemini, aider.`
+}
+
 function toLogString(value: unknown): string | undefined {
   if (typeof value === "string") return value
   if (value instanceof Buffer) return value.toString("utf8")
@@ -244,6 +255,79 @@ async function writePluginLog(client: LogCapableClient, level: LogLevel, message
   } catch {
     // Avoid breaking the TUI if logging itself fails.
   }
+}
+
+async function runAgentSetup(client: LogCapableClient, meta: { directory?: string; sessionID?: string; trigger: string; force?: boolean }): Promise<boolean> {
+  const command = resolveAkmCommand()
+  if (typeof command !== "string") {
+    await writePluginLog(client, "warn", "AKM agent setup skipped", {
+      subsystem: "akm",
+      trigger: meta.trigger,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      error: command.error,
+    })
+    return false
+  }
+
+  const args = ["setup"]
+  if (meta.force) args.push("--force")
+  args.push("--format", "json")
+
+  try {
+    const stdout = execFileSync(command, args, {
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    const parsed = safeJsonParse<{ ok?: boolean; error?: string }>(stdout)
+    if (parsed?.ok === false) {
+      await writePluginLog(client, "warn", "AKM agent setup reported an error", {
+        subsystem: "akm",
+        trigger: meta.trigger,
+        sessionID: meta.sessionID,
+        directory: meta.directory,
+        command,
+        args,
+        stdout,
+        error: parsed.error ?? "Unknown akm setup error",
+      })
+      return false
+    }
+    await writePluginLog(client, "info", "AKM agent setup completed", {
+      subsystem: "akm",
+      trigger: meta.trigger,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      command,
+      args,
+      stdout,
+    })
+    return true
+  } catch (error: unknown) {
+    const message = addAgentSetupGuidance(formatCliError(error))
+    await writePluginLog(client, "warn", "AKM agent setup failed", {
+      subsystem: "akm",
+      trigger: meta.trigger,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      command,
+      args,
+      error: message,
+      stdout: toLogString((error as { stdout?: unknown }).stdout) ?? "",
+      stderr: toLogString((error as { stderr?: unknown }).stderr) ?? message,
+    })
+    return false
+  }
+}
+
+async function ensureAgentSetup(client: LogCapableClient, meta: { directory?: string; sessionID?: string; trigger: string; force?: boolean }): Promise<boolean> {
+  if (agentSetupPromise) return agentSetupPromise
+  const promise = runAgentSetup(client, meta)
+  const trackedPromise = promise.finally(() => {
+    if (agentSetupPromise === trackedPromise) agentSetupPromise = null
+  })
+  agentSetupPromise = trackedPromise
+  return trackedPromise
 }
 
 function nowIso(): string {
@@ -678,6 +762,21 @@ function queueFeedback(
         stdio: "ignore",
       },
     )
+    child.on("exit", (code, signal) => {
+      if ((typeof code === "number" && code !== 0) || signal) {
+        void writePluginLog(client, "warn", "AKM auto-feedback failed", {
+          subsystem: "feedback",
+          toolName: meta.toolName,
+          sessionID: meta.sessionID,
+          directory: meta.directory,
+          ref,
+          sentiment,
+          error: signal
+            ? `akm feedback exited via signal ${signal}`
+            : `akm feedback exited with code ${code}`,
+        })
+      }
+    })
     child.on("error", (error) => {
       void writePluginLog(client, "warn", "AKM auto-feedback failed", {
         subsystem: "feedback",
@@ -1314,11 +1413,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
   const fullArgs = args.includes("--format") ? [...args] : [...args, "--format", "json"]
   const proposalId = args[0] === "proposal" && typeof args[2] === "string" ? args[2] : null
 
-  try {
-    const stdout = execFileSync(command, fullArgs, {
-      encoding: "utf8",
-      timeout: 60_000,
-    })
+  const recordSuccess = async (stdout: string): Promise<string> => {
     await writePluginLog(client, "info", "AKM command completed", {
       subsystem: "akm",
       toolName: meta.toolName,
@@ -1384,8 +1479,45 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       })
     }
     return stdout
+  }
+
+  try {
+    const stdout = execFileSync(command, fullArgs, {
+      encoding: "utf8",
+      timeout: 60_000,
+    })
+    return recordSuccess(stdout)
   } catch (error: unknown) {
-    const message = formatCliError(error)
+    let message = formatCliError(error)
+    if (["akm_reflect", "akm_propose"].includes(meta.toolName) && needsAgentSetup(message)) {
+      const setupOk = await ensureAgentSetup(client, {
+        directory: meta.directory,
+        sessionID: meta.sessionID,
+        trigger: `${meta.toolName}:retry`,
+        force: true,
+      })
+      if (setupOk) {
+        try {
+          const stdout = execFileSync(command, fullArgs, {
+            encoding: "utf8",
+            timeout: 60_000,
+          })
+          await writePluginLog(client, "info", "AKM command recovered after setup", {
+            subsystem: "akm",
+            toolName: meta.toolName,
+            sessionID: meta.sessionID,
+            directory: meta.directory,
+            command,
+            args: fullArgs,
+          })
+          return recordSuccess(stdout)
+        } catch (retryError: unknown) {
+          error = retryError
+          message = formatCliError(retryError)
+        }
+      }
+    }
+    message = addAgentSetupGuidance(message)
     await writePluginLog(client, "error", "AKM command failed", {
       subsystem: "akm",
       toolName: meta.toolName,
@@ -1980,6 +2112,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           if (!sid) return
           if (!sessionContextEpoch.has(sid)) sessionContextEpoch.set(sid, 0)
           if (type === "session.created") {
+            await ensureAgentSetup(logClient, {
+              directory,
+              sessionID: sid,
+              trigger: "session.created",
+            })
             warmIndexInBackground()
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
               const curated = runCurateForSession(sid)
@@ -2170,139 +2307,161 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       }
     },
     "chat.message": async (input, output) => {
-      const text = extractText(output.parts).trim()
-      if (!text) return
-      await writePluginLog(logClient, "info", "AKM user feedback recorded", {
-        subsystem: "feedback",
-        actor: "user",
-        sessionID: input.sessionID,
-        messageID: input.messageID,
-        agent: input.agent,
-        text: truncateLogText(text),
-      })
+      try {
+        const text = extractText(output.parts).trim()
+        if (!text) return
+        await writePluginLog(logClient, "info", "AKM user feedback recorded", {
+          subsystem: "feedback",
+          actor: "user",
+          sessionID: input.sessionID,
+          messageID: input.messageID,
+          agent: input.agent,
+          text: truncateLogText(text),
+        })
 
-      // Compound-engineering loop: on every user message, curate the stash and
-      // stash the result so experimental.chat.system.transform can inject it.
-      if (AKM_AUTO_CURATE && input.sessionID) {
-        const curated = runCurateForPrompt(text, input.sessionID)
-        if (curated) {
-          sessionCurated.set(input.sessionID, curated)
-          bumpCuratedVersion(input.sessionID)
+        // Compound-engineering loop: on every user message, curate the stash and
+        // stash the result so experimental.chat.system.transform can inject it.
+        if (AKM_AUTO_CURATE && input.sessionID) {
+          const curated = runCurateForPrompt(text, input.sessionID)
+          if (curated) {
+            sessionCurated.set(input.sessionID, curated)
+            bumpCuratedVersion(input.sessionID)
+          }
         }
-      }
 
-      // Track explicit memory intents so capture-memory has something durable
-      // to flush when the session ends.
-      if (/\b(remember|memory|memories)\b/i.test(text)) {
-        addBufferEntry(input.sessionID, {
-          kind: "memory-intent",
-          note: truncateLogText(text, 500),
+        // Track explicit memory intents so capture-memory has something durable
+        // to flush when the session ends.
+        if (/\b(remember|memory|memories)\b/i.test(text)) {
+          addBufferEntry(input.sessionID, {
+            kind: "memory-intent",
+            note: truncateLogText(text, 500),
+          })
+        }
+
+        if (input.sessionID && AKM_AUTO_FEEDBACK && AKM_RETROSPECTIVE_FEEDBACK_RE.test(text)) {
+          const recentRefs = (sessionBuffer.get(input.sessionID) ?? [])
+            .filter((entry) => entry.kind === "tool-ref" && !!entry.ref)
+            .map((entry) => entry.ref!)
+            .filter((ref, index, refs) => !ref.startsWith("memory:") && !ref.startsWith("vault:") && refs.indexOf(ref) === index)
+            .slice(-3)
+          const dedupe = new Set<string>()
+          for (const ref of recentRefs) {
+            queueFeedback(logClient, ref, "positive", "opencode retrospective: user confirmed it worked", {
+              toolName: "chat.message",
+              sessionID: input.sessionID,
+            }, dedupe)
+          }
+        }
+        await recordRetrospectiveFeedback(logClient, input.sessionID, text)
+      } catch (error: unknown) {
+        await writePluginLog(logClient, "error", "AKM chat.message hook failed", {
+          subsystem: "hook",
+          hook: "chat.message",
+          sessionID: input?.sessionID,
+          messageID: input?.messageID,
+          agent: input?.agent,
+          error: formatCliError(error),
         })
       }
-
-      if (input.sessionID && AKM_AUTO_FEEDBACK && AKM_RETROSPECTIVE_FEEDBACK_RE.test(text)) {
-        const recentRefs = (sessionBuffer.get(input.sessionID) ?? [])
-          .filter((entry) => entry.kind === "tool-ref" && !!entry.ref)
-          .map((entry) => entry.ref!)
-          .filter((ref, index, refs) => !ref.startsWith("memory:") && !ref.startsWith("vault:") && refs.indexOf(ref) === index)
-          .slice(-3)
-        const dedupe = new Set<string>()
-        for (const ref of recentRefs) {
-          queueFeedback(logClient, ref, "positive", "opencode retrospective: user confirmed it worked", {
-            toolName: "chat.message",
-            sessionID: input.sessionID,
-          }, dedupe)
-        }
-      }
-      await recordRetrospectiveFeedback(logClient, input.sessionID, text)
     },
     "tool.execute.after": async (input, output) => {
-      if (!input.tool.startsWith("akm_")) return
+      try {
+        if (!input.tool.startsWith("akm_")) return
 
-      const parsed = parseToolOutput(output.output)
-      if (!parsed) return
+        const parsed = parseToolOutput(output.output)
+        if (!parsed) return
 
-      const feedback = classifyToolFeedback(parsed)
-      if (feedback) {
-        await writePluginLog(logClient, feedback === "negative" ? "warn" : "info", "AKM system feedback recorded", {
-          subsystem: "feedback",
-          actor: "system",
-          feedback,
-          toolName: input.tool,
-          sessionID: input.sessionID,
-          callID: input.callID,
-          title: output.title,
-          error: typeof (parsed as { error?: unknown }).error === "string" ? (parsed as { error?: string }).error : undefined,
-        })
-      }
+        const feedback = classifyToolFeedback(parsed)
+        if (feedback) {
+          await writePluginLog(logClient, feedback === "negative" ? "warn" : "info", "AKM system feedback recorded", {
+            subsystem: "feedback",
+            actor: "system",
+            feedback,
+            toolName: input.tool,
+            sessionID: input.sessionID,
+            callID: input.callID,
+            title: output.title,
+            error: typeof (parsed as { error?: unknown }).error === "string" ? (parsed as { error?: string }).error : undefined,
+          })
+        }
 
-      const memoryRefs = extractMemoryRefs(input.tool, input.args as Record<string, unknown>, parsed)
-      if (memoryRefs.length > 0) {
-        await writePluginLog(logClient, "info", "AKM memory usage recorded", {
-          subsystem: "memory",
-          toolName: input.tool,
-          sessionID: input.sessionID,
-          callID: input.callID,
-          refs: memoryRefs,
-        })
-      }
+        const memoryRefs = extractMemoryRefs(input.tool, input.args as Record<string, unknown>, parsed)
+        if (memoryRefs.length > 0) {
+          await writePluginLog(logClient, "info", "AKM memory usage recorded", {
+            subsystem: "memory",
+            toolName: input.tool,
+            sessionID: input.sessionID,
+            callID: input.callID,
+            refs: memoryRefs,
+          })
+        }
 
-      // Auto-feedback + session buffering: record every asset ref the tool
-      // touched so the stash ranking improves over time and so Stop/Compact
-      // has material to flush into a session summary memory.
+        // Auto-feedback + session buffering: record every asset ref the tool
+        // touched so the stash ranking improves over time and so Stop/Compact
+        // has material to flush into a session summary memory.
         const refResult = extractToolRefs(input.tool, input.args as Record<string, unknown>, parsed)
         noteRecentRefs(input.sessionID, refResult.refs)
         if (refResult.refs.length > 0 && input.sessionID) {
-        for (const ref of refResult.refs) {
-          addBufferEntry(input.sessionID, {
-            kind: "tool-ref",
-            toolName: input.tool,
-            ref,
-            status: feedback ?? "unknown",
-          })
-        }
-        if (feedback === "positive") {
-          sessionSuccessfulAssetTouchCount.set(
-            input.sessionID,
-            (sessionSuccessfulAssetTouchCount.get(input.sessionID) ?? 0) + 1,
-          )
-          const checkpointRef = maybeCheckpointSessionMemory(input.sessionID)
-          if (checkpointRef) {
-            await writePluginLog(logClient, "info", "AKM checkpoint memory captured", {
-              subsystem: "memory",
-              actor: "system",
-              sessionID: input.sessionID,
-              reason: "checkpoint",
-              ref: checkpointRef,
+          for (const ref of refResult.refs) {
+            addBufferEntry(input.sessionID, {
+              kind: "tool-ref",
+              toolName: input.tool,
+              ref,
+              status: feedback ?? "unknown",
             })
           }
+          if (feedback === "positive") {
+            sessionSuccessfulAssetTouchCount.set(
+              input.sessionID,
+              (sessionSuccessfulAssetTouchCount.get(input.sessionID) ?? 0) + 1,
+            )
+            const checkpointRef = maybeCheckpointSessionMemory(input.sessionID)
+            if (checkpointRef) {
+              await writePluginLog(logClient, "info", "AKM checkpoint memory captured", {
+                subsystem: "memory",
+                actor: "system",
+                sessionID: input.sessionID,
+                reason: "checkpoint",
+                ref: checkpointRef,
+              })
+            }
+          }
         }
-      }
 
-      if (
-        AKM_AUTO_FEEDBACK
-        && feedback
-        && input.tool !== "akm_feedback"
-        && refResult.refs.length > 0
-      ) {
-        const dedupe = new Set<string>()
-        const feedbackRefs = feedback === "positive"
-          ? refResult.refs
-          : refResult.refs.filter((ref) => !refResult.positiveOnlyRefs.includes(ref))
-        const note = feedback === "positive"
-          ? `opencode auto: ${input.tool} succeeded`
-          : `opencode auto: ${input.tool} failed`
-        for (const ref of feedbackRefs) {
-          // Memories and vault refs are not first-class feedback targets —
-          // memories do not accept feedback, and vault values never surface in
-          // JSON so automatic usage signals would be misleading.
-          if (ref.startsWith("memory:") || ref.startsWith("vault:")) continue
-          const ok = queueFeedback(logClient, ref, feedback, note, {
-            toolName: input.tool,
-            sessionID: input.sessionID,
-          }, dedupe)
-          if (!ok) break
+        if (
+          AKM_AUTO_FEEDBACK
+          && feedback
+          && input.tool !== "akm_feedback"
+          && refResult.refs.length > 0
+        ) {
+          const dedupe = new Set<string>()
+          const feedbackRefs = feedback === "positive"
+            ? refResult.refs
+            : refResult.refs.filter((ref) => !refResult.positiveOnlyRefs.includes(ref))
+          const note = feedback === "positive"
+            ? `opencode auto: ${input.tool} succeeded`
+            : `opencode auto: ${input.tool} failed`
+          for (const ref of feedbackRefs) {
+            // Memories and vault refs are not first-class feedback targets —
+            // memories do not accept feedback, and vault values never surface in
+            // JSON so automatic usage signals would be misleading.
+            if (ref.startsWith("memory:") || ref.startsWith("vault:")) continue
+            const ok = queueFeedback(logClient, ref, feedback, note, {
+              toolName: input.tool,
+              sessionID: input.sessionID,
+            }, dedupe)
+            if (!ok) break
+          }
         }
+      } catch (error: unknown) {
+        await writePluginLog(logClient, "error", "AKM tool.execute.after hook failed", {
+          subsystem: "hook",
+          hook: "tool.execute.after",
+          toolName: input?.tool,
+          sessionID: input?.sessionID,
+          callID: input?.callID,
+          error: formatCliError(error),
+        })
       }
     },
     tool: {
@@ -2482,16 +2641,27 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       description: "Read compact text summaries of the parent session's messages so a dispatched AKM subagent can inherit upstream context.",
       args: {},
       async execute(_input, context) {
-        const parent = await getParentSessionID(sdkClient, context.sessionID, context.directory)
-        if (!parent.ok) return JSON.stringify(parent)
-        const messages = await sdkClient.session.messages({
-          path: { id: parent.parentID },
-          query: { directory: context.directory },
-        })
-        if (messages.error || !messages.data) {
+        try {
+          const parent = await getParentSessionID(sdkClient, context.sessionID, context.directory)
+          if (!parent.ok) return JSON.stringify(parent)
+          const messages = await sdkClient.session.messages({
+            path: { id: parent.parentID },
+            query: { directory: context.directory },
+          })
+          if (messages.error || !messages.data) {
+            return JSON.stringify({ ok: false, error: "Failed to read parent session messages." })
+          }
+          return JSON.stringify(summarizeSessionMessages(parent.parentID, messages.data))
+        } catch (error: unknown) {
+          await writePluginLog(logClient, "error", "AKM parent session read failed", {
+            subsystem: "session",
+            toolName: "akm_parent_messages",
+            sessionID: context.sessionID,
+            directory: context.directory,
+            error: formatCliError(error),
+          })
           return JSON.stringify({ ok: false, error: "Failed to read parent session messages." })
         }
-        return JSON.stringify(summarizeSessionMessages(parent.parentID, messages.data))
       },
     }),
     akm_session_messages: tool({
@@ -2500,23 +2670,35 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         session_id: tool.schema.string().describe("OpenCode session ID to inspect."),
       },
       async execute({ session_id }, context) {
-        const parent = await getParentSessionID(sdkClient, context.sessionID, context.directory)
-        const allowedSessionIDs = new Set<string>([context.sessionID])
-        if (parent.ok) allowedSessionIDs.add(parent.parentID)
-        if (context.agent !== "akm-curator" && !allowedSessionIDs.has(session_id)) {
-          return JSON.stringify({
-            ok: false,
-            error: "akm_session_messages only allows arbitrary session IDs for the akm-curator agent. Use akm_parent_messages for parent context.",
+        try {
+          const parent = await getParentSessionID(sdkClient, context.sessionID, context.directory)
+          const allowedSessionIDs = new Set<string>([context.sessionID])
+          if (parent.ok) allowedSessionIDs.add(parent.parentID)
+          if (context.agent !== "akm-curator" && !allowedSessionIDs.has(session_id)) {
+            return JSON.stringify({
+              ok: false,
+              error: "akm_session_messages only allows arbitrary session IDs for the akm-curator agent. Use akm_parent_messages for parent context.",
+            })
+          }
+          const messages = await sdkClient.session.messages({
+            path: { id: session_id },
+            query: { directory: context.directory },
           })
-        }
-        const messages = await sdkClient.session.messages({
-          path: { id: session_id },
-          query: { directory: context.directory },
-        })
-        if (messages.error || !messages.data) {
+          if (messages.error || !messages.data) {
+            return JSON.stringify({ ok: false, error: `Failed to read messages for session '${session_id}'.` })
+          }
+          return JSON.stringify(summarizeSessionMessages(session_id, messages.data))
+        } catch (error: unknown) {
+          await writePluginLog(logClient, "error", "AKM session messages read failed", {
+            subsystem: "session",
+            toolName: "akm_session_messages",
+            sessionID: context.sessionID,
+            directory: context.directory,
+            targetSessionID: session_id,
+            error: formatCliError(error),
+          })
           return JSON.stringify({ ok: false, error: `Failed to read messages for session '${session_id}'.` })
         }
-        return JSON.stringify(summarizeSessionMessages(session_id, messages.data))
       },
     }),
     akm_agent: tool({

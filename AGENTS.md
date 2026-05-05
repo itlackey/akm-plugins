@@ -1,3 +1,11 @@
+## Logging Standard
+
+- Plugin runtime code in this repo must never write directly to `console.*`, `process.stdout`, or `process.stderr`.
+- OpenCode runtime paths must log through `client.app.log` and degrade unexpected failures into structured results where possible.
+- Claude runtime paths must use plugin-local logging/state and fail closed without printing raw diagnostics.
+- Add basic error trapping around hooks, tool handlers, SDK calls, and subprocess boundaries so errors are logged instead of escaping silently.
+- Exception: dedicated CLI entrypoints and fake CLI shims in eval tooling may write to stdout/stderr only when stream output is the behavior being emulated or tested.
+
 ## Extended Searching
 
 You have access to a searchable library of tools, skills, commands, agents,
@@ -32,6 +40,17 @@ What you get back depends on the asset type:
 
 Always search the stash first when you need a capability. Prefer existing
 assets over writing new code.
+
+## Logging and Error Handling Requirements
+
+These requirements apply to all code in this repo, especially plugin runtime code.
+
+- Never write directly to `console.*`, `process.stdout`, or `process.stderr` from plugin runtime code.
+- For OpenCode plugin runtime code, route diagnostics through OpenCode app logging (`client.app.log`) and degrade failures into structured results whenever possible.
+- For Claude plugin runtime code, use the plugin's local state/logging mechanism and fail closed without printing raw diagnostics to the console.
+- Add basic error trapping around lifecycle hooks, tool handlers, SDK calls, subprocess wrappers, and other integration boundaries so unexpected failures are logged and do not escape silently.
+- Tests should assert logged failures and structured error results instead of normalizing direct console output from plugin paths.
+- Narrow exception: dedicated CLI entrypoints or fake CLI shims used only to emulate a terminal contract may write to stdout/stderr when that stream output is the behavior under test. Keep those cases isolated from plugin runtime code and document them clearly.
 
 **New in v0.7.0:**
 - `akm proposal list|show|diff|accept|reject` — operate the durable proposal queue. Always confirm with the user before `accept`/`reject`.
