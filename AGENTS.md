@@ -57,7 +57,7 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 - `akm reflect [ref] [--task "..."]` — generate a reflection proposal via the configured agent CLI.
 - `akm propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.
 - `akm distill <ref>` — distill repeated evidence into a `lesson` proposal (gated by `llm.features.feedback_distillation`).
-- `akm setup` — auto-detect installed agent CLIs and persist `agent.default`. Required once per machine for reflect/propose.
+- `akm setup` — interactive first-run configuration wizard for humans. Agents should not invoke it directly; use `akm init` for agent-safe stash initialization.
 - `akm search ... --include-proposed` — merge `quality:"proposed"` drafts into hits.
 
 **New in v0.5.0:**

@@ -13,14 +13,12 @@ const SESSION_LOG = path.join(STATE_DIR, "session.log")
 const FEEDBACK_LOG = path.join(STATE_DIR, "feedback.log")
 const MEMORY_LOG = path.join(STATE_DIR, "memory.log")
 const QUALITY_CACHE = path.join(STATE_DIR, "quality-cache.tsv")
-const SETUP_STAMP = path.join(STATE_DIR, "setup.stamp")
 const CURATE_LIMIT = Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5
 const CURATE_MIN_CHARS = Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16
 const CURATE_TIMEOUT = String(Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8)
 const CONTEXT_BUDGET_CHARS = Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000
 const AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") === "1"
 const AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") === "1"
-const AUTO_SETUP = process.env.AKM_AUTO_SETUP ?? "1"
 const INDEX_ON_SESSION_END = (process.env.AKM_INDEX_ON_SESSION_END ?? "0") === "1"
 const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM stash - assets relevant to this prompt"
@@ -353,14 +351,11 @@ function detectAgentDefault(): string {
   }
   const current = readCurrent()
   if (current) return current
-  if (AUTO_SETUP !== "1" && AUTO_SETUP !== "force") return ""
-  if (existsSync(SETUP_STAMP) && AUTO_SETUP !== "force") return ""
-  const setup = akmRun(["--format", "json", "-q", "setup"])
-  if (setup.trim()) {
-    writeFileSync(SETUP_STAMP, timestamp())
-    appendLog(SESSION_LOG, "akm_setup", "auto")
+  const setResult = akmRun(["--format", "json", "-q", "config", "set", "agent.default", "claude"])
+  if (setResult.trim()) {
+    appendLog(SESSION_LOG, "agent_default_initialized", "claude")
   } else {
-    appendLog(SESSION_LOG, "akm_setup_failed", "auto", "empty stdout from akm setup")
+    appendLog(SESSION_LOG, "agent_default_init_failed", "claude", "empty stdout from akm config set agent.default")
   }
   return readCurrent()
 }

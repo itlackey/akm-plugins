@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.7.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle vaults safely**, **operate the v0.7.0 proposal queue**, and **distill lessons** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, run `akm setup` to detect the agent CLI, and feed asset-usage feedback back into the stash so it improves with every session.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.7.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle vaults safely**, **operate the v0.7.0 proposal queue**, and **distill lessons** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, and feed asset-usage feedback back into the stash so it improves with every session. `akm setup` remains human-facing and should be run manually when needed.
 
 ## Installation
 
@@ -24,7 +24,7 @@ claude plugin install akm@akm-plugins
 ## What's included
 
 - **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
-- **Agentic hooks** — lifecycle hooks that install `akm`, run `akm setup` once to detect the agent CLI, auto-curate stash matches into every user prompt, auto-record feedback when assets are used (skipping proposed-quality drafts and `lesson:*` refs), surface pending-proposal counts in the SessionStart header, and harvest session memories at stop/compact time
+- **Agentic hooks** — lifecycle hooks that install `akm`, set `agent.default` to `claude` when it is missing, auto-curate stash matches into every user prompt, auto-record feedback when assets are used (skipping proposed-quality drafts and `lesson:*` refs), surface pending-proposal counts in the SessionStart header, and harvest session memories at stop/compact time
 - **Slash commands** — 18 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault`, `/akm-proposal`, `/akm-review-proposals`, `/akm-reflect`, `/akm-propose`, `/akm-distill`, `/akm-setup`, `/akm-help`) for explicit control of the compound-engineering loop
 - **`akm-curator` agent** — a self-evolution subagent that reviews session logs and proposes stash improvements
 
@@ -121,7 +121,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 | Event | What happens |
 | --- | --- |
-| **SessionStart** | Installs/refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`; Bun → npm fallback), runs `akm setup` once per machine to detect the configured agent CLI, surfaces it plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. |
+| **SessionStart** | Installs/refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`; Bun → npm fallback), sets `agent.default` to `claude` when it is missing, surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
 | **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
 | **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs (including `lesson:*`) from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. Skips `memory:*`, `vault:*`, `lesson:*`, and any ref the indexer reports as `quality:"proposed"`. |
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
@@ -135,7 +135,6 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | `AKM_PACKAGE_REF` | `akm-cli@latest` | Override the npm/bun package spec used by SessionStart auto-install (e.g. pin to `akm-cli@0.7.0` in CI). |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
-| `AKM_AUTO_SETUP` | `1` | Set to `0` to disable the automatic `akm setup` run on first SessionStart. Set to `force` to re-run on every SessionStart. |
 | `AKM_INDEX_ON_SESSION_END` | `0` | Set to `1` to run `akm index` after a session-end memory is captured. |
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
@@ -167,7 +166,7 @@ The plugin ships 18 first-class verbs. `/akm-add` and `/akm-save` are not part o
 - `/akm-reflect [ref] [--task "..."]` — generate a reflection proposal via the configured agent CLI; output lands in the proposal queue.
 - `/akm-propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.
 - `/akm-distill <ref>` — distill a ref into a proposed `lesson` (gated by `llm.features.feedback_distillation`).
-- `/akm-setup [--force]` — detect installed agent CLIs and persist `agent.default`. Required once per machine for reflect/propose.
+- `/akm-setup` — run the interactive `akm setup` wizard. It can configure `agent.default`, which is required for reflect/propose.
 - `/akm-help [task]` — surface a curated quick-reference for non-first-class `akm` verbs and fall back to live `akm --help`.
 
 ### When to use what

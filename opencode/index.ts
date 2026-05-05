@@ -71,7 +71,7 @@ const AKM_WORKFLOW_INSTRUCTION = [
   "3. Record `akm_feedback` after the result is known.",
   "4. Use the dedicated v0.7.0 tools for the proposal flow: `akm_proposal` (list/show/diff/accept/reject), `akm_reflect`, `akm_propose`, and `akm_distill`. Fall back to `akm_help` for any verb without a dedicated tool.",
   "5. Treat `lesson:*` as first-class durable learning assets — they are produced by `akm_distill <ref>` as proposals and accepted via `akm_proposal action=accept`.",
-  "6. Run `akm_setup` once on a fresh machine to detect installed agent CLIs and persist `agent.default`. Reflect/propose require it.",
+  "6. Use `akm_init` when you need to create the working stash or persist `stashDir`. Do not use `akm setup` from an agent; it is interactive and human-facing.",
   `7. ${PROPOSED_QUALITY_WARNING}`,
   "8. Never accept or reject proposals, push saves, remove sources, or access vault values without explicit user approval.",
 ].join("\n")
@@ -225,8 +225,81 @@ function needsAgentSetup(message: string): boolean {
 
 function addAgentSetupGuidance(message: string): string {
   if (!needsAgentSetup(message)) return message
-  if (/\bakm_setup\b|\bakm setup\b/i.test(message)) return message
-  return `${message}. Run akm_setup to detect an installed agent CLI and persist agent.default. If none is installed yet, install one of: opencode, claude, codex, gemini, aider.`
+  if (/\bakm init\b|\bakm_init\b|\bakm setup\b/i.test(message)) return message
+  return `${message}. Agents should not run akm setup because it is interactive. The plugin should set agent.default to the current platform when it is missing; if interactive configuration is still needed, ask the user to run akm setup manually. Use akm_init for agent-safe stash initialization.`
+}
+
+async function ensurePlatformAgentDefault(
+  client: LogCapableClient,
+  meta: { directory?: string; sessionID?: string; trigger: string; platform: string },
+): Promise<boolean> {
+  const command = resolveAkmCommand()
+  if (typeof command !== "string") {
+    await writePluginLog(client, "warn", "AKM agent default check skipped", {
+      subsystem: "akm",
+      trigger: meta.trigger,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      error: command.error,
+    })
+    return false
+  }
+
+  try {
+    const currentRaw = execFileSync(command, ["config", "get", "agent.default", "--format", "json"], {
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    const parsed = safeJsonParse<unknown>(currentRaw)
+    const current = typeof parsed === "string"
+      ? parsed.trim()
+      : parsed && typeof parsed === "object"
+        ? typeof (parsed as Record<string, unknown>).value === "string"
+          ? ((parsed as Record<string, unknown>).value as string).trim()
+          : typeof (parsed as Record<string, unknown>)["agent.default"] === "string"
+            ? ((parsed as Record<string, unknown>)["agent.default"] as string).trim()
+            : ""
+        : ""
+    if (current) return true
+
+    execFileSync(command, ["config", "set", "agent.default", meta.platform, "--format", "json"], {
+      encoding: "utf8",
+      timeout: 30_000,
+    })
+    await writePluginLog(client, "info", "AKM agent default initialized", {
+      subsystem: "akm",
+      trigger: meta.trigger,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      agentDefault: meta.platform,
+    })
+    return true
+  } catch (error: unknown) {
+    await writePluginLog(client, "warn", "AKM agent default initialization failed", {
+      subsystem: "akm",
+      trigger: meta.trigger,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      platform: meta.platform,
+      error: addAgentSetupGuidance(formatCliError(error)),
+      stdout: toLogString((error as { stdout?: unknown }).stdout) ?? "",
+      stderr: toLogString((error as { stderr?: unknown }).stderr) ?? "",
+    })
+    return false
+  }
+}
+
+async function ensureAgentSetup(
+  client: LogCapableClient,
+  meta: { directory?: string; sessionID?: string; trigger: string; platform: string },
+): Promise<boolean> {
+  if (agentSetupPromise) return agentSetupPromise
+  const promise = ensurePlatformAgentDefault(client, meta)
+  const trackedPromise = promise.finally(() => {
+    if (agentSetupPromise === trackedPromise) agentSetupPromise = null
+  })
+  agentSetupPromise = trackedPromise
+  return trackedPromise
 }
 
 function isNotIndexedFeedbackError(message: string): boolean {
@@ -273,79 +346,6 @@ async function logHookFailure(
     error: formatCliError(error),
     ...extra,
   })
-}
-
-async function runAgentSetup(client: LogCapableClient, meta: { directory?: string; sessionID?: string; trigger: string; force?: boolean }): Promise<boolean> {
-  const command = resolveAkmCommand()
-  if (typeof command !== "string") {
-    await writePluginLog(client, "warn", "AKM agent setup skipped", {
-      subsystem: "akm",
-      trigger: meta.trigger,
-      sessionID: meta.sessionID,
-      directory: meta.directory,
-      error: command.error,
-    })
-    return false
-  }
-
-  const args = ["setup"]
-  if (meta.force) args.push("--force")
-  args.push("--format", "json")
-
-  try {
-    const stdout = execFileSync(command, args, {
-      encoding: "utf8",
-      timeout: 30_000,
-    })
-    const parsed = safeJsonParse<{ ok?: boolean; error?: string }>(stdout)
-    if (parsed?.ok === false) {
-      await writePluginLog(client, "warn", "AKM agent setup reported an error", {
-        subsystem: "akm",
-        trigger: meta.trigger,
-        sessionID: meta.sessionID,
-        directory: meta.directory,
-        command,
-        args,
-        stdout,
-        error: parsed.error ?? "Unknown akm setup error",
-      })
-      return false
-    }
-    await writePluginLog(client, "info", "AKM agent setup completed", {
-      subsystem: "akm",
-      trigger: meta.trigger,
-      sessionID: meta.sessionID,
-      directory: meta.directory,
-      command,
-      args,
-      stdout,
-    })
-    return true
-  } catch (error: unknown) {
-    const message = addAgentSetupGuidance(formatCliError(error))
-    await writePluginLog(client, "warn", "AKM agent setup failed", {
-      subsystem: "akm",
-      trigger: meta.trigger,
-      sessionID: meta.sessionID,
-      directory: meta.directory,
-      command,
-      args,
-      error: message,
-      stdout: toLogString((error as { stdout?: unknown }).stdout) ?? "",
-      stderr: toLogString((error as { stderr?: unknown }).stderr) ?? message,
-    })
-    return false
-  }
-}
-
-async function ensureAgentSetup(client: LogCapableClient, meta: { directory?: string; sessionID?: string; trigger: string; force?: boolean }): Promise<boolean> {
-  if (agentSetupPromise) return agentSetupPromise
-  const promise = runAgentSetup(client, meta)
-  const trackedPromise = promise.finally(() => {
-    if (agentSetupPromise === trackedPromise) agentSetupPromise = null
-  })
-  agentSetupPromise = trackedPromise
-  return trackedPromise
 }
 
 function nowIso(): string {
@@ -1556,32 +1556,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
   } catch (error: unknown) {
     let message = formatCliError(error)
     if (["akm_reflect", "akm_propose"].includes(meta.toolName) && needsAgentSetup(message)) {
-      const setupOk = await ensureAgentSetup(client, {
-        directory: meta.directory,
-        sessionID: meta.sessionID,
-        trigger: `${meta.toolName}:retry`,
-        force: true,
-      })
-      if (setupOk) {
-        try {
-          const stdout = execFileSync(command, fullArgs, {
-            encoding: "utf8",
-            timeout: 60_000,
-          })
-          await writePluginLog(client, "info", "AKM command recovered after setup", {
-            subsystem: "akm",
-            toolName: meta.toolName,
-            sessionID: meta.sessionID,
-            directory: meta.directory,
-            command,
-            args: fullArgs,
-          })
-          return recordSuccess(stdout)
-        } catch (retryError: unknown) {
-          error = retryError
-          message = formatCliError(retryError)
-        }
-      }
+      message = addAgentSetupGuidance(message)
     }
     message = addAgentSetupGuidance(message)
     await writePluginLog(client, "error", "AKM command failed", {
@@ -2182,6 +2157,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               directory,
               sessionID: sid,
               trigger: "session.created",
+              platform: "opencode",
             })
             warmIndexInBackground()
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
@@ -2394,12 +2370,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           text: truncateLogText(text),
         })
 
-        // Compound-engineering loop: on every user message, curate the stash and
-        // stash the result so experimental.chat.system.transform can inject it.
+        // Session-start curation already seeded context. On later user messages,
+        // inject only a small reminder instead of firing more automatic AKM CLI calls.
         if (AKM_AUTO_CURATE && input.sessionID) {
-          const curated = await runCurateForPrompt(logClient, text, input.sessionID)
-          if (curated) {
-            sessionCurated.set(input.sessionID, curated)
+          const hint = "Need more AKM context? Use `akm_search` or `akm_curate` before writing from scratch."
+          const current = sessionCurated.get(input.sessionID) ?? ""
+          if (!current.includes(hint)) {
+            sessionCurated.set(input.sessionID, current ? `${current}\n\n${hint}` : hint)
             bumpCuratedVersion(input.sessionID)
           }
         }
@@ -3335,15 +3312,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         return runCli(client as unknown as LogCapableClient, ["distill", ref], { toolName: "akm_distill" })
       },
     }),
-    akm_setup: tool({
-      description: "Detect installed agent CLIs (opencode, claude, codex, gemini, aider) and persist `agent.default`. Required once per machine before akm_reflect / akm_propose can shell out. Idempotent — pass force=true to re-run detection even when agent.default is already set.",
-      args: {
-        force: tool.schema.boolean().optional().describe("Re-run detection even when agent.default is already configured."),
-      },
-      async execute({ force }) {
-        const args = ["setup"]
-        if (force) args.push("--force")
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_setup" })
+    akm_init: tool({
+      description: "Initialize AKM's working stash directory and persist `stashDir` in config. This is the agent-safe initialization path; do not use interactive `akm setup` from tools.",
+      args: {},
+      async execute() {
+        return runCli(client as unknown as LogCapableClient, ["init"], { toolName: "akm_init" })
       },
     }),
     akm_help: tool({

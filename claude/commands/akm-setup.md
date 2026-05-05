@@ -1,13 +1,12 @@
 ---
-description: Detect installed agent CLIs and persist `agent.default` so reflect/propose/distill can shell out.
-argument-hint: [--force]
+description: Tell the user to run the interactive `akm setup` wizard manually. Agents should not invoke it directly.
 ---
 
-Run `akm setup` to detect the local agent CLI surface and persist `agent.default` in the config.
+`akm setup` is the human-facing interactive configuration wizard. Do not run it from the agent.
 
-1. Run `akm --format json -q setup`. The command probes for `opencode`, `claude`, `codex`, `gemini`, and `aider` on PATH and records the first one it finds as `agent.default`.
-2. Surface the detected agent (or report "no agent CLI found on PATH" and stop).
-3. If the user passed `--force`, append `--force` to the call so it re-runs detection even when `agent.default` is already set.
-4. After running, confirm by reading back `akm --format json -q config get agent.default`. Mention that the SessionStart hook also performs this check on first run, gated by a stamp file under the plugin state dir.
+1. Explain that `akm setup` is interactive and intended for a human terminal session.
+2. Tell the user to run `akm setup` themselves if they want to configure stash location, providers, semantic search, registries, sources, output defaults, or agent CLI selection.
+3. If the task is only to create the working stash for agent-safe workflows, prefer `akm init` instead.
+4. After the user completes setup, you may confirm by reading back `akm --format json -q config get agent.default` if they asked whether an agent CLI was configured.
 
-Without an agent CLI on PATH, `/akm-reflect` and `/akm-propose` cannot generate proposals. Suggest the user install one (e.g. `bun install -g opencode-ai`) and rerun `/akm-setup --force`.
+Without an agent CLI on PATH, `/akm-reflect` and `/akm-propose` cannot generate proposals. Suggest the user install one (for example `opencode`, `claude`, `codex`, `gemini`, or `aider`) and then run `akm setup` manually.

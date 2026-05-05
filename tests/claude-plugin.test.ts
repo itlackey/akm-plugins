@@ -487,6 +487,13 @@ printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
   --version) echo "akm 9.9.9"; exit 0 ;;
 esac
+if [ "$1" = "--format" ] && [ "$2" = "json" ] && [ "$3" = "-q" ] && [ "$4" = "config" ] && [ "$5" = "get" ] && [ "$6" = "agent.default" ]; then
+  exit 0
+fi
+if [ "$1" = "--format" ] && [ "$2" = "json" ] && [ "$3" = "-q" ] && [ "$4" = "config" ] && [ "$5" = "set" ] && [ "$6" = "agent.default" ] && [ "$7" = "claude" ]; then
+  echo '{"ok":true}'
+  exit 0
+fi
 for arg in "$@"; do
   case "$arg" in
     hints) echo "# Stash hints"; echo "akm search <query>"; exit 0 ;;
@@ -516,6 +523,7 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toContain("skill:deploy")
 
     const invocations = readFileSync(invokeLog, "utf8")
+    expect(invocations).toContain("config set agent.default claude")
     expect(invocations).toContain("curate")
     expect(invocations).toContain("--detail agent")
     expect(invocations).not.toContain("--for-agent")

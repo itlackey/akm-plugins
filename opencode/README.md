@@ -36,7 +36,7 @@ The plugin exposes **20 high-value tools**. Long-tail verbs (`add`, `save`, `imp
 | `akm_reflect` | Generate a reflection proposal via the configured agent CLI; output lands in the proposal queue only |
 | `akm_propose` | Generate a new-asset proposal via the configured agent CLI; the result is `quality:"proposed"` until accepted |
 | `akm_distill` | Distill an AKM ref (typically `memory:*` or `knowledge:*`) into a proposed `lesson` (gated by `llm.features.feedback_distillation`) |
-| `akm_setup` | Detect installed agent CLIs (`opencode`, `claude`, `codex`, `gemini`, `aider`) and persist `agent.default`. Required once per machine for `akm_reflect` / `akm_propose` |
+| `akm_init` | Initialize AKM's working stash directory and persist `stashDir` in config. This is the agent-safe initialization path; interactive `akm setup` is human-facing |
 | `akm_help` | Discover the right `akm` CLI invocation for non-first-class verbs. Returns a curated quick-reference table plus live `akm <subcommand> --help` output |
 
 ## Compound-engineering hooks
@@ -47,8 +47,8 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 
 | Event | What happens |
 | --- | --- |
-| **`session.created`** (event hook) | Warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions see relevant stash context before the first user message. |
-| **`chat.message`** | Runs `akm curate "<prompt>" --run <sessionID>` on each user message (prompts shorter than `AKM_CURATE_MIN_CHARS` are skipped). The top matches are stored for injection. Memory intents (prompts mentioning "remember" / "memory") are tracked in the session buffer. |
+| **`session.created`** (event hook) | Sets `agent.default` to `opencode` when missing, warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions start with relevant stash context. |
+| **`chat.message`** | Records user feedback/memory intent and appends a short reminder to use `akm_search` / `akm_curate` when more stash context is needed. It does not auto-run AKM CLI lookups on every message. |
 | **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, pending proposal summaries, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
 | **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations until `confirm:true` is provided. |
 | **`permission.ask`** / **`command.execute.before`** | Detects risky raw `akm` CLI commands executed through shell/commands and denies them until the user explicitly approves the exact operation. |
@@ -61,7 +61,7 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic `akm curate` on user messages. |
+| `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic `akm curate` on user messages. Session start no longer auto-curates. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip injecting `akm hints` at session start. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |

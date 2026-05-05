@@ -27,7 +27,7 @@ The Claude AKM plugin exposes **18 first-class slash commands** for the high-val
 - `/akm-reflect` — generate a reflection proposal via the configured agent CLI
 - `/akm-propose` — generate a new-asset proposal via the configured agent CLI
 - `/akm-distill` — distill a ref into a `lesson` proposal (gated by `llm.features.feedback_distillation`)
-- `/akm-setup` — detect installed agent CLIs and persist `agent.default`
+- `/akm-setup` — tell the user to run the interactive `akm setup` wizard manually; agents should not invoke it directly
 - `/akm-help` — discover the right raw `akm` invocation for the long tail
 
 For every other verb — `add` (install kits / register sources), `save`, `import`, `clone`,
@@ -293,15 +293,13 @@ user before flipping the gate via `akm config set llm.features.feedback_distilla
 ## Reflect / Propose
 
 `/akm-reflect` and `/akm-propose` shell out to the configured agent CLI
-(`agent.default`, set up via `/akm-setup`) and write **only** to the proposal
+(`agent.default`, typically configured by the user via `akm setup`) and write **only** to the proposal
 queue — they never mutate live stash content. Use them when:
 
 - An asset misbehaved and you want a corrective draft → `/akm-reflect <ref> [--task "..."]`.
 - A coverage gap appeared in the conversation and you want a new draft asset → `/akm-propose <type> <name> --task "..."`.
 
-If `agent.default` is unset, run `/akm-setup` first; the plugin's SessionStart
-hook does this automatically on first run when an agent CLI is detected on
-PATH.
+If `agent.default` is unset, the plugin should initialize it to the current platform when possible. If further interactive configuration is still needed, ask the user to run `akm setup` manually. Agents should not invoke the interactive setup flow themselves.
 
 ## In-tree LLM gates
 
@@ -333,7 +331,7 @@ intent-bearing parts.
 
 | Phase | Automatic (hooks) | Your responsibility |
 | --- | --- | --- |
-| Session start | `akm` installed/refreshed; `agent.default` detected and persisted via `akm setup` on first run; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. |
+| Session start | `akm` installed/refreshed; `agent.default` initialized to the current platform when missing; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. If further interactive configuration is still needed, ask the user to run `akm setup` manually. |
 | Each user prompt | `akm curate "<prompt>"` runs and its top matches are injected into context as `additionalContext`. | Prefer the curated assets over writing new code; fetch full payloads with `akm show <ref>` before using. |
 | Each Bash tool call | Asset refs in the command/output are logged. Auto-feedback skips `memory:*` / `vault:*` / `lesson:*` / `quality:"proposed"` refs and records positive/negative feedback for everything else on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
 | Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings — distill the session memory into a `lesson` via `/akm-distill memory:<name>`, review the resulting proposal, and accept it via `/akm-proposal accept <id>`. |

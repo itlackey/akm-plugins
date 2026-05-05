@@ -150,7 +150,7 @@ describe("akm-opencode plugin", () => {
         "akm_reflect",
         "akm_propose",
         "akm_distill",
-        "akm_setup",
+        "akm_init",
         "akm_help",
       ]
       for (const name of expected) {
@@ -368,10 +368,10 @@ describe("akm-opencode plugin", () => {
       expect(tool.args.ref).toBeDefined()
     })
 
-    it("akm_setup exposes the force flag", async () => {
+    it("akm_init takes no args", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const tool = hooks.tool!.akm_setup
-      expect(tool.args.force).toBeDefined()
+      const tool = hooks.tool!.akm_init
+      expect(tool.args).toEqual({})
     })
 
   })
@@ -1273,6 +1273,7 @@ describe("akm-opencode plugin", () => {
     it("injects akm hints into the system prompt after session.created fires", async () => {
       mockExecFileSync.mockImplementation((cmd, args) => {
         if (args[0] === "--version") return "0.1.0"
+        if (Array.isArray(args) && args[0] === "config" && args[1] === "get" && args[2] === "agent.default") return "opencode"
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate")) return ""
         if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
@@ -1305,9 +1306,31 @@ describe("akm-opencode plugin", () => {
       expect(second.system).toHaveLength(0)
     })
 
+    it("initializes agent.default to opencode on session.created when missing", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "config" && args[1] === "get" && args[2] === "agent.default") return ""
+        if (Array.isArray(args) && args[0] === "config" && args[1] === "set" && args[2] === "agent.default" && args[3] === "opencode") {
+          return JSON.stringify({ ok: true })
+        }
+        if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
+        if (Array.isArray(args) && args.includes("curate")) return ""
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
+        return "mock output"
+      })
+
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "session-agent-default-1" } } } as any)
+
+      expect((mockExecFileSync.mock.calls as any[]).some(
+        ([, args]) => Array.isArray(args) && args[0] === "config" && args[1] === "set" && args[2] === "agent.default" && args[3] === "opencode",
+      )).toBe(true)
+    })
+
     it("curates on session.created and injects the result before the first user message", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "setup") return JSON.stringify({ ok: true, default: "opencode" })
+        if (Array.isArray(args) && args[0] === "config" && args[1] === "get" && args[2] === "agent.default") return ""
+        if (Array.isArray(args) && args[0] === "config" && args[1] === "set" && args[2] === "agent.default" && args[3] === "opencode") return JSON.stringify({ ok: true })
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate") && args.includes("--run")) {
           return "# skills\n- skill:deploy — ship the app\n"
@@ -1329,7 +1352,7 @@ describe("akm-opencode plugin", () => {
       expect(curateCall?.[1]).toEqual(expect.arrayContaining(["--detail", "agent"]))
       expect(curateCall?.[1]).not.toContain("--for-agent")
       expect((mockExecFileSync.mock.calls as any[]).some(
-        ([, args]) => Array.isArray(args) && args[0] === "setup" && args.includes("--format") && args.includes("json"),
+        ([, args]) => Array.isArray(args) && args[0] === "config" && args[1] === "set" && args[2] === "agent.default" && args[3] === "opencode",
       )).toBe(true)
 
       const output = { system: [] as string[] }
@@ -1450,11 +1473,8 @@ describe("akm-opencode plugin", () => {
       }
     })
 
-    it("curates on chat.message and injects the result once into system transform", async () => {
+    it("chat.message injects only a small AKM hint without auto-curating", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args.includes("curate")) {
-          return "# skills\n- skill:deploy — ship the app\n"
-        }
         return "mock output"
       })
 
@@ -1469,11 +1489,7 @@ describe("akm-opencode plugin", () => {
       const curateCall = (mockExecFileSync.mock.calls as any[]).find(
         ([, args]) => Array.isArray(args) && args.includes("curate"),
       )
-      expect(curateCall).toBeDefined()
-      expect(curateCall?.[1]).toEqual(expect.arrayContaining(["--detail", "agent"]))
-      expect(curateCall?.[1]).not.toContain("--for-agent")
-      expect(curateCall?.[1]).toContain("--run")
-      expect(curateCall?.[1]).toContain("session-curate-1")
+      expect(curateCall).toBeUndefined()
 
       const output = { system: [] as string[] }
       await hooks["experimental.chat.system.transform"]!(
@@ -1481,8 +1497,9 @@ describe("akm-opencode plugin", () => {
         output as any,
       )
       expect(output.system).toHaveLength(1)
-      expect(output.system[0]).toContain("AKM stash — assets relevant to this prompt")
-      expect(output.system[0]).toContain("skill:deploy")
+      expect(output.system[0]).toContain("Need more AKM context?")
+      expect(output.system[0]).toContain("akm_search")
+      expect(output.system[0]).toContain("akm_curate")
 
       // Curated context is one-shot per turn.
       const second = { system: [] as string[] }
@@ -2573,37 +2590,7 @@ describe("akm-opencode plugin", () => {
       )
     })
 
-    it("akm_propose retries once after akm setup when agent config is missing", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      let proposeCalls = 0
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (!Array.isArray(args)) return "mock output"
-        if (args[0] === "propose") {
-          proposeCalls += 1
-          if (proposeCalls === 1) {
-            const error = new Error("agent commands are disabled: no `agent` block in config.json") as Error & { status?: number }
-            error.status = 1
-            throw error
-          }
-          return JSON.stringify({ ok: true, id: "proposal-1" })
-        }
-        if (args[0] === "setup") return JSON.stringify({ ok: true, default: "opencode" })
-        return "mock output"
-      })
-
-      const raw = await hooks.tool!.akm_propose.execute(
-        { type: "lesson", name: "avoid-agent-drift", task: "capture the setup precondition for akm propose" } as any,
-        createToolContext(),
-      )
-
-      expect(JSON.parse(raw)).toEqual({ ok: true, id: "proposal-1" })
-      expect(proposeCalls).toBe(2)
-      expect((mockExecFileSync.mock.calls as any[]).some(
-        ([, args]) => Array.isArray(args) && args[0] === "setup" && args.includes("--force"),
-      )).toBe(true)
-    })
-
-    it("akm_propose returns setup guidance when agent config is still missing", async () => {
+    it("akm_propose returns init/setup guidance when agent config is missing", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       let proposeCalls = 0
       mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -2614,7 +2601,6 @@ describe("akm-opencode plugin", () => {
           error.status = 1
           throw error
         }
-        if (args[0] === "setup") return JSON.stringify({ ok: false, error: "no supported agent CLI found" })
         return "mock output"
       })
 
@@ -2625,7 +2611,8 @@ describe("akm-opencode plugin", () => {
 
       const parsed = JSON.parse(raw)
       expect(parsed.ok).toBe(false)
-      expect(parsed.error).toContain("Run akm_setup")
+      expect(parsed.error).toContain("Agents should not run akm setup")
+      expect(parsed.error).toContain("akm_init")
       expect(proposeCalls).toBe(1)
     })
 
@@ -2646,13 +2633,13 @@ describe("akm-opencode plugin", () => {
       )
     })
 
-    it("akm_setup runs `akm setup` and threads --force", async () => {
+    it("akm_init runs `akm init`", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockReturnValue("{\"ok\":true}")
-      await hooks.tool!.akm_setup.execute({ force: true } as any, {} as any)
+      await hooks.tool!.akm_init.execute({} as any, {} as any)
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["setup", "--force", "--format", "json"],
+        ["init", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })

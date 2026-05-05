@@ -9,7 +9,7 @@ The v0.7.0 release of akm finalizes the v1 architecture pre-release and introduc
 - **Proposal queue** — `/akm-proposal` (Claude) / `akm_proposal` (OpenCode) operate `list / show / diff / accept / reject`. All proposal-producing commands write through one durable queue at `<stashRoot>/.akm/proposals/`; drafts never leak into search or commits.
 - **Reflect / propose / distill** — three new agent-CLI-backed proposal generators. `distill` runs the bounded in-tree LLM (gated by `llm.features.feedback_distillation`) to turn evidence into a `lesson` proposal.
 - **`lesson` asset type** — first-class type stored under `lessons/<name>.md` with required `description` and `when_to_use` frontmatter.
-- **`agent.*` config + `akm setup`** — auto-detects installed agent CLIs (`opencode`, `claude`, `codex`, `gemini`, `aider`) and persists `agent.default`. SessionStart runs this once per machine.
+- **`agent.*` config + `akm setup`** — `akm setup` is the human-facing interactive configuration wizard. It can detect installed agent CLIs (`opencode`, `claude`, `codex`, `gemini`, `aider`) and persist `agent.default`, but agents should not invoke it directly.
 - **`quality:"proposed"`** — excluded from default search; surface drafts via `--include-proposed` or `akm proposal *`. The plugin's auto-feedback hook automatically skips proposed-quality refs.
 
 See akm's [`docs/migration/release-notes/0.7.0.md`](https://github.com/itlackey/akm/blob/main/docs/migration/release-notes/0.7.0.md) for the full delta.
@@ -43,7 +43,7 @@ Provides a surface of twenty tools. Verbs that are not first-class tools (`save`
 - `akm_reflect` — generate a reflection proposal via the configured agent CLI; output lands in the proposal queue.
 - `akm_propose` — generate a new-asset proposal via the configured agent CLI.
 - `akm_distill` — distill a ref into a proposed `lesson` (gated by `llm.features.feedback_distillation`).
-- `akm_setup` — detect installed agent CLIs and persist `agent.default`.
+- `akm_init` — initialize the working stash and persist `stashDir` in an agent-safe way.
 - `akm_session_messages` — summarize a specific OpenCode session (restricted for arbitrary session IDs)
 - `akm_parent_messages` — summarize the parent OpenCode session for dispatched stash subagents
 - `akm_help` — quick-reference table for non-first-class `akm` verbs, with live `akm --help` fallback
@@ -87,7 +87,7 @@ Provides:
 - **`/akm-help` discovery flow** — for verbs without a dedicated slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, raw `agent`, vault writes), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
-- **Claude hooks** — the plugin refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`) on session start, runs `akm setup` once per machine to detect the agent CLI, surfaces pending-proposal counts in the SessionStart header, and records relevant user/system feedback and memory usage events in local state logs. Auto-feedback skips proposed-quality and `lesson:*` refs.
+- **Claude hooks** — the plugin refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`) on session start, can set `agent.default` to the current platform when it is missing, surfaces pending-proposal counts in the SessionStart header, and records relevant user/system feedback and memory usage events in local state logs. Auto-feedback skips proposed-quality and `lesson:*` refs. Human users can run `akm setup` manually when interactive setup is needed.
 
 ### All Other Agents
 
