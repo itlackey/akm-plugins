@@ -1,5 +1,7 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test"
 import type { PluginInput } from "@opencode-ai/plugin"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 import opencodePackage from "../opencode/package.json"
 
 // Mock execFileSync and execSync before importing the plugin
@@ -63,6 +65,8 @@ async function withEnvVar<T>(name: string, value: string, fn: () => Promise<T>):
     else process.env[name] = previous
   }
 }
+
+const opencodeInstallLocation = path.dirname(fileURLToPath(new URL("../opencode/index.ts", import.meta.url)))
 
 // Minimal stub that satisfies the PluginInput shape
 function createPluginInput(overrides?: Partial<PluginInput>): PluginInput {
@@ -128,6 +132,7 @@ describe("akm-opencode plugin", () => {
       const hooks = await AkmPlugin(createPluginInput())
       const toolNames = Object.keys(hooks.tool!)
       const expected = [
+        "akm_info",
         "akm_search",
         "akm_show",
         "akm_remember",
@@ -204,6 +209,11 @@ describe("akm-opencode plugin", () => {
       expect(search.args.type).toBeDefined()
       expect(search.args.limit).toBeDefined()
       expect(search.args.source).toBeDefined()
+    })
+
+    it("akm_info has no args", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      expect(Object.keys(hooks.tool!.akm_info.args)).toHaveLength(0)
     })
 
     it("akm_show has required args schema", async () => {
@@ -352,6 +362,31 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("tool execution", () => {
+    it("akm_info returns akm info output plus plugin metadata", async () => {
+      mockExecFileSync.mockReturnValue(JSON.stringify({
+        version: "0.7.0",
+        stashDir: "/tmp/akm-stash",
+      }))
+
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_info.execute({} as any, {} as any)
+
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["info", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.pluginVersion).toBe(opencodePackage.version)
+      expect(parsed.pluginInstallLocation).toBe(opencodeInstallLocation)
+      expect(parsed.akmInfo).toEqual({
+        version: "0.7.0",
+        stashDir: "/tmp/akm-stash",
+      })
+    })
+
     it("akm_search calls CLI with correct args", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_search.execute(

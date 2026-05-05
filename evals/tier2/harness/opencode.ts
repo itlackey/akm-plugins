@@ -91,9 +91,9 @@ export function uninstallEnvPatch() {
 }
 
 // Stub fetch so ensureLatestAkmInstalled doesn't try to hit the real
-// npm registry on plugin construction. Returning a 404 makes
-// getLatestNpmPackageVersion return null, which causes the plugin to
-// gracefully use the on-PATH akm (our fake) without attempting to
+// npm registry during plugin import or construction. Returning a 404
+// makes getLatestNpmPackageVersion return null, which causes the plugin
+// to gracefully use the on-PATH akm (our fake) without attempting to
 // `bun install -g` the real CLI globally.
 function stubFetch() {
   const original = globalThis.fetch
@@ -200,45 +200,50 @@ export async function createOpenCodeHarness(env: Record<string, string>): Promis
   for (const [k, v] of Object.entries(env)) {
     process.env[k] = v
   }
-  const { AkmPlugin } = await loadPlugin()
-  const client = createMockClient()
-  const input: PluginInput = {
-    client: client as any,
-    project: {} as any,
-    directory: env.AKM_STASH_DIR ?? "/tmp/test-project",
-    worktree: env.AKM_STASH_DIR ?? "/tmp/test-project",
-    serverUrl: new URL("http://localhost:3000"),
-    $: {} as any,
-  }
-  const hooks = await AkmPlugin(input)
+  const restore = stubFetch()
+  try {
+    const { AkmPlugin } = await loadPlugin()
+    const client = createMockClient()
+    const input: PluginInput = {
+      client: client as any,
+      project: {} as any,
+      directory: env.AKM_STASH_DIR ?? "/tmp/test-project",
+      worktree: env.AKM_STASH_DIR ?? "/tmp/test-project",
+      serverUrl: new URL("http://localhost:3000"),
+      $: {} as any,
+    }
+    const hooks = await AkmPlugin(input)
 
-  return {
-    hooks,
-    client,
-    async curateAndExtract({ sessionID, prompt }) {
-      const start = performance.now()
-      // chat.message triggers per-prompt curation and stashes results in
-      // sessionCurated[sid]. The system.transform hook then drains those
-      // into the system prompt array.
-      await hooks["chat.message"](
-        { sessionID, messageID: `msg-${sessionID}`, agent: "build" },
-        { parts: [{ type: "text", text: prompt }] },
-      )
-      const output: { system: string[] } = { system: [] }
-      await hooks["experimental.chat.system.transform"]({ sessionID }, output)
-      const durationMs = performance.now() - start
-      const context = output.system.join("\n")
-      return { context, refs: parseRefs(context), durationMs }
-    },
-    async toolAfter({ sessionID, tool, toolArgs, output, title }) {
-      const before = client.__logs.length
-      const start = performance.now()
-      await hooks["tool.execute.after"](
-        { tool, sessionID, callID: `call-${sessionID}`, args: toolArgs },
-        { output, title: title ?? tool },
-      )
-      const durationMs = performance.now() - start
-      return { logs: client.__logs.slice(before), durationMs }
-    },
+    return {
+      hooks,
+      client,
+      async curateAndExtract({ sessionID, prompt }) {
+        const start = performance.now()
+        // chat.message triggers per-prompt curation and stashes results in
+        // sessionCurated[sid]. The system.transform hook then drains those
+        // into the system prompt array.
+        await hooks["chat.message"](
+          { sessionID, messageID: `msg-${sessionID}`, agent: "build" },
+          { parts: [{ type: "text", text: prompt }] },
+        )
+        const output: { system: string[] } = { system: [] }
+        await hooks["experimental.chat.system.transform"]({ sessionID }, output)
+        const durationMs = performance.now() - start
+        const context = output.system.join("\n")
+        return { context, refs: parseRefs(context), durationMs }
+      },
+      async toolAfter({ sessionID, tool, toolArgs, output, title }) {
+        const before = client.__logs.length
+        const start = performance.now()
+        await hooks["tool.execute.after"](
+          { tool, sessionID, callID: `call-${sessionID}`, args: toolArgs },
+          { output, title: title ?? tool },
+        )
+        const durationMs = performance.now() - start
+        return { logs: client.__logs.slice(before), durationMs }
+      },
+    }
+  } finally {
+    restore()
   }
 }

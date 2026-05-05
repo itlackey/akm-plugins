@@ -25,6 +25,7 @@ const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
 const AKM_RETROSPECTIVE_NEGATIVE_RE = createRetrospectiveNegativeRegex()
 const AKM_EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
 const PLUGIN_VERSION = readPackageVersion()
+const PLUGIN_INSTALL_LOCATION = moduleDir
 
 // Per-session state that drives the compound-engineering loop.
 // These maps are keyed by OpenCode sessionID.
@@ -1536,6 +1537,17 @@ function parseCliJson<T>(raw: string): T | CliError {
   }
 }
 
+function formatAkmInfoResponse(raw: string): string {
+  const parsed = parseCliJson<Record<string, unknown>>(raw)
+  if (isCliError(parsed)) return JSON.stringify(parsed)
+  return JSON.stringify({
+    ok: true,
+    pluginVersion: PLUGIN_VERSION,
+    pluginInstallLocation: PLUGIN_INSTALL_LOCATION,
+    akmInfo: parsed,
+  })
+}
+
 function blockedToolResponse(args: Record<string, unknown>): string | null {
   return typeof args.__akmBlocked === "string"
     ? JSON.stringify({ ok: false, error: args.__akmBlocked })
@@ -2294,6 +2306,14 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       }
     },
     tool: {
+    akm_info: tool({
+      description: "Show `akm info` output plus the installed akm-opencode plugin version and install location.",
+      args: {},
+      async execute() {
+        const raw = await runCli(client as unknown as LogCapableClient, ["info"], { toolName: "akm_info" })
+        return formatAkmInfoResponse(raw)
+      },
+    }),
     akm_search: tool({
       description: "Search your stash or the akm registry for scripts, skills, commands, agents, knowledge, memories, workflows, vaults, and wikis. Use source='registry' for installable community kits.",
       args: {
