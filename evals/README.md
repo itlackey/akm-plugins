@@ -98,7 +98,7 @@ Each metric:
    `lib/fake-akm.ts`. The shim ranks fixture assets with simple keyword
    matching so retrieval is held constant — metric deltas reflect plugin
    behavior, not akm-cli changes.
-3. Invokes `claude/hooks/akm-hook.sh` directly through `Bun.spawnSync`
+3. Invokes `claude/hooks/akm-hook.ts` directly through `Bun.spawnSync`
    (mirrors the pattern in `tests/claude-plugin.test.ts:36-59`).
 4. Parses the hook's JSON stdout to extract injected refs, latency,
    context size, etc.

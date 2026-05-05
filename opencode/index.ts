@@ -229,6 +229,10 @@ function addAgentSetupGuidance(message: string): string {
   return `${message}. Run akm_setup to detect an installed agent CLI and persist agent.default. If none is installed yet, install one of: opencode, claude, codex, gemini, aider.`
 }
 
+function isNotIndexedFeedbackError(message: string): boolean {
+  return /not in the current index|run ["'`]?akm index["'`]? and try again/i.test(message)
+}
+
 function toLogString(value: unknown): string | undefined {
   if (typeof value === "string") return value
   if (value instanceof Buffer) return value.toString("utf8")
@@ -431,9 +435,20 @@ function runCurate(args: string[]): string | null {
   return body || null
 }
 
-function runCurateForPrompt(text: string, sessionID?: string): string | null {
+async function runCurateLogged(
+  client: LogCapableClient,
+  args: string[],
+  meta: CliLogMeta & { operation: string },
+): Promise<string | null> {
+  return runCliSyncBestEffort(client, args, AKM_CURATE_TIMEOUT_MS, {
+    ...meta,
+    subsystem: "curation",
+  })
+}
+
+async function runCurateForPrompt(client: LogCapableClient, text: string, sessionID?: string): Promise<string | null> {
   if (!text || text.length < AKM_CURATE_MIN_CHARS) return null
-  return runCurate(
+  return runCurateLogged(client,
     appendRunScopeArgs(
       [
         "--detail",
@@ -448,11 +463,12 @@ function runCurateForPrompt(text: string, sessionID?: string): string | null {
       ],
       sessionID,
     ),
+    { toolName: "chat.message", sessionID, operation: "prompt-curate" },
   )
 }
 
-function runCurateForSession(sessionID: string): string | null {
-  return runCurate(
+async function runCurateForSession(client: LogCapableClient, sessionID: string): Promise<string | null> {
+  return runCurateLogged(client,
     appendRunScopeArgs(
       [
         "--detail",
@@ -466,14 +482,17 @@ function runCurateForSession(sessionID: string): string | null {
       ],
       sessionID,
     ),
+    { toolName: "session.start", sessionID, operation: "session-curate" },
   )
 }
 
-function runHintsForSession(): string | null {
-  const result = runCliSyncRaw(["--format", "text", "-q", "hints"], AKM_CURATE_TIMEOUT_MS)
-  if (!result.ok) return null
-  const body = result.stdout.trim()
-  return body || null
+async function runHintsForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
+  return runCliSyncBestEffort(client, ["--format", "text", "-q", "hints"], AKM_CURATE_TIMEOUT_MS, {
+    toolName: "session.start",
+    sessionID,
+    subsystem: "hints",
+    operation: "session-hints",
+  })
 }
 
 function summarizeWorkflowList(value: unknown): string | null {
@@ -507,10 +526,15 @@ function summarizeWorkflowList(value: unknown): string | null {
   return null
 }
 
-function runWorkflowSummaryForSession(): string | null {
-  const result = runCliSyncRaw(["--format", "json", "-q", "workflow", "list", "--active"], AKM_CURATE_TIMEOUT_MS)
-  if (!result.ok) return null
-  const parsed = parseMaybeJson(result.stdout)
+async function runWorkflowSummaryForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
+  const raw = await runCliSyncBestEffort(client, ["--format", "json", "-q", "workflow", "list", "--active"], AKM_CURATE_TIMEOUT_MS, {
+    toolName: "session.start",
+    sessionID,
+    subsystem: "workflow",
+    operation: "active-workflow-summary",
+  })
+  if (!raw) return null
+  const parsed = parseMaybeJson(raw)
   const summary = summarizeWorkflowList(
     Array.isArray(parsed)
       ? parsed
@@ -547,14 +571,20 @@ function summarizeCuratorReportForContext(report: string): string {
   return `${report.slice(0, AKM_CURATOR_CONTEXT_MAX_CHARS).trimEnd()}\n\n[truncated for context]`
 }
 
-function getAkmStashDir(): string | undefined {
+async function getAkmStashDir(client?: LogCapableClient): Promise<string | undefined> {
   if (cachedAkmStashDir !== undefined) return cachedAkmStashDir || undefined
-  const result = runCliSyncRaw(["--format", "json", "-q", "config", "get", "stashDir"], AKM_CURATE_TIMEOUT_MS)
-  if (!result.ok) {
+  const raw = client
+    ? await runCliSyncBestEffort(client, ["--format", "json", "-q", "config", "get", "stashDir"], AKM_CURATE_TIMEOUT_MS, {
+      toolName: "shell.env",
+      subsystem: "config",
+      operation: "get-stash-dir",
+    })
+    : runCurate(["--format", "json", "-q", "config", "get", "stashDir"])
+  if (!raw) {
     cachedAkmStashDir = ""
     return undefined
   }
-  const parsed = parseMaybeJson(result.stdout)
+  const parsed = parseMaybeJson(raw)
   if (typeof parsed === "string" && parsed.trim()) {
     cachedAkmStashDir = parsed.trim()
     return cachedAkmStashDir
@@ -568,7 +598,6 @@ function getAkmStashDir(): string | undefined {
       }
     }
   }
-  const raw = result.stdout.trim()
   cachedAkmStashDir = raw || ""
   return cachedAkmStashDir || undefined
 }
@@ -600,6 +629,29 @@ function emitWorkflowTelemetry(client: LogCapableClient, level: LogLevel, eventT
     pluginVersion: PLUGIN_VERSION,
     ...extra,
   })
+}
+
+async function runCliSyncBestEffort(
+  client: LogCapableClient,
+  args: string[],
+  timeoutMs: number,
+  meta: CliLogMeta & { subsystem: string; operation: string },
+): Promise<string | null> {
+  const result = runCliSyncRaw(args, timeoutMs)
+  if (!result.ok) {
+    await writePluginLog(client, "warn", "AKM synchronous helper failed", {
+      subsystem: meta.subsystem,
+      operation: meta.operation,
+      toolName: meta.toolName,
+      sessionID: meta.sessionID,
+      directory: meta.directory,
+      args,
+      error: result.error,
+    })
+    return null
+  }
+  const body = result.stdout.trim()
+  return body || null
 }
 
 function noteRecentRefs(sessionID: string | undefined, refs: string[]) {
@@ -659,7 +711,7 @@ async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: 
     sessionID,
   })
   const parsed = safeJsonParse<{ ok?: boolean }>(raw)
-  if (parsed?.ok !== false) {
+  if (parsed?.ok === true) {
     await emitWorkflowTelemetry(client, "info", "akm.feedback.recorded", {
       sessionID,
       toolName: "akm_feedback",
@@ -2119,7 +2171,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             })
             warmIndexInBackground()
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
-              const curated = runCurateForSession(sid)
+              const curated = await runCurateForSession(logClient, sid)
               if (curated) {
                 bumpCuratedVersion(sid)
                 sessionCurated.set(sid, curated)
@@ -2127,11 +2179,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             }
           }
           if (AKM_AUTO_HINTS && !sessionHints.has(sid)) {
-            const hints = runHintsForSession()
+            const hints = await runHintsForSession(logClient, sid)
             if (hints) sessionHints.set(sid, hints)
           }
           if (!sessionWorkflow.has(sid)) {
-            sessionWorkflow.set(sid, runWorkflowSummaryForSession() ?? "")
+            sessionWorkflow.set(sid, await runWorkflowSummaryForSession(logClient, sid) ?? "")
           }
           const proposalSummary = await getPendingProposalCount(logClient, sid)
           if (!proposalSummary.unsupported && proposalSummary.count > 0) {
@@ -2300,7 +2352,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       try {
         output.env.AKM_PROJECT = worktree
         output.env.AKM_PLUGIN_VERSION = PLUGIN_VERSION
-        const stashDir = getAkmStashDir()
+        const stashDir = await getAkmStashDir(logClient)
         if (stashDir) output.env.AKM_STASH_DIR = stashDir
       } catch {
         // Best-effort only.
@@ -2322,7 +2374,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // Compound-engineering loop: on every user message, curate the stash and
         // stash the result so experimental.chat.system.transform can inject it.
         if (AKM_AUTO_CURATE && input.sessionID) {
-          const curated = runCurateForPrompt(text, input.sessionID)
+          const curated = await runCurateForPrompt(logClient, text, input.sessionID)
           if (curated) {
             sessionCurated.set(input.sessionID, curated)
             bumpCuratedVersion(input.sessionID)
@@ -2552,6 +2604,32 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (note) args.push("--note", note)
         args.push(...buildScopedArgs(context as unknown as Record<string, unknown>))
         const raw = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_feedback", sessionID: context.sessionID, directory: context.directory })
+        const parsed = safeJsonParse<{ ok?: boolean; error?: string }>(raw)
+        if (parsed?.ok === false) {
+          const error = parsed.error ?? "Unknown akm feedback error"
+          if (isNotIndexedFeedbackError(error)) {
+            await writePluginLog(logClient, "warn", "AKM feedback skipped", {
+              subsystem: "feedback",
+              toolName: "akm_feedback",
+              sessionID: context.sessionID,
+              directory: context.directory,
+              ref,
+              sentiment,
+              reason: "ref_not_indexed",
+              error,
+            })
+            await emitWorkflowTelemetry(logClient, "warn", "akm.feedback.skipped", {
+              sessionID: context.sessionID,
+              toolName: "akm_feedback",
+              assetRef: ref,
+              outcome: "skipped",
+              reason: "ref not indexed",
+              directory: context.directory,
+            })
+            return JSON.stringify({ ok: true, skipped: true, reason: "ref_not_indexed", ref, sentiment })
+          }
+          return raw
+        }
         await emitWorkflowTelemetry(logClient, "info", "akm.feedback.recorded", {
           sessionID: context.sessionID,
           toolName: "akm_feedback",
@@ -2916,6 +2994,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               })
               return JSON.stringify({ ok: true, ref, shell: stdout.trim() })
             } catch (error: unknown) {
+              await writePluginLog(logClient, "error", "AKM vault load failed", {
+                subsystem: "vault",
+                toolName: "akm_vault",
+                action: "load",
+                ref,
+                error: formatCliError(error),
+              })
               return JSON.stringify({ ok: false, error: formatCliError(error) })
             }
           }
@@ -3023,6 +3108,15 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
                 })
                 return stdout
               } catch (error: unknown) {
+                await writePluginLog(logClient, "error", "AKM wiki stash failed", {
+                  subsystem: "wiki",
+                  toolName: "akm_wiki",
+                  action: "stash",
+                  name,
+                  source,
+                  as_slug,
+                  error: formatCliError(error),
+                })
                 return JSON.stringify({ ok: false, error: formatCliError(error) })
               }
             }
@@ -3130,6 +3224,12 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               })
               return JSON.stringify({ ok: true, template: stdout })
             } catch (error: unknown) {
+              await writePluginLog(logClient, "error", "AKM workflow template failed", {
+                subsystem: "workflow",
+                toolName: "akm_workflow",
+                action: "template",
+                error: formatCliError(error),
+              })
               return JSON.stringify({ ok: false, error: formatCliError(error) })
             }
           }
@@ -3242,6 +3342,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             timeout: 30_000,
           }).toString().trim()
         } catch (error: unknown) {
+          await writePluginLog(logClient, "error", "AKM help command failed", {
+            subsystem: "help",
+            toolName: "akm_help",
+            command: cliCommand,
+            args: helpArgs,
+            error: formatCliError(error),
+          })
           return JSON.stringify({ ok: false, error: formatCliError(error) })
         }
         return JSON.stringify({

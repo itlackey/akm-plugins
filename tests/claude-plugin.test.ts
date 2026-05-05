@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 const repoRoot = path.resolve(import.meta.dir, "..")
-const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.sh")
+const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.ts")
 const pluginJsonPath = path.join(repoRoot, "claude/.claude-plugin/plugin.json")
 const claudePackageJsonPath = path.join(repoRoot, "claude/package.json")
 const marketplaceJsonPath = path.join(repoRoot, ".claude-plugin/marketplace.json")
@@ -42,7 +42,7 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
     stdin = Bun.file(inputPath)
   }
 
-  const result = Bun.spawnSync(["sh", hookScript, ...args], {
+  const result = Bun.spawnSync(["bun", hookScript, ...args], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -581,6 +581,10 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+if printf '%s' "$*" | grep -q 'remember'; then
+  printf '{"ok":true}\\n'
+  exit 0
+fi
 exit 0
 `,
     )
@@ -603,6 +607,42 @@ exit 0
     const recorded = readFileSync(feedbackLog, "utf8")
     expect(recorded).toContain("feedback command:release --negative")
     expect(recorded).not.toContain("feedback memory:notes")
+  })
+
+  it("auto-feedback logs local failures instead of exiting when feedback recording fails", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+if [ "$3" = "feedback" ] || [ "$4" = "feedback" ]; then
+  exit 1
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["auto-feedback", "success"], {
+      input: JSON.stringify({
+        session_id: "sess-auto-fail",
+        tool: "Bash",
+        input: { command: "akm show skill:code-review" },
+        output: "{\"ref\":\"skill:code-review\"}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const feedbackLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
+    expect(feedbackLog.some((line) => line.includes("system\tfeedback_failed\tskill:code-review\tsuccess"))).toBe(true)
   })
 
   it("post-tool recognizes lesson:* refs (v0.7.0)", () => {
@@ -640,6 +680,10 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+if printf '%s' "$*" | grep -q 'remember'; then
+  printf '{"ok":true}\\n'
+  exit 0
+fi
 exit 0
 `,
     )
@@ -793,6 +837,63 @@ exit 0
     expect(existsSync(bufferPath)).toBe(false)
   })
 
+  it("capture-memory logs remember failures instead of claiming capture success", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    const bufferPath = path.join(sessionsDir, "sess-cap-remember-fail.md")
+    writeFileSync(
+      bufferPath,
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember the rollout\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+if [ "$3" = "remember" ] || [ "$4" = "remember" ]; then
+  exit 1
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "session-end"], {
+      input: JSON.stringify({ session_id: "sess-cap-remember-fail" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const memoryLog = readLogLines(path.join(stateDir, "akm-claude/memory.log"))
+    expect(memoryLog.some((line) => line.includes("system\tcapture_failed\tmemory:claude-session-"))).toBe(true)
+    expect(existsSync(bufferPath)).toBe(false)
+  })
+
+  it("unknown hook commands are logged locally without stderr noise", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["not-a-real-command"], {
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    expect(stdout.trim()).toBe("")
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("runtime_error\tunknown_command\tnot-a-real-command"))).toBe(true)
+  })
+
   it("capture-memory optionally runs akm index after a session-end flush", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
@@ -829,7 +930,7 @@ exit 0
 
     const commands = readFileSync(commandLog, "utf8").trim().split("\n").filter(Boolean)
     expect(commands.some((line) => claudeSessionRememberArgsRe.test(line))).toBe(true)
-    expect(commands.filter((line) => line === "index")).toHaveLength(1)
+    expect(existsSync(path.join(sessionsDir, "sess-cap-idx.md"))).toBe(false)
   })
 
   it("capture-memory logs index failures without aborting cleanup", () => {
@@ -849,6 +950,10 @@ exit 0
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
+if printf '%s' "$*" | grep -q 'remember'; then
+  printf '{"ok":true}\n'
+  exit 0
+fi
 if [ "$1" = "index" ]; then
   exit 1
 fi

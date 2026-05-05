@@ -8,7 +8,7 @@
 // Mechanics:
 //   - We use a git worktree (`git worktree add`) to materialize each ref
 //     in an isolated directory. The harness runs against THAT directory's
-//     plugin source AND fixtures (claude/hooks/akm-hook.sh,
+//     plugin source AND fixtures (claude/hooks/akm-hook.ts,
 //     opencode/index.ts, evals/fixtures/...).
 //   - This means a fixture change between the two refs WILL show up in
 //     the A/B. If you want plugin-only deltas, pin the candidate's

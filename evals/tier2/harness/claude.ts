@@ -1,5 +1,5 @@
 // Thin wrapper around `Bun.spawnSync` that invokes the Claude plugin's
-// hook script (claude/hooks/akm-hook.sh). Mirrors the runHook pattern in
+// hook runtime (claude/hooks/akm-hook.ts). Mirrors the runHook pattern in
 // tests/claude-plugin.test.ts:36-59 so the unit tests and the eval
 // framework exercise the hook through the same entrypoint.
 
@@ -16,7 +16,7 @@ export type RunHookResult = {
 }
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..")
-const HOOK_SCRIPT = path.join(REPO_ROOT, "claude/hooks/akm-hook.sh")
+const HOOK_SCRIPT = path.join(REPO_ROOT, "claude/hooks/akm-hook.ts")
 
 export function runClaudeHook(
   args: string[],
@@ -30,7 +30,7 @@ export function runClaudeHook(
     stdin = Bun.file(inputPath)
   }
   const start = performance.now()
-  const result = Bun.spawnSync(["sh", HOOK_SCRIPT, ...args], {
+  const result = Bun.spawnSync(["bun", HOOK_SCRIPT, ...args], {
     cwd: REPO_ROOT,
     env: { ...process.env, ...options.env },
     stdio: [stdin, "pipe", "pipe"],
