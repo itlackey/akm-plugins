@@ -2043,24 +2043,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // Best-effort only.
       }
     },
-    "experimental.session.compacting": async (input, output) => {
-      try {
-        const sid = input.sessionID
-        if (!sid) return
-        if (!Array.isArray(output.context)) return
-        markContextEpochDirty(sid)
-        const blocks = [
-          sessionHints.get(sid) ? `${AKM_HINTS_PREFIX}\n\n${sessionHints.get(sid)}` : "",
-          sessionCurated.get(sid) ? `${AKM_CURATED_HEADER}\n${sessionCurated.get(sid)}${AKM_CURATED_TAIL}` : "",
-          sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
-          (await getPendingProposalCount(logClient, sid)).count > 0 && !(await getPendingProposalCount(logClient, sid)).unsupported ? formatPendingProposalContext((await getPendingProposalCount(logClient, sid)).count) : "",
-          sessionCuratorReport.get(sid) ? formatCuratorReportContext(sessionCuratorReport.get(sid)!) : "",
-        ]
-        output.context.push(...applyContextBudget(blocks))
-      } catch {
-        // Never break compaction because of plugin context.
-      }
-    },
     // experimental.chat.system.transform is how OpenCode exposes the
     // additionalContext channel. We append the cached hints (once per session)
     // and the curated assets (once per turn) so the next LLM call sees them.

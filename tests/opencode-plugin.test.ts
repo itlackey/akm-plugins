@@ -120,7 +120,7 @@ describe("akm-opencode plugin", () => {
       expect(hooks["tool.execute.before"]).toBeDefined()
       expect(hooks["tool.execute.after"]).toBeDefined()
       expect(hooks["shell.env"]).toBeDefined()
-      expect(hooks["experimental.session.compacting"]).toBeDefined()
+      expect(hooks["experimental.session.compacting"]).toBeUndefined()
       expect(hooks.tool).toBeDefined()
     })
 
@@ -178,7 +178,6 @@ describe("akm-opencode plugin", () => {
       expect(hooks.event).toBeDefined()
       expect(hooks.stop).toBeDefined()
       expect(hooks["experimental.chat.system.transform"]).toBeDefined()
-      expect(hooks["experimental.session.compacting"]).toBeDefined()
     })
   })
 
@@ -1091,7 +1090,7 @@ describe("akm-opencode plugin", () => {
       expect(output.system.join("\n\n")).toContain("Do not treat proposed assets as curated until accepted.")
     })
 
-    it("preserves pending proposal summaries through compaction", async () => {
+    it("does not inject compaction context when compaction is disabled", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
           return JSON.stringify({ proposals: [{ id: "p1" }] })
@@ -1099,9 +1098,26 @@ describe("akm-opencode plugin", () => {
         return "mock output"
       })
       const hooks = await AkmPlugin(createPluginInput())
-      const output = { context: [] as string[] }
-      await hooks["experimental.session.compacting"]!({ sessionID: "session-compact" } as any, output as any)
-      expect(output.context.join("\n\n")).toContain("There is 1 pending AKM proposal.")
+      expect(hooks["experimental.session.compacting"]).toBeUndefined()
+    })
+
+    it("keeps compaction free of AKM tool-injection using the local fake model path", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
+          return JSON.stringify({ proposals: [{ id: "p1" }] })
+        }
+        return "mock output"
+      })
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      await hooks.event!({
+        event: { type: "session.created", properties: { sessionID: "session-local-model" } },
+      } as any)
+
+      expect(hooks["experimental.session.compacting"]).toBeUndefined()
+      expect(client.session.prompt).not.toHaveBeenCalled()
+      expect(client.session.create).not.toHaveBeenCalled()
+      expect(mockSpawn).not.toHaveBeenCalled()
     })
 
     it("denies risky raw akm shell commands", async () => {
@@ -1250,7 +1266,7 @@ describe("akm-opencode plugin", () => {
       expect(output.args.__akmBlocked).toBeUndefined()
     })
 
-    it("preserves hints, curation, workflows, and curator reports across compaction", async () => {
+    it("does not expose a compaction hook after disabling it", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args[0] === "--format" && args.includes("workflow")) {
@@ -1283,16 +1299,9 @@ describe("akm-opencode plugin", () => {
         } as any,
       )
 
-      const compactOutput = { context: [] as string[] }
-      await hooks["experimental.session.compacting"]!(
-        { sessionID: "session-compact-1" } as any,
-        compactOutput as any,
-      )
-
-      expect(compactOutput.context.join("\n")).toContain("AKM is available in this session")
-      expect(compactOutput.context.join("\n")).toContain("AKM stash — assets relevant to this prompt")
-      expect(compactOutput.context.join("\n")).toContain("workflow:release")
-      expect(compactOutput.context.join("\n")).toContain("AKM curator report")
+      expect(hooks["experimental.session.compacting"]).toBeUndefined()
+      expect(client.session.prompt).toHaveBeenCalledTimes(1)
+      expect(mockSpawn).not.toHaveBeenCalled()
 
       const postCompactSystem = { system: [] as string[] }
       await hooks["experimental.chat.system.transform"]!(
@@ -1304,7 +1313,7 @@ describe("akm-opencode plugin", () => {
       expect(postCompactSystem.system.join("\n")).toContain("workflow:release")
     })
 
-    it("truncates curator reports before re-injecting them into context", async () => {
+    it("keeps local-model curator flows working without compaction injection", async () => {
       const longReport = `${"A".repeat(4500)}TAIL`
       const client = createMockClient()
       client.session.prompt = mock(async () => ({
@@ -1326,15 +1335,10 @@ describe("akm-opencode plugin", () => {
         } as any,
       )
 
-      const compactOutput = { context: [] as string[] }
-      await hooks["experimental.session.compacting"]!(
-        { sessionID: "session-compact-2" } as any,
-        compactOutput as any,
-      )
-
-      const combined = compactOutput.context.join("\n")
-      expect(combined).toContain("[truncated for context]")
-      expect(combined).not.toContain("TAIL")
+      expect(hooks["experimental.session.compacting"]).toBeUndefined()
+      expect(client.session.prompt).toHaveBeenCalledTimes(1)
+      expect(client.session.create).toHaveBeenCalledTimes(1)
+      expect(mockSpawn).not.toHaveBeenCalled()
     })
 
     it("records auto positive feedback after a successful akm tool invocation", async () => {
