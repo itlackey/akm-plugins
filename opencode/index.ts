@@ -261,6 +261,20 @@ async function writePluginLog(client: LogCapableClient, level: LogLevel, message
   }
 }
 
+async function logHookFailure(
+  client: LogCapableClient,
+  hook: string,
+  error: unknown,
+  extra?: Record<string, unknown>,
+) {
+  await writePluginLog(client, "error", `AKM ${hook} hook failed`, {
+    subsystem: "hook",
+    hook,
+    error: formatCliError(error),
+    ...extra,
+  })
+}
+
 async function runAgentSetup(client: LogCapableClient, meta: { directory?: string; sessionID?: string; trigger: string; force?: boolean }): Promise<boolean> {
   const command = resolveAkmCommand()
   if (typeof command !== "string") {
@@ -2218,8 +2232,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             sessionBuffer.delete(sid)
           }
         }
-      } catch {
-        // Lifecycle hooks must never throw into the TUI.
+      } catch (error: unknown) {
+        await logHookFailure(logClient, "event", error)
       }
     },
     // Stop is the closest analogue to Claude's Stop/SubagentStop — the user or
@@ -2240,8 +2254,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           })
           await maybeIndexSessionMemory(logClient, sid, "stop", captured)
         }
-      } catch {
-        // Best-effort only.
+      } catch (error: unknown) {
+        await logHookFailure(logClient, "stop", error)
       }
     },
     // experimental.chat.system.transform is how OpenCode exposes the
@@ -2280,8 +2294,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             sessionCuratedInjectedVersion.set(sid, curatedVersion)
           }
         }
-      } catch {
-        // Never break the turn because of a transform failure.
+      } catch (error: unknown) {
+        await logHookFailure(logClient, "experimental.chat.system.transform", error)
       }
     },
     "tool.execute.before": async (input, output) => {
@@ -2297,8 +2311,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           return
         }
         output.args = args
-      } catch {
-        // Never break tool execution from the pre-hook.
+      } catch (error: unknown) {
+        await logHookFailure(logClient, "tool.execute.before", error, {
+          toolName: input?.tool,
+          sessionID: input?.sessionID,
+        })
       }
     },
     "permission.ask": async (input, output) => {
@@ -2326,8 +2343,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           command,
           category: assessment.category,
         })
-      } catch {
-        // Best-effort only.
+      } catch (error: unknown) {
+        await logHookFailure(logClient, "permission.ask", error, {
+          sessionID: input?.sessionID,
+          command: typeof input?.metadata?.command === "string" ? input.metadata.command : undefined,
+        })
       }
     },
     "command.execute.before": async (input, output) => {
@@ -2344,8 +2364,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           command,
           category: assessment.category,
         })
-      } catch {
-        // Best-effort only.
+      } catch (error: unknown) {
+        await logHookFailure(logClient, "command.execute.before", error, {
+          sessionID: input?.sessionID,
+          command: input?.command,
+        })
       }
     },
     "shell.env": async (_input, output) => {
@@ -2354,8 +2377,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         output.env.AKM_PLUGIN_VERSION = PLUGIN_VERSION
         const stashDir = await getAkmStashDir(logClient)
         if (stashDir) output.env.AKM_STASH_DIR = stashDir
-      } catch {
-        // Best-effort only.
+      } catch (error: unknown) {
+        await logHookFailure(logClient, "shell.env", error)
       }
     },
     "chat.message": async (input, output) => {

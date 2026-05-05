@@ -11,5 +11,8 @@
     "hooks",
     "skills",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
 }

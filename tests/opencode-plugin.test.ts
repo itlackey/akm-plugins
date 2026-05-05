@@ -184,6 +184,21 @@ describe("akm-opencode plugin", () => {
       expect(hooks.stop).toBeDefined()
       expect(hooks["experimental.chat.system.transform"]).toBeDefined()
     })
+
+    it("logs shell.env hook failures through OpenCode logging", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const output = { env: null as any }
+
+      await hooks["shell.env"]!({} as any, output as any)
+
+      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
+        body: expect.objectContaining({
+          message: "AKM shell.env hook failed",
+          extra: expect.objectContaining({ subsystem: "hook", hook: "shell.env" }),
+        }),
+      }))
+    })
   })
 
   describe("tool definitions", () => {

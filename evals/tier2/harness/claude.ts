@@ -30,7 +30,7 @@ export function runClaudeHook(
     stdin = Bun.file(inputPath)
   }
   const start = performance.now()
-  const result = Bun.spawnSync(["bun", HOOK_SCRIPT, ...args], {
+  const result = Bun.spawnSync([process.execPath, HOOK_SCRIPT, ...args], {
     cwd: REPO_ROOT,
     env: { ...process.env, ...options.env },
     stdio: [stdin, "pipe", "pipe"],

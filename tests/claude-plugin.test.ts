@@ -42,7 +42,7 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
     stdin = Bun.file(inputPath)
   }
 
-  const result = Bun.spawnSync(["bun", hookScript, ...args], {
+  const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -56,6 +56,25 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
   }
 
   return result.stdout.toString()
+}
+
+function runShellShim(args: string[], options?: { input?: string; env?: Record<string, string> }) {
+  let stdin: "ignore" | Blob = "ignore"
+
+  if (options?.input !== undefined) {
+    const inputPath = path.join(makeTempDir(), "stdin.txt")
+    writeFileSync(inputPath, options.input)
+    stdin = Bun.file(inputPath)
+  }
+
+  return Bun.spawnSync(["sh", path.join(repoRoot, "claude/hooks/akm-hook.sh"), ...args], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...options?.env,
+    },
+    stdio: [stdin, "pipe", "pipe"],
+  })
 }
 
 afterEach(() => {
@@ -329,6 +348,29 @@ fi
     expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skill:release --negative --note stale")
   })
 
+  it("shell shim notifies the agent and disables Claude hooks when Bun is unavailable", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    const result = runShellShim(["session-start"], {
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    expect(result.exitCode).toBe(0)
+    const payload = JSON.parse(result.stdout.toString())
+    expect(payload.hookSpecificOutput.hookEventName).toBe("SessionStart")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("disabled because the Bun runtime is not available")
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("runtime_disabled\tbun_unavailable"))).toBe(true)
+  })
+
   it("curate-prompt falls back to feedback logging and buffers memory intents per session", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
@@ -470,7 +512,7 @@ exit 0
     expect(payload.hookSpecificOutput.hookEventName).toBe("SessionStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM is available")
     expect(payload.hookSpecificOutput.additionalContext).toContain("Stash hints")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash — assets relevant to this session")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash - assets relevant to this session")
     expect(payload.hookSpecificOutput.additionalContext).toContain("skill:deploy")
 
     const invocations = readFileSync(invokeLog, "utf8")
@@ -643,6 +685,8 @@ exit 0
 
     const feedbackLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
     expect(feedbackLog.some((line) => line.includes("system\tfeedback_failed\tskill:code-review\tsuccess"))).toBe(true)
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("akm_failed\tauto-feedback") && line.includes("feedback skill:code-review"))).toBe(true)
   })
 
   it("post-tool recognizes lesson:* refs (v0.7.0)", () => {
@@ -873,6 +917,8 @@ exit 0
 
     const memoryLog = readLogLines(path.join(stateDir, "akm-claude/memory.log"))
     expect(memoryLog.some((line) => line.includes("system\tcapture_failed\tmemory:claude-session-"))).toBe(true)
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("akm_failed\tcapture-memory") && line.includes("remember --name"))).toBe(true)
     expect(existsSync(bufferPath)).toBe(false)
   })
 
