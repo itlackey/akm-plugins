@@ -93,11 +93,18 @@ describe("Claude plugin metadata", () => {
     expect(plugin.skills).toEqual(["./skills/akm"])
     expect(plugin.hooks.SessionStart).toBeDefined()
     expect(plugin.hooks.UserPromptSubmit).toBeDefined()
+    expect(plugin.hooks.UserPromptExpansion).toBeDefined()
     expect(plugin.hooks.PostToolUse).toBeDefined()
     expect(plugin.hooks.PostToolUseFailure).toBeDefined()
+    expect(plugin.hooks.PostToolBatch).toBeDefined()
     expect(plugin.hooks.Stop).toBeDefined()
+    expect(plugin.hooks.SubagentStart).toBeDefined()
     expect(plugin.hooks.SubagentStop).toBeDefined()
+    expect(plugin.hooks.TaskCreated).toBeDefined()
+    expect(plugin.hooks.TaskCompleted).toBeDefined()
     expect(plugin.hooks.PreCompact).toBeDefined()
+    expect(plugin.hooks.PostCompact).toBeDefined()
+    expect(plugin.hooks.SessionEnd).toBeDefined()
     expect(plugin.version).toBe(pkg.version)
     expect(marketplace.plugins[0].version).toBe(plugin.version)
 
@@ -108,6 +115,12 @@ describe("Claude plugin metadata", () => {
     // UserPromptSubmit wires curate-prompt
     const userPromptSubmit = plugin.hooks.UserPromptSubmit[0].hooks[0].command as string
     expect(userPromptSubmit).toContain("curate-prompt")
+
+    const userPromptExpansion = plugin.hooks.UserPromptExpansion[0].hooks[0].command as string
+    expect(userPromptExpansion).toContain("user-prompt-expansion")
+
+    expect(plugin.hooks.PreToolUse).toBeDefined()
+    expect(plugin.hooks.PreToolUse[0].hooks[0].command as string).toContain("pre-tool bash")
 
     // PostToolUse runs both post-tool and auto-feedback
     const postToolCommands = plugin.hooks.PostToolUse[0].hooks.map(
@@ -121,9 +134,15 @@ describe("Claude plugin metadata", () => {
     expect(plugin.hooks.SubagentStop[0].hooks[0].command as string).toContain(
       "capture-memory subagent-end",
     )
+    expect(plugin.hooks.SubagentStart[0].hooks[0].command as string).toContain("subagent-start")
+    expect(plugin.hooks.TaskCreated[0].hooks[0].command as string).toContain("task-created")
+    expect(plugin.hooks.TaskCompleted[0].hooks[0].command as string).toContain("task-completed")
     expect(plugin.hooks.PreCompact[0].hooks[0].command as string).toContain(
       "capture-memory pre-compact",
     )
+    expect(plugin.hooks.PostCompact[0].hooks[0].command as string).toContain("post-compact")
+    expect(plugin.hooks.PostToolBatch[0].hooks[0].command as string).toContain("post-tool-batch")
+    expect(plugin.hooks.SessionEnd[0].hooks[0].command as string).toContain("session-end")
   })
 
   it("ships the slash commands and curator agent referenced by the docs", () => {
@@ -132,6 +151,10 @@ describe("Claude plugin metadata", () => {
     for (const name of [
       "akm-search",
       "akm-show",
+      "akm-memory-audit",
+      "akm-memory-candidates",
+      "akm-memory-promote",
+      "akm-memory-reject",
       "akm-agent",
       "akm-cmd",
       "akm-curate",
@@ -228,6 +251,16 @@ describe("Claude plugin metadata", () => {
     expect(body).toContain("| Conversation-derived feedback | #29 | Open |")
     expect(body).toContain("| Session-end `akm index` | #30 | Shipped in both plugins |")
     expect(body).toContain("| Harness-provided LLM fallback | #31 | Open |")
+    expect(body).toContain("| Shared secret redaction | #64 | Shipped in both plugins |")
+    expect(body).toContain("| Structured memory events | #55 | Shipped in both plugins |")
+    expect(body).toContain("| Claude PreToolUse safety guard | #56 | Shipped in Claude |")
+    expect(body).toContain("| Checkpoint + candidates | #57 | Shipped in both plugins |")
+    expect(body).toContain("| Memory audit and candidate review | #58 | Shipped in both plugins |")
+    expect(body).toContain("| Shared recall policy | #59 | Shipped in both plugins |")
+    expect(body).toContain("| Confidence-scored auto-feedback | #60 | Shipped in both plugins |")
+    expect(body).toContain("| Expanded Claude lifecycle coverage | #61 | Shipped in Claude |")
+    expect(body).toContain("| Subagent context/result capture | #62 | Shipped in both plugins |")
+    expect(body).toContain("| Workflow compliance telemetry | #63 | Shipped in both plugins |")
   })
 })
 
@@ -1284,5 +1317,235 @@ exit 0
     expect(args).toContain("--user bob")
     expect(args).toContain("--run sess-scope-env")
     expect(args).toContain("--channel nightly")
+  })
+
+  it("pre-tool blocks risky proposal acceptance commands", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["pre-tool", "bash"], {
+      input: JSON.stringify({
+        session_id: "sess-pretool-1",
+        tool: "Bash",
+        input: { command: "akm proposal accept p_123" },
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.decision).toBe("block")
+    expect(payload.reason).toContain("explicit user approval")
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("pretool_blocked") && line.includes("proposal accept"))).toBe(true)
+  })
+
+  it("pre-tool blocks suspicious raw remember payloads containing secrets", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["pre-tool", "bash"], {
+      input: JSON.stringify({
+        session_id: "sess-pretool-2",
+        tool: "Bash",
+        input: { command: "akm remember OPENAI_API_KEY=sk-secret-value" },
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.decision).toBe("block")
+    expect(payload.reason).toContain("include secrets")
+  })
+
+  it("user-prompt-expansion emits guidance for mutating slash commands", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["user-prompt-expansion"], {
+      input: JSON.stringify({ session_id: "sess-expand-1", command: "/akm-memory-promote cand-1" }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+  })
+
+  it("user-prompt-expansion treats akm-memory-reject as mutating guidance", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["user-prompt-expansion"], {
+      input: JSON.stringify({ session_id: "sess-expand-2", command: "/akm-memory-reject cand-1" }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+  })
+
+  it("post-tool-batch records a grouped tool observation without throwing", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["post-tool-batch"], {
+      input: JSON.stringify({
+        session_id: "sess-batch-1",
+        tools: [
+          { tool: "Read", input: { file: "README.md" } },
+          { tool: "Bash", input: { command: "akm show skill:deploy" } },
+        ],
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    expect(stdout.trim()).toBe("")
+    const bufferPath = path.join(stateDir, "akm-claude/sessions/sess-batch-1.md")
+    expect(readFileSync(bufferPath, "utf8")).toContain("tool batch")
+  })
+
+  it("subagent-start injects scoped AKM context", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
+  echo '[{"ref":"workflow:release","runId":"run-1","state":"active"}]'
+  exit 0
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    const stdout = runHook(["subagent-start"], {
+      input: JSON.stringify({ session_id: "sess-subagent-1", agent: "reviewer", task: "Review auth middleware" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.hookSpecificOutput.hookEventName).toBe("SubagentStart")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("Role: reviewer")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("Review auth middleware")
+  })
+
+  it("task-created and task-completed log task lifecycle without breaking", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["task-created"], {
+      input: JSON.stringify({ session_id: "sess-task-1", task_id: "task-1", title: "Implement memory audit" }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    runHook(["task-completed"], {
+      input: JSON.stringify({ session_id: "sess-task-1", task_id: "task-1", summary: "Decision: keep event writes redacted and checkpointed" }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const bufferPath = path.join(stateDir, "akm-claude/sessions/sess-task-1.md")
+    const body = readFileSync(bufferPath, "utf8")
+    expect(body).toContain("task created")
+    expect(body).toContain("task completed")
+  })
+
+  it("post-compact records compact summary context", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["post-compact"], {
+      input: JSON.stringify({ session_id: "sess-compact-1", summary: "Kept active workflow and deployment constraints" }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    expect(stdout.trim()).toBe("")
+    const bufferPath = path.join(stateDir, "akm-claude/sessions/sess-compact-1.md")
+    expect(readFileSync(bufferPath, "utf8")).toContain("post compact")
+  })
+
+  it("session-end reuses capture-memory finalization", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const rememberLog = path.join(tempDir, "remember.log")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    writeFileSync(
+      path.join(sessionsDir, "sess-end-1.md"),
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember the rollout\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    const quotedLog = shellQuote(rememberLog)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["session-end"], {
+      input: JSON.stringify({ session_id: "sess-end-1" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const args = readFileSync(rememberLog, "utf8")
+    expect(args).toContain("remember --name claude-session-")
   })
 })

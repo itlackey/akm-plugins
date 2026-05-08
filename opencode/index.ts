@@ -3,6 +3,11 @@ import { execFileSync, execSync, spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
+import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates, updateCandidateStatus } from "../shared/memory-candidates"
+import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
+import { shouldRecall } from "../shared/recall-policy"
+import { redactObject, redactSecrets } from "../shared/redaction"
 
 let resolvedAkmCommand = "akm"
 const autoInstallPackageRef = process.env.AKM_PACKAGE_REF ?? "akm-cli@latest"
@@ -26,6 +31,8 @@ const AKM_RETROSPECTIVE_NEGATIVE_RE = createRetrospectiveNegativeRegex()
 const AKM_EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
 const PLUGIN_VERSION = readPackageVersion()
 const PLUGIN_INSTALL_LOCATION = moduleDir
+const OPENCODE_EVENT_LOG = getEventLogPath("opencode")
+const OPENCODE_CANDIDATE_LOG = getCandidateLogPath("opencode")
 
 // Per-session state that drives the compound-engineering loop.
 // These maps are keyed by OpenCode sessionID.
@@ -37,6 +44,7 @@ const sessionContextEpoch = new Map<string, number>()
 const sessionContextInjectedEpoch = new Map<string, number>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
+const sessionRecallAudit = new Map<string, { shouldRecall: boolean; reason: string; query: string; injectedRefs: string[]; injectedChars: number; warnings: string[] }>()
 type ParsedSemver = { core: [number, number, number]; prerelease: Array<string | number> | null }
 type SessionBufferEntry = {
   timestamp: string
@@ -320,18 +328,40 @@ function getExecStatus(error: unknown): number | null {
 
 async function writePluginLog(client: LogCapableClient, level: LogLevel, message: string, extra: Record<string, unknown>) {
   try {
+    const redacted = redactObject(extra)
     await client.app.log({
-      query: typeof extra.directory === "string" ? { directory: extra.directory } : undefined,
+      query: typeof redacted.value.directory === "string" ? { directory: redacted.value.directory as string } : undefined,
       body: {
         service: "akm-opencode",
         level,
         message,
-        extra,
+        extra: redacted.value,
       },
     })
   } catch {
     // Avoid breaking the TUI if logging itself fails.
   }
+}
+
+function buildEventScope(sessionID?: string, directory?: string, agent?: string) {
+  return {
+    user: process.env.AKM_USER_ID,
+    agent,
+    run: sessionID,
+    channel: process.env.AKM_CHANNEL,
+    project: directory,
+    repo: process.env.AKM_REPO,
+    branch: process.env.AKM_BRANCH,
+  }
+}
+
+function writeStructuredEvent(event: Omit<AkmMemoryEvent, "version" | "timestamp" | "harness">) {
+  return appendMemoryEvent(OPENCODE_EVENT_LOG, {
+    version: 1,
+    timestamp: nowIso(),
+    harness: "opencode",
+    ...event,
+  })
 }
 
 async function logHookFailure(
@@ -637,6 +667,19 @@ function safeJsonParse<T>(raw: string): T | undefined {
 }
 
 function emitWorkflowTelemetry(client: LogCapableClient, level: LogLevel, eventType: string, extra: Record<string, unknown>) {
+  const mappedEvent: AkmMemoryEvent["event"] = eventType.includes("workflow_")
+    ? eventType as AkmMemoryEvent["event"]
+    : eventType.includes("blocked")
+      ? "safety_blocked"
+      : "workflow_step"
+  void writeStructuredEvent({
+    event: mappedEvent,
+    sessionId: typeof extra.sessionID === "string" ? extra.sessionID : undefined,
+    workflowRunId: typeof extra.runId === "string" ? extra.runId : undefined,
+    scope: buildEventScope(typeof extra.sessionID === "string" ? extra.sessionID : undefined, typeof extra.directory === "string" ? extra.directory : undefined, typeof extra.toolName === "string" ? extra.toolName : undefined),
+    input: redactObject(extra).value as Record<string, unknown>,
+    outcome: { status: level === "error" ? "failed" : level === "warn" ? "blocked" : "ok", warnings: typeof extra.reason === "string" ? [extra.reason] : undefined },
+  })
   return writePluginLog(client, level, eventType, {
     subsystem: "workflow-compliance",
     eventType,
@@ -877,7 +920,7 @@ function rememberTextAsMemory(name: string, body: string): string | null {
     execFileSync(command, ["--format", "json", "-q", "remember", "--name", name, "--force"], {
       encoding: "utf8",
       timeout: AKM_CURATE_TIMEOUT_MS * 2,
-      input: body,
+      input: redactSecrets(body).text,
     })
     return `memory:${name}`
   } catch {
@@ -903,6 +946,13 @@ function captureSessionMemory(
   }
 
   const lines: string[] = []
+  lines.push("---")
+  lines.push("akm_memory_kind: session_checkpoint")
+  lines.push("harness: opencode")
+  lines.push(`session_id: ${sessionID}`)
+  lines.push(`reason: ${reason}`)
+  lines.push("---")
+  lines.push("")
   lines.push(`# Session summary (${nowIso()})`)
   lines.push(`Reason: ${reason}`)
   lines.push(`Session: ${sessionID}`)
@@ -937,6 +987,26 @@ function captureSessionMemory(
   }
 
   if (isCheckpoint) {
+    void writeStructuredEvent({
+      event: "pre_compact_checkpoint",
+      sessionId: sessionID,
+      scope: buildEventScope(sessionID),
+      memory: { ref, reason, kind: "session_checkpoint" },
+      refs: [ref],
+      outcome: { status: "ok" },
+    })
+    const candidates = extractCandidatesFromText({ harness: "opencode", sessionId: sessionID, text: body, evidence: [ref, reason] })
+    if (candidates.length > 0) {
+      appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
+      void writeStructuredEvent({
+        event: "candidate_extracted",
+        sessionId: sessionID,
+        scope: buildEventScope(sessionID),
+        memory: { sourceRef: ref, count: candidates.length },
+        refs: [ref],
+        outcome: { status: "ok" },
+      })
+    }
     for (const entry of entries) {
       if (!entry.checkpointed) entry.checkpointed = true
     }
@@ -947,6 +1017,26 @@ function captureSessionMemory(
 
   sessionFinalMemoryCaptured.add(sessionID)
   sessionBuffer.delete(sessionID)
+  void writeStructuredEvent({
+    event: "session_ended",
+    sessionId: sessionID,
+    scope: buildEventScope(sessionID),
+    memory: { ref, reason, kind: "session_checkpoint" },
+    refs: [ref],
+    outcome: { status: "ok" },
+  })
+  const candidates = extractCandidatesFromText({ harness: "opencode", sessionId: sessionID, text: body, evidence: [ref, reason] })
+  if (candidates.length > 0) {
+    appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
+    void writeStructuredEvent({
+      event: "candidate_extracted",
+      sessionId: sessionID,
+      scope: buildEventScope(sessionID),
+      memory: { sourceRef: ref, count: candidates.length },
+      refs: [ref],
+      outcome: { status: "ok" },
+    })
+  }
   return ref
 }
 
@@ -2151,6 +2241,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const sid = extractSessionIdFromEvent(event) ?? extractSessionIdFromEvent((event as { properties?: unknown }).properties)
         if (type === "session.created" || type === "session.updated") {
           if (!sid) return
+          writeStructuredEvent({
+            event: "session_started",
+            sessionId: sid,
+            scope: buildEventScope(sid, directory),
+            input: { type },
+            outcome: { status: "ok" },
+          })
           if (!sessionContextEpoch.has(sid)) sessionContextEpoch.set(sid, 0)
           if (type === "session.created") {
             await ensureAgentSetup(logClient, {
@@ -2191,6 +2288,15 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               ref: captured,
             })
             await maybeIndexSessionMemory(logClient, sid, type, captured)
+          }
+          if (type === "session.compacted") {
+            writeStructuredEvent({
+              event: "post_compact_summary",
+              sessionId: sid,
+              scope: buildEventScope(sid, directory),
+              memory: { ref: captured ?? null, reason: type },
+              outcome: { status: captured ? "ok" : "skipped" },
+            })
           }
           // Drop per-session state so a re-created session does not inherit
           // stale hints/curation.
@@ -2286,6 +2392,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
           return
         }
+        if (input.tool === "akm_memory" && ["promote", "reject"].includes(String(args.action ?? "")) && !confirm) {
+          output.args = {
+            ...args,
+            __akmBlocked: `akm_memory action='${String(args.action)}' requires confirm:true because it mutates candidate or memory state.`,
+          }
+          return
+        }
         output.args = args
       } catch (error: unknown) {
         await logHookFailure(logClient, "tool.execute.before", error, {
@@ -2370,14 +2483,53 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           text: truncateLogText(text),
         })
 
-        // Session-start curation already seeded context. On later user messages,
-        // inject only a small reminder instead of firing more automatic AKM CLI calls.
         if (AKM_AUTO_CURATE && input.sessionID) {
-          const hint = "Need more AKM context? Use `akm_search` or `akm_curate` before writing from scratch."
-          const current = sessionCurated.get(input.sessionID) ?? ""
-          if (!current.includes(hint)) {
-            sessionCurated.set(input.sessionID, current ? `${current}\n\n${hint}` : hint)
-            bumpCuratedVersion(input.sessionID)
+          const decision = shouldRecall(text, { activeWorkflow: !!sessionWorkflow.get(input.sessionID), recentAssetFailure: retrospectiveState.get(input.sessionID)?.lastNegativeSignalAt != null })
+          if (decision.shouldRecall) {
+            const curated = await runCurateForPrompt(logClient, decision.query, input.sessionID)
+            const refs = [...new Set((curated ?? "").match(/(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g) ?? [])]
+            sessionRecallAudit.set(input.sessionID, {
+              shouldRecall: true,
+              reason: decision.reason,
+              query: decision.query,
+              injectedRefs: refs,
+              injectedChars: curated?.length ?? 0,
+              warnings: [],
+            })
+            writeStructuredEvent({
+              event: "prompt_recall",
+              sessionId: input.sessionID,
+              scope: buildEventScope(input.sessionID, directory, input.agent),
+              input: { promptPreview: text.slice(0, 280), query: decision.query, reason: decision.reason },
+              refs,
+              outcome: { status: curated ? "ok" : "skipped" },
+            })
+            if (curated) {
+              sessionCurated.set(input.sessionID, curated)
+              bumpCuratedVersion(input.sessionID)
+            }
+          } else {
+            const hint = "Need more AKM context? Use `akm_search` or `akm_curate` before writing from scratch."
+            sessionRecallAudit.set(input.sessionID, {
+              shouldRecall: false,
+              reason: decision.reason,
+              query: decision.query,
+              injectedRefs: [],
+              injectedChars: 0,
+              warnings: [],
+            })
+            writeStructuredEvent({
+              event: "prompt_recall",
+              sessionId: input.sessionID,
+              scope: buildEventScope(input.sessionID, directory, input.agent),
+              input: { promptPreview: text.slice(0, 280), query: decision.query, reason: decision.reason },
+              outcome: { status: "skipped" },
+            })
+            const current = sessionCurated.get(input.sessionID) ?? ""
+            if (!current.includes(hint)) {
+              sessionCurated.set(input.sessionID, current ? `${current}\n\n${hint}` : hint)
+              bumpCuratedVersion(input.sessionID)
+            }
           }
         }
 
@@ -2453,6 +2605,14 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // has material to flush into a session summary memory.
         const refResult = extractToolRefs(input.tool, input.args as Record<string, unknown>, parsed)
         noteRecentRefs(input.sessionID, refResult.refs)
+        writeStructuredEvent({
+          event: "tool_observation",
+          sessionId: input.sessionID,
+          scope: buildEventScope(input.sessionID, input.directory, input.tool),
+          input: { tool: input.tool, callID: input.callID, args: input.args as Record<string, unknown>, output: parsed as Record<string, unknown> },
+          refs: refResult.refs,
+          outcome: { status: feedback === "negative" ? "failed" : "ok" },
+        })
         if (refResult.refs.length > 0 && input.sessionID) {
           for (const ref of refResult.refs) {
             addBufferEntry(input.sessionID, {
@@ -2498,10 +2658,40 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             // memories do not accept feedback, and vault values never surface in
             // JSON so automatic usage signals would be misleading.
             if (ref.startsWith("memory:") || ref.startsWith("vault:")) continue
-            const ok = queueFeedback(logClient, ref, feedback, note, {
+            const directInput = Object.values(input.args as Record<string, unknown>).some((value) => typeof value === "string" && value.includes(ref))
+            const signal = classifyFeedbackSignal({
+              ref,
+              polarity: feedback,
+              harness: "opencode",
+              sessionId: input.sessionID,
+              directInput,
+              note: `${note}; confidence=${directInput ? "0.65" : "0.25"}; source=${feedback === "positive" ? "tool_success" : "tool_failure"}`,
+            })
+            if (!shouldSubmitAutomaticFeedback(signal)) {
+              writeStructuredEvent({
+                event: "feedback_recorded",
+                sessionId: input.sessionID,
+                scope: buildEventScope(input.sessionID, input.directory, input.tool),
+                refs: [ref],
+                input: { source: signal.source, confidence: signal.confidence, note: signal.note },
+                outcome: { status: "skipped", warnings: ["confidence below automatic submission threshold"] },
+              })
+              continue
+            }
+            const ok = queueFeedback(logClient, ref, feedback, signal.note, {
               toolName: input.tool,
               sessionID: input.sessionID,
             }, dedupe)
+            if (ok) {
+              writeStructuredEvent({
+                event: "feedback_recorded",
+                sessionId: input.sessionID,
+                scope: buildEventScope(input.sessionID, input.directory, input.tool),
+                refs: [ref],
+                input: { source: signal.source, confidence: signal.confidence, note: signal.note },
+                outcome: { status: "ok" },
+              })
+            }
             if (!ok) break
           }
         }
@@ -2639,6 +2829,108 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           directory: context.directory,
         })
         return raw
+      },
+    }),
+    akm_memory: tool({
+      description: "Audit AKM memory behavior, inspect pending candidates, and promote or reject candidates. Mutating actions require confirm:true.",
+      args: {
+        action: tool.schema.enum(["audit", "candidates", "promote", "reject", "checkpoint", "sync"]).describe("Memory action."),
+        candidate_id: tool.schema.string().optional().describe("Candidate id for promote/reject."),
+        reason: tool.schema.string().optional().describe("Reason for rejection."),
+        scope: tool.schema.enum(["last-prompt", "session", "refs", "safety"]).optional().describe("Audit scope."),
+        status: tool.schema.enum(["pending", "promoted", "rejected"]).optional().describe("Candidate status filter."),
+        confirm: tool.schema.boolean().optional().describe("Must be true for mutate actions."),
+      },
+      async execute(input, context) {
+        const blocked = blockedToolResponse(input as Record<string, unknown>)
+        if (blocked) return blocked
+        if (input.action === "audit") {
+          const events = readJsonl<AkmMemoryEvent>(OPENCODE_EVENT_LOG)
+          const sessionEvents = context.sessionID ? events.filter((event) => event.sessionId === context.sessionID) : events
+          const recall = sessionRecallAudit.get(context.sessionID)
+          const recentWrites = sessionEvents.filter((event) => ["durable_memory_written", "pre_compact_checkpoint", "session_ended"].includes(event.event)).slice(-5)
+          const recentSafetyBlocks = sessionEvents.filter((event) => event.event === "safety_blocked").slice(-5)
+          const refs = [...new Set(sessionEvents.flatMap((event) => event.refs ?? []))]
+          const audit = input.scope === "last-prompt"
+            ? { lastRecall: recall ?? null }
+            : input.scope === "refs"
+              ? { refs }
+              : input.scope === "safety"
+                ? { recentSafetyBlocks }
+                : input.scope === "session"
+                  ? { lastRecall: recall ?? null, recentWrites, recentSafetyBlocks, refs }
+                  : { lastRecall: recall ?? null, recentWrites, recentSafetyBlocks, refs }
+          return JSON.stringify({
+            ok: true,
+            audit,
+          })
+        }
+        if (input.action === "candidates") {
+          const candidates = readCandidates(OPENCODE_CANDIDATE_LOG)
+            .filter((candidate) => !input.status || candidate.status === input.status)
+            .filter((candidate) => !context.sessionID || candidate.sessionId === context.sessionID)
+          return JSON.stringify({ ok: true, candidates })
+        }
+        if (input.action === "checkpoint") {
+          const ref = captureSessionMemory(context.sessionID, "manual-checkpoint", { checkpoint: true })
+          return JSON.stringify({ ok: true, ref })
+        }
+        if (input.action === "sync") {
+          return JSON.stringify({ ok: true, synced: true, events: readJsonl<AkmMemoryEvent>(OPENCODE_EVENT_LOG).length, candidates: readCandidates(OPENCODE_CANDIDATE_LOG).length })
+        }
+        if (!input.candidate_id) return JSON.stringify({ ok: false, error: "'candidate_id' is required for promote/reject." })
+        const candidates = readCandidates(OPENCODE_CANDIDATE_LOG)
+        const candidate = candidates.find((entry) => entry.id === input.candidate_id)
+        if (!candidate) return JSON.stringify({ ok: false, error: `Unknown candidate '${input.candidate_id}'.` })
+        if (input.action === "reject") {
+          const updated = updateCandidateStatus(OPENCODE_CANDIDATE_LOG, candidate.id, "rejected", input.reason)
+          writeStructuredEvent({
+            event: "candidate_rejected",
+            sessionId: context.sessionID,
+            scope: buildEventScope(context.sessionID, context.directory, context.agent),
+            memory: { candidateId: candidate.id, reason: input.reason ?? null },
+            outcome: { status: updated ? "ok" : "failed" },
+          })
+          return JSON.stringify({ ok: !!updated, candidate: updated ?? null })
+        }
+        if (input.action === "promote") {
+          let rawResult: string | null = null
+          if (candidate.recommendedAction === "remember") {
+            rawResult = await runCli(client as unknown as LogCapableClient, ["remember", candidate.content, "--name", `candidate-${candidate.id}`, "--force", ...buildScopedArgs(context as unknown as Record<string, unknown>)], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
+          } else if (candidate.recommendedAction === "feedback" && candidate.targetRef) {
+            rawResult = await runCli(client as unknown as LogCapableClient, ["feedback", candidate.targetRef, "--positive", "--note", candidate.content, ...buildScopedArgs(context as unknown as Record<string, unknown>)], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
+          } else if (candidate.recommendedAction === "distill" && candidate.targetRef) {
+            rawResult = await runCli(client as unknown as LogCapableClient, ["distill", candidate.targetRef], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
+          } else if (candidate.recommendedAction === "propose") {
+            rawResult = await runCli(client as unknown as LogCapableClient, ["propose", "knowledge", `candidate-${candidate.id}`, "--task", candidate.content], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
+          } else {
+            return JSON.stringify({ ok: false, error: "Candidate recommendedAction is 'ignore'; reject it instead." })
+          }
+          const parsedResult = rawResult ? parseMaybeJson(rawResult) : null
+          const resultOk = typeof parsedResult === "object" && parsedResult !== null && "ok" in parsedResult
+            ? parsedResult.ok !== false
+            : !!rawResult
+          if (!resultOk) {
+            writeStructuredEvent({
+              event: "candidate_promoted",
+              sessionId: context.sessionID,
+              scope: buildEventScope(context.sessionID, context.directory, context.agent),
+              memory: { candidateId: candidate.id, recommendedAction: candidate.recommendedAction },
+              outcome: { status: "failed", warnings: ["candidate promotion command did not succeed"] },
+            })
+            return JSON.stringify({ ok: false, candidate, result: parsedResult ?? rawResult })
+          }
+          const updated = updateCandidateStatus(OPENCODE_CANDIDATE_LOG, candidate.id, "promoted")
+          writeStructuredEvent({
+            event: "candidate_promoted",
+            sessionId: context.sessionID,
+            scope: buildEventScope(context.sessionID, context.directory, context.agent),
+            memory: { candidateId: candidate.id, recommendedAction: candidate.recommendedAction },
+            outcome: { status: updated ? "ok" : "failed" },
+          })
+          return JSON.stringify({ ok: !!updated, candidate: updated ?? null, result: parsedResult ?? rawResult })
+        }
+        return JSON.stringify({ ok: false, error: `Unsupported action '${String(input.action)}'.` })
       },
     }),
     akm_curate: tool({
@@ -2822,6 +3114,24 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const model = parseModelHint(shown.modelHint)
         const tools = parseToolPolicy(shown.toolPolicy)
 
+        writeStructuredEvent({
+          event: "subagent_started",
+          sessionId: context.sessionID,
+          scope: buildEventScope(context.sessionID, context.directory, context.agent),
+          input: {
+            ref: resolved.ref,
+            stashAgent: shown.name,
+            dispatchAgent: targetAgent,
+            taskPrompt: task_prompt,
+            advisoryToolPolicy: shown.toolPolicy ?? null,
+            appliedToolPolicy: tools ?? null,
+            modelHint: shown.modelHint ?? null,
+            appliedModel: model ?? null,
+          },
+          refs: [resolved.ref],
+          outcome: { status: "ok" },
+        })
+
         const targetSession = await ensureTargetSessionID({
           useSubtask,
           context: { sessionID: context.sessionID, directory: context.directory },
@@ -2852,6 +3162,19 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         })
         if (!promptResponse.ok) return JSON.stringify(promptResponse)
 
+        const childText = extractText(promptResponse.data.parts)
+        const candidates = extractCandidatesFromText({ harness: "opencode", sessionId: targetSession.sessionID, text: childText, evidence: [resolved.ref, task_prompt] })
+        if (candidates.length > 0) appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
+        writeStructuredEvent({
+          event: "subagent_completed",
+          sessionId: context.sessionID,
+          scope: buildEventScope(context.sessionID, context.directory, context.agent),
+          input: { childSessionID: targetSession.sessionID, stashAgent: shown.name, dispatchAgent: targetAgent },
+          memory: { parentSessionID: context.sessionID, childSessionID: targetSession.sessionID, candidatesCreated: candidates.length },
+          refs: [resolved.ref],
+          outcome: { status: "ok" },
+        })
+
         return JSON.stringify({
           ok: true,
           ref: resolved.ref,
@@ -2861,7 +3184,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           sessionID: targetSession.sessionID,
           model,
           tools,
-          text: extractText(promptResponse.data.parts),
+          text: childText,
         })
       },
     }),
@@ -3176,14 +3499,18 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='start'." })
             const args = ["workflow", "start", ref]
             if (params) args.push("--params", params)
-            return runCli(client as unknown as LogCapableClient, args, logMeta)
+            const raw = await runCli(client as unknown as LogCapableClient, args, logMeta)
+            void emitWorkflowTelemetry(logClient, "info", "workflow_started", { toolName: "akm_workflow", ref, params: params ?? null })
+            return raw
           }
           case "next": {
             const picked = target ?? run_id ?? ref
             if (!picked) return JSON.stringify({ ok: false, error: "'target', 'run_id', or 'ref' is required for action='next'." })
             const args = ["workflow", "next", picked]
             if (params) args.push("--params", params)
-            return runCli(client as unknown as LogCapableClient, args, logMeta)
+            const raw = await runCli(client as unknown as LogCapableClient, args, logMeta)
+            void emitWorkflowTelemetry(logClient, "info", "workflow_next_loaded", { toolName: "akm_workflow", target: picked, params: params ?? null })
+            return raw
           }
           case "complete": {
             if (!run_id) return JSON.stringify({ ok: false, error: "'run_id' is required for action='complete'." })
@@ -3192,7 +3519,16 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             if (state) args.push("--state", state)
             if (notes) args.push("--notes", notes)
             if (evidence) args.push("--evidence", evidence)
-            return runCli(client as unknown as LogCapableClient, args, logMeta)
+            const raw = await runCli(client as unknown as LogCapableClient, args, logMeta)
+            const eventType = state === "blocked"
+              ? "workflow_step_blocked"
+              : state === "failed"
+                ? "workflow_step_failed"
+                : state === "skipped"
+                  ? "workflow_step_skipped"
+                  : "workflow_step_completed"
+            void emitWorkflowTelemetry(logClient, "info", eventType, { toolName: "akm_workflow", runId: run_id, step, notes: notes ?? null, evidence: evidence ?? null })
+            return raw
           }
           case "status": {
             const picked = target ?? run_id ?? ref
@@ -3235,7 +3571,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
           case "resume": {
             if (!run_id) return JSON.stringify({ ok: false, error: "'run_id' is required for action='resume'." })
-            return runCli(client as unknown as LogCapableClient, ["workflow", "resume", run_id], logMeta)
+            const raw = await runCli(client as unknown as LogCapableClient, ["workflow", "resume", run_id], logMeta)
+            void emitWorkflowTelemetry(logClient, "info", "workflow_resumed", { toolName: "akm_workflow", runId: run_id })
+            return raw
           }
         }
       },

@@ -3,6 +3,11 @@
 import { accessSync, appendFileSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
+import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../../shared/feedback-signals"
+import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from "../../shared/memory-candidates"
+import { appendMemoryEvent, getEventLogPath } from "../../shared/memory-events"
+import { shouldRecall } from "../../shared/recall-policy"
+import { redactObject, redactSecrets } from "../../shared/redaction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
@@ -12,6 +17,8 @@ const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
 const FEEDBACK_LOG = path.join(STATE_DIR, "feedback.log")
 const MEMORY_LOG = path.join(STATE_DIR, "memory.log")
+const EVENT_LOG = getEventLogPath("claude-code")
+const CANDIDATE_LOG = getCandidateLogPath("claude-code")
 const QUALITY_CACHE = path.join(STATE_DIR, "quality-cache.tsv")
 const CURATE_LIMIT = Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5
 const CURATE_MIN_CHARS = Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16
@@ -45,10 +52,43 @@ function sanitize(value: string): string {
 
 function appendLog(filePath: string, ...fields: string[]) {
   try {
-    appendFileSync(filePath, `${timestamp()}${fields.map((field) => `\t${field}`).join("")}\n`)
+    const redacted = fields.map((field) => redactSecrets(field).text)
+    appendFileSync(filePath, `${timestamp()}${redacted.map((field) => `\t${field}`).join("")}\n`)
   } catch {
     // Logging must never throw.
   }
+}
+
+function buildScope(sessionID: string) {
+  return {
+    user: SCOPE_KEYS.includes("user") ? process.env.AKM_USER_ID : undefined,
+    agent: SCOPE_KEYS.includes("agent") ? process.env.AKM_AGENT_ID : undefined,
+    run: SCOPE_KEYS.includes("run") ? sessionID || undefined : undefined,
+    channel: SCOPE_KEYS.includes("channel") ? process.env.AKM_CHANNEL : undefined,
+    project: process.env.AKM_PROJECT,
+    repo: process.env.AKM_REPO,
+    branch: process.env.AKM_BRANCH,
+  }
+}
+
+function writeMemoryEvent(event: Omit<import("../../shared/memory-events").AkmMemoryEvent, "version" | "timestamp" | "harness">) {
+  const result = appendMemoryEvent(EVENT_LOG, {
+    version: 1,
+    timestamp: timestamp(),
+    harness: "claude-code",
+    ...event,
+  })
+  if (!result.ok) appendLog(SESSION_LOG, "event_write_failed", event.event, result.error)
+}
+
+function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
+  if (!sid) return
+  const redacted = redactSecrets(body).text
+  appendFileSync(path.join(SESSIONS_DIR, `${sid}.md`), `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
+}
+
+function emitBlockDecision(reason: string): string {
+  return JSON.stringify({ decision: "block", reason })
 }
 
 function logRuntimeError(detail: string) {
@@ -223,9 +263,9 @@ function extractUserText(raw: string): string {
   return ""
 }
 
-function extractPostToolFields(raw: string, mode: string): { toolName: string; commandText: string; statusText: string; refs: string[]; sid: string } {
+function extractPostToolFields(raw: string, mode: string): { toolName: string; commandText: string; outputText: string; statusText: string; refs: string[]; commandRefs: string[]; outputRefs: string[]; sid: string } {
   const parsed = safeJsonParse<Record<string, unknown>>(raw)
-  if (!parsed) return { toolName: "", commandText: sanitize(raw), statusText: mode || "success", refs: [], sid: "" }
+  if (!parsed) return { toolName: "", commandText: sanitize(raw), outputText: "", statusText: mode || "success", refs: [], commandRefs: [], outputRefs: [], sid: "" }
   const toolName = typeof parsed.tool === "string"
     ? parsed.tool
     : typeof parsed.tool_name === "string"
@@ -235,6 +275,8 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
         : ""
   const commandText = sanitize(getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || "")
   const outputText = sanitize(getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || "")
+  const commandRefs = [...new Set(commandText.match(REF_PATTERN) ?? [])]
+  const outputRefs = [...new Set(outputText.match(REF_PATTERN) ?? [])]
   const refs = [...new Set(`${commandText}\n${outputText}`.match(REF_PATTERN) ?? [])]
   if (refs.length === 0 && commandText.includes("akm remember")) {
     const match = commandText.match(/--name\s+([A-Za-z0-9._/-]+)/)
@@ -245,7 +287,181 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
     : typeof parsed.sessionId === "string"
       ? parsed.sessionId.replace(/[^A-Za-z0-9._-]/g, "")
       : ""
-  return { toolName, commandText, statusText: mode || "success", refs, sid }
+  return { toolName, commandText, outputText, statusText: mode || "success", refs, commandRefs, outputRefs, sid }
+}
+
+function assessRiskyClaudeCommand(command: string): string | undefined {
+  const normalized = command.trim()
+  if (!normalized) return undefined
+  if (/\bakm\s+proposal\s+(accept|reject)\b/.test(normalized)) return "Proposal acceptance/rejection requires explicit user approval."
+  if (/\bakm\s+save\b[\s\S]*--push\b/.test(normalized)) return "`akm save --push` requires explicit user approval."
+  if (/\bakm\s+remove\b/.test(normalized)) return "`akm remove` is destructive and requires explicit user approval."
+  if (/\bakm\s+update\b[\s\S]*--all\b/.test(normalized)) return "`akm update --all` requires explicit user approval."
+  if (/\bakm\s+upgrade\b(?:[\s\S]*--force\b|\b)/.test(normalized)) return "`akm upgrade` requires explicit user approval."
+  if (/\bakm\s+vault\s+(create|set|unset|load)\b/.test(normalized)) {
+    if (/^\s*eval\s+["']?\$\(akm\s+vault\s+load\s+/.test(normalized)) return undefined
+    return "Vault create/set/unset/load requires explicit approval, and raw `akm vault load` output must not be exposed in logs or chat."
+  }
+  if (/\bakm\s+config\s+set\s+(?:llm\.features\.|registries|searchPaths|stashDir)/.test(normalized)) return "AKM config mutations require explicit user approval."
+  if (/\bakm\s+(?:add|wiki\s+register)\b[\s\S]*--trust\b/.test(normalized)) return "Trusted source registration requires explicit user approval."
+  if (/\bakm\s+remember\b/.test(normalized) && redactSecrets(normalized).redacted) return "Raw `akm remember` payload appears to include secrets; redact it before writing memory."
+  return undefined
+}
+
+function preToolBash(): string {
+  const rawInput = readStdin()
+  const { commandText, sid } = extractPostToolFields(rawInput, "pre")
+  const blocked = assessRiskyClaudeCommand(commandText)
+  if (!blocked) return ""
+  appendLog(SESSION_LOG, "pretool_blocked", commandText, blocked)
+  writeMemoryEvent({
+    event: "safety_blocked",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { tool: "Bash", commandPreview: commandText.slice(0, 280) },
+    outcome: { status: "blocked", warnings: [blocked] },
+  })
+  return emitBlockDecision(blocked)
+}
+
+function userPromptExpansion(): string {
+  const rawInput = readStdin()
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
+  const sid = extractSessionId(rawInput)
+  const text = extractUserText(rawInput)
+  const expanded = typeof parsed.command === "string" ? parsed.command : text
+  if (!expanded) return ""
+  const refs = [...new Set(expanded.match(REF_PATTERN) ?? [])]
+  writeMemoryEvent({
+    event: "tool_observation",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { phase: "UserPromptExpansion", expandedPrompt: expanded.slice(0, 400) },
+    refs,
+    outcome: { status: "ok" },
+  })
+  if (/\/akm-(memory-promote|memory-reject|proposal)\b/.test(expanded) && !/\b(confirm|approved|approval)\b/i.test(expanded)) {
+    return emitHookContext("UserPromptExpansion", "AKM note: mutating memory/proposal flows should be explicit. Confirm promotion/rejection or proposal acceptance before changing durable state.")
+  }
+  if (/\/akm-/.test(expanded)) {
+    return emitHookContext("UserPromptExpansion", "AKM note: slash-command expansion should keep mutating actions explicit and prefer review before durable writes.")
+  }
+  return ""
+}
+
+function postToolBatch(): string {
+  const rawInput = readStdin()
+  const sid = extractSessionId(rawInput)
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
+  const tools = Array.isArray(parsed.tools) ? parsed.tools : Array.isArray(parsed.batch) ? parsed.batch : []
+  const flattened = sanitize(getText(tools))
+  const refs = [...new Set(flattened.match(REF_PATTERN) ?? [])]
+  writeMemoryEvent({
+    event: "tool_batch_observation",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { tools, summary: flattened.slice(0, 500) },
+    refs,
+    outcome: { status: "ok" },
+  })
+  if (sid && flattened) writeSessionBuffer(sid, "tool batch", `- summary: ${flattened}`)
+  return ""
+}
+
+function subagentStart(): string {
+  const rawInput = readStdin()
+  const sid = extractSessionId(rawInput)
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
+  const role = typeof parsed.agent === "string" ? parsed.agent : typeof parsed.role === "string" ? parsed.role : "subagent"
+  const task = sanitize(flattenText(parsed.task) || flattenText(parsed.prompt) || "")
+  const activeWorkflow = akmAvailable()
+    ? akmRun(["--format", "json", "-q", "workflow", "list", "--active"]).trim()
+    : ""
+  const workflowSummary = activeWorkflow && activeWorkflow !== "[]" ? `# Active workflow\n${activeWorkflow}` : ""
+  writeMemoryEvent({
+    event: "subagent_started",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { role, taskPreview: task.slice(0, 280) },
+    outcome: { status: "ok" },
+  })
+  const contextParts = [
+    `# AKM subagent context\nRole: ${role}`,
+    task ? `Task: ${task}` : "",
+    workflowSummary,
+  ].filter(Boolean)
+  return contextParts.length > 0 ? emitHookContext("SubagentStart", contextParts.join("\n\n")) : ""
+}
+
+function taskCreated(): string {
+  const rawInput = readStdin()
+  const sid = extractSessionId(rawInput)
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
+  const title = sanitize(flattenText(parsed.title) || flattenText(parsed.subject) || flattenText(parsed.task) || "")
+  writeMemoryEvent({
+    event: "task_created",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { taskId: parsed.task_id ?? parsed.taskId ?? null, title },
+    outcome: { status: "ok" },
+  })
+  if (sid && title) writeSessionBuffer(sid, "task created", `- title: ${title}`)
+  return ""
+}
+
+function taskCompleted(): string {
+  const rawInput = readStdin()
+  const sid = extractSessionId(rawInput)
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
+  const summary = sanitize(flattenText(parsed.summary) || flattenText(parsed.result) || flattenText(parsed.task) || "")
+  writeMemoryEvent({
+    event: "task_completed",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { taskId: parsed.task_id ?? parsed.taskId ?? null, summary },
+    outcome: { status: "ok" },
+  })
+  if (sid && summary) {
+    writeSessionBuffer(sid, "task completed", summary)
+    const candidates = extractCandidatesFromText({
+      harness: "claude-code",
+      sessionId: sid,
+      text: summary,
+      evidence: [summary],
+    })
+    if (candidates.length > 0) {
+      appendCandidates(CANDIDATE_LOG, candidates)
+      writeMemoryEvent({
+        event: "candidate_extracted",
+        sessionId: sid || undefined,
+        scope: buildScope(sid),
+        memory: { source: "task_completed", count: candidates.length },
+        outcome: { status: "ok" },
+      })
+    }
+  }
+  return ""
+}
+
+function postCompact(): string {
+  const rawInput = readStdin()
+  const sid = extractSessionId(rawInput)
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
+  const summary = sanitize(flattenText(parsed.summary) || flattenText(parsed.compact_summary) || "")
+  writeMemoryEvent({
+    event: "post_compact_summary",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { summary },
+    outcome: { status: summary ? "ok" : "skipped" },
+  })
+  if (sid && summary) writeSessionBuffer(sid, "post compact", summary)
+  return ""
+}
+
+function sessionEnd(): string {
+  captureMemory()
+  return ""
 }
 
 function findWritablePathDir(): string | undefined {
@@ -374,29 +590,35 @@ function recordUserFeedback() {
   appendLog(FEEDBACK_LOG, "user", "prompt", text)
   if (/\b(remember|memory|memories)\b/i.test(text)) {
     appendLog(MEMORY_LOG, "user", "intent", text)
-    if (sid) appendFileSync(path.join(SESSIONS_DIR, `${sid}.md`), `## ${timestamp()} - user memory intent\n${text}\n\n`)
+    writeSessionBuffer(sid, "user memory intent", text)
   }
 }
 
 function recordPostTool() {
   const rawInput = readStdin()
-  const { toolName, commandText, statusText, refs, sid } = extractPostToolFields(rawInput, MODE)
+  const { toolName, commandText, outputText, statusText, refs, sid } = extractPostToolFields(rawInput, MODE)
   if (/akm|\/akm/.test(commandText)) appendLog(FEEDBACK_LOG, "system", statusText, toolName || "Bash", commandText)
   for (const ref of refs) {
     appendLog(MEMORY_LOG, "system", toolName || "Bash", ref, commandText)
-    if (sid) appendFileSync(path.join(SESSIONS_DIR, `${sid}.md`), `## ${timestamp()} - ${toolName || "Bash"} ${statusText}\n- ref: ${ref}\n- command: ${commandText}\n\n`)
+    writeSessionBuffer(sid, `${toolName || "Bash"} ${statusText}`, `- ref: ${ref}\n- command: ${commandText}`)
   }
+  writeMemoryEvent({
+    event: "tool_observation",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { tool: toolName || "Bash", command: commandText, outputPreview: outputText.slice(0, 400) },
+    refs,
+    outcome: { status: statusText === "failure" ? "failed" : "ok" },
+  })
 }
 
 function autoFeedback() {
   if (!AUTO_FEEDBACK || !akmAvailable()) return
   const rawInput = readStdin()
-  const { commandText, statusText, refs, sid } = extractPostToolFields(rawInput, MODE)
+  const { commandText, statusText, refs, commandRefs, sid } = extractPostToolFields(rawInput, MODE)
   if (!/akm|\/akm/.test(commandText)) return
   if (/akm\s+feedback|\/akm\s+feedback/.test(commandText)) return
   if (refs.length === 0) return
-  const sentimentFlag = statusText === "failure" ? "--negative" : "--positive"
-  const note = statusText === "failure" ? "claude-code auto: tool failed" : "claude-code auto: tool succeeded"
   const scopeArgs = buildRunScopeArgs(sid)
   for (const ref of refs) {
     if (/^(?:.*\/\/)?(?:memory|vault|lesson):/.test(ref)) continue
@@ -404,8 +626,37 @@ function autoFeedback() {
       appendLog(FEEDBACK_LOG, "system", "skip_proposed", ref, statusText)
       continue
     }
-    const result = akmRun(["--format", "json", "-q", "feedback", ref, sentimentFlag, "--note", note, ...scopeArgs])
+    const signal = classifyFeedbackSignal({
+      ref,
+      polarity: statusText === "failure" ? "negative" : "positive",
+      harness: "claude-code",
+      sessionId: sid || undefined,
+      directInput: commandRefs.includes(ref),
+      note: `claude-code auto: source=${statusText === "failure" ? "tool_failure" : "tool_success"}; confidence=${(commandRefs.includes(ref) ? 0.65 : 0.25).toFixed(2)}`,
+    })
+    if (!shouldSubmitAutomaticFeedback(signal)) {
+      writeMemoryEvent({
+        event: "feedback_recorded",
+        sessionId: sid || undefined,
+        scope: buildScope(sid),
+        refs: [ref],
+        input: { source: signal.source, confidence: signal.confidence, note: signal.note },
+        outcome: { status: "skipped", warnings: ["confidence below automatic submission threshold"] },
+      })
+      continue
+    }
+    const result = akmRun(["--format", "json", "-q", "feedback", ref, signal.polarity === "negative" ? "--negative" : "--positive", "--note", redactSecrets(signal.note).text, ...scopeArgs])
     if (!result.trim()) appendLog(FEEDBACK_LOG, "system", "feedback_failed", ref, statusText, "empty stdout from akm feedback")
+    else {
+      writeMemoryEvent({
+        event: "feedback_recorded",
+        sessionId: sid || undefined,
+        scope: buildScope(sid),
+        refs: [ref],
+        input: { source: signal.source, confidence: signal.confidence, note: signal.note },
+        outcome: { status: "ok" },
+      })
+    }
   }
 }
 
@@ -417,11 +668,30 @@ function curatePrompt(): string {
     appendLog(FEEDBACK_LOG, "user", "prompt", text)
     if (/\b(remember|memory|memories)\b/i.test(text)) {
       appendLog(MEMORY_LOG, "user", "intent", text)
-      if (sid) appendFileSync(path.join(SESSIONS_DIR, `${sid}.md`), `## ${timestamp()} - user memory intent\n${text}\n\n`)
+      writeSessionBuffer(sid, "user memory intent", text)
     }
   }
-  if (!text || text.length < CURATE_MIN_CHARS || !akmAvailable()) return ""
+  if (!text) return ""
+  const decision = shouldRecall(text)
+  if (!decision.shouldRecall || !akmAvailable()) {
+    writeMemoryEvent({
+      event: "prompt_recall",
+      sessionId: sid || undefined,
+      scope: buildScope(sid),
+      input: { promptPreview: text.slice(0, 280), query: decision.query, reason: decision.reason },
+      outcome: { status: "skipped" },
+    })
+    return ""
+  }
   const curated = akmRun(["--detail", "agent", "--format", "text", "-q", "curate", text, "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)])
+  writeMemoryEvent({
+    event: "prompt_recall",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { promptPreview: text.slice(0, 280), query: decision.query, reason: decision.reason },
+    refs: [...new Set(curated.match(REF_PATTERN) ?? [])],
+    outcome: { status: curated.trim() ? "ok" : "skipped" },
+  })
   if (!curated.trim()) return ""
   return emitHookContext("UserPromptSubmit", `${CURATED_PROMPT_HEADER}\n${curated.trim()}\n\n${CURATED_CONTEXT_TAIL}`)
 }
@@ -459,6 +729,14 @@ function sessionStart(): string {
       : `There are ${pending} pending AKM proposals - review with \`/akm-review-proposals\` or \`/akm-proposal list\`.`
 
   if (!hints && !curated && !agentDefault && !pendingSummary) return ""
+  writeMemoryEvent({
+    event: "session_started",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { agentDefault, pendingProposals: pending },
+    refs: [...new Set(curated.match(REF_PATTERN) ?? [])],
+    outcome: { status: "ok" },
+  })
   let body = SESSION_START_HEADER
   if (agentDefault) body = `${body}\n\nAgent CLI: ${agentDefault} (configured via \`akm setup\`).`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
@@ -485,13 +763,46 @@ function captureMemory() {
   const dateTag = timestamp().slice(0, 10).replace(/-/g, "")
   const shortSid = sid.slice(0, 8)
   const name = `claude-session-${dateTag}-${shortSid}`
-  const body = `# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${buffer}`
-  const result = akmRun(["--format", "json", "-q", "remember", "--name", name, "--force", ...buildRunScopeArgs(sid)], body)
+  const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${buffer}`
+  const redactedBody = redactSecrets(rawBody).text
+  const result = akmRun(["--format", "json", "-q", "remember", "--name", name, "--force", ...buildRunScopeArgs(sid)], redactedBody)
   if (result.trim()) {
     appendLog(MEMORY_LOG, "system", "captured", `memory:${name}`, reason)
+    writeMemoryEvent({
+      event: reason === "pre-compact" ? "pre_compact_checkpoint" : "durable_memory_written",
+      sessionId: sid || undefined,
+      scope: buildScope(sid),
+      memory: { ref: `memory:${name}`, reason, kind: "session_checkpoint" },
+      refs: [`memory:${name}`],
+      outcome: { status: "ok" },
+    })
+    const candidates = extractCandidatesFromText({
+      harness: "claude-code",
+      sessionId: sid,
+      text: redactedBody,
+      evidence: [`memory:${name}`, reason],
+    })
+    if (candidates.length > 0) {
+      appendCandidates(CANDIDATE_LOG, candidates)
+      writeMemoryEvent({
+        event: "candidate_extracted",
+        sessionId: sid || undefined,
+        scope: buildScope(sid),
+        memory: { sourceRef: `memory:${name}`, count: candidates.length },
+        refs: [`memory:${name}`],
+        outcome: { status: "ok" },
+      })
+    }
     runIndexOnSessionEnd(reason, sid, `memory:${name}`)
   } else {
     appendLog(MEMORY_LOG, "system", "capture_failed", `memory:${name}`, reason, "empty stdout from akm remember")
+    writeMemoryEvent({
+      event: reason === "pre-compact" ? "pre_compact_checkpoint" : "session_ended",
+      sessionId: sid || undefined,
+      scope: buildScope(sid),
+      memory: { ref: `memory:${name}`, reason, kind: "session_checkpoint" },
+      outcome: { status: "failed", error: "empty stdout from akm remember" },
+    })
   }
   rmSync(bufferPath, { force: true })
 }
@@ -508,6 +819,23 @@ function main(): string {
       return ""
     case "curate-prompt":
       return curatePrompt()
+    case "user-prompt-expansion":
+      return userPromptExpansion()
+    case "pre-tool":
+      if (MODE === "bash") return preToolBash()
+      return ""
+    case "post-tool-batch":
+      return postToolBatch()
+    case "subagent-start":
+      return subagentStart()
+    case "task-created":
+      return taskCreated()
+    case "task-completed":
+      return taskCompleted()
+    case "post-compact":
+      return postCompact()
+    case "session-end":
+      return sessionEnd()
     case "post-tool":
       recordPostTool()
       return ""

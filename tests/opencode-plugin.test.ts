@@ -137,6 +137,7 @@ describe("akm-opencode plugin", () => {
         "akm_show",
         "akm_remember",
         "akm_feedback",
+        "akm_memory",
         "akm_curate",
         "akm_evolve",
         "akm_parent_messages",
@@ -265,6 +266,17 @@ describe("akm-opencode plugin", () => {
       expect(feedback.args.ref).toBeDefined()
       expect(feedback.args.sentiment).toBeDefined()
       expect(feedback.args.note).toBeDefined()
+    })
+
+    it("akm_memory exposes action and candidate review args", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const memory = hooks.tool!.akm_memory
+      expect(memory.args.action).toBeDefined()
+      expect(memory.args.candidate_id).toBeDefined()
+      expect(memory.args.reason).toBeDefined()
+      expect(memory.args.scope).toBeDefined()
+      expect(memory.args.status).toBeDefined()
+      expect(memory.args.confirm).toBeDefined()
     })
 
     it("akm_cmd has required args schema", async () => {
@@ -1553,6 +1565,23 @@ describe("akm-opencode plugin", () => {
       expect(output.args.__akmBlocked).toBeUndefined()
     })
 
+    it("tool.execute.before does not block read-only akm_memory sync", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const output = { args: { action: "sync" } as any }
+
+      await hooks["tool.execute.before"]!(
+        {
+          tool: "akm_memory",
+          sessionID: "session-memory-sync-1",
+          callID: "call-1",
+        } as any,
+        output as any,
+      )
+
+      expect(output.args.action).toBe("sync")
+      expect(output.args.__akmBlocked).toBeUndefined()
+    })
+
     it("does not expose a compaction hook after disabling it", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
@@ -1755,7 +1784,7 @@ describe("akm-opencode plugin", () => {
         .filter(([, args]) => Array.isArray(args) && args.includes("--positive"))
         .map(([, args]) => args[4])
         .sort()
-      expect(positiveFeedbackRefs).toEqual(["agent:coach.md", "knowledge:release-guide", "skill:deploy"])
+      expect(positiveFeedbackRefs).toEqual(["agent:coach.md"])
     })
 
     it("does not auto-feedback for memory refs and never recurses into akm_feedback", async () => {
@@ -3103,9 +3132,7 @@ describe("akm-opencode plugin", () => {
           const args = call[1] as string[]
           return args[args.indexOf("feedback") + 1]
         })
-      expect(feedbackRefs).toContain("workflow:release")
-      expect(feedbackRefs).toContain("wiki:team/intro")
-      expect(feedbackRefs).toContain("skill:review")
+      expect(feedbackRefs).toEqual([])
       // Vault refs MUST NOT receive automatic feedback.
       expect(feedbackRefs).not.toContain("vault:prod")
     })
@@ -3124,7 +3151,133 @@ describe("akm-opencode plugin", () => {
           const args = call[1] as string[]
           return args[args.indexOf("feedback") + 1]
         })
-      expect(feedbackRefs).toContain("lesson:review-first")
+      expect(feedbackRefs).toEqual([])
+    })
+
+    it("akm_memory audit reports recall, writes, refs, and safety blocks", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["chat.message"]!(
+        { sessionID: "session-memory-audit", messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Continue the workflow and remember the deployment constraint" }] as any },
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: "session-memory-audit", callID: "c1", args: { ref: "workflow:release" } } as any,
+        { title: "show", output: JSON.stringify({ type: "workflow", ref: "workflow:release" }), metadata: {} } as any,
+      )
+      const result = await hooks.tool!.akm_memory.execute(
+        { action: "audit" } as any,
+        createToolContext({ sessionID: "session-memory-audit" }),
+      )
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.audit).toBeDefined()
+      expect(parsed.audit.lastRecall).toBeDefined()
+      expect(Array.isArray(parsed.audit.refs)).toBe(true)
+    })
+
+    it("akm_memory audit honors the requested scope", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["chat.message"]!(
+        { sessionID: "session-memory-scope", messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Continue the workflow and remember the deployment constraint" }] as any },
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: "session-memory-scope", callID: "c1", args: { ref: "workflow:release" } } as any,
+        { title: "show", output: JSON.stringify({ type: "workflow", ref: "workflow:release" }), metadata: {} } as any,
+      )
+
+      const refsOnly = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "audit", scope: "refs" } as any,
+        createToolContext({ sessionID: "session-memory-scope" }),
+      ))
+      expect(refsOnly.ok).toBe(true)
+      expect(refsOnly.audit.refs).toContain("workflow:release")
+      expect(refsOnly.audit.lastRecall).toBeUndefined()
+      expect(refsOnly.audit.recentWrites).toBeUndefined()
+
+      const lastPromptOnly = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "audit", scope: "last-prompt" } as any,
+        createToolContext({ sessionID: "session-memory-scope" }),
+      ))
+      expect(lastPromptOnly.ok).toBe(true)
+      expect(lastPromptOnly.audit.lastRecall).toBeDefined()
+      expect(lastPromptOnly.audit.refs).toBeUndefined()
+    })
+
+    it("akm_memory candidates can reject with confirm:true after checkpoint extraction", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["chat.message"]!(
+        { sessionID: "session-memory-candidate", messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Remember: always run integration tests before release" }] as any },
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: "session-memory-candidate", callID: "c1", args: { ref: "skill:deploy" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:deploy" }), metadata: {} } as any,
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: "session-memory-candidate", callID: "c2", args: { ref: "skill:test" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
+      )
+      await hooks.stop!({ sessionID: "session-memory-candidate" } as any)
+
+      const listed = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "candidates" } as any,
+        createToolContext({ sessionID: "session-memory-candidate" }),
+      ))
+      expect(listed.ok).toBe(true)
+      expect(listed.candidates.length).toBeGreaterThan(0)
+
+      const rejected = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "reject", candidate_id: listed.candidates[0].id, reason: "not durable", confirm: true } as any,
+        createToolContext({ sessionID: "session-memory-candidate" }),
+      ))
+      expect(rejected.ok).toBe(true)
+      expect(rejected.candidate.status).toBe("rejected")
+    })
+
+    it("akm_memory promote keeps the candidate pending when the AKM command fails", async () => {
+      const client = createMockClient()
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args.includes("remember")) {
+          return JSON.stringify({ ok: false, error: "remember failed" })
+        }
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+
+      await hooks["chat.message"]!(
+        { sessionID: "session-memory-promote", messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Remember: always run integration tests before release" }] as any },
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: "session-memory-promote", callID: "c1", args: { ref: "skill:deploy" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:deploy" }), metadata: {} } as any,
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: "session-memory-promote", callID: "c2", args: { ref: "skill:test" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
+      )
+      await hooks.stop!({ sessionID: "session-memory-promote" } as any)
+
+      const listed = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "candidates" } as any,
+        createToolContext({ sessionID: "session-memory-promote" }),
+      ))
+      expect(listed.ok).toBe(true)
+      expect(listed.candidates.length).toBeGreaterThan(0)
+
+      const promoteResult = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "promote", candidate_id: listed.candidates[0].id, confirm: true } as any,
+        createToolContext({ sessionID: "session-memory-promote" }),
+      ))
+      expect(promoteResult.ok).toBe(false)
+
+      const afterFailure = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "candidates" } as any,
+        createToolContext({ sessionID: "session-memory-promote" }),
+      ))
+      const candidate = afterFailure.candidates.find((entry: { id: string }) => entry.id === listed.candidates[0].id)
+      expect(candidate.status).toBe("pending")
     })
   })
 

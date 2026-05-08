@@ -123,10 +123,17 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | --- | --- |
 | **SessionStart** | Installs/refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`; Bun → npm fallback), sets `agent.default` to `claude` when it is missing, surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
 | **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
+| **UserPromptExpansion** | Logs expanded `/akm-*` slash-command usage and injects a short reminder when a mutating memory/proposal command is expanded without explicit confirmation language. |
+| **PreToolUse** (Bash) | Blocks risky raw AKM shell commands before execution, including proposal acceptance without explicit approval and suspicious `akm remember` payloads that appear to contain secrets. |
 | **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs (including `lesson:*`) from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. Skips `memory:*`, `vault:*`, `lesson:*`, and any ref the indexer reports as `quality:"proposed"`. |
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
+| **PostToolBatch** | Records grouped tool-batch observations as structured events and appends a short batch summary to the local session buffer for later checkpoint extraction. |
+| **SubagentStart** | Injects concise AKM subagent context, including the detected role, task preview, and any active workflow summary. |
 | **Stop** / **SubagentStop** | Flushes the per-session buffer into a `memory:claude-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows that flush with `akm index` so upstream inference/graph passes run immediately. |
+| **TaskCreated** / **TaskCompleted** | Records task lifecycle events, appends task summaries to the local session buffer, and lets completed-task summaries feed candidate extraction through the normal checkpoint/session flush path. |
 | **PreCompact** | Same memory capture before Claude Code compacts the transcript, with the same optional post-flush `akm index` run when `AKM_INDEX_ON_SESSION_END=1`. |
+| **PostCompact** | Records the compacted summary as a structured event and buffers a short post-compaction note for later recall. |
+| **SessionEnd** | Reuses the session-final memory capture path so Claude can flush the final checkpoint even when `Stop` is not the last lifecycle event observed. |
 
 ### Environment overrides
 

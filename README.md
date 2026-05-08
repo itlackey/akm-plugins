@@ -26,7 +26,7 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides a surface of twenty tools. Verbs that are not first-class tools (`save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `reindex`, `config`, `upgrade`, `run`, raw `agent`, vault writes) are discoverable through the `akm_help` tool, which surfaces a curated quick-reference and falls back to live `akm --help` so agents can compose the right CLI invocation and run it via shell:
+Provides a surface of twenty-one tools. Verbs that are not first-class tools (`save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `reindex`, `config`, `upgrade`, `run`, raw `agent`, vault writes) are discoverable through the `akm_help` tool, which surfaces a curated quick-reference and falls back to live `akm --help` so agents can compose the right CLI invocation and run it via shell:
 - `akm_info` — show `akm info` output together with the installed `akm-opencode` plugin version and install location
 - `akm_search` — search the stash, the registry, or both (including `workflow`, `vault`, `wiki`, and `lesson` types). Pass `--include-proposed` to merge proposed-quality drafts.
 - `akm_show` — show a stash asset by ref
@@ -39,6 +39,7 @@ Provides a surface of twenty tools. Verbs that are not first-class tools (`save`
 - `akm_evolve` — dispatch the AKM curator subagent (review session activity, propose stash improvements, persist the report as a memory)
 - `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
 - `akm_feedback` — record positive or negative feedback for a stash asset
+- `akm_memory` — audit recall/write/safety behavior, review memory candidates, and promote/reject them with confirmation
 - `akm_proposal` — operate the v0.7.0 proposal queue (`list`, `show`, `diff`, `accept`, `reject`). Always confirm with the user before `accept`/`reject`.
 - `akm_reflect` — generate a reflection proposal via the configured agent CLI; output lands in the proposal queue.
 - `akm_propose` — generate a new-asset proposal via the configured agent CLI.
@@ -48,7 +49,7 @@ Provides a surface of twenty tools. Verbs that are not first-class tools (`save`
 - `akm_parent_messages` — summarize the parent OpenCode session for dispatched stash subagents
 - `akm_help` — quick-reference table for non-first-class `akm` verbs, with live `akm --help` fallback
 
-The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to gate destructive actions, preserve context through compaction, and record user/system feedback and memory usage in OpenCode app logs when relevant.
+The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to gate destructive actions, preserve context through compaction, emit structured redacted memory events/candidates, and record user/system feedback and memory usage in OpenCode app logs when relevant.
 
 ## Feature parity tracker
 
@@ -59,6 +60,16 @@ The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.exec
 | Conversation-derived feedback | #29 | Open |
 | Session-end `akm index` | #30 | Shipped in both plugins |
 | Harness-provided LLM fallback | #31 | Open |
+| Shared secret redaction | #64 | Shipped in both plugins |
+| Structured memory events | #55 | Shipped in both plugins |
+| Claude PreToolUse safety guard | #56 | Shipped in Claude |
+| Checkpoint + candidates | #57 | Shipped in both plugins |
+| Memory audit and candidate review | #58 | Shipped in both plugins |
+| Shared recall policy | #59 | Shipped in both plugins |
+| Confidence-scored auto-feedback | #60 | Shipped in both plugins |
+| Expanded Claude lifecycle coverage | #61 | Shipped in Claude |
+| Subagent context/result capture | #62 | Shipped in both plugins |
+| Workflow compliance telemetry | #63 | Shipped in both plugins |
 
 ### Claude Code
 
@@ -83,11 +94,11 @@ claude plugin install akm@akm-plugins
 
 Provides:
 - **AKM Skill** — Claude automatically uses the akm CLI when you ask about stash assets
-- **Slash-command surface (18 verbs)** — `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault` (`list`/`show`/`load`), `/akm-proposal` (`list`/`show`/`diff`/`accept`/`reject`), `/akm-review-proposals`, `/akm-reflect`, `/akm-propose`, `/akm-distill`, `/akm-setup`, and `/akm-help`
+- **Slash-command surface (22 verbs)** — `/akm-search`, `/akm-show`, `/akm-memory-audit`, `/akm-memory-candidates`, `/akm-memory-promote`, `/akm-memory-reject`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault` (`list`/`show`/`load`), `/akm-proposal` (`list`/`show`/`diff`/`accept`/`reject`), `/akm-review-proposals`, `/akm-reflect`, `/akm-propose`, `/akm-distill`, `/akm-setup`, and `/akm-help`
 - **`/akm-help` discovery flow** — for verbs without a dedicated slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, raw `agent`, vault writes), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
-- **Claude hooks** — the plugin refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`) on session start, can set `agent.default` to the current platform when it is missing, surfaces pending-proposal counts in the SessionStart header, and records relevant user/system feedback and memory usage events in local state logs. Auto-feedback skips proposed-quality and `lesson:*` refs. Human users can run `akm setup` manually when interactive setup is needed.
+- **Claude hooks** — the plugin refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`) on session start, can set `agent.default` to the current platform when it is missing, surfaces pending-proposal counts in the SessionStart header, blocks risky raw AKM Bash in `PreToolUse`, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality and `lesson:*` refs. Human users can run `akm setup` manually when interactive setup is needed.
 
 ### All Other Agents
 
@@ -128,7 +139,7 @@ Config is stored at `~/.config/akm/config.json` (XDG standard). Use `akm config 
 
 For OpenCode, the plugin checks the installed `akm` version first and only runs `bun install -g akm-cli@latest` when `akm` is missing or older than the latest stable npm release. Newer pre-releases and local builds are left in place. The plugin then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
 
-For Claude Code, the plugin uses a `SessionStart` hook to refresh `akm-cli@latest` with Bun first and npm as a fallback, then records hook-driven feedback and memory activity in local state logs during relevant prompt and Bash events.
+For Claude Code, the plugin uses `SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `PreCompact`, `PostCompact`, and `SessionEnd` hooks to refresh `akm-cli@latest`, gate risky raw AKM Bash, inject scoped AKM context, and record redacted memory/event/candidate activity across prompt, tool, task, compaction, and session lifecycle events.
 
 ```sh
 # macOS / Linux
