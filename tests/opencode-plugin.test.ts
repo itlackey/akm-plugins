@@ -1,7 +1,9 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test"
 import type { PluginInput } from "@opencode-ai/plugin"
+import { cpSync, mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs"
+import { tmpdir } from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import opencodePackage from "../opencode/package.json"
 
 // Mock execFileSync and execSync before importing the plugin
@@ -20,6 +22,24 @@ mock.module("node:child_process", () => ({
 
 const pluginModule = await import("../opencode/index.ts")
 const { AkmPlugin, server, default: defaultPluginModule } = pluginModule
+const repoRoot = path.resolve(import.meta.dir, "..")
+const opencodeRoot = path.join(repoRoot, "opencode")
+const tempDirs: string[] = []
+
+function makeTempDir() {
+  const dir = mkdtempSync(path.join(tmpdir(), "akm-opencode-plugin-"))
+  tempDirs.push(dir)
+  return dir
+}
+
+function installOpenCodePackage(destinationDir: string) {
+  mkdirSync(destinationDir, { recursive: true })
+  cpSync(path.join(opencodeRoot, "package.json"), path.join(destinationDir, "package.json"))
+  for (const entry of opencodePackage.files) {
+    cpSync(path.join(opencodeRoot, entry), path.join(destinationDir, entry), { recursive: true })
+  }
+  symlinkSync(path.join(opencodeRoot, "node_modules"), path.join(destinationDir, "node_modules"), "dir")
+}
 
 function createMockClient() {
   return {
@@ -96,6 +116,13 @@ function createToolContext(overrides?: Record<string, unknown>) {
 }
 
 describe("akm-opencode plugin", () => {
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   beforeEach(() => {
     mockExecFileSync.mockClear()
     mockExecFileSync.mockReturnValue("mock output")
@@ -3313,6 +3340,20 @@ describe("akm-opencode plugin", () => {
   describe("packaging", () => {
     it("ships workflow command docs in the package", () => {
       expect(opencodePackage.files).toContain("commands/")
+    })
+
+    it("packages the shared runtime modules alongside the OpenCode entrypoint", async () => {
+      expect(opencodePackage.files).toContain("shared/")
+
+      const installRoot = path.join(makeTempDir(), "akm-opencode")
+      installOpenCodePackage(installRoot)
+
+      const installedModule = await import(`${pathToFileURL(path.join(installRoot, "index.ts")).href}?t=${Date.now()}`)
+      const installedPlugin = await installedModule.AkmPlugin(createPluginInput())
+
+      expect(typeof installedModule.AkmPlugin).toBe("function")
+      expect(installedPlugin.tool).toBeDefined()
+      expect(installedPlugin["chat.message"]).toBeDefined()
     })
   })
 
