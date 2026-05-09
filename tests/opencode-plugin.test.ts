@@ -1522,6 +1522,35 @@ describe("akm-opencode plugin", () => {
       expect(second.system).toHaveLength(0)
     })
 
+    it("chat.message curates release prompts that imply workflow and command recall", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args.includes("curate")) {
+          return "# release\n- command:bump-version\n- workflow:release\n"
+        }
+        return "mock output"
+      })
+
+      const hooks = await AkmPlugin(createPluginInput())
+
+      await hooks["chat.message"]!(
+        { sessionID: "session-release-curate-1", messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Cut a new semver release and publish - bump version everywhere and tag the release." }] as any },
+      )
+
+      const curateCall = (mockExecFileSync.mock.calls as any[]).find(
+        ([, args]) => Array.isArray(args) && args.includes("curate"),
+      )
+      expect(curateCall).toBeDefined()
+
+      const output = { system: [] as string[] }
+      await hooks["experimental.chat.system.transform"]!(
+        { sessionID: "session-release-curate-1" } as any,
+        output as any,
+      )
+      expect(output.system.join("\n")).toContain("command:bump-version")
+      expect(output.system.join("\n")).toContain("workflow:release")
+    })
+
     it("skips curate when the user prompt is shorter than AKM_CURATE_MIN_CHARS", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks["chat.message"]!(

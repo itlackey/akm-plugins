@@ -475,6 +475,44 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toContain("knowledge:release-plan")
   })
 
+  it("curate-prompt recalls release workflow prompts", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+for arg in "$@"; do
+  case "$arg" in
+    curate) echo "[command] bump-version"; echo "  ref: command:bump-version"; echo "[workflow] release"; echo "  ref: workflow:release"; exit 0 ;;
+  esac
+done
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    const stdout = runHook(["curate-prompt"], {
+      input: JSON.stringify({
+        session_id: "sess-curate-release-1",
+        prompt: "Cut a new semver release and publish - bump version everywhere and tag the release.",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("command:bump-version")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("workflow:release")
+  })
+
   it("curate-prompt skips curation for very short prompts", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")

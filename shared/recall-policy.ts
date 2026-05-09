@@ -9,6 +9,7 @@ export type RecallDecision = {
     | "command-dispatch"
     | "wiki-intent"
     | "proposal-intent"
+    | "release-intent"
     | "coding-task"
     | "active-workflow"
     | "recent-asset-failure"
@@ -54,6 +55,9 @@ export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolea
   }
   if (/\b(proposal|accept|reject|diff proposal|review proposals)\b/.test(lower)) {
     return { shouldRecall: true, reason: "proposal-intent", query: text, scopeHints: ["proposal"] }
+  }
+  if (/\b(release|publish|semver|version bump|bump version|tag the release|cut a release)\b/.test(lower)) {
+    return { shouldRecall: true, reason: "release-intent", query: text, scopeHints: ["workflow", "command"] }
   }
   if (text.length >= 80 && /\b(add|implement|fix|update|refactor|debug|test|review|build)\b/.test(lower)) {
     return { shouldRecall: true, reason: "coding-task", query: text, scopeHints: ["code"] }
