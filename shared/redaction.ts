@@ -51,14 +51,21 @@ function uniq(values: string[]): string[] {
 }
 
 function redactAssignments(text: string, categories: string[]): string {
-  const envLineRe = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/gm
-  return text.replace(envLineRe, (match, rawKey: string) => {
-    const key = String(rawKey)
-    if (!SENSITIVE_KEY_RE.test(key)) return match
-    categories.push(key.toLowerCase().includes("password") || key.toLowerCase().includes("passwd") ? "password" : "env_secret")
-    categories.push("vault_output")
-    return `${key}=[REDACTED:${key}]`
-  })
+  return text
+    .split("\n")
+    .map((line) => {
+      let candidate = line.trimStart()
+      if (candidate.startsWith("export ")) candidate = candidate.slice("export ".length)
+      const separator = candidate.indexOf("=")
+      if (separator === -1) return line
+      const key = candidate.slice(0, separator).trim()
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return line
+      if (!SENSITIVE_KEY_RE.test(key)) return line
+      categories.push(key.toLowerCase().includes("password") || key.toLowerCase().includes("passwd") ? "password" : "env_secret")
+      categories.push("vault_output")
+      return `${key}=[REDACTED:${key}]`
+    })
+    .join("\n")
 }
 
 function redactJsonLikePairs(text: string, categories: string[]): string {
