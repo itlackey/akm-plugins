@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync, cpSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -33,7 +33,11 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`
 }
 
-function runHook(args: string[], options?: { input?: string; env?: Record<string, string> }) {
+function runHookScript(
+  scriptPath: string,
+  args: string[],
+  options?: { input?: string; env?: Record<string, string>; cwd?: string },
+) {
   let stdin: "ignore" | Blob = "ignore"
 
   if (options?.input !== undefined) {
@@ -42,8 +46,8 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
     stdin = Bun.file(inputPath)
   }
 
-  const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
-    cwd: repoRoot,
+  const result = Bun.spawnSync([process.execPath, scriptPath, ...args], {
+    cwd: options?.cwd ?? repoRoot,
     env: {
       ...process.env,
       ...options?.env,
@@ -56,6 +60,19 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
   }
 
   return result.stdout.toString()
+}
+
+function runHook(args: string[], options?: { input?: string; env?: Record<string, string> }) {
+  return runHookScript(hookScript, args, options)
+}
+
+function installClaudePackage(destinationDir: string) {
+  const pkg = JSON.parse(readFileSync(claudePackageJsonPath, "utf8")) as { files: string[] }
+  const claudeRoot = path.join(repoRoot, "claude")
+  mkdirSync(destinationDir, { recursive: true })
+  for (const entry of pkg.files) {
+    cpSync(path.join(claudeRoot, entry), path.join(destinationDir, entry), { recursive: true })
+  }
 }
 
 function runShellShim(args: string[], options?: { input?: string; env?: Record<string, string> }) {
@@ -261,6 +278,34 @@ describe("Claude plugin metadata", () => {
     expect(body).toContain("| Expanded Claude lifecycle coverage | #61 | Shipped in Claude |")
     expect(body).toContain("| Subagent context/result capture | #62 | Shipped in both plugins |")
     expect(body).toContain("| Workflow compliance telemetry | #63 | Shipped in both plugins |")
+  })
+
+  it("packages the shared hook modules alongside the Claude hook entrypoint", () => {
+    const pkg = JSON.parse(readFileSync(claudePackageJsonPath, "utf8")) as { files: string[]; version: string }
+    expect(pkg.files).toContain("shared")
+
+    const installRoot = path.join(makeTempDir(), "akm", pkg.version ?? "test")
+    const stateDir = path.join(makeTempDir(), "state")
+    installClaudePackage(installRoot)
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHookScript(
+      path.join(installRoot, "hooks/akm-hook.ts"),
+      ["user-prompt-expansion"],
+      {
+        cwd: installRoot,
+        input: JSON.stringify({ session_id: "sess-expand-package", command: "/akm-memory-reject cand-1" }),
+        env: {
+          HOME: installRoot,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          XDG_STATE_HOME: stateDir,
+        },
+      },
+    )
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
   })
 })
 
