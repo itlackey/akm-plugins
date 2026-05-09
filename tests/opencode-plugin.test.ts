@@ -1485,7 +1485,7 @@ describe("akm-opencode plugin", () => {
       }
     })
 
-    it("chat.message injects only a small AKM hint without auto-curating", async () => {
+    it("chat.message injects only a small AKM hint for low-signal prompts", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         return "mock output"
       })
@@ -1495,7 +1495,7 @@ describe("akm-opencode plugin", () => {
 
       await hooks["chat.message"]!(
         { sessionID: "session-curate-1", messageID: "m1", agent: "build" } as any,
-        { message: {} as any, parts: [{ type: "text", text: "Help me deploy the application to production" }] as any },
+        { message: {} as any, parts: [{ type: "text", text: "Need more help" }] as any },
       )
 
       const curateCall = (mockExecFileSync.mock.calls as any[]).find(
