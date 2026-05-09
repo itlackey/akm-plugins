@@ -59,6 +59,8 @@ function redactAssignments(text: string, categories: string[]): string {
       const separator = candidate.indexOf("=")
       if (separator === -1) return line
       const key = candidate.slice(0, separator).trim()
+      const first = key[0]
+      if (!first || !/[A-Za-z_]/.test(first)) return line
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return line
       if (!SENSITIVE_KEY_RE.test(key)) return line
       categories.push(key.toLowerCase().includes("password") || key.toLowerCase().includes("passwd") ? "password" : "env_secret")
