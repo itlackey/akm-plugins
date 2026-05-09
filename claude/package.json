@@ -9,6 +9,7 @@
     "agents",
     "commands",
     "hooks",
+    "shared",
     "skills",
     "README.md"
   ],

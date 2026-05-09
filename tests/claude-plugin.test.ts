@@ -89,8 +89,10 @@ describe("Claude plugin metadata", () => {
     const plugin = JSON.parse(readFileSync(pluginJsonPath, "utf8"))
     const pkg = JSON.parse(readFileSync(claudePackageJsonPath, "utf8"))
     const marketplace = JSON.parse(readFileSync(marketplaceJsonPath, "utf8"))
+    const hookSource = readFileSync(hookScript, "utf8")
 
     expect(plugin.skills).toEqual(["./skills/akm"])
+    expect(pkg.files).toContain("shared")
     expect(plugin.hooks.SessionStart).toBeDefined()
     expect(plugin.hooks.UserPromptSubmit).toBeDefined()
     expect(plugin.hooks.UserPromptExpansion).toBeDefined()
@@ -143,6 +145,12 @@ describe("Claude plugin metadata", () => {
     expect(plugin.hooks.PostCompact[0].hooks[0].command as string).toContain("post-compact")
     expect(plugin.hooks.PostToolBatch[0].hooks[0].command as string).toContain("post-tool-batch")
     expect(plugin.hooks.SessionEnd[0].hooks[0].command as string).toContain("session-end")
+
+    expect(hookSource).toContain('from "../shared/feedback-signals"')
+    expect(hookSource).toContain('from "../shared/memory-candidates"')
+    expect(hookSource).toContain('from "../shared/memory-events"')
+    expect(hookSource).toContain('from "../shared/recall-policy"')
+    expect(hookSource).toContain('from "../shared/redaction"')
   })
 
   it("ships the slash commands and curator agent referenced by the docs", () => {

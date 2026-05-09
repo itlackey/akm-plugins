@@ -3,11 +3,11 @@
 import { accessSync, appendFileSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
-import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../../shared/feedback-signals"
-import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from "../../shared/memory-candidates"
-import { appendMemoryEvent, getEventLogPath } from "../../shared/memory-events"
-import { shouldRecall } from "../../shared/recall-policy"
-import { redactObject, redactSecrets } from "../../shared/redaction"
+import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
+import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from "../shared/memory-candidates"
+import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
+import { shouldRecall } from "../shared/recall-policy"
+import { redactObject, redactSecrets } from "../shared/redaction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
@@ -71,7 +71,7 @@ function buildScope(sessionID: string) {
   }
 }
 
-function writeMemoryEvent(event: Omit<import("../../shared/memory-events").AkmMemoryEvent, "version" | "timestamp" | "harness">) {
+function writeMemoryEvent(event: Omit<import("../shared/memory-events").AkmMemoryEvent, "version" | "timestamp" | "harness">) {
   const result = appendMemoryEvent(EVENT_LOG, {
     version: 1,
     timestamp: timestamp(),
