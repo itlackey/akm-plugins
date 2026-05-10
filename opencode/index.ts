@@ -69,7 +69,7 @@ let agentSetupPromise: Promise<boolean> | null = null
 const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/
 const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
 const AKM_WORKFLOW_INSTRUCTION = [
-  "# AKM workflow (v0.7.0)",
+  "# AKM workflow (v0.8.0)",
   "",
   "Use AKM as a reusable knowledge and workflow stash.",
   "",
@@ -77,8 +77,8 @@ const AKM_WORKFLOW_INSTRUCTION = [
   "1. Use `akm_search` or `akm_curate`.",
   "2. Use `akm_show <ref>` before relying on an asset.",
   "3. Record `akm_feedback` after the result is known.",
-  "4. Use the dedicated v0.7.0 tools for the proposal flow: `akm_proposal` (list/show/diff/accept/reject), `akm_reflect`, `akm_propose`, and `akm_distill`. Fall back to `akm_help` for any verb without a dedicated tool.",
-  "5. Treat `lesson:*` as first-class durable learning assets — they are produced by `akm_distill <ref>` as proposals and accepted via `akm_proposal action=accept`.",
+  "4. Use the dedicated v0.8.0 tools for the proposal flow: `akm_proposal` (list/show/diff/accept/reject), `akm_improve`, and `akm_propose`. Fall back to `akm_help` for any verb without a dedicated tool.",
+  "5. Treat `lesson:*` as first-class durable learning assets — they are produced through `akm_improve` and accepted via `akm_proposal action=accept`.",
   "6. Use `akm_init` when you need to create the working stash or persist `stashDir`. Do not use `akm setup` from an agent; it is interactive and human-facing.",
   `7. ${PROPOSED_QUALITY_WARNING}`,
   "8. Never accept or reject proposals, push saves, remove sources, or access vault values without explicit user approval.",
@@ -127,7 +127,7 @@ Inputs you should inspect:
 Signals to act on:
 - Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --note "curator: consistently useful" to reinforce.
 - Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --note "<excerpt>" and open the asset for review.
-- Lesson candidates: repeated memories or failures that should become a proposed lesson. Use akm_help topic="distill" before raw CLI distill commands.
+- Lesson candidates: repeated memories or failures that should become a proposed lesson. Use akm_improve or akm_help topic="improve" before raw CLI improvement commands.
 - Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see akm_help topic="reindex").
 - Pending proposals: list or diff them via akm_help topic="proposal" and recommend accept, reject, or revise. Never accept or reject without explicit user approval.
 - Duplicates / drift: near-identical descriptions or overlapping responsibilities. Propose a consolidation.
@@ -152,7 +152,7 @@ Output shape: end every run with a markdown report that has these sections:
 - <ref> — failure signal — proposed fix
 
 ## Lesson candidates
-- <theme> — evidence refs — distill or reflect command to run
+- <theme> — evidence refs — improve or propose command to run
 
 ## Coverage gaps
 - <theme> — proposed asset (type, name, one-line description)
@@ -791,11 +791,11 @@ function assessRiskyAkmCommand(command: string): RiskyCommandAssessment | undefi
   const akmIndex = args.findIndex((arg) => arg === "akm" || arg.endsWith("/akm") || arg.endsWith("\\akm.exe"))
   if (akmIndex === -1) return undefined
   const tokens = args.slice(akmIndex + 1)
-  if (tokens[0] === "proposal" && tokens[1] === "accept") {
-    return { category: "proposal-accept", reason: "Proposal acceptance changes curated AKM content.", approval: "Ask the user to approve `akm proposal accept <id>`." }
+  if ((tokens[0] === "proposal" && tokens[1] === "accept") || tokens[0] === "accept") {
+    return { category: "proposal-accept", reason: "Proposal acceptance changes curated AKM content.", approval: "Ask the user to approve `akm accept <id>`." }
   }
-  if (tokens[0] === "proposal" && tokens[1] === "reject") {
-    return { category: "proposal-reject", reason: "Proposal rejection is a durable curation decision.", approval: "Ask the user to approve `akm proposal reject <id> --reason \"...\"`." }
+  if ((tokens[0] === "proposal" && tokens[1] === "reject") || tokens[0] === "reject") {
+    return { category: "proposal-reject", reason: "Proposal rejection is a durable curation decision.", approval: "Ask the user to approve `akm reject <id> --reason \"...\"`." }
   }
   if (tokens[0] === "save" && tokens.includes("--push")) {
     return { category: "save-push", reason: "Pushing stash changes must be explicitly approved.", approval: "Ask the user to approve `akm save --push`." }
@@ -1191,20 +1191,21 @@ type AkmHelpEntry = {
 const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Review pending proposals and decide whether to accept, reject, or revise them",
-    command: "akm proposal list --status pending --format json; akm proposal show <id>; akm proposal diff <id>",
+    command: "akm proposals --status pending --format json; akm show proposal <id>; akm diff proposal <id>",
     notes: "Accept/reject requires explicit user approval.",
     keywords: ["proposal", "review proposals", "pending proposals", "accept proposal", "reject proposal"],
   },
   {
-    task: "Distill repeated evidence into a proposed lesson",
-    command: "akm distill <ref>",
-    notes: "Distill creates a proposal; proposed assets are not curated until accepted.",
-    keywords: ["distill", "lesson", "proposed lesson"],
+    task: "Improve existing assets or distill repeated evidence into proposals",
+    command: "akm improve [<type>|<ref>] [--task \"...\"]",
+    notes: "Improve owns the former reflect/distill flow; proposed assets are not curated until accepted.",
+    keywords: ["improve", "lesson", "reflect", "distill", "drift", "failure"],
   },
   {
-    task: "Reflect on an existing asset after failure or drift",
-    command: "akm reflect <ref> --task \"...\"",
-    keywords: ["reflect", "drift", "failure"],
+    task: "Manage scheduled task assets via the OS scheduler",
+    command: "akm tasks <add|list|show|remove|enable|disable|run|history|sync|doctor> ...",
+    notes: "Tasks are first-class in v0.8.0 but remain a long-tail CLI surface in this plugin.",
+    keywords: ["tasks", "scheduled task", "cron", "launchd", "schtasks"],
   },
   {
     task: "Create a proposed asset for a coverage gap",
@@ -1645,7 +1646,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
     return recordSuccess(stdout)
   } catch (error: unknown) {
     let message = formatCliError(error)
-    if (["akm_reflect", "akm_propose"].includes(meta.toolName) && needsAgentSetup(message)) {
+    if (["akm_improve", "akm_propose"].includes(meta.toolName) && needsAgentSetup(message)) {
       message = addAgentSetupGuidance(message)
     }
     message = addAgentSetupGuidance(message)
@@ -2900,7 +2901,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           } else if (candidate.recommendedAction === "feedback" && candidate.targetRef) {
             rawResult = await runCli(client as unknown as LogCapableClient, ["feedback", candidate.targetRef, "--positive", "--note", candidate.content, ...buildScopedArgs(context as unknown as Record<string, unknown>)], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
           } else if (candidate.recommendedAction === "distill" && candidate.targetRef) {
-            rawResult = await runCli(client as unknown as LogCapableClient, ["distill", candidate.targetRef], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
+            rawResult = await runCli(client as unknown as LogCapableClient, ["improve", candidate.targetRef], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
           } else if (candidate.recommendedAction === "propose") {
             rawResult = await runCli(client as unknown as LogCapableClient, ["propose", "knowledge", `candidate-${candidate.id}`, "--task", candidate.content], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
           } else {
@@ -3579,7 +3580,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
     }),
     akm_proposal: tool({
-      description: "Operate the AKM v0.7.0 proposal queue — list/show/diff/accept/reject pending drafts. All proposal-producing commands (reflect, propose, distill, plus plugin-emitted proposals) write through this queue. Acceptance runs full validation before promoting; rejection archives the draft. Always confirm with the user before action='accept' or 'reject'.",
+      description: "Operate the AKM v0.8.0 proposal queue — list/show/diff/accept/reject pending drafts. All proposal-producing commands (improve, propose, plus plugin-emitted proposals) write through this queue. Acceptance runs full validation before promoting; rejection archives the draft. Always confirm with the user before action='accept' or 'reject'.",
       args: {
         action: tool.schema.enum(["list", "show", "diff", "accept", "reject"]).describe("Proposal subcommand."),
         id: tool.schema.string().optional().describe("Proposal id. Required for show/diff/accept/reject."),
@@ -3590,41 +3591,43 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const logMeta = { toolName: "akm_proposal" }
         switch (action) {
           case "list": {
-            const args = ["proposal", "list"]
+            const args = ["proposals"]
             if (status) args.push("--status", status)
             return runCli(client as unknown as LogCapableClient, args, logMeta)
           }
           case "show": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='show'." })
-            return runCli(client as unknown as LogCapableClient, ["proposal", "show", id], logMeta)
+            return runCli(client as unknown as LogCapableClient, ["show", "proposal", id], logMeta)
           }
           case "diff": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='diff'." })
-            return runCli(client as unknown as LogCapableClient, ["proposal", "diff", id], logMeta)
+            return runCli(client as unknown as LogCapableClient, ["diff", "proposal", id], logMeta)
           }
           case "accept": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='accept'. Confirm with the user before accepting." })
-            return runCli(client as unknown as LogCapableClient, ["proposal", "accept", id], logMeta)
+            return runCli(client as unknown as LogCapableClient, ["accept", id], logMeta)
           }
           case "reject": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='reject'. Confirm with the user before rejecting." })
             if (!reason || !reason.trim()) return JSON.stringify({ ok: false, error: "'reason' is required for action='reject'. Ask the user why the proposal is being rejected." })
-            return runCli(client as unknown as LogCapableClient, ["proposal", "reject", id, "--reason", reason], logMeta)
+            return runCli(client as unknown as LogCapableClient, ["reject", id, "--reason", reason], logMeta)
           }
         }
       },
     }),
-    akm_reflect: tool({
-      description: "Generate a reflection proposal for an AKM ref via the configured agent CLI. Output lands in the proposal queue only — never mutates live stash content. Requires `agent.default` to be set (run akm_setup first if missing).",
+    akm_improve: tool({
+      description: "Generate AKM improvement proposals for an existing ref, an asset type, or the broader stash. This is the v0.8.0 replacement for the old reflect/distill flow. Output lands in the proposal queue only — never mutates live stash content. Requires `agent.default` to be set for agent-backed proposal generation.",
       args: {
-        ref: tool.schema.string().optional().describe("[origin//]type:name ref to reflect on. Optional — when omitted the agent reflects on overall session signal."),
-        task: tool.schema.string().optional().describe("Free-form task description guiding the reflection."),
+        scope: tool.schema.string().optional().describe("Optional asset type or [origin//]type:name ref to improve. When omitted, improves the current stash scope."),
+        task: tool.schema.string().optional().describe("Optional extra guidance for this improvement pass."),
+        dry_run: tool.schema.boolean().optional().describe("Show planned actions without generating proposals."),
       },
-      async execute({ ref, task }) {
-        const args = ["reflect"]
-        if (ref) args.push(ref)
+      async execute({ scope, task, dry_run }) {
+        const args = ["improve"]
+        if (scope) args.push(scope)
         if (task) args.push("--task", task)
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_reflect" })
+        if (dry_run) args.push("--dry-run")
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_improve" })
       },
     }),
     akm_propose: tool({
@@ -3632,22 +3635,17 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       args: {
         type: tool.schema.enum(["skill", "command", "agent", "knowledge", "lesson", "script", "workflow", "wiki"]).describe("Asset type for the new proposal."),
         name: tool.schema.string().describe("Slug for the new asset (matches the standard ref grammar)."),
-        task: tool.schema.string().describe("Required. Describes what the asset should do."),
+        task: tool.schema.string().optional().describe("Optional inline task text describing what the asset should do."),
+        file: tool.schema.string().optional().describe("Optional UTF-8 file path to read the task text from. Exactly one of task/file is required."),
       },
-      async execute({ type, name, task }) {
-        if (!task || !task.trim()) return JSON.stringify({ ok: false, error: "'task' is required for akm_propose." })
-        const args = ["propose", type, name, "--task", task]
+      async execute({ type, name, task, file }) {
+        const hasTask = !!task?.trim()
+        const hasFile = !!file?.trim()
+        if (hasTask === hasFile) return JSON.stringify({ ok: false, error: "Exactly one of 'task' or 'file' is required for akm_propose." })
+        const args = ["propose", type, name]
+        if (hasTask) args.push("--task", task!.trim())
+        if (hasFile) args.push("--file", file!.trim())
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_propose" })
-      },
-    }),
-    akm_distill: tool({
-      description: "Distill an AKM ref into a proposed `lesson` using the bounded in-tree LLM. Gated by `llm.features.feedback_distillation` (default false); when the gate is off the call returns a fallback warning instead of a proposal. Lessons require `description` and `when_to_use` frontmatter and are stored under `lessons/<name>.md` after acceptance.",
-      args: {
-        ref: tool.schema.string().describe("[origin//]type:name ref to distill — most often memory:<name> or knowledge:<name>."),
-      },
-      async execute({ ref }) {
-        if (!ref || !ref.trim()) return JSON.stringify({ ok: false, error: "'ref' is required for akm_distill." })
-        return runCli(client as unknown as LogCapableClient, ["distill", ref], { toolName: "akm_distill" })
       },
     }),
     akm_init: tool({
@@ -3694,10 +3692,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           help: helpText,
           workflowTopics: [
             "proposal",
-            "distill",
-            "reflect",
+            "improve",
             "propose",
             "lesson",
+            "tasks",
             "include-proposed",
             "llm-features",
             "vault-safety",

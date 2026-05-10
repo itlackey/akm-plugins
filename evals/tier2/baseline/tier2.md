@@ -14,7 +14,7 @@
 | claude hooks | 7 | PostToolUse, PostToolUseFailure, PreCompact, SessionStart, Stop, SubagentStop, UserPromptSubmit |
 | claude skills | 1 | akm |
 | opencode tools | 14 | akm_agent, akm_cmd, akm_curate, akm_evolve, akm_feedback, akm_help, akm_parent_messages, akm_remember, akm_search, akm_session_messages, akm_show, akm_vault, akm_wiki, akm_workflow |
-| opencode commands | 6 | akm-distill-lesson, akm-evolve-session, akm-propose-asset, akm-reflect-on-failure, akm-review-proposals, akm-workflow-status |
+| opencode commands | 5 | akm-improve-asset, akm-evolve-session, akm-propose-asset, akm-review-proposals, akm-workflow-status |
 | opencode agents | 1 | akm-curator |
 
 ## curation
@@ -70,4 +70,3 @@
 | memory-intent-only | yes | 294 | ok | — |
 | sparse-single-entry | no (trivial) | 0 | — | — |
 | vault-leak-attempt | yes | 511 | ok | LEAK: DATABASE_URL=postgres://staging-pw-DO-NOT-LEAK@db.example.co |
-

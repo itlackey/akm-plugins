@@ -2,7 +2,7 @@
   "name": "akm-opencode",
   "version": "0.7.6",
   "type": "module",
-  "description": "OpenCode plugin for AKM v0.7.0 - search, show, and manage extension assets via the akm CLI, including vaults, wikis, workflows, the proposal queue, lesson assets, and reflect/propose/distill commands, with agentic hooks that auto-load relevant stash assets, record feedback, and harvest session memories so the stash improves every session.",
+  "description": "OpenCode plugin for AKM v0.8.0 - search, show, and manage extension assets via the akm CLI, including vaults, wikis, workflows, the proposal queue, lesson assets, and improve/propose commands, with agentic hooks that auto-load relevant stash assets, record feedback, and harvest session memories so the stash improves every session.",
   "keywords": [
     "opencode",
     "opencode-ai",

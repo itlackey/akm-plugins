@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.7.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle vaults safely**, **operate the v0.7.0 proposal queue**, and **distill lessons** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, and feed asset-usage feedback back into the stash so it improves with every session. `akm setup` remains human-facing and should be run manually when needed.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle vaults safely**, **operate the v0.8.0 proposal queue**, and **improve assets** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, and feed asset-usage feedback back into the stash so it improves with every session. `akm setup` remains human-facing and should be run manually when needed.
 
 ## Installation
 
@@ -25,7 +25,7 @@ claude plugin install akm@akm-plugins
 
 - **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
 - **Agentic hooks** — lifecycle hooks that install `akm`, set `agent.default` to `claude` when it is missing, auto-curate stash matches into every user prompt, auto-record feedback when assets are used (skipping proposed-quality drafts and `lesson:*` refs), surface pending-proposal counts in the SessionStart header, and harvest session memories at stop/compact time
-- **Slash commands** — 18 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault`, `/akm-proposal`, `/akm-review-proposals`, `/akm-reflect`, `/akm-propose`, `/akm-distill`, `/akm-setup`, `/akm-help`) for explicit control of the compound-engineering loop
+- **Slash commands** — 17 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault`, `/akm-proposal`, `/akm-review-proposals`, `/akm-improve`, `/akm-propose`, `/akm-setup`, `/akm-help`) for explicit control of the compound-engineering loop
 - **`akm-curator` agent** — a self-evolution subagent that reviews session logs and proposes stash improvements
 
 The skill teaches Claude to:
@@ -104,11 +104,11 @@ stash/
 ├── agents/     # markdown files
 ├── knowledge/  # markdown files
 ├── memories/   # markdown memory files (akm remember)
-├── lessons/    # first-class durable learnings (lesson:<name>) — produced by akm distill, accepted via akm proposal accept
+├── lessons/    # first-class durable learnings (lesson:<name>) — often produced via akm improve, accepted via akm accept
 ├── workflows/  # multi-step procedures (workflow:<name>)
 ├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
 ├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
-└── .akm/proposals/  # v0.7.0 proposal queue — drafts that never leak into search or commits
+└── .akm/proposals/  # v0.8.0 proposal queue — drafts that never leak into search or commits
 ```
 
 Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
@@ -168,12 +168,11 @@ The plugin ships 18 first-class verbs. `/akm-add` and `/akm-save` are not part o
 - `/akm-wiki <subcommand> [args]` — manage AKM wikis (create, register, list, show, pages, search, stash, lint, ingest, remove).
 - `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
 - `/akm-vault <list|show|load> [ref]` — vault read paths: enumerate vaults, show key names, or emit a shell-eval `load` snippet. `show`/`list` never echo values; `load` output is opaque shell text meant for `eval` and is never displayed back in chat.
-- `/akm-proposal <list|show|diff|accept|reject> [id] [--reason "..."]` — operate the v0.7.0 proposal queue. Always confirms with the user before `accept`/`reject`.
+- `/akm-proposal <list|show|diff|accept|reject> [id] [--reason "..."]` — operate the v0.8.0 proposal queue. Always confirms with the user before `accept`/`reject`.
 - `/akm-review-proposals [--limit N]` — list every pending proposal and diff each one in a single pass for review.
-- `/akm-reflect [ref] [--task "..."]` — generate a reflection proposal via the configured agent CLI; output lands in the proposal queue.
+- `/akm-improve [type|ref] [--task "..."] [--dry-run]` — generate improvement proposals for the stash, a type, or a specific ref.
 - `/akm-propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.
-- `/akm-distill <ref>` — distill a ref into a proposed `lesson` (gated by `llm.features.feedback_distillation`).
-- `/akm-setup` — run the interactive `akm setup` wizard. It can configure `agent.default`, which is required for reflect/propose.
+- `/akm-setup` — run the interactive `akm setup` wizard. It can configure `agent.default`, which is required for improve/propose.
 - `/akm-help [task]` — surface a curated quick-reference for non-first-class `akm` verbs and fall back to live `akm --help`.
 
 ### When to use what

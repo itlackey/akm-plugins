@@ -174,9 +174,8 @@ describe("Claude plugin metadata", () => {
       "akm-vault",
       "akm-proposal",
       "akm-review-proposals",
-      "akm-reflect",
+      "akm-improve",
       "akm-propose",
-      "akm-distill",
       "akm-setup",
       "akm-help",
     ]) {
@@ -189,21 +188,21 @@ describe("Claude plugin metadata", () => {
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
   })
 
-  it("v0.7.0 slash commands carry the canonical proposal-flow guard rails", () => {
+  it("v0.8.0 slash commands carry the canonical proposal-flow guard rails", () => {
     const commandsDir = path.join(repoRoot, "claude/commands")
     const proposal = readFileSync(path.join(commandsDir, "akm-proposal.md"), "utf8")
-    expect(proposal).toContain("proposal list")
-    expect(proposal).toContain("proposal accept")
-    expect(proposal).toContain("proposal reject")
+    expect(proposal).toContain("akm --format json -q proposals")
+    expect(proposal).toContain("akm --format json -q accept <id>")
+    expect(proposal).toContain("akm --format json -q reject <id>")
     expect(proposal).toMatch(/[Cc]onfirm with the user/)
 
     const review = readFileSync(path.join(commandsDir, "akm-review-proposals.md"), "utf8")
-    expect(review).toContain("proposal list --status pending")
-    expect(review).toMatch(/[Dd]o not call `?akm proposal accept/)
+    expect(review).toContain("proposals --status pending")
+    expect(review).toMatch(/[Dd]o not call `?akm accept/)
 
-    const distill = readFileSync(path.join(commandsDir, "akm-distill.md"), "utf8")
-    expect(distill).toContain("llm.features.feedback_distillation")
-    expect(distill).toContain("distill <ref>")
+    const improve = readFileSync(path.join(commandsDir, "akm-improve.md"), "utf8")
+    expect(improve).toContain("improve")
+    expect(improve).toContain("replaces the old reflect/distill split")
 
     const setup = readFileSync(path.join(commandsDir, "akm-setup.md"), "utf8")
     expect(setup).toContain("agent.default")
@@ -1374,7 +1373,7 @@ exit 0
       input: JSON.stringify({
         session_id: "sess-pretool-1",
         tool: "Bash",
-        input: { command: "akm proposal accept p_123" },
+        input: { command: "akm accept p_123" },
       }),
       env: {
         HOME: tempDir,
@@ -1387,7 +1386,7 @@ exit 0
     expect(payload.decision).toBe("block")
     expect(payload.reason).toContain("explicit user approval")
     const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("pretool_blocked") && line.includes("proposal accept"))).toBe(true)
+    expect(sessionLog.some((line) => line.includes("pretool_blocked") && line.includes("akm accept"))).toBe(true)
   })
 
   it("pre-tool blocks suspicious raw remember payloads containing secrets", () => {

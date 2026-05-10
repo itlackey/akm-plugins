@@ -9,4 +9,4 @@ description: Tell the user to run the interactive `akm setup` wizard manually. A
 3. If the task is only to create the working stash for agent-safe workflows, prefer `akm init` instead.
 4. After the user completes setup, you may confirm by reading back `akm --format json -q config get agent.default` if they asked whether an agent CLI was configured.
 
-Without an agent CLI on PATH, `/akm-reflect` and `/akm-propose` cannot generate proposals. Suggest the user install one (for example `opencode`, `claude`, `codex`, `gemini`, or `aider`) and then run `akm setup` manually.
+Without an agent CLI on PATH, `/akm-improve` and `/akm-propose` cannot generate agent-backed proposals. Suggest the user install one (for example `opencode`, `claude`, `codex`, `gemini`, or `aider`) and then run `akm setup` manually.

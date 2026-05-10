@@ -128,7 +128,7 @@ describe("akm-opencode plugin", () => {
       expect(hooks.tool).toBeDefined()
     })
 
-    it("registers the high-value tool surface plus akm_help and the v0.7.0 proposal/lesson tools", async () => {
+    it("registers the high-value tool surface plus akm_help and the v0.8.0 proposal/improve tools", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const toolNames = Object.keys(hooks.tool!)
       const expected = [
@@ -148,9 +148,8 @@ describe("akm-opencode plugin", () => {
         "akm_wiki",
         "akm_workflow",
         "akm_proposal",
-        "akm_reflect",
+        "akm_improve",
         "akm_propose",
-        "akm_distill",
         "akm_init",
         "akm_help",
       ]
@@ -350,7 +349,7 @@ describe("akm-opencode plugin", () => {
       expect(wf.args.active_only).toBeDefined()
     })
 
-    it("akm_proposal exposes the v0.7.0 list/show/diff/accept/reject discriminator", async () => {
+    it("akm_proposal exposes the v0.8.0 list/show/diff/accept/reject discriminator", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const tool = hooks.tool!.akm_proposal
       expect(tool.args.action).toBeDefined()
@@ -359,25 +358,21 @@ describe("akm-opencode plugin", () => {
       expect(tool.args.reason).toBeDefined()
     })
 
-    it("akm_reflect exposes ref + task args", async () => {
+    it("akm_improve exposes scope + task args", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const tool = hooks.tool!.akm_reflect
-      expect(tool.args.ref).toBeDefined()
+      const tool = hooks.tool!.akm_improve
+      expect(tool.args.scope).toBeDefined()
       expect(tool.args.task).toBeDefined()
+      expect(tool.args.dry_run).toBeDefined()
     })
 
-    it("akm_propose requires type/name/task", async () => {
+    it("akm_propose requires type/name and one input source", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const tool = hooks.tool!.akm_propose
       expect(tool.args.type).toBeDefined()
       expect(tool.args.name).toBeDefined()
       expect(tool.args.task).toBeDefined()
-    })
-
-    it("akm_distill takes a ref", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const tool = hooks.tool!.akm_distill
-      expect(tool.args.ref).toBeDefined()
+      expect(tool.args.file).toBeDefined()
     })
 
     it("akm_init takes no args", async () => {
@@ -1432,8 +1427,8 @@ describe("akm-opencode plugin", () => {
       await hooks["permission.ask"]?.({
         sessionID: "session-1",
         permission: "bash",
-        patterns: ["akm proposal accept 123"],
-        metadata: { command: "akm proposal accept 123" },
+        patterns: ["akm accept 123"],
+        metadata: { command: "akm accept 123" },
       } as any, output)
       expect(output.status).toBe("deny")
       expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
@@ -2550,7 +2545,7 @@ describe("akm-opencode plugin", () => {
       expect(parsed.usedSubtask).toBe(true)
     })
 
-    it("akm_proposal list shells out to `akm proposal list`", async () => {
+    it("akm_proposal list shells out to `akm proposals`", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockReturnValue("{\"proposals\":[]}")
       await hooks.tool!.akm_proposal.execute(
@@ -2559,7 +2554,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["proposal", "list", "--format", "json"],
+        ["proposals", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -2573,7 +2568,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["proposal", "list", "--status", "pending", "--format", "json"],
+        ["proposals", "--status", "pending", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -2598,7 +2593,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["proposal", "accept", "p_123", "--format", "json"],
+        ["accept", "p_123", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -2614,21 +2609,21 @@ describe("akm-opencode plugin", () => {
       expect(parsed.error).toContain("'reason' is required")
     })
 
-    it("akm_reflect forwards ref + task", async () => {
+    it("akm_improve forwards scope + task", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockReturnValue("{\"ok\":true}")
-      await hooks.tool!.akm_reflect.execute(
-        { ref: "knowledge:design", task: "review consistency" } as any,
+      await hooks.tool!.akm_improve.execute(
+        { scope: "knowledge:design", task: "review consistency" } as any,
         {} as any,
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["reflect", "knowledge:design", "--task", "review consistency", "--format", "json"],
+        ["improve", "knowledge:design", "--task", "review consistency", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
 
-    it("akm_propose requires task and forwards type/name/task", async () => {
+    it("akm_propose requires exactly one of task/file and forwards task input", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockReturnValue("{\"ok\":true}")
       const noTask = await hooks.tool!.akm_propose.execute(
@@ -2637,6 +2632,12 @@ describe("akm-opencode plugin", () => {
       )
       expect(JSON.parse(noTask).ok).toBe(false)
 
+      const both = await hooks.tool!.akm_propose.execute(
+        { type: "skill", name: "release-checks", task: "x", file: "./prompt.md" } as any,
+        {} as any,
+      )
+      expect(JSON.parse(both).ok).toBe(false)
+
       await hooks.tool!.akm_propose.execute(
         { type: "skill", name: "release-checks", task: "fail loudly when CI is red" } as any,
         {} as any,
@@ -2644,6 +2645,20 @@ describe("akm-opencode plugin", () => {
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
         ["propose", "skill", "release-checks", "--task", "fail loudly when CI is red", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_propose forwards file input", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      mockExecFileSync.mockReturnValue("{\"ok\":true}")
+      await hooks.tool!.akm_propose.execute(
+        { type: "workflow", name: "release-checks", file: "./prompt.md" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["propose", "workflow", "release-checks", "--file", "./prompt.md", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -2674,19 +2689,16 @@ describe("akm-opencode plugin", () => {
       expect(proposeCalls).toBe(1)
     })
 
-    it("akm_distill requires a ref", async () => {
+    it("akm_proposal show routes through `akm show proposal`", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const missing = await hooks.tool!.akm_distill.execute({} as any, {} as any)
-      expect(JSON.parse(missing).ok).toBe(false)
-
       mockExecFileSync.mockReturnValue("{\"ok\":true}")
-      await hooks.tool!.akm_distill.execute(
-        { ref: "memory:retro" } as any,
+      await hooks.tool!.akm_proposal.execute(
+        { action: "show", id: "p_123" } as any,
         {} as any,
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["distill", "memory:retro", "--format", "json"],
+        ["show", "proposal", "p_123", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })

@@ -31,7 +31,7 @@ const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").spli
 const CURATED_PROMPT_HEADER = "# AKM stash - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM stash - assets relevant to this session"
 const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content, and record `akm feedback <ref> --positive|--negative` once you know whether the asset helped."
-const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, agent, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. v0.7.0 adds the `/akm-proposal`, `/akm-reflect`, `/akm-propose`, `/akm-distill`, `/akm-review-proposals`, and `/akm-setup` slash commands for the proposal queue and agent-CLI integration."
+const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, agent, tasks, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. v0.8.0 adds the `/akm-proposal`, `/akm-improve`, `/akm-propose`, `/akm-review-proposals`, and `/akm-setup` slash commands for the proposal queue and agent-CLI integration."
 const SESSION_START_HEADER = [
   "# AKM is available in this session",
   "",
@@ -293,7 +293,7 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
 function assessRiskyClaudeCommand(command: string): string | undefined {
   const normalized = command.trim()
   if (!normalized) return undefined
-  if (/\bakm\s+proposal\s+(accept|reject)\b/.test(normalized)) return "Proposal acceptance/rejection requires explicit user approval."
+  if (/\bakm\s+(?:proposal\s+)?(accept|reject)\b/.test(normalized)) return "Proposal acceptance/rejection requires explicit user approval."
   if (/\bakm\s+save\b[\s\S]*--push\b/.test(normalized)) return "`akm save --push` requires explicit user approval."
   if (/\bakm\s+remove\b/.test(normalized)) return "`akm remove` is destructive and requires explicit user approval."
   if (/\bakm\s+update\b[\s\S]*--all\b/.test(normalized)) return "`akm update --all` requires explicit user approval."

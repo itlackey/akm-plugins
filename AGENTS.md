@@ -33,7 +33,7 @@ What you get back depends on the asset type:
 - **command** — A prompt template with placeholders to fill in
 - **agent** — A system prompt with model and tool hints
 - **knowledge** — A reference doc (use `toc` or `section "..."` as positional args, e.g. `akm show knowledge:guide toc`)
-- **lesson** — A durable learning with required `description` and `when_to_use` frontmatter, normally produced by `akm distill <ref>` and accepted via `akm proposal accept`
+- **lesson** — A durable learning with required `description` and `when_to_use` frontmatter, normally produced through `akm improve <ref>` and accepted via `akm accept`
 - **wiki** — A page inside a wiki (`wiki:<name>/<page>`) with frontmatter, xrefs, and cited raw sources
 - **workflow** — A stateful multi-step procedure driven by `akm workflow start|next|complete|resume`
 - **vault** — A `.env`-style secret store. **Only key names surface** — values never appear in JSON, logs, or search indexes. Use `eval "$(akm vault load vault:<name>)"` to load into a shell.
@@ -52,11 +52,11 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 - Tests should assert logged failures and structured error results instead of normalizing direct console output from plugin paths.
 - Narrow exception: dedicated CLI entrypoints or fake CLI shims used only to emulate a terminal contract may write to stdout/stderr when that stream output is the behavior under test. Keep those cases isolated from plugin runtime code and document them clearly.
 
-**New in v0.7.0:**
-- `akm proposal list|show|diff|accept|reject` — operate the durable proposal queue. Always confirm with the user before `accept`/`reject`.
-- `akm reflect [ref] [--task "..."]` — generate a reflection proposal via the configured agent CLI.
-- `akm propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.
-- `akm distill <ref>` — distill repeated evidence into a `lesson` proposal (gated by `llm.features.feedback_distillation`).
+**New in v0.8.0:**
+- `akm proposals` / `akm show proposal <id>` / `akm diff proposal <id>` / `akm accept <id>` / `akm reject <id> --reason "..."` — operate the durable proposal queue. Always confirm with the user before `accept`/`reject`.
+- `akm improve [ref|type] [--task "..."]` — generate improvement proposals via the configured agent CLI.
+- `akm propose <type> <name> (--task "..." | --file <path>)` — generate a new-asset proposal via the configured agent CLI.
+- `akm tasks <subcommand> ...` — manage scheduled task assets through the OS scheduler.
 - `akm setup` — interactive first-run configuration wizard for humans. Agents should not invoke it directly; use `akm init` for agent-safe stash initialization.
 - `akm search ... --include-proposed` — merge `quality:"proposed"` drafts into hits.
 
