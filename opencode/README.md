@@ -46,15 +46,15 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 
 | Event | What happens |
 | --- | --- |
-| **`session.created`** (event hook) | Sets `agent.default` to `opencode` when missing, warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions start with relevant stash context. |
+| **`session.created`** (event hook) | Sets the AKM default agent in `~/.config/akm/config.json` to `opencode` when missing, warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions start with relevant stash context. |
 | **`chat.message`** | Records user feedback/memory intent and appends a short reminder to use `akm_search` / `akm_curate` when more stash context is needed. It does not auto-run AKM CLI lookups on every message. |
 | **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, pending proposal summaries, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
 | **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations until `confirm:true` is provided. |
 | **`permission.ask`** / **`command.execute.before`** | Detects risky raw `akm` CLI commands executed through shell/commands and denies them until the user explicitly approves the exact operation. |
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, checkpoints memories every `AKM_MEMORY_CHECKPOINT_EVERY` successful asset-touching tool calls, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
-| **`shell.env`** | Exposes `AKM_STASH_DIR`, `AKM_PROJECT`, and `AKM_PLUGIN_VERSION` to shell tools so plain `akm` calls inherit the right context. |
-| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Flushes the per-session buffer into a `memory:opencode-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. Requires at least two observations before persisting. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows a successful flush with `akm index` so upstream inference/graph passes run immediately. |
+| **`shell.env`** | Exposes `AKM_PROJECT` and `AKM_PLUGIN_VERSION` to shell tools. The plugin does not force `AKM_STASH_DIR` into shell invocations, so plain `akm` calls keep using AKM's normal config/path resolution. |
+| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Flushes the per-session buffer into a `memory:opencode-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. The persisted memory now includes compact event/candidate summaries plus explicit file paths to the full-detail plugin state and OpenCode host logs so `akm improve` can inspect deeper evidence when needed. Requires at least two observations before persisting. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows a successful flush with `akm index` so upstream inference/graph passes run immediately. |
 
 ### Environment overrides
 

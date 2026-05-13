@@ -79,6 +79,10 @@ describe("OpenCode eval harness", () => {
         "--positive",
         "--note",
         "opencode auto: akm_show succeeded; confidence=0.65; source=tool_success",
+        "--agent",
+        "akm_show",
+        "--run",
+        "eval-feedback-1",
       ])
     } finally {
       rmSync(resultDir, { recursive: true, force: true })

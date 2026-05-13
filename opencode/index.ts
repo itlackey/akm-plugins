@@ -1,6 +1,7 @@
 import { type Plugin, tool } from "@opencode-ai/plugin"
 import { execFileSync, execSync, spawn } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
@@ -42,6 +43,7 @@ const sessionWorkflow = new Map<string, string>()
 const sessionCuratorReport = new Map<string, string>()
 const sessionContextEpoch = new Map<string, number>()
 const sessionContextInjectedEpoch = new Map<string, number>()
+const sessionCuratedFile = new Map<string, string>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
 const sessionRecallAudit = new Map<string, { shouldRecall: boolean; reason: string; query: string; injectedRefs: string[]; injectedChars: number; warnings: string[] }>()
@@ -210,6 +212,9 @@ type CliLogMeta = {
   toolName: string
   directory?: string
   sessionID?: string
+  agent?: string
+  userID?: string
+  channel?: string
 }
 
 type SessionPromptBody = {
@@ -234,7 +239,48 @@ function needsAgentSetup(message: string): boolean {
 function addAgentSetupGuidance(message: string): string {
   if (!needsAgentSetup(message)) return message
   if (/\bakm init\b|\bakm_init\b|\bakm setup\b/i.test(message)) return message
-  return `${message}. Agents should not run akm setup because it is interactive. The plugin should set agent.default to the current platform when it is missing; if interactive configuration is still needed, ask the user to run akm setup manually. Use akm_init for agent-safe stash initialization.`
+  return `${message}. Agents should not run akm setup because it is interactive. The plugin should set the AKM default agent to the current platform when it is missing; if interactive configuration is still needed, ask the user to run akm setup manually. Use akm_init for agent-safe stash initialization.`
+}
+
+function getAkmConfigPath(): string {
+  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? ".", ".config")
+  return path.join(configHome, "akm", "config.json")
+}
+
+function readAkmConfig(): Record<string, unknown> {
+  try {
+    const raw = readFileSync(getAkmConfigPath(), "utf8")
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function readConfiguredAgentDefault(): string {
+  const config = readAkmConfig()
+  const agent = config.agent
+  if (!agent || typeof agent !== "object") return ""
+  const value = (agent as Record<string, unknown>).default
+  return typeof value === "string" ? value.trim() : ""
+}
+
+function writeConfiguredAgentDefault(platform: string): boolean {
+  if (!platform.trim()) return false
+  try {
+    const configPath = getAkmConfigPath()
+    const configDir = path.dirname(configPath)
+    mkdirSync(configDir, { recursive: true })
+    const current = readAkmConfig()
+    const agent = current.agent && typeof current.agent === "object"
+      ? { ...(current.agent as Record<string, unknown>) }
+      : {}
+    agent.default = platform
+    writeFileSync(configPath, `${JSON.stringify({ ...current, agent }, null, 2)}\n`)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function ensurePlatformAgentDefault(
@@ -254,26 +300,12 @@ async function ensurePlatformAgentDefault(
   }
 
   try {
-    const currentRaw = execFileSync(command, ["config", "get", "agent.default", "--format", "json"], {
-      encoding: "utf8",
-      timeout: 30_000,
-    })
-    const parsed = safeJsonParse<unknown>(currentRaw)
-    const current = typeof parsed === "string"
-      ? parsed.trim()
-      : parsed && typeof parsed === "object"
-        ? typeof (parsed as Record<string, unknown>).value === "string"
-          ? ((parsed as Record<string, unknown>).value as string).trim()
-          : typeof (parsed as Record<string, unknown>)["agent.default"] === "string"
-            ? ((parsed as Record<string, unknown>)["agent.default"] as string).trim()
-            : ""
-        : ""
+    const current = readConfiguredAgentDefault()
     if (current) return true
 
-    execFileSync(command, ["config", "set", "agent.default", meta.platform, "--format", "json"], {
-      encoding: "utf8",
-      timeout: 30_000,
-    })
+    if (!writeConfiguredAgentDefault(meta.platform)) {
+      throw new Error(`Failed to write ${getAkmConfigPath()}`)
+    }
     await writePluginLog(client, "info", "AKM agent default initialized", {
       subsystem: "akm",
       trigger: meta.trigger,
@@ -364,6 +396,46 @@ function writeStructuredEvent(event: Omit<AkmMemoryEvent, "version" | "timestamp
   })
 }
 
+const CURATED_DIR = path.join(os.tmpdir(), "akm-opencode", "curated")
+mkdirSync(CURATED_DIR, { recursive: true })
+
+function gatherCwdContext(directory: string): string {
+  const parts: string[] = []
+  const indicators: Array<{ file: string; label: string }> = [
+    { file: "package.json", label: "Node" },
+    { file: "Cargo.toml", label: "Rust" },
+    { file: "pyproject.toml", label: "Python" },
+    { file: "go.mod", label: "Go" },
+    { file: "Gemfile", label: "Ruby" },
+    { file: "Makefile", label: "Make" },
+    { file: "Dockerfile", label: "Docker" },
+    { file: "docker-compose.yml", label: "Docker Compose" },
+    { file: ".github/workflows", label: "GitHub Actions" },
+    { file: "composer.json", label: "PHP" },
+  ]
+  for (const indicator of indicators) {
+    try {
+      if (existsSync(path.join(directory, indicator.file))) parts.push(indicator.label)
+    } catch {}
+  }
+  try {
+    const pkgPath = path.join(directory, "package.json")
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"))
+      if (pkg.name) parts.push(pkg.name)
+      if (pkg.description) parts.push(String(pkg.description).slice(0, 120))
+    }
+  } catch {}
+  try {
+    const readme = path.join(directory, "README.md")
+    if (existsSync(readme)) {
+      const firstContent = readFileSync(readme, "utf8").split("\n").find((l) => l.trim() && !l.startsWith("#"))
+      if (firstContent) parts.push(firstContent.trim().slice(0, 100))
+    }
+  } catch {}
+  return parts.join(", ")
+}
+
 async function logHookFailure(
   client: LogCapableClient,
   hook: string,
@@ -404,6 +476,16 @@ function markContextEpochDirty(sessionID: string) {
 
 function bumpCuratedVersion(sessionID: string) {
   sessionCuratedVersion.set(sessionID, (sessionCuratedVersion.get(sessionID) ?? 0) + 1)
+}
+
+function writeCuratedFile(sessionID: string, content: string): string {
+  const sanitized = sessionID.replace(/[^A-Za-z0-9._-]/g, "_")
+  const filePath = path.join(CURATED_DIR, `${sanitized}.md`)
+  try {
+    writeFileSync(filePath, content)
+    sessionCuratedFile.set(sessionID, filePath)
+  } catch {}
+  return filePath
 }
 
 function isAkmRef(value: string): boolean {
@@ -472,6 +554,125 @@ function buildScopedArgs(context: Record<string, unknown> | undefined): string[]
   return args
 }
 
+function getHarnessStatePaths(): { stateDir: string; eventLog: string; candidateLog: string; opencodeLogDir: string } {
+  const stateDir = path.dirname(OPENCODE_EVENT_LOG)
+  return {
+    stateDir,
+    eventLog: OPENCODE_EVENT_LOG,
+    candidateLog: OPENCODE_CANDIDATE_LOG,
+    opencodeLogDir: path.join(process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? ".", ".local", "share"), "opencode", "log"),
+  }
+}
+
+function formatPathBullet(label: string, filePath: string): string {
+  return `- ${label}: ${filePath}`
+}
+
+function countByValue(values: string[]): Array<[string, number]> {
+  const counts = new Map<string, number>()
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+}
+
+function uniqueRecent<T>(values: T[], key: (value: T) => string, limit: number): T[] {
+  const selected: T[] = []
+  const seen = new Set<string>()
+  for (let index = values.length - 1; index >= 0 && selected.length < limit; index -= 1) {
+    const value = values[index]
+    const id = key(value)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    selected.push(value)
+  }
+  return selected.reverse()
+}
+
+function sessionHasPendingCheckpointEvidence(sessionID: string | undefined): boolean {
+  if (!sessionID) return false
+  return (sessionBuffer.get(sessionID) ?? []).some((entry) => !entry.checkpointed)
+}
+
+async function ensureFreshProposalCheckpoint(
+  client: LogCapableClient,
+  context: { sessionID?: string; directory?: string; agent?: string },
+  reason: string,
+): Promise<string | null> {
+  if (!context.sessionID || !sessionHasPendingCheckpointEvidence(context.sessionID)) return null
+  const ref = captureSessionMemory(context.sessionID, reason, { checkpoint: true })
+  if (!ref) return null
+  await writePluginLog(client, "info", "AKM proposal checkpoint captured", {
+    subsystem: "memory",
+    actor: "system",
+    sessionID: context.sessionID,
+    directory: context.directory,
+    agent: context.agent,
+    reason,
+    ref,
+  })
+  const indexResult = runCliSyncRaw(["index"], AKM_CURATE_TIMEOUT_MS)
+  if (!indexResult.ok) {
+    await writePluginLog(client, "warn", "AKM proposal checkpoint indexing failed", {
+      subsystem: "memory",
+      actor: "system",
+      sessionID: context.sessionID,
+      directory: context.directory,
+      agent: context.agent,
+      reason,
+      ref,
+      error: indexResult.error,
+    })
+  }
+  return ref
+}
+
+function truncateLine(value: string, maxChars = 220): string {
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}...`
+}
+
+function formatEvidenceSummary(events: AkmMemoryEvent[], candidates: ReturnType<typeof readCandidates>, entries: SessionBufferEntry[]): string[] {
+  const lines: string[] = []
+  const toolRefs = entries.filter((entry) => entry.kind === "tool-ref" && entry.ref)
+  const touchedRefs = countByValue(toolRefs.map((entry) => entry.ref!))
+  const toolNames = countByValue(toolRefs.map((entry) => entry.toolName ?? "tool"))
+  const statuses = countByValue(toolRefs.map((entry) => entry.status ?? "unknown"))
+  const eventTypes = countByValue(events.map((event) => event.event))
+  const candidateTypes = countByValue(candidates.map((candidate) => candidate.type))
+
+  lines.push("## Evidence aggregates")
+  lines.push(`- buffered observations: ${entries.length}`)
+  if (toolRefs.length > 0) lines.push(`- asset-touch observations: ${toolRefs.length}`)
+  if (touchedRefs.length > 0) lines.push(`- top refs: ${touchedRefs.slice(0, 5).map(([ref, count]) => `${ref} (${count})`).join(", ")}`)
+  if (toolNames.length > 0) lines.push(`- tools involved: ${toolNames.slice(0, 5).map(([name, count]) => `${name} (${count})`).join(", ")}`)
+  if (statuses.length > 0) lines.push(`- statuses: ${statuses.map(([status, count]) => `${status} (${count})`).join(", ")}`)
+  if (eventTypes.length > 0) lines.push(`- event types: ${eventTypes.slice(0, 6).map(([event, count]) => `${event} (${count})`).join(", ")}`)
+  if (candidateTypes.length > 0) lines.push(`- candidate types: ${candidateTypes.map(([type, count]) => `${type} (${count})`).join(", ")}`)
+  lines.push("")
+
+  const notableEvents = uniqueRecent(events, (event) => `${event.timestamp}:${event.event}:${(event.refs ?? []).join(",")}`, 5)
+  if (notableEvents.length > 0) {
+    lines.push("## Notable recent events")
+    for (const event of notableEvents) {
+      const status = event.outcome?.status ?? "unknown"
+      const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` refs=${event.refs.join(", ")}` : ""
+      const warning = event.outcome?.warnings?.[0] ? ` warning=${truncateLine(event.outcome.warnings[0], 120)}` : ""
+      lines.push(`- ${event.timestamp} ${event.event} (${status})${refs}${warning}`)
+    }
+    lines.push("")
+  }
+
+  const notableCandidates = uniqueRecent(candidates, (candidate) => candidate.id, 5)
+  if (notableCandidates.length > 0) {
+    lines.push("## Candidate highlights")
+    for (const candidate of notableCandidates) {
+      const target = candidate.targetRef ? ` target=${candidate.targetRef}` : ""
+      lines.push(`- [${candidate.status}] ${candidate.type}/${candidate.scope}${target} :: ${truncateLine(candidate.content, 180)}`)
+    }
+    lines.push("")
+  }
+
+  return lines
+}
+
 function runCurate(args: string[]): string | null {
   const result = runCliSyncRaw(args, AKM_CURATE_TIMEOUT_MS)
   if (!result.ok) return null
@@ -511,21 +712,19 @@ async function runCurateForPrompt(client: LogCapableClient, text: string, sessio
   )
 }
 
-async function runCurateForSession(client: LogCapableClient, sessionID: string): Promise<string | null> {
+async function runCurateForSession(client: LogCapableClient, sessionID: string, query?: string): Promise<string | null> {
+  const args = [
+    "--detail",
+    "agent",
+    "--format",
+    "text",
+    "-q",
+    "curate",
+  ]
+  if (query) args.push(query)
+  args.push("--limit", String(AKM_CURATE_LIMIT))
   return runCurateLogged(client,
-    appendRunScopeArgs(
-      [
-        "--detail",
-        "agent",
-        "--format",
-        "text",
-        "-q",
-        "curate",
-        "--limit",
-        String(AKM_CURATE_LIMIT),
-      ],
-      sessionID,
-    ),
+    appendRunScopeArgs(args, sessionID),
     { toolName: "session.start", sessionID, operation: "session-curate" },
   )
 }
@@ -763,7 +962,7 @@ async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: 
   }
 
   const targetRef = recentRefs[recentRefs.length - 1]
-  const raw = await runCli(client, ["feedback", targetRef, "--negative", "--note", text.slice(0, 280)], {
+  const raw = await runCli(client, ["feedback", targetRef, "--negative", "--note", text.slice(0, 280), ...buildScopedArgs({ sessionID })], {
     toolName: "akm_feedback",
     sessionID,
   })
@@ -865,6 +1064,13 @@ function queueFeedback(
         sentiment === "positive" ? "--positive" : "--negative",
         "--note",
         note,
+        ...buildScopedArgs({
+          sessionID: meta.sessionID,
+          directory: meta.directory,
+          agent: meta.agent,
+          userID: meta.userID,
+          channel: meta.channel,
+        }),
       ],
       {
         detached: true,
@@ -913,11 +1119,11 @@ function queueFeedback(
   }
 }
 
-function rememberTextAsMemory(name: string, body: string): string | null {
+function rememberTextAsMemory(name: string, body: string, context?: Record<string, unknown>): string | null {
   const command = resolveAkmCommand()
   if (typeof command !== "string") return null
   try {
-    execFileSync(command, ["--format", "json", "-q", "remember", "--name", name, "--force"], {
+    execFileSync(command, ["--format", "json", "-q", "remember", "--name", name, "--force", ...buildScopedArgs(context)], {
       encoding: "utf8",
       timeout: AKM_CURATE_TIMEOUT_MS * 2,
       input: redactSecrets(body).text,
@@ -931,7 +1137,7 @@ function rememberTextAsMemory(name: string, body: string): string | null {
 function captureSessionMemory(
   sessionID: string,
   reason: string,
-  options?: { checkpoint?: boolean },
+  options?: { checkpoint?: boolean; directory?: string; agent?: string; channel?: string; userID?: string; user?: string },
 ): string | null {
   if (!AKM_AUTO_MEMORY) return null
   if (!sessionID) return null
@@ -945,6 +1151,14 @@ function captureSessionMemory(
     return null
   }
 
+  const relatedEvents = readJsonl<AkmMemoryEvent>(OPENCODE_EVENT_LOG)
+    .filter((event) => event.sessionId === sessionID)
+    .slice(-12)
+  const relatedCandidates = readCandidates(OPENCODE_CANDIDATE_LOG)
+    .filter((candidate) => candidate.sessionId === sessionID)
+    .slice(-8)
+  const harnessPaths = getHarnessStatePaths()
+
   const lines: string[] = []
   lines.push("---")
   lines.push("akm_memory_kind: session_checkpoint")
@@ -957,6 +1171,15 @@ function captureSessionMemory(
   lines.push(`Reason: ${reason}`)
   lines.push(`Session: ${sessionID}`)
   lines.push("")
+  lines.push("## Full-detail evidence files")
+  lines.push(formatPathBullet("OpenCode state dir", harnessPaths.stateDir))
+  lines.push(formatPathBullet("Structured event log", harnessPaths.eventLog))
+  lines.push(formatPathBullet("Memory candidate log", harnessPaths.candidateLog))
+  lines.push(formatPathBullet("OpenCode host log dir", harnessPaths.opencodeLogDir))
+  const harnessLog = process.env.AKM_EVAL_HARNESS_LOG?.trim()
+  if (harnessLog) lines.push(formatPathBullet("Harness log", harnessLog))
+  lines.push("")
+  lines.push(...formatEvidenceSummary(relatedEvents, relatedCandidates, pendingEntries))
   for (const entry of pendingEntries) {
     if (entry.kind === "memory-intent") {
       lines.push(`## ${entry.timestamp} — user memory intent`)
@@ -969,6 +1192,22 @@ function captureSessionMemory(
       lines.push("")
     }
   }
+  if (relatedEvents.length > 0) {
+    lines.push("## Plugin event summary")
+    for (const event of relatedEvents) {
+      const status = event.outcome?.status ?? "unknown"
+      const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` — refs: ${event.refs.join(", ")}` : ""
+      lines.push(`- ${event.timestamp} — ${event.event} (${status})${refs}`)
+    }
+    lines.push("")
+  }
+  if (relatedCandidates.length > 0) {
+    lines.push("## Memory candidates observed")
+    for (const candidate of relatedCandidates) {
+      lines.push(`- [${candidate.status}] ${candidate.type}/${candidate.scope}: ${candidate.content}`)
+    }
+    lines.push("")
+  }
   const body = lines.join("\n")
 
   const dateTag = buildDateTag({ includeTime: isCheckpoint })
@@ -977,7 +1216,15 @@ function captureSessionMemory(
     ? `opencode-checkpoint-${dateTag}-${shortSid}`
     : `opencode-session-${dateTag}-${shortSid}`
 
-  const ref = rememberTextAsMemory(name, body)
+  const ref = rememberTextAsMemory(name, body, {
+    sessionID,
+    run: sessionID,
+    directory: options?.directory,
+    agent: options?.agent,
+    channel: options?.channel,
+    userID: options?.userID,
+    user: options?.user,
+  })
   if (!ref) {
     if (!isCheckpoint) {
       sessionFinalMemoryCaptured.add(sessionID)
@@ -995,7 +1242,15 @@ function captureSessionMemory(
       refs: [ref],
       outcome: { status: "ok" },
     })
-    const candidates = extractCandidatesFromText({ harness: "opencode", sessionId: sessionID, text: body, evidence: [ref, reason] })
+    const targetRefHints = pendingEntries.flatMap((entry) => entry.ref ? [entry.ref] : [])
+    const candidates = extractCandidatesFromText({
+      harness: "opencode",
+      sessionId: sessionID,
+      text: body,
+      evidence: [ref, reason, ...targetRefHints],
+      sourcePaths: [harnessPaths.eventLog, harnessPaths.candidateLog],
+      targetRefHints,
+    })
     if (candidates.length > 0) {
       appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
       void writeStructuredEvent({
@@ -1025,7 +1280,15 @@ function captureSessionMemory(
     refs: [ref],
     outcome: { status: "ok" },
   })
-  const candidates = extractCandidatesFromText({ harness: "opencode", sessionId: sessionID, text: body, evidence: [ref, reason] })
+  const targetRefHints = entries.flatMap((entry) => entry.ref ? [entry.ref] : [])
+  const candidates = extractCandidatesFromText({
+    harness: "opencode",
+    sessionId: sessionID,
+    text: body,
+    evidence: [ref, reason, ...targetRefHints],
+    sourcePaths: [harnessPaths.eventLog, harnessPaths.candidateLog],
+    targetRefHints,
+  })
   if (candidates.length > 0) {
     appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
     void writeStructuredEvent({
@@ -1040,10 +1303,13 @@ function captureSessionMemory(
   return ref
 }
 
-function maybeCheckpointSessionMemory(sessionID: string): string | null {
+function maybeCheckpointSessionMemory(
+  sessionID: string,
+  options?: { directory?: string; agent?: string; channel?: string; userID?: string; user?: string },
+): string | null {
   const count = sessionSuccessfulAssetTouchCount.get(sessionID) ?? 0
   if (count < AKM_MEMORY_CHECKPOINT_EVERY) return null
-  const captured = captureSessionMemory(sessionID, "checkpoint", { checkpoint: true })
+  const captured = captureSessionMemory(sessionID, "checkpoint", { checkpoint: true, ...options })
   if (!captured) {
     sessionSuccessfulAssetTouchCount.set(sessionID, 0)
   }
@@ -2259,10 +2525,12 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             })
             warmIndexInBackground()
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
-              const curated = await runCurateForSession(logClient, sid)
+              const cwdContext = gatherCwdContext(directory)
+              const curated = await runCurateForSession(logClient, sid, cwdContext || undefined)
               if (curated) {
                 bumpCuratedVersion(sid)
                 sessionCurated.set(sid, curated)
+                writeCuratedFile(sid, curated)
               }
             }
           }
@@ -2279,7 +2547,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
         } else if (type === "session.compacted" || type === "session.idle" || type === "session.deleted") {
           if (!sid) return
-          const captured = captureSessionMemory(sid, type)
+          const captured = captureSessionMemory(sid, type, { directory })
           if (captured) {
             await writePluginLog(logClient, "info", "AKM session memory captured", {
               subsystem: "memory",
@@ -2304,6 +2572,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           if (type === "session.deleted") {
             sessionHints.delete(sid)
             sessionCurated.delete(sid)
+            sessionCuratedFile.delete(sid)
             sessionWorkflow.delete(sid)
             sessionCuratorReport.delete(sid)
             sessionContextEpoch.delete(sid)
@@ -2326,7 +2595,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       try {
         const sid = extractSessionIdFromEvent(input)
         if (!sid) return
-        const captured = captureSessionMemory(sid, "stop")
+        const captured = captureSessionMemory(sid, "stop", { directory })
         if (captured) {
           await writePluginLog(logClient, "info", "AKM session memory captured", {
             subsystem: "memory",
@@ -2343,7 +2612,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
     },
     // experimental.chat.system.transform is how OpenCode exposes the
     // additionalContext channel. We append the cached hints (once per session)
-    // and the curated assets (once per turn) so the next LLM call sees them.
+    // and the curated file reference (once per turn) so the next LLM call
+    // sees instructions to read the curated file instead of raw content.
     "experimental.chat.system.transform": async (
       input: { sessionID?: string; session_id?: string } | undefined,
       output: { system?: string[] } | undefined,
@@ -2354,9 +2624,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const epoch = sessionContextEpoch.get(sid) ?? 0
         const injectedEpoch = sessionContextInjectedEpoch.get(sid)
         if (sid && injectedEpoch !== epoch) {
+          const curatedFile = sessionCuratedFile.get(sid)
+          const curatedBlock = curatedFile
+            ? `AKM stash curation available at \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${AKM_CURATED_TAIL}`
+            : ""
           const blocks = [
             sessionHints.get(sid) ? `${AKM_HINTS_PREFIX}\n\n${sessionHints.get(sid)}` : "",
-            sessionCurated.get(sid) ? `${AKM_CURATED_HEADER}\n${sessionCurated.get(sid)}${AKM_CURATED_TAIL}` : "",
+            curatedBlock,
             sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
             (await getPendingProposalCount(logClient, sid)).count > 0 && !(await getPendingProposalCount(logClient, sid)).unsupported ? formatPendingProposalContext((await getPendingProposalCount(logClient, sid)).count) : "",
             sessionCuratorReport.get(sid) ? formatCuratorReportContext(sessionCuratorReport.get(sid)!) : "",
@@ -2364,8 +2638,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           output.system.push(...applyContextBudget(blocks))
           sessionContextInjectedEpoch.set(sid, epoch)
           if (sessionCurated.has(sid)) {
-            // Startup curation is already included in the epoch-scoped block,
-            // so mark that version as consumed to avoid a duplicate inject below.
             sessionCuratedInjectedVersion.set(sid, sessionCuratedVersion.get(sid) ?? 0)
           }
         }
@@ -2373,7 +2645,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const curatedVersion = sessionCuratedVersion.get(sid) ?? 0
         if (curated) {
           if (sessionCuratedInjectedVersion.get(sid) !== curatedVersion) {
-            output.system.push(...applyContextBudget([`${AKM_CURATED_HEADER}\n${curated}${AKM_CURATED_TAIL}`]))
+            const curatedFile = writeCuratedFile(sid, curated)
+            output.system.push(...applyContextBudget([`AKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to the current task. ${AKM_CURATED_TAIL}`]))
             sessionCuratedInjectedVersion.set(sid, curatedVersion)
           }
         }
@@ -2465,8 +2738,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       try {
         output.env.AKM_PROJECT = worktree
         output.env.AKM_PLUGIN_VERSION = PLUGIN_VERSION
-        const stashDir = await getAkmStashDir(logClient)
-        if (stashDir) output.env.AKM_STASH_DIR = stashDir
       } catch (error: unknown) {
         await logHookFailure(logClient, "shell.env", error)
       }
@@ -2507,6 +2778,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             })
             if (curated) {
               sessionCurated.set(input.sessionID, curated)
+              writeCuratedFile(input.sessionID, curated)
               bumpCuratedVersion(input.sessionID)
             }
           } else {
@@ -2528,7 +2800,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             })
             const current = sessionCurated.get(input.sessionID) ?? ""
             if (!current.includes(hint)) {
-              sessionCurated.set(input.sessionID, current ? `${current}\n\n${hint}` : hint)
+              const updated = current ? `${current}\n\n${hint}` : hint
+              sessionCurated.set(input.sessionID, updated)
+              writeCuratedFile(input.sessionID, updated)
               bumpCuratedVersion(input.sessionID)
             }
           }
@@ -2554,6 +2828,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             queueFeedback(logClient, ref, "positive", "opencode retrospective: user confirmed it worked", {
               toolName: "chat.message",
               sessionID: input.sessionID,
+              agent: input.agent,
             }, dedupe)
           }
         }
@@ -2628,7 +2903,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               input.sessionID,
               (sessionSuccessfulAssetTouchCount.get(input.sessionID) ?? 0) + 1,
             )
-            const checkpointRef = maybeCheckpointSessionMemory(input.sessionID)
+            const checkpointRef = maybeCheckpointSessionMemory(input.sessionID, {
+              directory: input.directory,
+              agent: input.tool,
+            })
             if (checkpointRef) {
               await writePluginLog(logClient, "info", "AKM checkpoint memory captured", {
                 subsystem: "memory",
@@ -2682,6 +2960,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             const ok = queueFeedback(logClient, ref, feedback, signal.note, {
               toolName: input.tool,
               sessionID: input.sessionID,
+              directory: input.directory,
+              agent: input.tool,
             }, dedupe)
             if (ok) {
               writeStructuredEvent({
@@ -2873,7 +3153,14 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           return JSON.stringify({ ok: true, candidates })
         }
         if (input.action === "checkpoint") {
-          const ref = captureSessionMemory(context.sessionID, "manual-checkpoint", { checkpoint: true })
+          const ref = captureSessionMemory(context.sessionID, "manual-checkpoint", {
+            checkpoint: true,
+            directory: context.directory,
+            agent: context.agent,
+            channel: (context as Record<string, unknown>).channel as string | undefined,
+            userID: (context as Record<string, unknown>).userID as string | undefined,
+            user: (context as Record<string, unknown>).user as string | undefined,
+          })
           return JSON.stringify({ ok: true, ref })
         }
         if (input.action === "sync") {
@@ -2956,6 +3243,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         as_subtask: tool.schema.boolean().optional().describe("Run in a child session with parent context. Defaults to true."),
       },
       async execute({ focus, dispatch_agent, as_subtask }, context) {
+        await ensureFreshProposalCheckpoint(logClient, {
+          sessionID: context.sessionID,
+          directory: context.directory,
+          agent: context.agent,
+        }, "pre-evolve")
         const useSubtask = as_subtask ?? true
         const requestedAgent = dispatch_agent ?? "akm-curator"
         const targetAgent = await resolveDispatchAgent(sdkClient, requestedAgent, context.directory)
@@ -2994,7 +3286,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const dateTag = buildDateTag()
         const shortSid = context.sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"
         const curatorMemoryRef = fullText
-          ? rememberTextAsMemory(`akm-curator-${dateTag}-${shortSid}`, fullText)
+          ? rememberTextAsMemory(`akm-curator-${dateTag}-${shortSid}`, fullText, context as unknown as Record<string, unknown>)
           : null
 
         return JSON.stringify({
@@ -3164,7 +3456,14 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (!promptResponse.ok) return JSON.stringify(promptResponse)
 
         const childText = extractText(promptResponse.data.parts)
-        const candidates = extractCandidatesFromText({ harness: "opencode", sessionId: targetSession.sessionID, text: childText, evidence: [resolved.ref, task_prompt] })
+        const candidates = extractCandidatesFromText({
+          harness: "opencode",
+          sessionId: targetSession.sessionID,
+          text: childText,
+          evidence: [resolved.ref, task_prompt],
+          sourcePaths: [OPENCODE_EVENT_LOG, OPENCODE_CANDIDATE_LOG],
+          targetRefHints: [resolved.ref],
+        })
         if (candidates.length > 0) appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
         writeStructuredEvent({
           event: "subagent_completed",
@@ -3622,12 +3921,19 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         task: tool.schema.string().optional().describe("Optional extra guidance for this improvement pass."),
         dry_run: tool.schema.boolean().optional().describe("Show planned actions without generating proposals."),
       },
-      async execute({ scope, task, dry_run }) {
+      async execute({ scope, task, dry_run }, context) {
+        if (!dry_run) {
+          await ensureFreshProposalCheckpoint(logClient, {
+            sessionID: context.sessionID,
+            directory: context.directory,
+            agent: context.agent,
+          }, "pre-improve")
+        }
         const args = ["improve"]
         if (scope) args.push(scope)
         if (task) args.push("--task", task)
         if (dry_run) args.push("--dry-run")
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_improve" })
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_improve", sessionID: context.sessionID, directory: context.directory, agent: context.agent })
       },
     }),
     akm_propose: tool({
@@ -3638,14 +3944,19 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         task: tool.schema.string().optional().describe("Optional inline task text describing what the asset should do."),
         file: tool.schema.string().optional().describe("Optional UTF-8 file path to read the task text from. Exactly one of task/file is required."),
       },
-      async execute({ type, name, task, file }) {
+      async execute({ type, name, task, file }, context) {
         const hasTask = !!task?.trim()
         const hasFile = !!file?.trim()
         if (hasTask === hasFile) return JSON.stringify({ ok: false, error: "Exactly one of 'task' or 'file' is required for akm_propose." })
+        await ensureFreshProposalCheckpoint(logClient, {
+          sessionID: context.sessionID,
+          directory: context.directory,
+          agent: context.agent,
+        }, "pre-propose")
         const args = ["propose", type, name]
         if (hasTask) args.push("--task", task!.trim())
         if (hasFile) args.push("--file", file!.trim())
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_propose" })
+        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_propose", sessionID: context.sessionID, directory: context.directory, agent: context.agent })
       },
     }),
     akm_init: tool({
@@ -3706,6 +4017,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
     },
   }
 }
-
+ 
 export const server = AkmPlugin
-export default { server }
+export default { server, id: "akm-opencode" }

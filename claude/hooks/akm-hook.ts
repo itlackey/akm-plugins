@@ -4,8 +4,8 @@ import { accessSync, appendFileSync, constants, copyFileSync, existsSync, mkdirS
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
-import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from "../shared/memory-candidates"
-import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
+import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates } from "../shared/memory-candidates"
+import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
 
@@ -38,8 +38,72 @@ const SESSION_START_HEADER = [
   'You have an AKM stash on this machine. Before writing anything from scratch, call `akm curate "<task>"` or `akm search` to see if the stash already covers it. Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
 const REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g
+const CURATED_DIR = path.join(STATE_DIR, "curated")
+const PROPOSAL_FLOW_RE = /\/akm-(improve|evolve|propose)\b/
+
+function formatPathBullet(label: string, filePath: string): string {
+  return `- ${label}: ${filePath}`
+}
+
+function countByValue(values: string[]): Array<[string, number]> {
+  const counts = new Map<string, number>()
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+}
+
+function uniqueRecent<T>(values: T[], key: (value: T) => string, limit: number): T[] {
+  const selected: T[] = []
+  const seen = new Set<string>()
+  for (let index = values.length - 1; index >= 0 && selected.length < limit; index -= 1) {
+    const value = values[index]
+    const id = key(value)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    selected.push(value)
+  }
+  return selected.reverse()
+}
+
+function gatherCwdContext(): string {
+  const parts: string[] = []
+  const cwd = process.cwd()
+  const indicators: Array<{ file: string; label: string }> = [
+    { file: "package.json", label: "Node" },
+    { file: "Cargo.toml", label: "Rust" },
+    { file: "pyproject.toml", label: "Python" },
+    { file: "go.mod", label: "Go" },
+    { file: "Gemfile", label: "Ruby" },
+    { file: "Makefile", label: "Make" },
+    { file: "Dockerfile", label: "Docker" },
+    { file: "docker-compose.yml", label: "Docker Compose" },
+    { file: ".github/workflows", label: "GitHub Actions" },
+    { file: "composer.json", label: "PHP" },
+  ]
+  for (const indicator of indicators) {
+    try {
+      if (existsSync(path.join(cwd, indicator.file))) parts.push(indicator.label)
+    } catch {}
+  }
+  try {
+    const pkgPath = path.join(cwd, "package.json")
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"))
+      if (pkg.name) parts.push(pkg.name)
+      if (pkg.description) parts.push(String(pkg.description).slice(0, 120))
+    }
+  } catch {}
+  try {
+    const readme = path.join(cwd, "README.md")
+    if (existsSync(readme)) {
+      const firstContent = readFileSync(readme, "utf8").split("\n").find((l) => l.trim() && !l.startsWith("#"))
+      if (firstContent) parts.push(firstContent.trim().slice(0, 100))
+    }
+  } catch {}
+  return parts.join(", ")
+}
 
 mkdirSync(STATE_DIR, { recursive: true })
+mkdirSync(CURATED_DIR, { recursive: true })
 mkdirSync(SESSIONS_DIR, { recursive: true })
 
 function timestamp(): string {
@@ -159,6 +223,46 @@ function akmAvailable(): boolean {
   return !!findCommandOnPath("akm")
 }
 
+function getAkmConfigPath(): string {
+  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? ".", ".config")
+  return path.join(configHome, "akm", "config.json")
+}
+
+function readAkmConfig(): Record<string, unknown> {
+  try {
+    const raw = readFileSync(getAkmConfigPath(), "utf8")
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function readConfiguredAgentDefault(): string {
+  const config = readAkmConfig()
+  const agent = config.agent
+  if (!agent || typeof agent !== "object") return ""
+  const value = (agent as Record<string, unknown>).default
+  return typeof value === "string" ? value.trim() : ""
+}
+
+function writeConfiguredAgentDefault(platform: string): boolean {
+  if (!platform.trim()) return false
+  try {
+    const configPath = getAkmConfigPath()
+    mkdirSync(path.dirname(configPath), { recursive: true })
+    const current = readAkmConfig()
+    const agent = current.agent && typeof current.agent === "object"
+      ? { ...(current.agent as Record<string, unknown>) }
+      : {}
+    agent.default = platform
+    writeFileSync(configPath, `${JSON.stringify({ ...current, agent }, null, 2)}\n`)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function akmRun(args: string[], input?: string): string {
   const akm = findCommandOnPath("akm")
   if (!akm) return ""
@@ -263,6 +367,14 @@ function extractUserText(raw: string): string {
   return ""
 }
 
+function sessionHasPendingCheckpointEvidence(sessionID: string | undefined): boolean {
+  if (!sessionID) return false
+  const bufferPath = path.join(SESSIONS_DIR, `${sessionID}.md`)
+  if (!existsSync(bufferPath)) return false
+  const buffer = readFileSync(bufferPath, "utf8")
+  return (buffer.match(/^## /gm) ?? []).length >= 2
+}
+
 function extractPostToolFields(raw: string, mode: string): { toolName: string; commandText: string; outputText: string; statusText: string; refs: string[]; commandRefs: string[]; outputRefs: string[]; sid: string } {
   const parsed = safeJsonParse<Record<string, unknown>>(raw)
   if (!parsed) return { toolName: "", commandText: sanitize(raw), outputText: "", statusText: mode || "success", refs: [], commandRefs: [], outputRefs: [], sid: "" }
@@ -343,6 +455,7 @@ function userPromptExpansion(): string {
   if (/\/akm-(memory-promote|memory-reject|proposal)\b/.test(expanded) && !/\b(confirm|approved|approval)\b/i.test(expanded)) {
     return emitHookContext("UserPromptExpansion", "AKM note: mutating memory/proposal flows should be explicit. Confirm promotion/rejection or proposal acceptance before changing durable state.")
   }
+  if (PROPOSAL_FLOW_RE.test(expanded)) ensureFreshProposalCheckpoint(rawInput)
   if (/\/akm-/.test(expanded)) {
     return emitHookContext("UserPromptExpansion", "AKM note: slash-command expansion should keep mutating actions explicit and prefer review before durable writes.")
   }
@@ -423,11 +536,15 @@ function taskCompleted(): string {
   })
   if (sid && summary) {
     writeSessionBuffer(sid, "task completed", summary)
+    const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
+    const targetRefHints = [...new Set(summary.match(REF_PATTERN) ?? [])]
     const candidates = extractCandidatesFromText({
       harness: "claude-code",
       sessionId: sid,
       text: summary,
       evidence: [summary],
+      sourcePaths: [bufferPath, EVENT_LOG, CANDIDATE_LOG],
+      targetRefHints,
     })
     if (candidates.length > 0) {
       appendCandidates(CANDIDATE_LOG, candidates)
@@ -554,26 +671,14 @@ function refQuality(ref: string): string {
 
 function detectAgentDefault(): string {
   if (!akmAvailable()) return ""
-  const readCurrent = () => {
-    const raw = akmRun(["--format", "json", "-q", "config", "get", "agent.default"])
-    const parsed = safeJsonParse<unknown>(raw)
-    if (typeof parsed === "string") return parsed
-    if (parsed && typeof parsed === "object") {
-      const record = parsed as Record<string, unknown>
-      const value = record.value ?? record["agent.default"]
-      return typeof value === "string" ? value : ""
-    }
-    return ""
-  }
-  const current = readCurrent()
+  const current = readConfiguredAgentDefault()
   if (current) return current
-  const setResult = akmRun(["--format", "json", "-q", "config", "set", "agent.default", "claude"])
-  if (setResult.trim()) {
+  if (writeConfiguredAgentDefault("claude")) {
     appendLog(SESSION_LOG, "agent_default_initialized", "claude")
   } else {
-    appendLog(SESSION_LOG, "agent_default_init_failed", "claude", "empty stdout from akm config set agent.default")
+    appendLog(SESSION_LOG, "agent_default_init_failed", "claude", `failed to write ${getAkmConfigPath()}`)
   }
-  return readCurrent()
+  return readConfiguredAgentDefault()
 }
 
 function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
@@ -610,6 +715,14 @@ function recordPostTool() {
     refs,
     outcome: { status: statusText === "failure" ? "failed" : "ok" },
   })
+}
+
+function ensureFreshProposalCheckpoint(rawInput?: string): string | null {
+  if (!AUTO_MEMORY || !akmAvailable()) return null
+  const payload = rawInput ?? readStdin()
+  const sid = extractSessionId(payload)
+  if (!sid || !sessionHasPendingCheckpointEvidence(sid)) return null
+  return captureMemory({ rawInput: payload, reason: "proposal-prep", checkpoint: true })
 }
 
 function autoFeedback() {
@@ -660,6 +773,49 @@ function autoFeedback() {
   }
 }
 
+function formatEvidenceSummary(events: AkmMemoryEvent[], candidates: ReturnType<typeof readCandidates>, buffer: string): string[] {
+  const lines: string[] = []
+  const bufferedEntries = (buffer.match(/^## /gm) ?? []).length
+  const allRefs = [...new Set(buffer.match(REF_PATTERN) ?? [])]
+  const eventTypes = countByValue(events.map((event) => event.event))
+  const statuses = countByValue(events.map((event) => event.outcome?.status ?? "unknown"))
+  const candidateTypes = countByValue(candidates.map((candidate) => candidate.type))
+  const targetedCandidates = countByValue(candidates.map((candidate) => candidate.targetRef).filter((value): value is string => !!value))
+
+  lines.push("## Evidence aggregates")
+  lines.push(`- buffered observations: ${bufferedEntries}`)
+  if (allRefs.length > 0) lines.push(`- referenced assets: ${allRefs.slice(0, 6).join(", ")}`)
+  if (eventTypes.length > 0) lines.push(`- event types: ${eventTypes.slice(0, 6).map(([event, count]) => `${event} (${count})`).join(", ")}`)
+  if (statuses.length > 0) lines.push(`- event outcomes: ${statuses.map(([status, count]) => `${status} (${count})`).join(", ")}`)
+  if (candidateTypes.length > 0) lines.push(`- candidate types: ${candidateTypes.map(([type, count]) => `${type} (${count})`).join(", ")}`)
+  if (targetedCandidates.length > 0) lines.push(`- candidate targets: ${targetedCandidates.slice(0, 5).map(([ref, count]) => `${ref} (${count})`).join(", ")}`)
+  lines.push("")
+
+  const notableEvents = uniqueRecent(events, (event) => `${event.timestamp}:${event.event}:${(event.refs ?? []).join(",")}`, 5)
+  if (notableEvents.length > 0) {
+    lines.push("## Notable recent events")
+    for (const event of notableEvents) {
+      const status = event.outcome?.status ?? "unknown"
+      const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` refs=${event.refs.join(", ")}` : ""
+      const warning = event.outcome?.warnings?.[0] ? ` warning=${sanitize(event.outcome.warnings[0]).slice(0, 120)}` : ""
+      lines.push(`- ${event.timestamp} ${event.event} (${status})${refs}${warning}`)
+    }
+    lines.push("")
+  }
+
+  const notableCandidates = uniqueRecent(candidates, (candidate) => candidate.id, 5)
+  if (notableCandidates.length > 0) {
+    lines.push("## Candidate highlights")
+    for (const candidate of notableCandidates) {
+      const target = candidate.targetRef ? ` target=${candidate.targetRef}` : ""
+      lines.push(`- [${candidate.status}] ${candidate.type}/${candidate.scope}${target} :: ${candidate.content.slice(0, 180)}`)
+    }
+    lines.push("")
+  }
+
+  return lines
+}
+
 function curatePrompt(): string {
   const rawInput = readStdin()
   const text = extractUserText(rawInput)
@@ -693,7 +849,11 @@ function curatePrompt(): string {
     outcome: { status: curated.trim() ? "ok" : "skipped" },
   })
   if (!curated.trim()) return ""
-  return emitHookContext("UserPromptSubmit", `${CURATED_PROMPT_HEADER}\n${curated.trim()}\n\n${CURATED_CONTEXT_TAIL}`)
+  const curatedFile = path.join(CURATED_DIR, `prompt-${sid ?? "unknown"}.md`)
+  try {
+    writeFileSync(curatedFile, curated.trim())
+  } catch {}
+  return emitHookContext("UserPromptSubmit", `AKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this task. ${CURATED_CONTEXT_TAIL}`)
 }
 
 function sessionStart(): string {
@@ -714,7 +874,15 @@ function sessionStart(): string {
 
   const agentDefault = detectAgentDefault()
   const hints = akmRun(["--format", "text", "-q", "hints"]).trim()
-  const curated = akmRun(["--detail", "agent", "--format", "text", "-q", "curate", "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)]).trim()
+  const cwdContext = gatherCwdContext()
+  const curatedRaw = akmRun(["--detail", "agent", "--format", "text", "-q", "curate", cwdContext, "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)]).trim()
+  let curatedFile = ""
+  if (curatedRaw) {
+    curatedFile = path.join(CURATED_DIR, `session-${sid ?? "unknown"}.md`)
+    try {
+      writeFileSync(curatedFile, curatedRaw)
+    } catch {}
+  }
   const pendingRaw = akmRun(["--format", "json", "-q", "proposal", "list", "--status", "pending"])
   const pendingItems = safeJsonParse<Record<string, unknown>>(pendingRaw)
   const pending = Array.isArray(pendingItems?.proposals)
@@ -728,42 +896,86 @@ function sessionStart(): string {
       ? "There is 1 pending AKM proposal - review with `/akm-review-proposals` or `/akm-proposal list`."
       : `There are ${pending} pending AKM proposals - review with \`/akm-review-proposals\` or \`/akm-proposal list\`.`
 
-  if (!hints && !curated && !agentDefault && !pendingSummary) return ""
+  if (!hints && !curatedRaw && !agentDefault && !pendingSummary) return ""
   writeMemoryEvent({
     event: "session_started",
     sessionId: sid || undefined,
     scope: buildScope(sid),
     input: { agentDefault, pendingProposals: pending },
-    refs: [...new Set(curated.match(REF_PATTERN) ?? [])],
+    refs: [...new Set(curatedRaw.match(REF_PATTERN) ?? [])],
     outcome: { status: "ok" },
   })
   let body = SESSION_START_HEADER
   if (agentDefault) body = `${body}\n\nAgent CLI: ${agentDefault} (configured via \`akm setup\`).`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (hints) body = `${body}\n\n${hints}`
-  if (curated) body = `${body}\n\n${CURATED_SESSION_HEADER}\n${curated}\n\n${CURATED_CONTEXT_TAIL}`
+  if (curatedFile) body = `${body}\n\nAKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${CURATED_CONTEXT_TAIL}`
   body = `${body}\n\n${SESSION_START_FOOTER}`
   return emitHookContext("SessionStart", body)
 }
 
-function captureMemory() {
-  const reason = MODE || "session-end"
-  if (!AUTO_MEMORY || !akmAvailable()) return
-  const rawInput = readStdin()
+function captureMemory(options?: { rawInput?: string; reason?: string; checkpoint?: boolean }) {
+  const reason = options?.reason ?? MODE ?? "session-end"
+  const isCheckpoint = options?.checkpoint === true
+  if (!AUTO_MEMORY || !akmAvailable()) return null
+  const rawInput = options?.rawInput ?? readStdin()
   const sid = extractSessionId(rawInput)
-  if (!sid) return
+  if (!sid) return null
   const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
-  if (!existsSync(bufferPath)) return
+  if (!existsSync(bufferPath)) return null
   const buffer = readFileSync(bufferPath, "utf8")
   const entries = (buffer.match(/^## /gm) ?? []).length
   if (entries < 2) {
-    rmSync(bufferPath, { force: true })
-    return
+    if (!isCheckpoint) rmSync(bufferPath, { force: true })
+    return null
   }
-  const dateTag = timestamp().slice(0, 10).replace(/-/g, "")
+  const dateTag = isCheckpoint
+    ? timestamp().replace(/[-:TZ.]/g, "").slice(0, 14)
+    : timestamp().slice(0, 10).replace(/-/g, "")
   const shortSid = sid.slice(0, 8)
-  const name = `claude-session-${dateTag}-${shortSid}`
-  const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${buffer}`
+  const name = isCheckpoint
+    ? `claude-checkpoint-${dateTag}-${shortSid}`
+    : `claude-session-${dateTag}-${shortSid}`
+  const relatedEvents = readJsonl<AkmMemoryEvent>(EVENT_LOG)
+    .filter((event) => event.sessionId === sid)
+    .slice(-12)
+  const relatedCandidates = readCandidates(CANDIDATE_LOG)
+    .filter((candidate) => candidate.sessionId === sid)
+    .slice(-8)
+  const targetRefHints = relatedCandidates.flatMap((candidate) => candidate.targetRef ? [candidate.targetRef] : [])
+  const summarySections: string[] = [buffer.trimEnd()]
+  summarySections.push([
+    "## Full-detail evidence files",
+    formatPathBullet("Claude state dir", STATE_DIR),
+    formatPathBullet("Session buffer", bufferPath),
+    formatPathBullet("Structured event log", EVENT_LOG),
+    formatPathBullet("Memory candidate log", CANDIDATE_LOG),
+    formatPathBullet("Session log", SESSION_LOG),
+    formatPathBullet("Feedback log", FEEDBACK_LOG),
+    formatPathBullet("Memory log", MEMORY_LOG),
+    process.env.AKM_EVAL_HARNESS_LOG?.trim() ? formatPathBullet("Harness log", process.env.AKM_EVAL_HARNESS_LOG.trim()) : "",
+  ].filter(Boolean).join("\n"))
+  summarySections.push(formatEvidenceSummary(relatedEvents, relatedCandidates, buffer).join("\n").trimEnd())
+  if (relatedEvents.length > 0) {
+    summarySections.push([
+      "## Plugin event summary",
+      ...relatedEvents.map((event) => {
+        const status = event.outcome?.status ?? "unknown"
+        const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` — refs: ${event.refs.join(", ")}` : ""
+        return `- ${event.timestamp} — ${event.event} (${status})${refs}`
+      }),
+    ].join("\n"))
+  }
+  if (relatedCandidates.length > 0) {
+    summarySections.push([
+      "## Memory candidates observed",
+      ...relatedCandidates.map((candidate) => {
+        const target = candidate.targetRef ? ` target=${candidate.targetRef}` : ""
+        return `- [${candidate.status}] ${candidate.type}/${candidate.scope}${target}: ${candidate.content}`
+      }),
+    ].join("\n"))
+  }
+  const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${summarySections.join("\n\n")}`
   const redactedBody = redactSecrets(rawBody).text
   const result = akmRun(["--format", "json", "-q", "remember", "--name", name, "--force", ...buildRunScopeArgs(sid)], redactedBody)
   if (result.trim()) {
@@ -780,7 +992,11 @@ function captureMemory() {
       harness: "claude-code",
       sessionId: sid,
       text: redactedBody,
-      evidence: [`memory:${name}`, reason],
+      evidence: [`memory:${name}`, reason, ...targetRefHints],
+      sourcePaths: [bufferPath, EVENT_LOG, CANDIDATE_LOG, SESSION_LOG, FEEDBACK_LOG, MEMORY_LOG].concat(
+        process.env.AKM_EVAL_HARNESS_LOG?.trim() ? [process.env.AKM_EVAL_HARNESS_LOG.trim()] : [],
+      ),
+      targetRefHints,
     })
     if (candidates.length > 0) {
       appendCandidates(CANDIDATE_LOG, candidates)
@@ -804,7 +1020,8 @@ function captureMemory() {
       outcome: { status: "failed", error: "empty stdout from akm remember" },
     })
   }
-  rmSync(bufferPath, { force: true })
+  if (!isCheckpoint) rmSync(bufferPath, { force: true })
+  return `memory:${name}`
 }
 
 function main(): string {
@@ -843,7 +1060,7 @@ function main(): string {
       autoFeedback()
       return ""
     case "capture-memory":
-      captureMemory()
+      captureMemory({ checkpoint: MODE === "proposal-prep" })
       return ""
     default:
       appendLog(SESSION_LOG, "runtime_error", "unknown_command", COMMAND)

@@ -98,7 +98,7 @@ Provides:
 - **`/akm-help` discovery flow** — for verbs without a dedicated slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, raw `agent`, vault writes), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
-- **Claude hooks** — the plugin refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`) on session start, can set `agent.default` to the current platform when it is missing, surfaces pending-proposal counts in the SessionStart header, blocks risky raw AKM Bash in `PreToolUse`, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality and `lesson:*` refs. Human users can run `akm setup` manually when interactive setup is needed.
+- **Claude hooks** — the plugin refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`) on session start, can set `agent.default` to the current platform in the AKM config file when it is missing, surfaces pending-proposal counts in the SessionStart header, blocks risky raw AKM Bash in `PreToolUse`, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality and `lesson:*` refs. Human users can run `akm setup` manually when interactive setup is needed.
 
 ### All Other Agents
 

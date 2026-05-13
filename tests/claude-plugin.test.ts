@@ -188,6 +188,13 @@ describe("Claude plugin metadata", () => {
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
   })
 
+  it("re-exports shared memory helpers to reduce harness drift", async () => {
+    const candidateShared = readFileSync(path.join(repoRoot, "claude/shared/memory-candidates.ts"), "utf8")
+    const eventShared = readFileSync(path.join(repoRoot, "claude/shared/memory-events.ts"), "utf8")
+    expect(candidateShared.trim()).toBe('export * from "../../shared/memory-candidates"')
+    expect(eventShared.trim()).toBe('export * from "../../shared/memory-events"')
+  })
+
   it("v0.8.0 slash commands carry the canonical proposal-flow guard rails", () => {
     const commandsDir = path.join(repoRoot, "claude/commands")
     const proposal = readFileSync(path.join(commandsDir, "akm-proposal.md"), "utf8")
@@ -478,8 +485,8 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("knowledge:release-plan")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/prompt-sess-curate-2.md")
   })
 
   it("curate-prompt recalls release workflow prompts", () => {
@@ -516,8 +523,8 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("command:bump-version")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("workflow:release")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/prompt-sess-curate-release-1.md")
   })
 
   it("curate-prompt skips curation for very short prompts", () => {
@@ -557,6 +564,9 @@ echo "[knowledge] should-not-appear"
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(invokeLog)
 
+    mkdirSync(path.join(tempDir, ".config", "akm"), { recursive: true })
+    writeFileSync(path.join(tempDir, ".config", "akm", "config.json"), `${JSON.stringify({})}\n`)
+
     // Fake akm: version/install, index no-op, hints + curated output.
     writeFileSync(
       path.join(binDir, "akm"),
@@ -565,13 +575,6 @@ printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
   --version) echo "akm 9.9.9"; exit 0 ;;
 esac
-if [ "$1" = "--format" ] && [ "$2" = "json" ] && [ "$3" = "-q" ] && [ "$4" = "config" ] && [ "$5" = "get" ] && [ "$6" = "agent.default" ]; then
-  exit 0
-fi
-if [ "$1" = "--format" ] && [ "$2" = "json" ] && [ "$3" = "-q" ] && [ "$4" = "config" ] && [ "$5" = "set" ] && [ "$6" = "agent.default" ] && [ "$7" = "claude" ]; then
-  echo '{"ok":true}'
-  exit 0
-fi
 for arg in "$@"; do
   case "$arg" in
     hints) echo "# Stash hints"; echo "akm search <query>"; exit 0 ;;
@@ -594,14 +597,15 @@ exit 0
     })
 
     const payload = JSON.parse(stdout.trim())
+    const config = JSON.parse(readFileSync(path.join(tempDir, ".config", "akm", "config.json"), "utf8"))
     expect(payload.hookSpecificOutput.hookEventName).toBe("SessionStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM is available")
     expect(payload.hookSpecificOutput.additionalContext).toContain("Stash hints")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash - assets relevant to this session")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("skill:deploy")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/session-sess-start-1.md")
+    expect(config.agent.default).toBe("claude")
 
     const invocations = readFileSync(invokeLog, "utf8")
-    expect(invocations).toContain("config set agent.default claude")
     expect(invocations).toContain("curate")
     expect(invocations).toContain("--detail agent")
     expect(invocations).not.toContain("--for-agent")
@@ -963,8 +967,58 @@ exit 0
     const body = readFileSync(rememberBody, "utf8")
     expect(body).toContain("# Session summary")
     expect(body).toContain("Reason: session-end")
+    expect(body).toContain("## Full-detail evidence files")
+    expect(body).toContain("events.jsonl")
+    expect(body).toContain("memory-candidates.jsonl")
+    expect(body).toContain("session.log")
+    expect(body).toContain("## Evidence aggregates")
     expect(body).toContain("- ref: skill:rollout")
     expect(existsSync(bufferPath)).toBe(false)
+  })
+
+  it("capture-memory writes checkpoint memories for proposal prep without clearing the final buffer", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const rememberLog = path.join(tempDir, "remember.log")
+    const rememberBody = path.join(tempDir, "remember.body")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    const bufferPath = path.join(sessionsDir, "sess-prep-1.md")
+    writeFileSync(
+      bufferPath,
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember the rollout\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    const quotedLog = shellQuote(rememberLog)
+    const quotedBody = shellQuote(rememberBody)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+if printf '%s' "$*" | grep -q 'remember'; then
+  cat > ${quotedBody}
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "proposal-prep"], {
+      input: JSON.stringify({ session_id: "sess-prep-1" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const args = readFileSync(rememberLog, "utf8")
+    expect(args).toMatch(/--format json -q remember --name claude-checkpoint-\d{14}-sess-pre --force/)
+    expect(readFileSync(rememberBody, "utf8")).toContain("Reason: proposal-prep")
+    expect(existsSync(bufferPath)).toBe(true)
   })
 
   it("capture-memory logs remember failures instead of claiming capture success", () => {
@@ -1448,6 +1502,71 @@ exit 0
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
     expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+  })
+
+  it("user-prompt-expansion captures a fresh checkpoint before improve/propose flows", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const rememberLog = path.join(tempDir, "remember.log")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+    writeFileSync(
+      path.join(sessionsDir, "sess-expand-prep.md"),
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember release lessons\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    const quotedLog = shellQuote(rememberLog)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["user-prompt-expansion"], {
+      input: JSON.stringify({ session_id: "sess-expand-prep", command: "/akm-improve memory:release-summary --task refine lesson" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const recorded = readFileSync(rememberLog, "utf8")
+    expect(recorded).toContain("remember --name claude-checkpoint-")
+    expect(existsSync(path.join(sessionsDir, "sess-expand-prep.md"))).toBe(true)
+  })
+
+  it("task-completed candidate extraction keeps source paths and targets the touched ref", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["task-completed"], {
+      input: JSON.stringify({
+        session_id: "sess-task-candidate",
+        task_id: "task-1",
+        summary: "The release workflow failed with skill:deploy, and the fix worked after updating the checklist.",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const candidates = readFileSync(path.join(stateDir, "akm-claude/memory-candidates.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+    expect(candidates.length).toBeGreaterThan(0)
+    expect(candidates.some((candidate) => candidate.targetRef === "skill:deploy")).toBe(true)
+    expect(candidates.some((candidate) => Array.isArray(candidate.sourcePaths) && candidate.sourcePaths.some((entry: string) => entry.includes("sessions/sess-task-candidate.md")))).toBe(true)
   })
 
   it("post-tool-batch records a grouped tool observation without throwing", () => {
