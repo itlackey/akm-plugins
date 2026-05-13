@@ -418,7 +418,7 @@ Other long-tail verbs covered the same way: `akm help migrate <version>` (releas
 
 ## Dispatching Stash Agents
 
-You can dynamically spawn a stash agent to work on a task. The agent's prompt, tool constraints, and model preferences are defined in its markdown file and loaded at runtime.
+You can dispatch a stash agent as a dedicated Claude Code CLI session. The agent's prompt, tool constraints, and model preferences are defined in its markdown file and translated into Claude CLI flags at dispatch time.
 
 ### Agent payload shape
 
@@ -456,25 +456,23 @@ When the user asks you to dispatch, run, or use a stash agent:
    ```
    Parse the JSON. Verify `type` is `"agent"` and `prompt` is non-empty. If validation fails, inform the user.
 
-3. **Compose the subagent prompt.** Build a prompt that embeds the stash agent's persona and the user's task:
+3. **Compose the Claude CLI invocation.** Build a one-shot CLI call that embeds the stash agent's persona and the user's task:
 
-   ```
-   <agent-persona>
-   {value of the "prompt" field from akm show}
-   </agent-persona>
-
-   <tool-constraints>
-   {render toolPolicy as natural language, e.g.:
-    - "You may read files but must NOT edit files or run shell commands."
-    - If toolPolicy is absent, omit this section.}
-   </tool-constraints>
-
-   Task: {the user's task description}
+   ```bash
+   claude -p \
+     --agents '{"stash-agent":{"description":"{description}","prompt":"{prompt}"}}' \
+     --agent stash-agent \
+     --model {modelHint-or-default} \
+     --allowed-tools {tool-list} \
+     --permission-mode bypassPermissions \
+     --no-session-persistence \
+     --output-format json \
+     --system-prompt '{task/context}'
    ```
 
-4. **Spawn the subagent** using the Agent tool with `subagent_type: "general-purpose"` and the composed prompt.
+4. **Run the CLI through Bash** so this becomes a real Claude Code session with the requested agent, model, and tool constraints.
 
-5. **Report results** to the user. If `modelHint` was present, note that Claude Code does not support per-subagent model selection so it was not enforced.
+5. **Report results** to the user. If `modelHint` is absent or invalid, omit `--model` and fall back to the session default.
 
 ### Example
 

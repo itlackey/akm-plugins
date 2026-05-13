@@ -4,12 +4,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import semverSatisfies from "semver/functions/satisfies.js"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
 import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates, updateCandidateStatus } from "../shared/memory-candidates"
 import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
+import { extractAkmRefsFromString } from "../shared/ref-extraction"
 
 let resolvedAkmCommand = "akm"
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
@@ -1398,6 +1398,20 @@ function extractToolRefs(
   return { refs: [...refs], positiveOnlyRefs: [...positiveOnlyRefs] }
 }
 
+function extractAkmRefsFromAllArgs(args: Record<string, unknown>): string[] {
+  if (!args || typeof args !== "object") return []
+  const refs = new Set<string>()
+  for (const value of Object.values(args)) {
+    if (typeof value === "string") {
+      for (const ref of extractAkmRefsFromString(value)) refs.add(ref)
+    } else if (typeof value === "object" && value !== null) {
+      const serialized = JSON.stringify(value)
+      for (const ref of extractAkmRefsFromString(serialized)) refs.add(ref)
+    }
+  }
+  return [...refs]
+}
+
 const AKM_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
@@ -1603,7 +1617,10 @@ function getCommandVersion(command: string): string | null {
 }
 
 function satisfiesAkmVersionRange(version: string | null): boolean {
-  return typeof version === "string" && semverSatisfies(version, AKM_REQUIRED_VERSION_RANGE, { includePrerelease: true })
+  if (typeof version !== "string") return false
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/)
+  if (!match) return false
+  return Number(match[1]) === 0 && Number(match[2]) === 8
 }
 
 function getBundledAkmCommand(): string | null {
@@ -2712,7 +2729,32 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
     },
     "tool.execute.after": async (input, output) => {
       try {
-        if (!input.tool.startsWith("akm_")) return
+        const isAkmTool = input.tool.startsWith("akm_")
+
+        const allArgRefs = extractAkmRefsFromAllArgs(input.args as Record<string, unknown>)
+        const allOutputRefs = extractAkmRefsFromString(output.output)
+        const allRefs = [...new Set([...allArgRefs, ...allOutputRefs])]
+
+        if (allRefs.length > 0) {
+          writeStructuredEvent({
+            event: "tool_ref_observed",
+            sessionId: input.sessionID,
+            scope: buildEventScope(input.sessionID, input.directory, input.tool),
+            input: { tool: input.tool, callID: input.callID },
+            refs: allRefs,
+            outcome: { status: "ok" },
+          })
+          for (const ref of allRefs) {
+            addBufferEntry(input.sessionID, {
+              kind: "tool-ref",
+              toolName: input.tool,
+              ref,
+              status: "unknown",
+            })
+          }
+        }
+
+        if (!isAkmTool) return
 
         const parsed = parseToolOutput(output.output)
         if (!parsed) return
@@ -2742,9 +2784,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           })
         }
 
-        // Auto-feedback + session buffering: record every asset ref the tool
-        // touched so the stash ranking improves over time and so Stop/Compact
-        // has material to flush into a session summary memory.
         const refResult = extractToolRefs(input.tool, input.args as Record<string, unknown>, parsed)
         noteRecentRefs(input.sessionID, refResult.refs)
         writeStructuredEvent({
@@ -2799,9 +2838,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             ? `opencode auto: ${input.tool} succeeded`
             : `opencode auto: ${input.tool} failed`
           for (const ref of feedbackRefs) {
-            // Memories and vault refs are not first-class feedback targets —
-            // memories do not accept feedback, and vault values never surface in
-            // JSON so automatic usage signals would be misleading.
             if (ref.startsWith("memory:") || ref.startsWith("vault:")) continue
             const directInput = Object.values(input.args as Record<string, unknown>).some((value) => typeof value === "string" && value.includes(ref))
             const signal = classifyFeedbackSignal({
@@ -3272,7 +3308,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const targetAgent = dispatch_agent ?? "general"
         const model = parseModelHint(shown.modelHint)
         const tools = parseToolPolicy(shown.toolPolicy)
-
         writeStructuredEvent({
           event: "subagent_started",
           sessionId: context.sessionID,

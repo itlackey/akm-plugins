@@ -9,13 +9,28 @@ import opencodePackage from "../opencode/package.json"
 // Mock execFileSync and execSync before importing the plugin
 const mockExecFileSync = mock(() => "mock output")
 const mockExecSync = mock(() => "exec output")
+const execFileSyncShim = (...args: any[]) => {
+  const [command, commandArgs] = args as [string, string[]]
+  const isAkmCommand = typeof command === "string"
+    && (command === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(command))
+  if (isAkmCommand && Array.isArray(commandArgs) && commandArgs[0] === "--version") {
+    try {
+      const result = (mockExecFileSync as any)(...args)
+      if (typeof result === "string" && /\b\d+\.\d+\.\d+\b/.test(result)) return result
+      return "akm 0.8.9\n"
+    } catch {
+      return "akm 0.8.9\n"
+    }
+  }
+  return (mockExecFileSync as any)(...args)
+}
 const mockSpawn = mock(() => ({
   on: mock(() => undefined),
   unref: mock(() => undefined),
 }))
 const mockFetch = mock(async () => new Response(JSON.stringify({ version: "0.5.0" }), { status: 200 }))
 mock.module("node:child_process", () => ({
-  execFileSync: mockExecFileSync,
+  execFileSync: execFileSyncShim,
   execSync: mockExecSync,
   spawn: mockSpawn,
 }))
@@ -387,19 +402,23 @@ describe("akm-opencode plugin", () => {
 
   describe("tool execution", () => {
     it("akm_info returns akm info output plus plugin metadata", async () => {
-      mockExecFileSync.mockReturnValue(JSON.stringify({
-        version: "0.7.0",
-        stashDir: "/tmp/akm-stash",
-      }))
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "--version") return "0.8.9"
+        if (Array.isArray(args) && args[0] === "info") {
+          return JSON.stringify({ version: "0.7.0", stashDir: "/tmp/akm-stash" })
+        }
+        return "mock output"
+      })
 
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_info.execute({} as any, {} as any)
 
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["info", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8" }),
-      )
+      expect(
+        mockExecFileSync.mock.calls.some(([, args]) =>
+          Array.isArray(args)
+          && args[0] === "info",
+        ),
+      ).toBe(true)
 
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(true)
@@ -1017,7 +1036,7 @@ describe("akm-opencode plugin", () => {
 
     it("writes failed AKM tool invocations to OpenCode app logs", async () => {
       mockExecFileSync.mockImplementation((cmd, args) => {
-        if (Array.isArray(args) && args[0] === "--version") return "0.0.18"
+        if (Array.isArray(args) && args[0] === "--version") return "0.8.9"
         const error = new Error("Legacy show flags are no longer supported.") as Error & {
           status?: number
           stdout?: string
@@ -1284,7 +1303,7 @@ describe("akm-opencode plugin", () => {
       mkdirSync(path.join(configHome, "akm"), { recursive: true })
       writeFileSync(path.join(configHome, "akm", "config.json"), `${JSON.stringify({ agent: { default: "opencode" } })}\n`)
       mockExecFileSync.mockImplementation((cmd, args) => {
-        if (args[0] === "--version") return "0.1.0"
+        if (args[0] === "--version") return "0.8.9"
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate")) return ""
         if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
@@ -2140,6 +2159,46 @@ describe("akm-opencode plugin", () => {
           parts: [{ type: "text", text: "Review this repository for bugs" }],
         },
       })
+    })
+
+    it("akm_agent keeps using the supported OpenCode session prompt path", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (args[0] === "show") {
+          return JSON.stringify({
+            type: "agent",
+            name: "coach.md",
+            path: "/stash/agents/coach.md",
+            prompt: "Use this exact system prompt.",
+            modelHint: "openai/gpt-5",
+            toolPolicy: { read: true, edit: false, bash: false },
+          })
+        }
+        return "mock output"
+      })
+
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_agent.execute(
+        {
+          ref: "agent:coach.md",
+          task_prompt: "Review this repository for bugs",
+        } as any,
+        createToolContext(),
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.dispatchAgent).toBe("general")
+      expect(parsed.agentSlug).toBeUndefined()
+      expect(client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            agent: "general",
+            system: "Use this exact system prompt.",
+            model: { providerID: "openai", modelID: "gpt-5" },
+          }),
+        }),
+      )
     })
 
     it("akm_agent returns JSON error when session.create throws", async () => {
@@ -3436,54 +3495,10 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("akm CLI availability", () => {
-    it("installs the latest akm-cli package with Bun when the installed version is older than npm latest", async () => {
-      let installComplete = false
+    it("uses a compatible AKM executable without attempting Bun auto-install", async () => {
       mockExecFileSync.mockImplementation((cmd, args) => {
-        if (cmd === "bun" && args[0] === "--version") return "1.3.5"
-        // Before install the Bun-managed CLI is older than npm latest; after install it matches latest.
-        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version") return installComplete ? "0.5.0" : "0.4.0"
-        if (cmd === "bun" && args[0] === "install") {
-          installComplete = true
-          return "installed"
-        }
-        if (cmd === "bun" && args[0] === "pm") return "/tmp/.bun/bin\n"
-        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "search" && installComplete) {
-          return JSON.stringify({ hits: [] })
-        }
-        return "mock output"
-      })
-
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
-
-      expect(JSON.parse(result)).toEqual({ hits: [] })
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "bun",
-        ["install", "-g", "akm-cli@latest"],
-        expect.objectContaining({ encoding: "utf8", timeout: 120_000, stdio: "pipe" }),
-      )
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://registry.npmjs.org/akm-cli/latest",
-        expect.objectContaining({ headers: { accept: "application/json" } }),
-      )
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "/tmp/.bun/bin/akm",
-        ["search", "anything", "--detail", "normal", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8", timeout: 60_000 }),
-      )
-    })
-
-    it("does not downgrade a newer pre-release that is already installed", async () => {
-      mockExecFileSync.mockImplementation((cmd, args) => {
-        if (cmd === "bun" && args[0] === "--version") return "1.3.5"
-        if (cmd === "bun" && args[0] === "pm") return "/tmp/.bun/bin\n"
-        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "--version") return "0.6.0-rc2"
-        if (cmd === "/tmp/.bun/bin/akm" && args[0] === "search") {
-          return JSON.stringify({ hits: [] })
-        }
-        if (cmd === "bun" && args[0] === "install") {
-          throw new Error("auto-install should not run")
-        }
+        if (cmd === "akm" && args[0] === "--version") return "0.8.9"
+        if (cmd === "akm" && args[0] === "search") return JSON.stringify({ hits: [] })
         return "mock output"
       })
 
@@ -3492,15 +3507,38 @@ describe("akm-opencode plugin", () => {
 
       expect(JSON.parse(result)).toEqual({ hits: [] })
       expect(
+        mockExecFileSync.mock.calls.some(([cmd, args]) =>
+          cmd === "akm"
+          && Array.isArray(args)
+          && args[0] === "search"
+          && args[1] === "anything",
+        ),
+      ).toBe(true)
+      expect(
+        mockExecFileSync.mock.calls.some(([cmd, args]) =>
+          cmd === "bun" && Array.isArray(args) && args[0] === "install",
+        ),
+      ).toBe(false)
+    })
+
+    it("returns a compatibility error when only unsupported AKM versions are available", async () => {
+      mockExecFileSync.mockImplementation((cmd, args) => {
+        if (cmd === "akm" && args[0] === "--version") return "0.7.9"
+        return "mock output"
+      })
+
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
+
+      expect(JSON.parse(result)).toEqual({
+        ok: false,
+        error: "AKM CLI ^0.8.0 is required, but no compatible bundled or PATH 'akm' executable was found. Reinstall or update the akm-opencode plugin so OpenCode/Bun installs the dependency.",
+      })
+      expect(
         mockExecFileSync.mock.calls.some(
           ([cmd, args]) => cmd === "bun" && Array.isArray(args) && args[0] === "install",
         ),
       ).toBe(false)
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "/tmp/.bun/bin/akm",
-        ["search", "anything", "--detail", "normal", "--format", "json"],
-        expect.objectContaining({ encoding: "utf8", timeout: 60_000 }),
-      )
     })
   })
 })

@@ -276,6 +276,18 @@ describe("Claude plugin metadata", () => {
     expect(body).toContain("| Subagent context/result capture | #62 | Shipped in both plugins |")
     expect(body).toContain("| Workflow compliance telemetry | #63 | Shipped in both plugins |")
   })
+
+  it("documents the Claude CLI one-shot agent dispatch path", () => {
+    const commandPath = path.join(repoRoot, "claude/commands/akm-agent.md")
+    const body = readFileSync(commandPath, "utf8")
+
+    expect(body).toContain("--agents")
+    expect(body).toContain("--agent")
+    expect(body).toContain("--model")
+    expect(body).toContain("--tools")
+    expect(body).toContain("--print")
+    expect(body).toContain("-p")
+  })
 })
 
 describe("Claude hook scripts", () => {

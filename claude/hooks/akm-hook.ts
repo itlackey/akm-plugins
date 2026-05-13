@@ -9,6 +9,7 @@ import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readC
 import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
+import { extractAkmRefsFromString } from "../shared/ref-extraction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
@@ -455,6 +456,44 @@ function preToolBash(): string {
     outcome: { status: "blocked", warnings: [blocked] },
   })
   return emitBlockDecision(blocked)
+}
+
+function pretoolNonBash(): string {
+  const rawInput = readStdin()
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput)
+  if (!parsed) return ""
+  const text = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || sanitize(rawInput)
+  const refs = extractAkmRefsFromString(text)
+  if (refs.length === 0) return ""
+  const sid = extractSessionId(rawInput)
+  const toolName = typeof parsed.tool === "string" ? parsed.tool : typeof parsed.tool_name === "string" ? parsed.tool_name : "nonbash"
+  writeMemoryEvent({
+    event: "tool_ref_observed",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { tool: toolName, phase: "pre" },
+    refs,
+    outcome: { status: "ok" },
+  })
+  return ""
+}
+
+function posttoolNonBash(): string {
+  const rawInput = readStdin()
+  const { commandText, outputText, refs, sid, toolName } = extractPostToolFields(rawInput, MODE)
+  if (refs.length === 0) return ""
+  writeMemoryEvent({
+    event: "tool_ref_observed",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { tool: toolName, command: commandText, phase: "post", outputPreview: outputText.slice(0, 400) },
+    refs,
+    outcome: { status: MODE === "failure" ? "failed" : "ok" },
+  })
+  for (const ref of refs) {
+    writeSessionBuffer(sid, `${toolName} ref`, `- ref: ${ref}`)
+  }
+  return ""
 }
 
 function userPromptExpansion(): string {
@@ -1068,6 +1107,11 @@ function main(): string {
       return userPromptExpansion()
     case "pre-tool":
       if (MODE === "bash") return preToolBash()
+      return ""
+    case "pre-tool-nonbash":
+      return pretoolNonBash()
+    case "post-tool-nonbash":
+      posttoolNonBash()
       return ""
     case "post-tool-batch":
       return postToolBatch()
