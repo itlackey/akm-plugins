@@ -42,7 +42,7 @@ The plugin exposes **19 high-value tools**. Long-tail verbs (`add`, `save`, `imp
 
 The plugin subscribes to OpenCode lifecycle events so AKM participates in the
 session loop instead of waiting to be called. Every hook is non-blocking and
-fails silently when `akm` is not on PATH — the TUI is never affected.
+fails silently when a compatible `akm` is not resolvable — the TUI is never affected.
 
 | Event | What happens |
 | --- | --- |
@@ -75,7 +75,6 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong|failed|broken|didn't work|did not work|bad)\b` | Case-insensitive regex used for negative retrospective feedback signals. |
 | `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Comma-separated list of scope fields to attach on every `akm_remember`, `akm_curate`, and `akm_feedback` call. Remove a key to opt out of that dimension. |
 | `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Seconds allowed for lightweight pending-proposal count checks during context injection. |
-| `AKM_PACKAGE_REF` | `akm-cli@latest` | Override the npm/bun package spec used for auto-install (e.g. pin to `akm-cli@0.7.0` in CI). |
 
 ### Curator agent
 
@@ -144,17 +143,17 @@ At least one of `ref` or `query` is required.
 
 ## Prerequisites
 
-When the plugin loads, it checks the installed `akm` version first and only runs `bun install -g akm-cli@latest` when `akm` is missing or older than the latest stable npm release. Newer pre-releases and local builds are left in place. It then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
+When the plugin loads, it resolves the bundled `akm-cli` dependency installed with the plugin and requires an `akm` version that satisfies `^0.8.0`. It prefers that bundled binary first, falls back to an existing `akm` on PATH only when it also satisfies the same range, and otherwise returns a structured error telling you to reinstall or update the plugin so OpenCode/Bun installs the dependency. It does not run global installers from plugin runtime.
 
 ```sh
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
 # PowerShell (Windows)
 irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
-
-# Or via Bun
-bun install -g akm-cli@latest
 ```
+
+Reinstall or update the plugin to let OpenCode/Bun install the bundled `akm-cli`
+dependency automatically.
 
 ## Stash model
 

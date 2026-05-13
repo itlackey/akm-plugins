@@ -34,6 +34,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.2.20"
+    "@opencode-ai/plugin": "^1.2.20",
+    "akm-cli": "^0.8.0",
+    "semver": "^7.7.2"
   }
 }

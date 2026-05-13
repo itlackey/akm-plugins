@@ -3,6 +3,7 @@
 import { accessSync, appendFileSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
+import { satisfies, valid } from "semver"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
 import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates } from "../shared/memory-candidates"
 import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
@@ -11,7 +12,8 @@ import { redactObject, redactSecrets } from "../shared/redaction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
-const PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@latest"
+const AKM_REQUIRED_RANGE = "^0.8.0"
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@${AKM_REQUIRED_RANGE}`
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
@@ -196,6 +198,25 @@ function findCommandOnPath(command: string): string | undefined {
 
 function firstLine(value: string): string {
   return value.replace(/\r/g, "").split("\n")[0] ?? ""
+}
+
+function parseAkmVersion(value: string): string {
+  const line = firstLine(value).trim()
+  const match = /\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\b/.exec(line)
+  return match?.[1] ?? ""
+}
+
+function readAkmVersion(commandPath: string): string {
+  const result = runCommand(commandPath, ["--version"])
+  return parseAkmVersion(result.stdout)
+}
+
+function akmVersionSatisfies(commandPath: string): { ok: boolean; version: string; error?: string } {
+  const version = readAkmVersion(commandPath)
+  if (!version) return { ok: false, version: "unknown", error: "unable to parse akm version" }
+  if (!valid(version)) return { ok: false, version, error: "akm version is not valid semver" }
+  if (!satisfies(version, AKM_REQUIRED_RANGE)) return { ok: false, version, error: `akm version does not satisfy ${AKM_REQUIRED_RANGE}` }
+  return { ok: true, version }
 }
 
 function runCommand(command: string, args: string[], options?: { input?: string; suppressStderr?: boolean }): { ok: boolean; stdout: string; stderr: string } {
@@ -624,9 +645,12 @@ function npmGlobalBin(): string {
 function ensureAkm() {
   const existing = findCommandOnPath("akm")
   if (existing) {
-    const version = firstLine(runCommand(existing, ["--version"]).stdout) || "unknown"
-    appendLog(SESSION_LOG, "akm_ready", "path", existing, version)
-    return
+    const current = akmVersionSatisfies(existing)
+    if (current.ok) {
+      appendLog(SESSION_LOG, "akm_ready", "path", existing, current.version)
+      return
+    }
+    appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
   }
 
   let installer = "path"
@@ -634,22 +658,26 @@ function ensureAkm() {
   if (findCommandOnPath("bun")) {
     installer = "bun"
     const globalBin = runCommand("bun", ["pm", "bin", "-g"])
-    const install = runCommand("bun", ["install", "-g", PACKAGE_REF])
+    const install = runCommand("bun", ["install", "-g", AKM_PACKAGE_REF])
     if (install.ok && globalBin.ok && globalBin.stdout.trim()) installedBin = path.join(globalBin.stdout.trim(), "akm")
   }
   if (!installedBin && findCommandOnPath("npm")) {
     installer = "npm"
-    const install = runCommand("npm", ["install", "-g", PACKAGE_REF])
+    const install = runCommand("npm", ["install", "-g", AKM_PACKAGE_REF])
     const globalBin = npmGlobalBin()
     if (install.ok && globalBin) installedBin = path.join(globalBin, "akm")
   }
   if (installedBin) ensureOnPath(installedBin)
   const resolved = findCommandOnPath("akm")
   if (resolved) {
-    const version = firstLine(runCommand(resolved, ["--version"]).stdout) || "unknown"
-    appendLog(SESSION_LOG, "akm_ready", installer, resolved, version)
+    const current = akmVersionSatisfies(resolved)
+    if (current.ok) {
+      appendLog(SESSION_LOG, "akm_ready", installer, resolved, current.version)
+    } else {
+      appendLog(SESSION_LOG, "akm_install_failed", installer, resolved, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
+    }
   } else {
-    appendLog(SESSION_LOG, "akm_missing", installer, PACKAGE_REF)
+    appendLog(SESSION_LOG, "akm_missing", installer, AKM_PACKAGE_REF, AKM_REQUIRED_RANGE)
   }
 }
 

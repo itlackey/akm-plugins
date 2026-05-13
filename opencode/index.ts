@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import semverSatisfies from "semver/functions/satisfies.js"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
 import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates, updateCandidateStatus } from "../shared/memory-candidates"
 import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
@@ -11,9 +12,9 @@ import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
 
 let resolvedAkmCommand = "akm"
-const autoInstallPackageRef = process.env.AKM_PACKAGE_REF ?? "akm-cli@latest"
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b/
+const AKM_REQUIRED_VERSION_RANGE = "^0.8.0"
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
@@ -47,7 +48,6 @@ const sessionCuratedFile = new Map<string, string>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
 const sessionRecallAudit = new Map<string, { shouldRecall: boolean; reason: string; query: string; injectedRefs: string[]; injectedChars: number; warnings: string[] }>()
-type ParsedSemver = { core: [number, number, number]; prerelease: Array<string | number> | null }
 type SessionBufferEntry = {
   timestamp: string
   kind: "memory-intent" | "tool-ref"
@@ -1586,21 +1586,6 @@ function extractSessionIdFromEvent(payload: unknown): string | undefined {
   return undefined
 }
 
-function getCommandStatus(command: string): "ok" | "missing" | "error" {
-  try {
-    execFileSync(command, ["--version"], {
-      encoding: "utf8",
-      timeout: 10_000,
-    })
-    return "ok"
-  } catch (error: unknown) {
-    if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
-      return "missing"
-    }
-    return "error"
-  }
-}
-
 function extractFirstSemverMatch(value: string): string | null {
   return value.match(SEMVER_PATTERN)?.[0] ?? null
 }
@@ -1617,202 +1602,83 @@ function getCommandVersion(command: string): string | null {
   }
 }
 
-function parseSemver(version: string): ParsedSemver | null {
-  const normalized = extractFirstSemverMatch(version)
-  if (!normalized) return null
-
-  const [withoutBuildMetadata] = normalized.split("+", 1)
-  const [release, prereleaseText] = withoutBuildMetadata.split("-", 2)
-  const parts = release.split(".").map((part) => Number(part))
-  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
-    return null
-  }
-  const core = [parts[0], parts[1], parts[2]] as [number, number, number]
-
-  return {
-    core,
-    prerelease: prereleaseText
-      ? prereleaseText.split(".").map((part) => (/^\d+$/.test(part) ? Number(part) : part))
-      : null,
-  }
+function satisfiesAkmVersionRange(version: string | null): boolean {
+  return typeof version === "string" && semverSatisfies(version, AKM_REQUIRED_VERSION_RANGE, { includePrerelease: true })
 }
 
-function compareSemver(left: string, right: string): number {
-  const leftParsed = parseSemver(left)
-  const rightParsed = parseSemver(right)
-  if (!leftParsed || !rightParsed) return left.localeCompare(right)
-
-  for (let index = 0; index < leftParsed.core.length; index += 1) {
-    const delta = leftParsed.core[index] - rightParsed.core[index]
-    if (delta !== 0) return delta
-  }
-
-  if (!leftParsed.prerelease && !rightParsed.prerelease) return 0
-  if (!leftParsed.prerelease) return 1
-  if (!rightParsed.prerelease) return -1
-
-  const length = Math.max(leftParsed.prerelease.length, rightParsed.prerelease.length)
-  for (let index = 0; index < length; index += 1) {
-    const leftPart = leftParsed.prerelease[index]
-    const rightPart = rightParsed.prerelease[index]
-    if (leftPart === undefined) return -1
-    if (rightPart === undefined) return 1
-    if (leftPart === rightPart) continue
-    if (typeof leftPart === "number" && typeof rightPart === "number") return leftPart - rightPart
-    if (typeof leftPart === "number") return -1
-    if (typeof rightPart === "number") return 1
-    return leftPart.localeCompare(rightPart)
-  }
-
-  return 0
-}
-
-function getBunGlobalAkmCommand(): string | null {
+function getBundledAkmCommand(): string | null {
+  const packagePath = path.join(moduleDir, "node_modules", "akm-cli", "package.json")
+  const fallback = path.join(moduleDir, "node_modules", ".bin", process.platform === "win32" ? "akm.cmd" : "akm")
   try {
-    const globalBin = execFileSync("bun", ["pm", "bin", "-g"], {
-      encoding: "utf8",
-      timeout: 10_000,
-    }).trim()
-    if (!globalBin || !path.isAbsolute(globalBin)) return null
-    return process.platform === "win32"
-      ? path.join(globalBin, "akm.exe")
-      : path.join(globalBin, "akm")
+    const raw = readFileSync(packagePath, "utf8")
+    const pkg = JSON.parse(raw) as { bin?: unknown }
+    const bin = pkg.bin
+    const relativeBin = typeof bin === "string"
+      ? bin
+      : bin && typeof bin === "object" && typeof (bin as Record<string, unknown>).akm === "string"
+        ? (bin as Record<string, string>).akm
+        : null
+    if (!relativeBin) return existsSync(fallback) ? fallback : null
+    const bundledCommand = path.join(moduleDir, "node_modules", "akm-cli", relativeBin)
+    return existsSync(bundledCommand) ? bundledCommand : existsSync(fallback) ? fallback : null
   } catch {
-    return null
+    return existsSync(fallback) ? fallback : null
   }
 }
 
-function getInstalledAkmDetails(): { command: string; version: string } | null {
-  const candidates = [resolvedAkmCommand, getBunGlobalAkmCommand(), "akm"]
+function getResolvedAkmDetails(): { command: string; version: string; source: "bundled" | "path" } | null {
+  const candidates: Array<{ command: string; source: "bundled" | "path" }> = []
+  const bundled = getBundledAkmCommand()
+  if (bundled) candidates.push({ command: bundled, source: "bundled" })
+  candidates.push({ command: "akm", source: "path" })
+
   const seen = new Set<string>()
   for (const candidate of candidates) {
-    if (!candidate || seen.has(candidate)) continue
-    seen.add(candidate)
-    const version = getCommandVersion(candidate)
-    if (version) return { command: candidate, version }
+    if (!candidate.command || seen.has(candidate.command)) continue
+    seen.add(candidate.command)
+    const version = getCommandVersion(candidate.command)
+    if (!satisfiesAkmVersionRange(version)) continue
+    return { ...candidate, version: version! }
   }
   return null
 }
 
-async function getLatestNpmPackageVersion(packageName: string): Promise<string | null> {
-  if (typeof fetch !== "function") return null
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10_000)
-  try {
-    const response = await fetch(`https://registry.npmjs.org/${packageName}/latest`, {
-      headers: { accept: "application/json" },
-      signal: controller.signal,
-    })
-    if (!response.ok) return null
-    const body = await response.json()
-    if (!body || typeof body !== "object") return null
-    return typeof body.version === "string" ? extractFirstSemverMatch(body.version) : null
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-async function ensureLatestAkmInstalled(client: LogCapableClient): Promise<void> {
-  try {
-    execFileSync("bun", ["--version"], {
-      encoding: "utf8",
-      timeout: 10_000,
-    })
-  } catch (error: unknown) {
-    await writePluginLog(client, "warn", "AKM auto-install skipped", {
+async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<void> {
+  const installedAkm = getResolvedAkmDetails()
+  if (!installedAkm) {
+    await writePluginLog(client, "warn", "AKM CLI resolution failed", {
       subsystem: "akm",
-      installer: "bun",
-      error: `Bun is not available: ${formatCliError(error)}`,
+      requiredRange: AKM_REQUIRED_VERSION_RANGE,
+      bundledCommand: getBundledAkmCommand(),
+      pathCommand: "akm",
+      reason: "no_supported_command",
     })
     return
   }
 
-  const installedAkm = getInstalledAkmDetails()
-  const latestStable = await getLatestNpmPackageVersion("akm-cli")
-
-  if (installedAkm) {
-    if (!latestStable) {
-      resolvedAkmCommand = installedAkm.command
-      await writePluginLog(client, "info", "AKM auto-install skipped", {
-        subsystem: "akm",
-        installer: "bun",
-        package: autoInstallPackageRef,
-        command: resolvedAkmCommand,
-        installedVersion: installedAkm.version,
-        latestStable,
-        reason: "latest_version_unavailable",
-      })
-      return
-    }
-
-    if (compareSemver(installedAkm.version, latestStable) >= 0) {
-      resolvedAkmCommand = installedAkm.command
-      await writePluginLog(client, "info", "AKM auto-install skipped", {
-        subsystem: "akm",
-        installer: "bun",
-        package: autoInstallPackageRef,
-        command: resolvedAkmCommand,
-        installedVersion: installedAkm.version,
-        latestStable,
-        reason: "installed_version_not_older",
-      })
-      return
-    }
-  }
-
-  try {
-    execFileSync("bun", ["install", "-g", autoInstallPackageRef], {
-      encoding: "utf8",
-      timeout: 120_000,
-      stdio: "pipe",
-    })
-
-    const bunGlobalAkm = getBunGlobalAkmCommand()
-    if (bunGlobalAkm && getCommandStatus(bunGlobalAkm) === "ok") {
-      resolvedAkmCommand = bunGlobalAkm
-    } else if (getCommandStatus("akm") === "ok") {
-      resolvedAkmCommand = "akm"
-    }
-
-      await writePluginLog(client, "info", "AKM CLI install check completed", {
-        subsystem: "akm",
-        installer: "bun",
-        package: autoInstallPackageRef,
-        command: resolvedAkmCommand,
-        installedVersion: installedAkm?.version ?? null,
-        latestStable,
-      })
-  } catch (error: unknown) {
-    await writePluginLog(client, "warn", "AKM auto-install failed", {
-      subsystem: "akm",
-      installer: "bun",
-      package: autoInstallPackageRef,
-      error: formatCliError(error),
-    })
-  }
+  resolvedAkmCommand = installedAkm.command
+  await writePluginLog(client, "info", "AKM CLI resolved", {
+    subsystem: "akm",
+    command: installedAkm.command,
+    source: installedAkm.source,
+    version: installedAkm.version,
+    requiredRange: AKM_REQUIRED_VERSION_RANGE,
+  })
 }
 
 function resolveAkmCommand(): string | CliError {
-  const currentStatus = getCommandStatus(resolvedAkmCommand)
-  if (currentStatus === "ok" || currentStatus === "error") return resolvedAkmCommand
+  const currentVersion = getCommandVersion(resolvedAkmCommand)
+  if (satisfiesAkmVersionRange(currentVersion)) return resolvedAkmCommand
 
-  const bunGlobalAkm = getBunGlobalAkmCommand()
-  if (bunGlobalAkm && getCommandStatus(bunGlobalAkm) === "ok") {
-    resolvedAkmCommand = bunGlobalAkm
-    return resolvedAkmCommand
-  }
-
-  if (getCommandStatus("akm") === "ok") {
-    resolvedAkmCommand = "akm"
+  const installedAkm = getResolvedAkmDetails()
+  if (installedAkm) {
+    resolvedAkmCommand = installedAkm.command
     return resolvedAkmCommand
   }
 
   return {
     ok: false,
-    error: `The 'akm' CLI could not be resolved after attempting to install '${autoInstallPackageRef}' with Bun. Install akm from https://github.com/itlackey/akm.`,
+    error: `AKM CLI ${AKM_REQUIRED_VERSION_RANGE} is required, but no compatible bundled or PATH 'akm' executable was found. Reinstall or update the akm-opencode plugin so OpenCode/Bun installs the dependency.`,
   }
 }
 
@@ -2492,7 +2358,7 @@ type PluginClient = {
 }
 
 export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
-  await ensureLatestAkmInstalled(client as unknown as LogCapableClient)
+  await ensureSupportedAkmResolved(client as unknown as LogCapableClient)
 
   const logClient = client as unknown as LogCapableClient
   const sdkClient = client as unknown as PluginClient
