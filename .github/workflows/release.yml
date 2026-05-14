@@ -126,7 +126,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           PUBLISH_ARGS="--provenance --access public"
-          NPM_TAG=$(VERSION="$VERSION" node -p "const version = process.env.VERSION; const match = version.match(/^\d+\.\d+\.\d+-([0-9A-Za-z-]+)(?:\.[0-9A-Za-z-]+)*$/); match ? match[1] : ''")
+          NPM_TAG=$(VERSION="$VERSION" node -p "const version = process.env.VERSION; const prerelease = version.match(/^\d+\.\d+\.\d+-([0-9A-Za-z.-]+)$/)?.[1] ?? ''; if (!prerelease) { '' } else if (/^(beta|rc)(?:[.-]?\d.*)?$/i.test(prerelease)) { 'next' } else { prerelease.split(/[.-]/)[0] }")
 
           if [ -n "$NPM_TAG" ]; then
             PUBLISH_ARGS="$PUBLISH_ARGS --tag $NPM_TAG"
