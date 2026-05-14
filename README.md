@@ -151,6 +151,16 @@ irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile ins
 bun install -g akm-cli@latest
 ```
 
+## Ecosystem
+
+| Repo | What it is |
+| --- | --- |
+| [itlackey/akm](https://github.com/itlackey/akm) | Core Agent Kit Manager CLI (v0.8.0+) |
+| [itlackey/akm-stash](https://github.com/itlackey/akm-stash) | Official stash — ready-made skills, workflows, commands, and knowledge |
+| [itlackey/akm-registry](https://github.com/itlackey/akm-registry) | Official registry index — pre-configured in every akm install |
+| [itlackey/akm-bench](https://github.com/itlackey/akm-bench) | Benchmark harness for measuring agent performance with akm |
+| [itlackey/akm-eval](https://github.com/itlackey/akm-eval) | Eval framework for akm asset quality using authoritative upstream harnesses |
+
 ## Docs
 
 - **AKM CLI**: [github.com/itlackey/akm](https://github.com/itlackey/akm)
