@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 1.2.3). Bumps all packages, publishes opencode to npm, and creates a GitHub release."
+        description: "Version to release (e.g. 1.2.3 or 1.2.3-beta.1). Bumps all packages, publishes opencode to npm, and creates a GitHub release."
         required: true
         type: string
 
@@ -36,13 +36,8 @@ jobs:
       contents: write
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      tag_exists: ${{ steps.tag.outputs.tag_exists }}
     steps:
-      - name: Ensure workflow runs from default branch
-        if: ${{ github.ref_name != github.event.repository.default_branch }}
-        run: |
-          echo "Releases must be dispatched from ${{ github.event.repository.default_branch }}."
-          exit 1
-
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
@@ -85,16 +80,14 @@ jobs:
             git push
           fi
 
-          if git rev-parse -q --verify "refs/tags/v${{ inputs.version }}" >/dev/null; then
-            git tag -d "v${{ inputs.version }}"
-          fi
-
           if git ls-remote --exit-code --tags origin "refs/tags/v${{ inputs.version }}" >/dev/null; then
-            git push origin ":refs/tags/v${{ inputs.version }}"
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            git tag "v${{ inputs.version }}"
+            git push origin "v${{ inputs.version }}"
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-          git tag "v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
           echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
 
   publish-opencode:
@@ -115,9 +108,36 @@ jobs:
 
       - run: npm install -g npm@latest
 
-      - name: Publish akm-opencode
+      - name: Check if akm-opencode version already exists
+        id: npm_version
         working-directory: opencode
-        run: npm publish --provenance --access public
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+
+          if npm view "akm-opencode@$VERSION" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Derive npm publish args
+        id: publish_args
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          PUBLISH_ARGS="--provenance --access public"
+          NPM_TAG=$(VERSION="$VERSION" node -p "const version = process.env.VERSION; const match = version.match(/^\d+\.\d+\.\d+-([0-9A-Za-z-]+)(?:\.[0-9A-Za-z-]+)*$/); match ? match[1] : ''")
+
+          if [ -n "$NPM_TAG" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --tag $NPM_TAG"
+          fi
+
+          echo "publish_args=$PUBLISH_ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Publish akm-opencode
+        if: ${{ steps.npm_version.outputs.exists != 'true' }}
+        working-directory: opencode
+        run: npm publish ${{ steps.publish_args.outputs.publish_args }}
 
   github-release:
     needs: [version, publish-opencode]
@@ -131,6 +151,10 @@ jobs:
 
       - name: Create GitHub release
         run: |
+          if gh release view "${{ needs.version.outputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            exit 0
+          fi
+
           gh release create "${{ needs.version.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --title "${{ needs.version.outputs.tag }}" \
