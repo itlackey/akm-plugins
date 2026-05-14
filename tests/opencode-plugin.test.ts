@@ -1,6 +1,6 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test"
 import type { PluginInput } from "@opencode-ai/plugin"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -2097,6 +2097,13 @@ describe("akm-opencode plugin", () => {
     })
 
     it("injects AKM shell environment variables for bash tools", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "--format" && args[3] === "config" && args[4] === "get" && args[5] === "stashDir") {
+          return JSON.stringify({ stashDir: "/tmp/akm-stash" })
+        }
+        return "mock output"
+      })
+
       const hooks = await AkmPlugin(createPluginInput())
       const output = { env: {} as Record<string, string> }
       await hooks["shell.env"]!(
@@ -2106,7 +2113,7 @@ describe("akm-opencode plugin", () => {
 
       expect(output.env.AKM_PROJECT).toBe("/tmp/test-project")
       expect(output.env.AKM_PLUGIN_VERSION).toBeTruthy()
-      expect(output.env.AKM_STASH_DIR).toBeUndefined()
+      expect(output.env.AKM_STASH_DIR).toBe("/tmp/akm-stash")
     })
 
     it("akm_agent creates child session and prompts with stash metadata", async () => {
@@ -3521,9 +3528,75 @@ describe("akm-opencode plugin", () => {
       ).toBe(false)
     })
 
-    it("returns a compatibility error when only unsupported AKM versions are available", async () => {
+    it("falls back to ~/.local/bin/akm when PATH lookup fails", async () => {
+      const fallbackCommand = path.join(process.env.HOME ?? "/home/test", ".local", "bin", "akm")
       mockExecFileSync.mockImplementation((cmd, args) => {
         if (cmd === "akm" && args[0] === "--version") return "0.7.9"
+        if (cmd === fallbackCommand && args[0] === "--version") return "0.8.0-rc0"
+        if (cmd === fallbackCommand && args[0] === "search") return JSON.stringify({ hits: [] })
+        return "mock output"
+      })
+
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
+
+      expect(JSON.parse(result)).toEqual({ hits: [] })
+      expect(
+        mockExecFileSync.mock.calls.some(([cmd, args]) =>
+          cmd === fallbackCommand
+          && Array.isArray(args)
+          && args[0] === "search"
+          && args[1] === "anything",
+        ),
+      ).toBe(true)
+    })
+
+    it("prefers ~/.config/opencode/node_modules/.bin/akm before user-local fallbacks", async () => {
+      await withEnvVar("HOME", mkdtempSync(path.join(tmpdir(), "akm-opencode-home-")), async () => {
+        const configCommand = path.join(process.env.HOME!, ".config", "opencode", "node_modules", ".bin", "akm")
+        const fallbackCommand = path.join(process.env.HOME!, ".local", "bin", "akm")
+        mkdirSync(path.dirname(configCommand), { recursive: true })
+        writeFileSync(configCommand, "#!/bin/sh\n")
+        expect(existsSync(configCommand)).toBe(true)
+
+        mockExecFileSync.mockImplementation((cmd, args) => {
+          if (Array.isArray(args) && args[0] === "search") {
+            return JSON.stringify({ hits: [], command: cmd })
+          }
+          if (Array.isArray(args) && args[0] === "--version") {
+            return cmd === configCommand ? "0.8.0-rc0" : "0.7.9"
+          }
+          return "mock output"
+        })
+
+        const hooks = await AkmPlugin(createPluginInput())
+        const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
+
+        expect(JSON.parse(result)).toEqual({ hits: [], command: configCommand })
+        expect(
+          mockExecFileSync.mock.calls.some(([cmd, args]) =>
+            cmd === configCommand
+            && Array.isArray(args)
+            && args[0] === "search"
+            && args[1] === "anything",
+          ),
+        ).toBe(true)
+        expect(
+          mockExecFileSync.mock.calls.some(([cmd, args]) =>
+            cmd === fallbackCommand
+            && Array.isArray(args)
+            && args[0] === "search",
+          ),
+        ).toBe(false)
+      })
+    })
+
+    it("returns a compatibility error when only unsupported AKM versions are available", async () => {
+      mockExecFileSync.mockImplementation((cmd, args) => {
+        if (Array.isArray(args) && args[0] === "search") return "mock output"
+        if (typeof cmd === "string" && Array.isArray(args) && args[0] === "--version" && /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd)) {
+          return "0.7.9"
+        }
         return "mock output"
       })
 

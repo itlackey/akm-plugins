@@ -1643,11 +1643,32 @@ function getBundledAkmCommand(): string | null {
   }
 }
 
+function getConfigNodeModulesAkmCommand(): string | null {
+  const homeDir = process.env.HOME || os.homedir()
+  const configDir = process.env.XDG_CONFIG_HOME || path.join(homeDir, ".config")
+  const configBin = path.join(configDir, "opencode", "node_modules", ".bin", process.platform === "win32" ? "akm.cmd" : "akm")
+  return existsSync(configBin) ? configBin : null
+}
+
+function getPathAkmCandidates(): string[] {
+  const candidates: string[] = []
+  const configNodeModules = getConfigNodeModulesAkmCommand()
+  if (configNodeModules) candidates.push(configNodeModules)
+  candidates.push("akm")
+  const home = os.homedir()
+  if (home) {
+    candidates.push(path.join(home, ".local", "bin", process.platform === "win32" ? "akm.cmd" : "akm"))
+  }
+  return candidates
+}
+
 function getResolvedAkmDetails(): { command: string; version: string; source: "bundled" | "path" } | null {
   const candidates: Array<{ command: string; source: "bundled" | "path" }> = []
   const bundled = getBundledAkmCommand()
   if (bundled) candidates.push({ command: bundled, source: "bundled" })
-  candidates.push({ command: "akm", source: "path" })
+  for (const command of getPathAkmCandidates()) {
+    candidates.push({ command, source: "path" })
+  }
 
   const seen = new Set<string>()
   for (const candidate of candidates) {
@@ -2621,6 +2642,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       try {
         output.env.AKM_PROJECT = worktree
         output.env.AKM_PLUGIN_VERSION = PLUGIN_VERSION
+        const stashDir = await getAkmStashDir(logClient)
+        if (stashDir) output.env.AKM_STASH_DIR = stashDir
       } catch (error: unknown) {
         await logHookFailure(logClient, "shell.env", error)
       }
