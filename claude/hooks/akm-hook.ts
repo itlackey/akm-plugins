@@ -13,7 +13,7 @@ import { extractAkmRefsFromString } from "../shared/ref-extraction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
-const AKM_REQUIRED_RANGE = "^0.8.0"
+const AKM_REQUIRED_RANGE = "^0.8.0-rc0 || ^0.8.0"
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@${AKM_REQUIRED_RANGE}`
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
