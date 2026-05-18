@@ -1121,6 +1121,9 @@ function captureMemory(options?: { rawInput?: string; reason?: string; checkpoin
       })
     }
     runIndexOnSessionEnd(reason, sid, `memory:${name}`)
+    // Auto-signal so improve picks up this session memory on the next run.
+    // Without a positive feedback event the signal gate would exclude it (minRetrievalCount=1).
+    akmRun(["--format", "json", "-q", "feedback", `memory:${name}`, "--positive", "--note", "session checkpoint: auto-signal for improve eligibility"])
   } else {
     appendLog(MEMORY_LOG, "system", "capture_failed", `memory:${name}`, reason, "empty stdout from akm remember")
     writeMemoryEvent({
