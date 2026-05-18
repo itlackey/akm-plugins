@@ -2288,6 +2288,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               ref: captured,
             })
             await maybeIndexSessionMemory(logClient, sid, type, captured)
+            // Auto-signal so improve picks up this session memory on the next run.
+            runCliSyncRaw(["feedback", captured, "--positive", "--note", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
           }
           if (type === "session.compacted") {
             writeStructuredEvent({
@@ -2335,6 +2337,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             ref: captured,
           })
           await maybeIndexSessionMemory(logClient, sid, "stop", captured)
+          // Auto-signal so improve picks up this session memory on the next run.
+          runCliSyncRaw(["feedback", captured, "--positive", "--note", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
         }
       } catch (error: unknown) {
         await logHookFailure(logClient, "stop", error)
