@@ -293,7 +293,7 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
 function assessRiskyClaudeCommand(command: string): string | undefined {
   const normalized = command.trim()
   if (!normalized) return undefined
-  if (/\bakm\s+proposal\s+(accept|reject)\b/.test(normalized)) return "Proposal acceptance/rejection requires explicit user approval."
+  if (/^\s*akm\s+proposal\s+(accept|reject)\b/.test(normalized)) return "Proposal acceptance/rejection requires explicit user approval."
   if (/\bakm\s+save\b[\s\S]*--push\b/.test(normalized)) return "`akm save --push` requires explicit user approval."
   if (/\bakm\s+remove\b/.test(normalized)) return "`akm remove` is destructive and requires explicit user approval."
   if (/\bakm\s+update\b[\s\S]*--all\b/.test(normalized)) return "`akm update --all` requires explicit user approval."
