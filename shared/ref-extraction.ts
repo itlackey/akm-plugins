@@ -22,6 +22,29 @@
  * `refToRelPath` must be added here too.
  */
 
+// CONTRACT: ref-resolver
+// ----------------------------------------------------------------------------
+// The `refExistsInAnyStash` and `refToRelPath` helpers below are
+// contract-locked: a sister copy lives in the akm-core repo at
+// `src/commands/lint/base-linter.ts`. Both implementations resolve the same
+// `<type>:<slug>` -> on-disk-asset question and MUST agree on the set of
+// reachable refs for any given stash layout.
+//
+// The lock is enforced by `tests/ref-resolver-contract.test.ts`, which drives
+// `validateRefCandidates` (the only public entry to this resolver) through a
+// canonical fixture set. The akm-core repo ships an equivalent test at
+// `tests/contracts/ref-resolver-contract.test.ts` that drives ITS copy
+// through the SAME inputs. Any change to the resolver behavior on either
+// side MUST update both contract tests in lockstep, or one will fail.
+//
+// NOTE: this file is the SECOND copy of the resolver. The runtime-shipped
+// copy lives at `claude/shared/ref-extraction.ts` and is imported by the
+// post-tool hook. Both copies must agree with each other AND with the
+// akm-core resolver. The contract test runs against `../shared/ref-extraction`
+// (this file) — the divergence between this file and the runtime copy is
+// tracked separately (regex tightness only, see top-level repo notes).
+// ----------------------------------------------------------------------------
+
 import { existsSync, statSync, readdirSync } from "node:fs";
 import path from "node:path";
 

@@ -22,6 +22,32 @@
  * `refToRelPath` must be added here too.
  */
 
+// CONTRACT: ref-resolver
+// ----------------------------------------------------------------------------
+// The `refExistsInAnyStash` and `refToRelPath` helpers below are
+// contract-locked: a sister copy lives in the akm-core repo at
+// `src/commands/lint/base-linter.ts`. Both implementations resolve the same
+// `<type>:<slug>` -> on-disk-asset question and MUST agree on the set of
+// reachable refs for any given stash layout.
+//
+// The lock is enforced by `tests/ref-resolver-contract.test.ts`, which drives
+// `validateRefCandidates` (the only public entry to this resolver) through a
+// canonical fixture set. The akm-core repo ships an equivalent test at
+// `tests/contracts/ref-resolver-contract.test.ts` that drives ITS copy
+// through the SAME inputs. Any change to the resolver behavior on either
+// side MUST update both contract tests in lockstep, or one will fail.
+//
+// Cases the contract covers (see fixture in the contract test):
+//   - existing memory / knowledge / agent / workflow / skill / vault refs
+//   - knowledge subdirectory layout (knowledge/<category>/<slug>.md)
+//   - skill multi-file layout (skills/<slug>/SKILL.md)
+//   - memory `.derived.md` sibling
+//   - vault default vs named (.env vs <name>.env)
+//   - namespaced slugs containing `/`
+//   - non-existent refs
+//   - script type (unresolvable by design — both must return false)
+// ----------------------------------------------------------------------------
+
 import { existsSync, statSync, readdirSync } from "node:fs";
 import path from "node:path";
 
