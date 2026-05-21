@@ -8,6 +8,7 @@ import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from
 import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
+import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
@@ -85,6 +86,97 @@ function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
   if (!sid) return
   const redacted = redactSecrets(body).text
   appendFileSync(path.join(SESSIONS_DIR, `${sid}.md`), `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
+}
+
+/**
+ * Append ref candidates to a per-session sidecar file. The sidecar is
+ * consumed by captureMemory() at session end: the candidates are validated
+ * against the live stash and survivors are written to the durable memory's
+ * YAML frontmatter as `refs: [...]`. Candidates that never resolve are
+ * silently dropped, so heredoc / grep-pattern / JSON-value literals never
+ * appear in the durable memory's ref list (and therefore never trigger
+ * `missing-ref` lint flags).
+ */
+function appendSessionRefCandidates(sid: string, candidates: readonly string[]) {
+  if (!sid || candidates.length === 0) return
+  const sidecar = path.join(SESSIONS_DIR, `${sid}.refs.jsonl`)
+  try {
+    const payload = candidates.map((ref) => JSON.stringify({ ref })).join("\n")
+    appendFileSync(sidecar, `${payload}\n`)
+  } catch {
+    // sidecar failure is non-fatal; refs will simply be absent from frontmatter
+  }
+}
+
+function readSessionRefCandidates(sid: string): string[] {
+  if (!sid) return []
+  const sidecar = path.join(SESSIONS_DIR, `${sid}.refs.jsonl`)
+  if (!existsSync(sidecar)) return []
+  try {
+    const lines = readFileSync(sidecar, "utf8").split("\n").filter(Boolean)
+    const out: string[] = []
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line) as { ref?: unknown }
+        if (typeof parsed.ref === "string" && parsed.ref) out.push(parsed.ref)
+      } catch {
+        // skip malformed lines
+      }
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Resolve the stash root(s) used for ref validation. Prefers explicit
+ * environment override (`AKM_STASH_DIR`) so tests / sandboxed harnesses
+ * don't have to spawn `akm`. Falls back to `akm config get stashDir`, then
+ * to the conventional `$HOME/akm` location.
+ *
+ * Returns an array because future work may surface multiple roots; today
+ * the array has at most one entry.
+ */
+/**
+ * Build a frontmatter fragment containing the validated `refs:` array.
+ * Candidates are validated against the local stash; survivors are sorted
+ * and deduplicated. When zero candidates survive, returns the empty
+ * string so the frontmatter omits the key entirely (matches how the
+ * `tags:` / `keywords:` keys are omitted when empty in
+ * `src/commands/remember.ts#buildMemoryFrontmatter`).
+ *
+ * Returned string starts with a newline (no trailing newline) so it can
+ * be concatenated directly into a template like
+ * `reason: ${reason}${refsBlock}\n---`.
+ */
+function buildRefsFrontmatterBlock(candidates: readonly string[]): string {
+  const stashRoots = resolveStashRoots()
+  if (stashRoots.length === 0 || candidates.length === 0) return ""
+  const validated = validateRefCandidates(candidates, stashRoots)
+  if (validated.length === 0) return ""
+  const lines = validated.map((ref) => `  - ${ref}`).join("\n")
+  return `\nrefs:\n${lines}`
+}
+
+function resolveStashRoots(): string[] {
+  const envOverride = process.env.AKM_STASH_DIR?.trim()
+  if (envOverride) return [envOverride]
+  if (akmAvailable()) {
+    const raw = akmRun(["--format", "json", "-q", "config", "get", "stashDir"]).trim()
+    if (raw) {
+      const parsed = safeJsonParse<unknown>(raw)
+      if (typeof parsed === "string" && parsed) return [parsed]
+      if (parsed && typeof parsed === "object") {
+        const record = parsed as Record<string, unknown>
+        const value = record.value ?? record.stashDir
+        if (typeof value === "string" && value) return [value]
+      }
+    }
+  }
+  const home = process.env.HOME
+  if (home) return [path.join(home, "akm")]
+  return []
 }
 
 function emitBlockDecision(reason: string): string {
@@ -273,11 +365,20 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
       : typeof parsed.toolName === "string"
         ? parsed.toolName
         : ""
-  const commandText = sanitize(getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || "")
-  const outputText = sanitize(getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || "")
-  const commandRefs = [...new Set(commandText.match(REF_PATTERN) ?? [])]
-  const outputRefs = [...new Set(outputText.match(REF_PATTERN) ?? [])]
-  const refs = [...new Set(`${commandText}\n${outputText}`.match(REF_PATTERN) ?? [])]
+  // Capture the *raw* (pre-sanitize) command/output text so we can collect
+  // ref candidates from any sub-string position (heredocs, fenced code,
+  // JSON values, prose). Candidates are intentionally permissive — the
+  // validation step in captureMemory() drops anything that doesn't resolve
+  // to a real asset in the local stash, so string-literal false positives
+  // never make it into the durable memory frontmatter.
+  // (sanitize() is still used for log-line readability.)
+  const rawCommandText = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || ""
+  const rawOutputText = getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || ""
+  const commandText = sanitize(rawCommandText)
+  const outputText = sanitize(rawOutputText)
+  const commandRefs = extractAllRefs(rawCommandText)
+  const outputRefs = extractAllRefs(rawOutputText)
+  const refs = [...new Set([...commandRefs, ...outputRefs])]
   if (refs.length === 0 && commandText.includes("akm remember")) {
     const match = commandText.match(/--name\s+([A-Za-z0-9._/-]+)/)
     if (match) refs.push(`memory:${match[1]}`)
@@ -600,7 +701,18 @@ function recordPostTool() {
   if (/akm|\/akm/.test(commandText)) appendLog(FEEDBACK_LOG, "system", statusText, toolName || "Bash", commandText)
   for (const ref of refs) {
     appendLog(MEMORY_LOG, "system", toolName || "Bash", ref, commandText)
-    writeSessionBuffer(sid, `${toolName || "Bash"} ${statusText}`, `- ref: ${ref}\n- command: ${commandText}`)
+  }
+  // Record one buffer section per post-tool event (command + status) and
+  // accumulate ref candidates in a sidecar file. We deliberately do NOT
+  // inject `- ref: <type>:<slug>` lines into the body — those lines were
+  // the producer-side source of `missing-ref` lint flags whenever a
+  // candidate turned out to be a heredoc/grep literal rather than a real
+  // asset. Candidates are validated against the live stash at capture time
+  // and written to frontmatter (`refs:` array), which is the authoritative
+  // ref list for session-checkpoint memories.
+  if (sid && refs.length > 0) {
+    writeSessionBuffer(sid, `${toolName || "Bash"} ${statusText}`, `- command: ${commandText}`)
+    appendSessionRefCandidates(sid, refs)
   }
   writeMemoryEvent({
     event: "tool_observation",
@@ -753,17 +865,32 @@ function captureMemory() {
   const sid = extractSessionId(rawInput)
   if (!sid) return
   const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
-  if (!existsSync(bufferPath)) return
+  const refSidecar = path.join(SESSIONS_DIR, `${sid}.refs.jsonl`)
+  if (!existsSync(bufferPath)) {
+    rmSync(refSidecar, { force: true })
+    return
+  }
   const buffer = readFileSync(bufferPath, "utf8")
   const entries = (buffer.match(/^## /gm) ?? []).length
   if (entries < 2) {
     rmSync(bufferPath, { force: true })
+    rmSync(refSidecar, { force: true })
     return
   }
   const dateTag = timestamp().slice(0, 10).replace(/-/g, "")
   const shortSid = sid.slice(0, 8)
   const name = `claude-session-${dateTag}-${shortSid}`
-  const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${buffer}`
+  // Validate any ref candidates that accumulated during the session: only
+  // candidates that resolve to a real asset in the local stash become
+  // entries in the durable memory's frontmatter `refs:` array. Literal
+  // strings (heredocs, grep patterns, JSON values) silently drop out, so
+  // `akm lint` will not flag them as `missing-ref`. The captured-memory
+  // body still contains the raw command/heredoc text — the lint
+  // carve-out treats the frontmatter `refs:` array as authoritative for
+  // session-checkpoint memories.
+  const refCandidates = readSessionRefCandidates(sid)
+  const refsBlock = buildRefsFrontmatterBlock(refCandidates)
+  const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}${refsBlock}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${buffer}`
   const redactedBody = redactSecrets(rawBody).text
   const result = akmRun(["--format", "json", "-q", "remember", "--name", name, "--force", ...buildRunScopeArgs(sid)], redactedBody)
   if (result.trim()) {
@@ -808,6 +935,7 @@ function captureMemory() {
     })
   }
   rmSync(bufferPath, { force: true })
+  rmSync(refSidecar, { force: true })
 }
 
 function main(): string {

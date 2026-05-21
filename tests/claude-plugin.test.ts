@@ -968,6 +968,166 @@ exit 0
     expect(existsSync(bufferPath)).toBe(false)
   })
 
+  it("capture-memory validates ref candidates against the live stash and writes only survivors to frontmatter", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const stashDir = path.join(tempDir, "stash")
+    const rememberLog = path.join(tempDir, "remember.log")
+    const rememberBody = path.join(tempDir, "remember.body")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+    // Stash contains the real targets…
+    mkdirSync(path.join(stashDir, "memories"), { recursive: true })
+    mkdirSync(path.join(stashDir, "agents"), { recursive: true })
+    writeFileSync(path.join(stashDir, "memories", "rollout-notes.md"), "x")
+    writeFileSync(path.join(stashDir, "agents", "bunjs-coder.md"), "x")
+
+    // Buffer simulates 2+ post-tool entries that have already been recorded.
+    const bufferPath = path.join(sessionsDir, "sess-validated.md")
+    writeFileSync(
+      bufferPath,
+      "## 2026-04-22T03:00:00Z — Bash success\n- command: grep -E 'memory:foo|memory:bar' /tmp/x\n\n## 2026-04-22T03:01:00Z — Bash success\n- command: akm show memory:rollout-notes\n",
+    )
+    // Sidecar simulates the candidates that recordPostTool() accumulated.
+    // Mix of real refs (resolve) and literal strings (do not resolve).
+    const refSidecar = path.join(sessionsDir, "sess-validated.refs.jsonl")
+    writeFileSync(
+      refSidecar,
+      [
+        '{"ref":"memory:foo"}',
+        '{"ref":"memory:bar"}',
+        '{"ref":"memory:rollout-notes"}',
+        '{"ref":"agent:bunjs-coder"}',
+        '{"ref":"agent:bunjs-coder"}',
+        '{"ref":"knowledge:projects/akm/does-not-exist"}',
+      ].join("\n") + "\n",
+    )
+
+    const quotedLog = shellQuote(rememberLog)
+    const quotedBody = shellQuote(rememberBody)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+if printf '%s' "$*" | grep -q 'remember'; then
+  cat > ${quotedBody}
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "session-end"], {
+      input: JSON.stringify({ session_id: "sess-validated" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_STASH_DIR: stashDir,
+      },
+    })
+
+    const body = readFileSync(rememberBody, "utf8")
+    // The validated refs land in frontmatter, sorted and deduped.
+    expect(body).toContain("refs:\n  - agent:bunjs-coder\n  - memory:rollout-notes")
+    // The literal-string candidates that never resolved are absent.
+    expect(body).not.toContain("- memory:foo")
+    expect(body).not.toContain("- memory:bar")
+    expect(body).not.toContain("- knowledge:projects/akm/does-not-exist")
+    // The body still contains the raw command transcript verbatim — including
+    // the literal grep pattern that contains `memory:foo`. The lint
+    // carve-out treats the frontmatter array as authoritative so those
+    // strings do not produce missing-ref flags.
+    expect(body).toContain("grep -E 'memory:foo|memory:bar'")
+    // Sidecar is cleaned up after capture.
+    expect(existsSync(refSidecar)).toBe(false)
+    expect(existsSync(bufferPath)).toBe(false)
+  })
+
+  it("capture-memory omits the refs key when no candidates survive validation", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const stashDir = path.join(tempDir, "stash")
+    const rememberBody = path.join(tempDir, "remember.body")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stashDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    const bufferPath = path.join(sessionsDir, "sess-empty.md")
+    writeFileSync(
+      bufferPath,
+      "## 2026-04-22T03:00:00Z — Bash success\n- command: echo memory:foo\n\n## 2026-04-22T03:01:00Z — Bash success\n- command: echo memory:bar\n",
+    )
+    // All candidates are literal strings — none resolve against the empty stash.
+    writeFileSync(
+      path.join(sessionsDir, "sess-empty.refs.jsonl"),
+      '{"ref":"memory:foo"}\n{"ref":"memory:bar"}\n',
+    )
+
+    const quotedBody = shellQuote(rememberBody)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+if printf '%s' "$*" | grep -q 'remember'; then
+  cat > ${quotedBody}
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "session-end"], {
+      input: JSON.stringify({ session_id: "sess-empty" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_STASH_DIR: stashDir,
+      },
+    })
+
+    const body = readFileSync(rememberBody, "utf8")
+    expect(body).not.toContain("refs:")
+    expect(body).toContain("akm_memory_kind: session_checkpoint")
+  })
+
+  it("post-tool writes ref candidates to a sidecar file (not into the buffer body)", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["post-tool", "success"], {
+      input: JSON.stringify({
+        session_id: "sess-sidecar",
+        tool: "Bash",
+        input: { command: "cat <<'EOF'\nmemory:foo\nknowledge:projects/akm/bar\nEOF" },
+        output: "ok",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    const bufferPath = path.join(sessionsDir, "sess-sidecar.md")
+    const refSidecar = path.join(sessionsDir, "sess-sidecar.refs.jsonl")
+
+    // Buffer holds the command line but NOT a `- ref: ...` injection line.
+    const buffer = readFileSync(bufferPath, "utf8")
+    expect(buffer).toContain("- command: cat")
+    expect(buffer).not.toMatch(/^- ref:/m)
+    // Sidecar holds the permissive candidate list (validation runs at capture time).
+    const sidecar = readFileSync(refSidecar, "utf8")
+    expect(sidecar).toContain('"ref":"memory:foo"')
+    expect(sidecar).toContain('"ref":"knowledge:projects/akm/bar"')
+  })
+
   it("capture-memory logs remember failures instead of claiming capture success", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
