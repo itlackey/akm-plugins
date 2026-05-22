@@ -14,8 +14,7 @@ const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
 
 // ── Agent model alias resolution ─────────────────────────────────────────────
-const ANTHROPIC_MODEL_ALIASES = new Set(["inherit", "sonnet", "opus", "haiku"])
-const CC_VALID_MODEL_PATTERN = /^(anthropic\/|lab\/)/ // full-ID prefixes (lab/ = user custom provider)
+const CC_VALID_MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "inherit"])
 const MODEL_ALIAS_MAP: Record<string, string> = {
   balanced: "sonnet",
   fast: "haiku",
@@ -29,16 +28,9 @@ const MODEL_ALIAS_MAP: Record<string, string> = {
   "gpt-5.4": "opus",
 }
 
-function isValidCcModel(model: string): boolean {
-  if (!model) return false
-  if (ANTHROPIC_MODEL_ALIASES.has(model)) return true
-  if (CC_VALID_MODEL_PATTERN.test(model)) return true
-  return false
-}
-
 function resolveModel(raw: string | null | undefined): string | null {
   if (!raw) return null
-  if (isValidCcModel(raw)) return raw
+  if (CC_VALID_MODEL_ALIASES.has(raw)) return raw
   const mapped = MODEL_ALIAS_MAP[raw.toLowerCase()]
   if (mapped) return mapped
   return "sonnet" // unknown alias → safe fallback
