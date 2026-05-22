@@ -13,6 +13,36 @@ import { extractAkmRefsFromString } from "../shared/ref-extraction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
+
+const ANTHROPIC_MODEL_ALIASES = new Set(["inherit", "sonnet", "opus", "haiku"])
+const CC_VALID_MODEL_PATTERN = /^(anthropic\/|lab\/)/ // full-ID prefixes
+const MODEL_ALIAS_MAP: Record<string, string> = {
+  balanced: "sonnet",
+  fast: "haiku",
+  capable: "opus",
+  smart: "opus",
+  cheap: "haiku",
+  "gpt-4o": "sonnet",
+  "gpt-4o-mini": "haiku",
+  "gpt-4": "sonnet",
+  "gpt-5": "opus",
+  "gpt-5.4": "opus",
+}
+
+function isValidCcModel(model: string): boolean {
+  if (!model) return false
+  if (ANTHROPIC_MODEL_ALIASES.has(model)) return true
+  if (CC_VALID_MODEL_PATTERN.test(model)) return true
+  return false
+}
+
+function resolveModel(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  if (isValidCcModel(raw)) return raw
+  const mapped = MODEL_ALIAS_MAP[raw.toLowerCase()]
+  if (mapped) return mapped
+  return "sonnet"
+}
 const AKM_REQUIRED_RANGE = "^0.8.0-rc0 || ^0.8.0"
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@${AKM_REQUIRED_RANGE}`
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
@@ -1091,6 +1121,97 @@ function captureMemory(options?: { rawInput?: string; reason?: string; checkpoin
   return `memory:${name}`
 }
 
+function preToolAgent(): string {
+  const rawInput = readStdin()
+  let payload: Record<string, unknown>
+  try {
+    payload = JSON.parse(rawInput)
+  } catch {
+    return "" // malformed — pass through
+  }
+
+  const toolInput = (payload.tool_input ?? {}) as Record<string, unknown>
+  const subagentType = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : null
+  const rawModel = typeof toolInput.model === "string" ? toolInput.model : null
+
+  const updatedInput: Record<string, unknown> = {}
+
+  if (subagentType?.startsWith("akm:")) {
+    // --- AKM stash agent dispatch ---
+    const ref = subagentType.slice(4) // strip "akm:"
+    const akmRef = ref.startsWith("agent:") ? ref : `agent:${ref}`
+    const result = akmRunChecked(["show", akmRef, "--format", "json"])
+    if (result.ok && result.stdout.trim()) {
+      try {
+        const agentData = JSON.parse(result.stdout) as Record<string, unknown>
+        const systemPrompt = typeof agentData.prompt === "string" ? agentData.prompt : typeof agentData.content === "string" ? agentData.content : ""
+        const agentModel = typeof agentData.model === "string" ? agentData.model : typeof agentData.modelHint === "string" ? agentData.modelHint : null
+        const resolvedModel = resolveModel(rawModel ?? agentModel) ?? "sonnet"
+        const safeName = `akm-${ref.replace(/[^a-zA-Z0-9-]/g, "-")}`
+        const agentsDir = path.join(process.env.HOME ?? ".", ".claude", "agents")
+        mkdirSync(agentsDir, { recursive: true })
+        const agentFilePath = path.join(agentsDir, `${safeName}.md`)
+        const description = typeof agentData.description === "string" ? agentData.description : "AKM stash agent"
+        const frontmatter = [
+          "---",
+          `name: ${safeName}`,
+          `description: ${description}`,
+          `model: ${resolvedModel}`,
+          `color: blue`,
+          "---",
+          "",
+          systemPrompt,
+        ].join("\n")
+        writeFileSync(agentFilePath, frontmatter, "utf8")
+        updatedInput.subagent_type = safeName
+        updatedInput.model = resolvedModel
+      } catch {
+        // JSON parse failed — fall back
+        updatedInput.subagent_type = "general-purpose"
+        updatedInput.model = resolveModel(rawModel) ?? "sonnet"
+      }
+    } else {
+      // akm show failed — fall back to general-purpose with resolved model
+      updatedInput.subagent_type = "general-purpose"
+      updatedInput.model = resolveModel(rawModel) ?? "sonnet"
+    }
+  } else {
+    // --- Model alias resolution for regular subagent types ---
+    let frontmatterModel: string | null = null
+    if (subagentType) {
+      const agentFilePath = path.join(process.env.HOME ?? ".", ".claude", "agents", `${subagentType}.md`)
+      try {
+        const content = readFileSync(agentFilePath, "utf8")
+        const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
+        if (fmMatch) {
+          const modelMatch = fmMatch[1].match(/^model:\s*(.+)$/m)
+          if (modelMatch) frontmatterModel = modelMatch[1].trim()
+        }
+      } catch {
+        // File not found — no frontmatter model
+      }
+    }
+
+    const effectiveRaw = rawModel ?? frontmatterModel
+    const resolved = resolveModel(effectiveRaw)
+    if (resolved && resolved !== effectiveRaw) {
+      updatedInput.model = resolved
+    }
+  }
+
+  if (Object.keys(updatedInput).length === 0) {
+    return "" // pass through
+  }
+
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+      updatedInput,
+    },
+  })
+}
+
 function main(): string {
   switch (COMMAND) {
     case "ensure-akm":
@@ -1108,6 +1229,8 @@ function main(): string {
     case "pre-tool":
       if (MODE === "bash") return preToolBash()
       return ""
+    case "pre-tool-agent":
+      return preToolAgent()
     case "pre-tool-nonbash":
       return pretoolNonBash()
     case "post-tool-nonbash":
