@@ -983,66 +983,31 @@ function preToolAgent(): string {
   const subagentType = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : null
   const rawModel = typeof toolInput.model === "string" ? toolInput.model : null
 
-  const updatedInput: Record<string, unknown> = {}
-
-  if (subagentType?.startsWith("akm:")) {
-    // Materialize AKM stash agent on-demand
-    const ref = subagentType.slice(4) // strip "akm:"
-    const akmRef = ref.startsWith("agent:") ? ref : `agent:${ref}`
-    const result = akmRunChecked(["show", akmRef, "--format", "json"])
-    if (result.ok && result.stdout.trim()) {
-      try {
-        const agentData = JSON.parse(result.stdout) as Record<string, unknown>
-        const systemPrompt = typeof agentData.prompt === "string" ? agentData.prompt : typeof agentData.content === "string" ? agentData.content : ""
-        const agentModel = typeof agentData.model === "string" ? agentData.model : typeof agentData.modelHint === "string" ? agentData.modelHint : null
-        const resolvedModel = resolveModel(rawModel ?? agentModel) ?? "sonnet"
-        const safeName = `akm-${ref.replace(/[^a-zA-Z0-9-]/g, "-")}`
-        const agentsDir = path.join(process.env.HOME ?? ".", ".claude", "agents")
-        mkdirSync(agentsDir, { recursive: true })
-        const agentFilePath = path.join(agentsDir, `${safeName}.md`)
-        const description = typeof agentData.description === "string" ? agentData.description : "AKM stash agent"
-        const frontmatter = ["---", `name: ${safeName}`, `description: ${description}`, `model: ${resolvedModel}`, `color: blue`, "---", "", systemPrompt].join("\n")
-        writeFileSync(agentFilePath, frontmatter, "utf8")
-        updatedInput.subagent_type = safeName
-        updatedInput.model = resolvedModel
-      } catch {
-        updatedInput.subagent_type = "general-purpose"
-        updatedInput.model = resolveModel(rawModel) ?? "sonnet"
+  // Read model from agent frontmatter if not set on the tool call directly
+  let frontmatterModel: string | null = null
+  if (subagentType) {
+    const agentFilePath = path.join(process.env.HOME ?? ".", ".claude", "agents", `${subagentType}.md`)
+    try {
+      const content = readFileSync(agentFilePath, "utf8")
+      const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
+      if (fmMatch) {
+        const modelMatch = fmMatch[1].match(/^model:\s*(.+)$/m)
+        if (modelMatch) frontmatterModel = modelMatch[1].trim()
       }
-    } else {
-      updatedInput.subagent_type = "general-purpose"
-      updatedInput.model = resolveModel(rawModel) ?? "sonnet"
-    }
-  } else {
-    // Resolve model alias for regular subagent types — read frontmatter then override if needed
-    let frontmatterModel: string | null = null
-    if (subagentType) {
-      const agentFilePath = path.join(process.env.HOME ?? ".", ".claude", "agents", `${subagentType}.md`)
-      try {
-        const content = readFileSync(agentFilePath, "utf8")
-        const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
-        if (fmMatch) {
-          const modelMatch = fmMatch[1].match(/^model:\s*(.+)$/m)
-          if (modelMatch) frontmatterModel = modelMatch[1].trim()
-        }
-      } catch {
-        // agent file not found — no frontmatter model
-      }
-    }
-    const effectiveRaw = rawModel ?? frontmatterModel
-    const resolved = resolveModel(effectiveRaw)
-    if (resolved && resolved !== effectiveRaw) {
-      updatedInput.model = resolved
+    } catch {
+      // agent file not found — no frontmatter model
     }
   }
 
-  if (Object.keys(updatedInput).length === 0) return ""
+  const effectiveRaw = rawModel ?? frontmatterModel
+  const resolved = resolveModel(effectiveRaw)
+  if (!resolved || resolved === effectiveRaw) return ""
 
   return JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
-      updatedInput,
+      updatedInput: { model: resolved },
     },
   })
 }
