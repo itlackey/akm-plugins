@@ -15,8 +15,13 @@ import { assessRiskyAkmCommand } from "../shared/risky-command"
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
 
-const ANTHROPIC_MODEL_ALIASES = new Set(["inherit", "sonnet", "opus", "haiku"])
-const CC_VALID_MODEL_PATTERN = /^(anthropic\/|lab\/)/ // full-ID prefixes
+// ── Agent model alias resolution ─────────────────────────────────────────────
+// The only valid Claude Code subagent model identifiers are the four Anthropic
+// aliases below. Everything else (cross-provider aliases like `balanced`,
+// `gpt-4o`, or full-ID prefixes like `anthropic/...` and `lab/...`) gets
+// remapped via MODEL_ALIAS_MAP or falls back to `sonnet` so the Agent tool
+// dispatch is never rejected upstream.
+const CC_VALID_MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "inherit"])
 const MODEL_ALIAS_MAP: Record<string, string> = {
   balanced: "sonnet",
   fast: "haiku",
@@ -30,19 +35,12 @@ const MODEL_ALIAS_MAP: Record<string, string> = {
   "gpt-5.4": "opus",
 }
 
-function isValidCcModel(model: string): boolean {
-  if (!model) return false
-  if (ANTHROPIC_MODEL_ALIASES.has(model)) return true
-  if (CC_VALID_MODEL_PATTERN.test(model)) return true
-  return false
-}
-
 function resolveModel(raw: string | null | undefined): string | null {
   if (!raw) return null
-  if (isValidCcModel(raw)) return raw
+  if (CC_VALID_MODEL_ALIASES.has(raw)) return raw
   const mapped = MODEL_ALIAS_MAP[raw.toLowerCase()]
   if (mapped) return mapped
-  return "sonnet"
+  return "sonnet" // unknown alias → safe fallback
 }
 const AKM_REQUIRED_RANGE = "^0.8.0-rc0 || ^0.8.0"
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@${AKM_REQUIRED_RANGE}`
@@ -1282,80 +1280,36 @@ function preToolAgent(): string {
   const subagentType = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : null
   const rawModel = typeof toolInput.model === "string" ? toolInput.model : null
 
-  const updatedInput: Record<string, unknown> = {}
-
-  if (subagentType?.startsWith("akm:")) {
-    // --- AKM stash agent dispatch ---
-    const ref = subagentType.slice(4) // strip "akm:"
-    const akmRef = ref.startsWith("agent:") ? ref : `agent:${ref}`
-    const result = akmRunChecked(["show", akmRef, "--format", "json"])
-    if (result.ok && result.stdout.trim()) {
-      try {
-        const agentData = JSON.parse(result.stdout) as Record<string, unknown>
-        const systemPrompt = typeof agentData.prompt === "string" ? agentData.prompt : typeof agentData.content === "string" ? agentData.content : ""
-        const agentModel = typeof agentData.model === "string" ? agentData.model : typeof agentData.modelHint === "string" ? agentData.modelHint : null
-        const resolvedModel = resolveModel(rawModel ?? agentModel) ?? "sonnet"
-        const safeName = `akm-${ref.replace(/[^a-zA-Z0-9-]/g, "-")}`
-        const agentsDir = path.join(process.env.HOME ?? ".", ".claude", "agents")
-        mkdirSync(agentsDir, { recursive: true })
-        const agentFilePath = path.join(agentsDir, `${safeName}.md`)
-        const description = typeof agentData.description === "string" ? agentData.description : "AKM stash agent"
-        const frontmatter = [
-          "---",
-          `name: ${safeName}`,
-          `description: ${description}`,
-          `model: ${resolvedModel}`,
-          `color: blue`,
-          "---",
-          "",
-          systemPrompt,
-        ].join("\n")
-        writeFileSync(agentFilePath, frontmatter, "utf8")
-        updatedInput.subagent_type = safeName
-        updatedInput.model = resolvedModel
-      } catch {
-        // JSON parse failed — fall back
-        updatedInput.subagent_type = "general-purpose"
-        updatedInput.model = resolveModel(rawModel) ?? "sonnet"
+  // Read model from agent frontmatter if not set on the tool call directly.
+  // Note: we deliberately do NOT special-case `akm:` prefixed subagent_type
+  // values — the Agent tool's subagent_type is always a known
+  // ~/.claude/agents/<name>.md file reference, not a runtime-resolved stash
+  // ref. Stash agents are surfaced via the `/akm-agent` slash command
+  // (which materializes them at user request), not via on-the-fly dispatch.
+  let frontmatterModel: string | null = null
+  if (subagentType) {
+    const agentFilePath = path.join(process.env.HOME ?? ".", ".claude", "agents", `${subagentType}.md`)
+    try {
+      const content = readFileSync(agentFilePath, "utf8")
+      const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
+      if (fmMatch) {
+        const modelMatch = fmMatch[1].match(/^model:\s*(.+)$/m)
+        if (modelMatch) frontmatterModel = modelMatch[1].trim()
       }
-    } else {
-      // akm show failed — fall back to general-purpose with resolved model
-      updatedInput.subagent_type = "general-purpose"
-      updatedInput.model = resolveModel(rawModel) ?? "sonnet"
-    }
-  } else {
-    // --- Model alias resolution for regular subagent types ---
-    let frontmatterModel: string | null = null
-    if (subagentType) {
-      const agentFilePath = path.join(process.env.HOME ?? ".", ".claude", "agents", `${subagentType}.md`)
-      try {
-        const content = readFileSync(agentFilePath, "utf8")
-        const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
-        if (fmMatch) {
-          const modelMatch = fmMatch[1].match(/^model:\s*(.+)$/m)
-          if (modelMatch) frontmatterModel = modelMatch[1].trim()
-        }
-      } catch {
-        // File not found — no frontmatter model
-      }
-    }
-
-    const effectiveRaw = rawModel ?? frontmatterModel
-    const resolved = resolveModel(effectiveRaw)
-    if (resolved && resolved !== effectiveRaw) {
-      updatedInput.model = resolved
+    } catch {
+      // agent file not found — no frontmatter model
     }
   }
 
-  if (Object.keys(updatedInput).length === 0) {
-    return "" // pass through
-  }
+  const effectiveRaw = rawModel ?? frontmatterModel
+  const resolved = resolveModel(effectiveRaw)
+  if (!resolved || resolved === effectiveRaw) return ""
 
   return JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
-      updatedInput,
+      updatedInput: { model: resolved },
     },
   })
 }
