@@ -10,6 +10,7 @@ import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } fr
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
 import { extractAkmRefsFromString } from "../shared/ref-extraction"
+import { assessRiskyAkmCommand } from "../shared/risky-command"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
@@ -455,20 +456,24 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
 }
 
 function assessRiskyClaudeCommand(command: string): string | undefined {
-  const normalized = command.trim()
-  if (!normalized) return undefined
-  if (/\bakm\s+(?:proposal\s+)?(accept|reject)\b/.test(normalized)) return "Proposal acceptance/rejection requires explicit user approval."
-  if (/\bakm\s+save\b[\s\S]*--push\b/.test(normalized)) return "`akm save --push` requires explicit user approval."
-  if (/\bakm\s+remove\b/.test(normalized)) return "`akm remove` is destructive and requires explicit user approval."
-  if (/\bakm\s+update\b[\s\S]*--all\b/.test(normalized)) return "`akm update --all` requires explicit user approval."
-  if (/\bakm\s+upgrade\b(?:[\s\S]*--force\b|\b)/.test(normalized)) return "`akm upgrade` requires explicit user approval."
-  if (/\bakm\s+vault\s+(create|set|unset|load)\b/.test(normalized)) {
-    if (/^\s*eval\s+["']?\$\(akm\s+vault\s+load\s+/.test(normalized)) return undefined
-    return "Vault create/set/unset/load requires explicit approval, and raw `akm vault load` output must not be exposed in logs or chat."
+  // Tokenized assessment of canonical risky `akm` subcommands (shared with the
+  // OpenCode plugin). Token-aware matching avoids false positives on prose
+  // mentions of these phrases inside commit messages, heredoc bodies, or
+  // release notes.
+  const assessment = assessRiskyAkmCommand(command)
+  if (assessment) {
+    return `${assessment.reason} ${assessment.approval} This requires explicit user approval.`
   }
-  if (/\bakm\s+config\s+set\s+(?:llm\.features\.|registries|searchPaths|stashDir)/.test(normalized)) return "AKM config mutations require explicit user approval."
-  if (/\bakm\s+(?:add|wiki\s+register)\b[\s\S]*--trust\b/.test(normalized)) return "Trusted source registration requires explicit user approval."
-  if (/\bakm\s+remember\b/.test(normalized) && redactSecrets(normalized).redacted) return "Raw `akm remember` payload appears to include secrets; redact it before writing memory."
+
+  // Content-scan check: `akm remember` with a payload that looks like it
+  // contains secrets. This is intentionally regex-based — we want to fire on
+  // *any* occurrence of a secret in the argv, even if `akm remember` itself
+  // is being invoked safely. The redactor uses its own heuristics; we just
+  // gate on its verdict.
+  const normalized = command.trim()
+  if (/\bakm\s+remember\b/.test(normalized) && redactSecrets(normalized).redacted) {
+    return "Raw `akm remember` payload appears to include secrets; redact it before writing memory."
+  }
   return undefined
 }
 
