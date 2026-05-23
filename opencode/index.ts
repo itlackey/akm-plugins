@@ -2865,7 +2865,12 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             ? `opencode auto: ${input.tool} succeeded`
             : `opencode auto: ${input.tool} failed`
           for (const ref of feedbackRefs) {
-            if (ref.startsWith("memory:") || ref.startsWith("vault:")) continue
+            // Skip refs that should never receive auto-feedback. Matches the
+            // claude-side hook (claude/hooks/akm-hook.ts:957): memory/vault/
+            // lesson are excluded, including origin-qualified forms like
+            // `local//lesson:foo`. Lessons take feedback through the proposal
+            // queue, not via direct akm feedback.
+            if (/^(?:.*\/\/)?(?:memory|vault|lesson):/.test(ref)) continue
             const directInput = Object.values(input.args as Record<string, unknown>).some((value) => typeof value === "string" && value.includes(ref))
             const signal = classifyFeedbackSignal({
               ref,
