@@ -9,7 +9,7 @@ Promotion rules:
 
 - `remember` — run `akm --format json -q remember --name candidate-<id> --force` with the candidate content on stdin
 - `feedback` — if `targetRef` is present, run `akm --format json -q feedback <targetRef> --positive --note "<content>"`
-- `distill` — if `targetRef` is present, run `akm --format json -q improve <targetRef>`
+- `distill` — if `targetRef` is present, run `akm improve <targetRef>` (the `improve` verb rejects `--format` in v0.8.0)
 - `propose` — run `akm --format json -q propose knowledge candidate-<id> --task "<content>"`
 - `ignore` — do not promote; tell the user to reject it instead
 

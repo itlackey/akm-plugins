@@ -1704,7 +1704,9 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
     return JSON.stringify(command)
   }
 
-  const fullArgs = args.includes("--format") ? [...args] : [...args, "--format", "json"]
+  // `akm improve` hard-rejects --format in 0.8.0 (cli.ts:4131-4137); never auto-inject it there.
+  const skipFormatInjection = args[0] === "improve"
+  const fullArgs = skipFormatInjection || args.includes("--format") ? [...args] : [...args, "--format", "json"]
   const proposalId = args[0] === "proposal" && typeof args[2] === "string" ? args[2] : null
 
   const recordSuccess = async (stdout: string): Promise<string> => {
@@ -3453,8 +3455,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         action: tool.schema.enum(["list", "show", "create", "set", "unset", "load"]).describe("Vault subcommand. 'load' wraps `akm vault load` — treat its output as opaque shell text meant for eval."),
         ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/set/unset/load; optional for list."),
         name: tool.schema.string().optional().describe("Vault name when action is 'create' (e.g. 'prod' → vaults/prod.env)."),
-        key: tool.schema.string().optional().describe("Variable name for set/unset. May include '=' to pass KEY=VALUE in one field when value is omitted."),
-        value: tool.schema.string().optional().describe("Value to store. Never echoed back."),
+        key: tool.schema.string().optional().describe("Variable name for set/unset. The legacy KEY=VALUE one-field form was removed in akm 0.8.0; pass the value via the 'value' field (piped to akm stdin)."),
+        value: tool.schema.string().optional().describe("Value to store for action='set'. Sent to `akm vault set` via stdin in 0.8.0 (never via argv) and never echoed back."),
         comment: tool.schema.string().optional().describe("Optional inline '# comment' written above the key for 'set'."),
         confirm: tool.schema.boolean().optional().describe("Must be true for sensitive actions like show and unset."),
       },
@@ -3480,10 +3482,40 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           case "set": {
             if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='set'." })
             if (!key) return JSON.stringify({ ok: false, error: "'key' is required for action='set'." })
-            const args = ["vault", "set", ref, key]
-            if (value != null) args.push(value)
+            if (value == null) return JSON.stringify({ ok: false, error: "'value' is required for action='set'." })
+            if (key.includes("=")) {
+              return JSON.stringify({
+                ok: false,
+                error: "'key' must not contain '='. The legacy KEY=VALUE form was removed in akm 0.8.0; pass the value via the 'value' field.",
+              })
+            }
+            // 0.8.0 removed positional VALUE / KEY=VALUE forms for security; the
+            // CLI now reads the value from stdin. Pipe it through execFileSync
+            // directly (runCli has no stdin path) so the value never appears in
+            // argv (/proc/cmdline, exec logs, etc.).
+            const command = resolveAkmCommand()
+            if (typeof command !== "string") return JSON.stringify(command)
+            const args = ["--format", "json", "-q", "vault", "set", ref, key]
             if (comment) args.push("--comment", comment)
-            return runCli(client as unknown as LogCapableClient, args, logMeta)
+            try {
+              const stdout = execFileSync(command, args, {
+                encoding: "utf8",
+                timeout: 30_000,
+                input: value,
+              })
+              return stdout || JSON.stringify({ ok: true, ref, key })
+            } catch (error: unknown) {
+              const message = formatCliError(error)
+              await writePluginLog(logClient, "error", "AKM vault set failed", {
+                subsystem: "vault",
+                toolName: "akm_vault",
+                action: "set",
+                ref,
+                key,
+                error: message,
+              })
+              return JSON.stringify({ ok: false, error: message })
+            }
           }
           case "unset": {
             if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='unset'." })

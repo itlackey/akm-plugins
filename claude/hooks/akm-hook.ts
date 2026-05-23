@@ -1103,7 +1103,7 @@ function sessionStart(): string {
       writeFileSync(curatedFile, curatedRaw)
     } catch {}
   }
-  const pendingRaw = akmRun(["--format", "json", "-q", "proposal", "list", "--status", "pending"])
+  const pendingRaw = akmRun(["--format", "json", "-q", "proposals", "--status", "pending"])
   const pendingItems = safeJsonParse<Record<string, unknown>>(pendingRaw)
   const pending = Array.isArray(pendingItems?.proposals)
     ? pendingItems?.proposals.length

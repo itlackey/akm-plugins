@@ -2695,7 +2695,7 @@ describe("akm-opencode plugin", () => {
       expect(parsed.error).toContain("'reason' is required")
     })
 
-    it("akm_improve forwards scope + task", async () => {
+    it("akm_improve forwards scope + task without auto-injecting --format (akm 0.8.0 rejects --format on improve)", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockReturnValue("{\"ok\":true}")
       await hooks.tool!.akm_improve.execute(
@@ -2704,7 +2704,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["improve", "knowledge:design", "--task", "review consistency", "--format", "json"],
+        ["improve", "knowledge:design", "--task", "review consistency"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -3021,17 +3021,37 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("v0.5.0 tool execution", () => {
-    it("akm_vault set forwards ref, key, value, and comment", async () => {
+    it("akm_vault set pipes value via stdin (akm 0.8.0 removed positional VALUE)", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_vault.execute(
         { action: "set", ref: "vault:prod", key: "API_KEY", value: "s3kret", comment: "prod key" } as any,
         {} as any,
       )
+      // The value MUST go via stdin (the `input` option) and MUST NOT appear in argv.
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["vault", "set", "vault:prod", "API_KEY", "s3kret", "--comment", "prod key", "--format", "json"],
-        expect.any(Object),
+        ["--format", "json", "-q", "vault", "set", "vault:prod", "API_KEY", "--comment", "prod key"],
+        expect.objectContaining({ input: "s3kret" }),
       )
+    })
+
+    it("akm_vault set rejects KEY=VALUE shape (removed in akm 0.8.0)", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_vault.execute(
+        { action: "set", ref: "vault:prod", key: "API_KEY=s3kret", value: "ignored" } as any,
+        {} as any,
+      )
+      expect(JSON.parse(result as string).ok).toBe(false)
+      expect(JSON.parse(result as string).error).toContain("KEY=VALUE form was removed")
+    })
+
+    it("akm_vault rejects set without a value", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_vault.execute(
+        { action: "set", ref: "vault:prod", key: "API_KEY" } as any,
+        {} as any,
+      )
+      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "'value' is required for action='set'." })
     })
 
     it("akm_vault load returns raw shell text wrapped in JSON", async () => {
