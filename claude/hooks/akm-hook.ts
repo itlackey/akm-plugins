@@ -391,10 +391,19 @@ function readAkmConfig(): Record<string, unknown> {
 
 function readConfiguredAgentDefault(): string {
   const config = readAkmConfig()
+  // 0.8.0 canonical shape: defaults.agent. Fall back to the legacy agent.default
+  // slot when running against a pre-0.8 config that has not been migrated yet.
+  const defaults = config.defaults
+  if (defaults && typeof defaults === "object") {
+    const value = (defaults as Record<string, unknown>).agent
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
   const agent = config.agent
-  if (!agent || typeof agent !== "object") return ""
-  const value = (agent as Record<string, unknown>).default
-  return typeof value === "string" ? value.trim() : ""
+  if (agent && typeof agent === "object") {
+    const value = (agent as Record<string, unknown>).default
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return ""
 }
 
 function writeConfiguredAgentDefault(platform: string): boolean {
@@ -403,11 +412,41 @@ function writeConfiguredAgentDefault(platform: string): boolean {
     const configPath = getAkmConfigPath()
     mkdirSync(path.dirname(configPath), { recursive: true })
     const current = readAkmConfig()
-    const agent = current.agent && typeof current.agent === "object"
-      ? { ...(current.agent as Record<string, unknown>) }
+    // 0.8.0 canonical shape: defaults.agent + profiles.agent.<name>.platform.
+    // Writing the legacy agent.default slot triggers a config-migrate write on
+    // the next akm load, which clobbers nearby keys (the "config clobber
+    // trap"). Write the canonical shape directly so akm's auto-migration is a
+    // no-op.
+    const defaults = current.defaults && typeof current.defaults === "object"
+      ? { ...(current.defaults as Record<string, unknown>) }
       : {}
-    agent.default = platform
-    writeFileSync(configPath, `${JSON.stringify({ ...current, agent }, null, 2)}\n`)
+    defaults.agent = platform
+
+    const profiles = current.profiles && typeof current.profiles === "object"
+      ? { ...(current.profiles as Record<string, unknown>) }
+      : {}
+    const agentProfiles = profiles.agent && typeof profiles.agent === "object"
+      ? { ...(profiles.agent as Record<string, unknown>) }
+      : {}
+    if (!(platform in agentProfiles) || typeof agentProfiles[platform] !== "object") {
+      agentProfiles[platform] = { platform }
+    }
+    profiles.agent = agentProfiles
+
+    // Strip the legacy agent.default slot so akm's auto-migration doesn't
+    // re-trigger on every load. Preserve other top-level fields verbatim.
+    const next: Record<string, unknown> = { ...current, defaults, profiles }
+    if (next.agent && typeof next.agent === "object") {
+      const legacyAgent = { ...(next.agent as Record<string, unknown>) }
+      delete legacyAgent.default
+      if (Object.keys(legacyAgent).length === 0) {
+        delete next.agent
+      } else {
+        next.agent = legacyAgent
+      }
+    }
+
+    writeFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`)
     return true
   } catch {
     return false

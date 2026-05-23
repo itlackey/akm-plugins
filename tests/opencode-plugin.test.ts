@@ -1306,7 +1306,7 @@ describe("akm-opencode plugin", () => {
         if (args[0] === "--version") return "0.8.9"
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate")) return ""
-        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
+        if (Array.isArray(args) && args[0] === "proposals") return JSON.stringify({ proposals: [] })
         return "mock output"
       })
 
@@ -1341,14 +1341,14 @@ describe("akm-opencode plugin", () => {
       }
     })
 
-    it("initializes agent.default to opencode on session.created when missing", async () => {
+    it("initializes defaults.agent to opencode on session.created when missing", async () => {
       const configHome = mkdtempSync(path.join(tmpdir(), "akm-opencode-config-"))
       mkdirSync(path.join(configHome, "akm"), { recursive: true })
       writeFileSync(path.join(configHome, "akm", "config.json"), `${JSON.stringify({})}\n`)
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate")) return ""
-        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
+        if (Array.isArray(args) && args[0] === "proposals") return JSON.stringify({ proposals: [] })
         return "mock output"
       })
 
@@ -1359,7 +1359,10 @@ describe("akm-opencode plugin", () => {
           await hooks.event!({ event: { type: "session.created", properties: { sessionID: "session-agent-default-1" } } } as any)
 
           const config = JSON.parse(readFileSync(path.join(configHome, "akm", "config.json"), "utf8"))
-          expect(config.agent.default).toBe("opencode")
+          // 0.8.0 canonical shape: defaults.agent + profiles.agent.<name>.
+          expect(config.defaults.agent).toBe("opencode")
+          expect(config.profiles.agent.opencode).toEqual({ platform: "opencode" })
+          expect(config.agent).toBeUndefined()
         })
       } finally {
         rmSync(configHome, { recursive: true, force: true })
@@ -1375,7 +1378,7 @@ describe("akm-opencode plugin", () => {
         if (Array.isArray(args) && args.includes("curate") && args.includes("--run")) {
           return "# skills\n- skill:deploy — ship the app\n"
         }
-        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
+        if (Array.isArray(args) && args[0] === "proposals") return JSON.stringify({ proposals: [] })
         return "mock output"
       })
 
@@ -1395,7 +1398,8 @@ describe("akm-opencode plugin", () => {
           expect(curateCall?.[1]).not.toContain("--for-agent")
 
           const config = JSON.parse(readFileSync(path.join(configHome, "akm", "config.json"), "utf8"))
-          expect(config.agent.default).toBe("opencode")
+          expect(config.defaults.agent).toBe("opencode")
+          expect(config.profiles.agent.opencode).toEqual({ platform: "opencode" })
 
           const output = { system: [] as string[] }
           await hooks["experimental.chat.system.transform"]!(
@@ -1413,7 +1417,7 @@ describe("akm-opencode plugin", () => {
 
     it("injects a pending proposal summary when proposals exist", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
+        if (Array.isArray(args) && args[0] === "proposals") {
           return JSON.stringify({ proposals: [{ id: "p1" }, { id: "p2" }] })
         }
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
@@ -1431,7 +1435,7 @@ describe("akm-opencode plugin", () => {
 
     it("does not inject compaction context when compaction is disabled", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
+        if (Array.isArray(args) && args[0] === "proposals") {
           return JSON.stringify({ proposals: [{ id: "p1" }] })
         }
         return "mock output"
@@ -1442,7 +1446,7 @@ describe("akm-opencode plugin", () => {
 
     it("keeps compaction free of AKM tool-injection using the local fake model path", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
+        if (Array.isArray(args) && args[0] === "proposals") {
           return JSON.stringify({ proposals: [{ id: "p1" }] })
         }
         return "mock output"

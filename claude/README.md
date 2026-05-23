@@ -121,7 +121,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 | Event | What happens |
 | --- | --- |
-| **SessionStart** | Reuses `akm` when the resolved CLI already satisfies the required `^0.8.0` range; otherwise installs the required package ref (override via `AKM_PACKAGE_REF`; Bun → npm fallback), verifies the resolved version, sets `agent.default` to `claude` in `~/.config/akm/config.json` when it is missing, surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
+| **SessionStart** | Reuses `akm` when the resolved CLI already satisfies the required `^0.8.0` range; otherwise installs the required package ref (override via `AKM_PACKAGE_REF`; Bun → npm fallback), verifies the resolved version, sets `defaults.agent` to `claude` (and ensures `profiles.agent.claude` exists) in `~/.config/akm/config.json` when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
 | **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
 | **UserPromptExpansion** | Logs expanded `/akm-*` slash-command usage, injects a short reminder when a mutating memory/proposal command is expanded without explicit confirmation language, and takes a fresh proposal-prep checkpoint before `/akm-improve`, `/akm-evolve`, or `/akm-propose` when the local session buffer has unflushed evidence. |
 | **PreToolUse** (Bash) | Blocks risky raw AKM shell commands before execution, including proposal acceptance without explicit approval and suspicious `akm remember` payloads that appear to contain secrets. |
@@ -207,7 +207,7 @@ The plugin ships 18 first-class verbs. `/akm-add` and `/akm-save` are not part o
 - `/akm-review-proposals [--limit N]` — list every pending proposal and diff each one in a single pass for review.
 - `/akm-improve [type|ref] [--task "..."] [--dry-run]` — generate improvement proposals for the stash, a type, or a specific ref.
 - `/akm-propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.
-- `/akm-setup` — run the interactive `akm setup` wizard. It can configure `agent.default`, which is required for improve/propose.
+- `/akm-setup` — run the interactive `akm setup` wizard. It can configure `defaults.agent` (with a matching `profiles.agent.<name>` entry), which is required for improve/propose. The legacy `agent.default` shape is auto-migrated on load.
 - `/akm-help [task]` — surface a curated quick-reference for non-first-class `akm` verbs and fall back to live `akm --help`.
 
 ### When to use what

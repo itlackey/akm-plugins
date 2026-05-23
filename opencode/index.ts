@@ -260,10 +260,19 @@ function readAkmConfig(): Record<string, unknown> {
 
 function readConfiguredAgentDefault(): string {
   const config = readAkmConfig()
+  // 0.8.0 canonical shape: defaults.agent. Fall back to the legacy agent.default
+  // slot when running against a pre-0.8 config that has not been migrated yet.
+  const defaults = config.defaults
+  if (defaults && typeof defaults === "object") {
+    const value = (defaults as Record<string, unknown>).agent
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
   const agent = config.agent
-  if (!agent || typeof agent !== "object") return ""
-  const value = (agent as Record<string, unknown>).default
-  return typeof value === "string" ? value.trim() : ""
+  if (agent && typeof agent === "object") {
+    const value = (agent as Record<string, unknown>).default
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return ""
 }
 
 function writeConfiguredAgentDefault(platform: string): boolean {
@@ -273,11 +282,41 @@ function writeConfiguredAgentDefault(platform: string): boolean {
     const configDir = path.dirname(configPath)
     mkdirSync(configDir, { recursive: true })
     const current = readAkmConfig()
-    const agent = current.agent && typeof current.agent === "object"
-      ? { ...(current.agent as Record<string, unknown>) }
+    // 0.8.0 canonical shape: defaults.agent + profiles.agent.<name>.platform.
+    // Writing the legacy agent.default slot triggers a config-migrate write on
+    // the next akm load, which clobbers nearby keys (the "config clobber
+    // trap"). Write the canonical shape directly so akm's auto-migration is a
+    // no-op.
+    const defaults = current.defaults && typeof current.defaults === "object"
+      ? { ...(current.defaults as Record<string, unknown>) }
       : {}
-    agent.default = platform
-    writeFileSync(configPath, `${JSON.stringify({ ...current, agent }, null, 2)}\n`)
+    defaults.agent = platform
+
+    const profiles = current.profiles && typeof current.profiles === "object"
+      ? { ...(current.profiles as Record<string, unknown>) }
+      : {}
+    const agentProfiles = profiles.agent && typeof profiles.agent === "object"
+      ? { ...(profiles.agent as Record<string, unknown>) }
+      : {}
+    if (!(platform in agentProfiles) || typeof agentProfiles[platform] !== "object") {
+      agentProfiles[platform] = { platform }
+    }
+    profiles.agent = agentProfiles
+
+    // Strip the legacy agent.default slot so akm's auto-migration doesn't
+    // re-trigger on every load. Preserve other top-level fields verbatim.
+    const next: Record<string, unknown> = { ...current, defaults, profiles }
+    if (next.agent && typeof next.agent === "object") {
+      const legacyAgent = { ...(next.agent as Record<string, unknown>) }
+      delete legacyAgent.default
+      if (Object.keys(legacyAgent).length === 0) {
+        delete next.agent
+      } else {
+        next.agent = legacyAgent
+      }
+    }
+
+    writeFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`)
     return true
   } catch {
     return false
@@ -926,7 +965,8 @@ async function getPendingProposalCount(client: LogCapableClient, sessionID?: str
   const command = resolveAkmCommand()
   if (typeof command !== "string") return { count: 0, unsupported: true }
   try {
-    const stdout = execFileSync(command, ["proposal", "list", "--status", "pending", "--format", "json"], {
+    // 0.8.0: the proposal-list subcommand is `akm proposals` (no "list" verb).
+    const stdout = execFileSync(command, ["proposals", "--status", "pending", "--format", "json"], {
       encoding: "utf8",
       timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
     })
@@ -3833,7 +3873,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
     }),
     akm_improve: tool({
-      description: "Generate AKM improvement proposals for an existing ref, an asset type, or the broader stash. This is the v0.8.0 replacement for the old reflect/distill flow. Output lands in the proposal queue only — never mutates live stash content. Requires `agent.default` to be set for agent-backed proposal generation.",
+      description: "Generate AKM improvement proposals for an existing ref, an asset type, or the broader stash. This is the v0.8.0 replacement for the old reflect/distill flow. Output lands in the proposal queue only — never mutates live stash content. Requires `defaults.agent` (with a matching `profiles.agent.<name>` entry) to be set for agent-backed proposal generation; the legacy `agent.default` shape is auto-migrated on load.",
       args: {
         scope: tool.schema.string().optional().describe("Optional asset type or [origin//]type:name ref to improve. When omitted, improves the current stash scope."),
         task: tool.schema.string().optional().describe("Optional extra guidance for this improvement pass."),
@@ -3855,7 +3895,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
     }),
     akm_propose: tool({
-      description: "Generate a new-asset proposal via the configured agent CLI. The asset is drafted as `quality:\"proposed\"` and lands in the proposal queue — never directly into curated content. Requires `agent.default` (run akm_setup first if missing).",
+      description: "Generate a new-asset proposal via the configured agent CLI. The asset is drafted as `quality:\"proposed\"` and lands in the proposal queue — never directly into curated content. Requires `defaults.agent` (with a matching `profiles.agent.<name>` entry; run akm_setup first if missing). The legacy `agent.default` shape is auto-migrated on load.",
       args: {
         type: tool.schema.enum(["skill", "command", "agent", "knowledge", "lesson", "script", "workflow", "wiki"]).describe("Asset type for the new proposal."),
         name: tool.schema.string().describe("Slug for the new asset (matches the standard ref grammar)."),

@@ -291,13 +291,13 @@ remember`-style flows is also supported.
 ## Improve / Propose
 
 `/akm-improve` and `/akm-propose` shell out to the configured agent CLI
-(`agent.default`, typically configured by the user via `akm setup`) and write **only** to the proposal
+(`defaults.agent` + `profiles.agent.<name>`, typically configured by the user via `akm setup`; the legacy `agent.default` shape is auto-migrated on load) and write **only** to the proposal
 queue — they never mutate live stash content. Use them when:
 
 - An asset misbehaved and you want a corrective draft or lesson proposal → `/akm-improve <ref> [--task "..."]`.
 - A coverage gap appeared in the conversation and you want a new draft asset → `/akm-propose <type> <name> --task "..."`.
 
-If `agent.default` is unset, the plugin should initialize it to the current platform when possible. If further interactive configuration is still needed, ask the user to run `akm setup` manually. Agents should not invoke the interactive setup flow themselves.
+If `defaults.agent` is unset, the plugin should initialize it to the current platform when possible (writing the canonical `defaults.agent` + `profiles.agent.<name>` shape). If further interactive configuration is still needed, ask the user to run `akm setup` manually. Agents should not invoke the interactive setup flow themselves.
 
 ## In-tree LLM gates
 
@@ -329,7 +329,7 @@ intent-bearing parts.
 
 | Phase | Automatic (hooks) | Your responsibility |
 | --- | --- | --- |
-| Session start | `akm` installed/refreshed; `agent.default` initialized to the current platform when missing; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. If further interactive configuration is still needed, ask the user to run `akm setup` manually. |
+| Session start | `akm` installed/refreshed; `defaults.agent` (+ a matching `profiles.agent.<name>` entry) initialized to the current platform when missing — the legacy `agent.default` slot is auto-migrated on load; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. If further interactive configuration is still needed, ask the user to run `akm setup` manually. |
 | Each user prompt | `akm curate "<prompt>"` runs and its top matches are injected into context as `additionalContext`. | Prefer the curated assets over writing new code; fetch full payloads with `akm show <ref>` before using. |
 | Each Bash tool call | Asset refs in the command/output are logged. Auto-feedback skips `memory:*` / `vault:*` / `lesson:*` / `quality:"proposed"` refs and records positive/negative feedback for everything else on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
 | Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings — improve the session memory into a proposal via `/akm-improve memory:<name>`, review the resulting proposal, and accept it via `/akm-proposal accept <id>`. |

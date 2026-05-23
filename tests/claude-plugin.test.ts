@@ -697,7 +697,12 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toContain("Stash hints")
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
     expect(payload.hookSpecificOutput.additionalContext).toContain("curated/session-sess-start-1.md")
-    expect(config.agent.default).toBe("claude")
+    // 0.8.0 canonical shape: defaults.agent + profiles.agent.<name>; the legacy
+    // agent.default slot is no longer written so akm's auto-migrate doesn't
+    // clobber sibling keys on load.
+    expect(config.defaults.agent).toBe("claude")
+    expect(config.profiles.agent.claude).toEqual({ platform: "claude" })
+    expect(config.agent).toBeUndefined()
 
     const invocations = readFileSync(invokeLog, "utf8")
     expect(invocations).toContain("curate")
