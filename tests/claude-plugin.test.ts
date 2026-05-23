@@ -1702,6 +1702,80 @@ exit 0
     expect(sessionLog.some((line) => line.includes("pretool_blocked") && line.includes("akm accept"))).toBe(true)
   })
 
+  it("pre-tool blocks akm revert (proposal-revert) on the tokenized gate", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["pre-tool", "bash"], {
+      input: JSON.stringify({
+        session_id: "sess-pretool-revert",
+        tool: "Bash",
+        input: { command: "akm revert p_abc" },
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.decision).toBe("block")
+    expect(payload.reason).toContain("akm revert <id>")
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("pretool_blocked") && line.includes("akm revert"))).toBe(true)
+  })
+
+  it("pre-tool blocks akm tasks add (tasks-mutate) on the tokenized gate", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["pre-tool", "bash"], {
+      input: JSON.stringify({
+        session_id: "sess-pretool-tasks",
+        tool: "Bash",
+        input: { command: "akm tasks add nightly --cron \"0 2 * * *\"" },
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.decision).toBe("block")
+    expect(payload.reason).toMatch(/OS scheduler|tasks add/)
+  })
+
+  it("pre-tool allows akm tasks list (read-only verb, no gate)", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["pre-tool", "bash"], {
+      input: JSON.stringify({
+        session_id: "sess-pretool-tasks-list",
+        tool: "Bash",
+        input: { command: "akm tasks list" },
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    // Hook outputs nothing (or a non-block decision) for non-risky commands.
+    const trimmed = stdout.trim()
+    if (trimmed) {
+      const payload = JSON.parse(trimmed)
+      expect(payload.decision).not.toBe("block")
+    }
+  })
+
   it("pre-tool blocks suspicious raw remember payloads containing secrets", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")

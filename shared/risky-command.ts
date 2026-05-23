@@ -54,7 +54,12 @@ export function assessRiskyAkmCommand(command: string): RiskyCommandAssessment |
   const sub = tokens[0]
   const subSub = tokens[1]
 
-  if ((sub === "proposal" && subSub === "accept") || sub === "accept") {
+  // 0.8.0 promoted accept/reject/revert to top-level verbs. The legacy
+  // `proposal accept|reject` two-token form never existed in akm 0.8.0
+  // (cli.ts has no `proposal` subcommand — only `proposals`, `accept`,
+  // `reject`, `revert`, `show proposal <id>`, `diff <id>`). The bare-verb
+  // arm is the canonical match.
+  if (sub === "accept") {
     return {
       category: "proposal-accept",
       reason: "Proposal acceptance changes curated AKM content.",
@@ -62,11 +67,32 @@ export function assessRiskyAkmCommand(command: string): RiskyCommandAssessment |
     }
   }
 
-  if ((sub === "proposal" && subSub === "reject") || sub === "reject") {
+  if (sub === "reject") {
     return {
       category: "proposal-reject",
       reason: "Proposal rejection is a durable curation decision.",
       approval: 'Ask the user to approve `akm reject <id> --reason "..."`.',
+    }
+  }
+
+  // `akm revert <id>` rolls back an accepted proposal — same impact class
+  // as accept/reject (durable curation decision). Gate it explicitly.
+  if (sub === "revert") {
+    return {
+      category: "proposal-revert",
+      reason: "Reverting an accepted proposal rolls back curated AKM content.",
+      approval: "Ask the user to approve `akm revert <id>`.",
+    }
+  }
+
+  // `akm tasks add|remove|enable|disable|run` registers, mutates, or
+  // executes OS-native scheduler entries (cron / launchd / schtasks). All
+  // five verbs have durable side effects outside the stash.
+  if (sub === "tasks" && ["add", "remove", "enable", "disable", "run"].includes(subSub)) {
+    return {
+      category: "tasks-mutate",
+      reason: `\`akm tasks ${subSub}\` changes or runs an OS scheduler entry (cron / launchd / schtasks).`,
+      approval: `Ask the user to approve the exact \`akm tasks ${subSub} ...\` command.`,
     }
   }
 
