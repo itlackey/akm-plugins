@@ -10,6 +10,7 @@ import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } fr
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
 import { extractAkmRefsFromString } from "../shared/ref-extraction"
+import { assessRiskyAkmCommand, blockedCommandMessage, splitArguments, type RiskyCommandAssessment } from "../shared/risky-command"
 
 let resolvedAkmCommand = "akm"
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
@@ -979,52 +980,9 @@ async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: 
   retrospectiveState.set(sessionID, { recentRefs })
 }
 
-type RiskyCommandAssessment = {
-  category: string
-  reason: string
-  approval: string
-}
-
-function assessRiskyAkmCommand(command: string): RiskyCommandAssessment | undefined {
-  const args = splitArguments(command)
-  const akmIndex = args.findIndex((arg) => arg === "akm" || arg.endsWith("/akm") || arg.endsWith("\\akm.exe"))
-  if (akmIndex === -1) return undefined
-  const tokens = args.slice(akmIndex + 1)
-  if ((tokens[0] === "proposal" && tokens[1] === "accept") || tokens[0] === "accept") {
-    return { category: "proposal-accept", reason: "Proposal acceptance changes curated AKM content.", approval: "Ask the user to approve `akm accept <id>`." }
-  }
-  if ((tokens[0] === "proposal" && tokens[1] === "reject") || tokens[0] === "reject") {
-    return { category: "proposal-reject", reason: "Proposal rejection is a durable curation decision.", approval: "Ask the user to approve `akm reject <id> --reason \"...\"`." }
-  }
-  if (tokens[0] === "save" && tokens.includes("--push")) {
-    return { category: "save-push", reason: "Pushing stash changes must be explicitly approved.", approval: "Ask the user to approve `akm save --push`." }
-  }
-  if (tokens[0] === "remove") {
-    return { category: "remove", reason: "Removing AKM sources is destructive.", approval: "Ask the user to approve the exact `akm remove ...` command." }
-  }
-  if (tokens[0] === "vault" && ["show", "load", "set", "unset"].includes(tokens[1] ?? "")) {
-    return { category: `vault-${tokens[1]}`, reason: "Vault access or mutation is sensitive.", approval: `Ask the user to approve the exact \`akm vault ${tokens[1]} ...\` command.` }
-  }
-  if (tokens[0] === "config" && tokens[1] === "set" && (tokens[2]?.startsWith("llm.features.") ?? false)) {
-    return { category: "config-llm-features", reason: "Changing AKM LLM feature flags alters autonomous behavior.", approval: "Ask the user to approve the exact `akm config set llm.features.* ...` command." }
-  }
-  if (tokens[0] === "update" && tokens.includes("--all")) {
-    return { category: "update-all", reason: "Updating all AKM kits changes many assets at once.", approval: "Ask the user to approve `akm update --all`." }
-  }
-  if (tokens[0] === "upgrade") {
-    return { category: "upgrade", reason: "Upgrading the AKM CLI changes the toolchain.", approval: "Ask the user to approve the exact `akm upgrade` command." }
-  }
-  return undefined
-}
-
-function blockedCommandMessage(command: string, assessment: RiskyCommandAssessment): string {
-  return [
-    `Blocked risky AKM command: ${command}`,
-    assessment.reason,
-    assessment.approval,
-    "Retry only after explicit user approval in this conversation.",
-  ].join("\n")
-}
+// Risk assessment for `akm` CLI invocations moved to shared/risky-command.ts.
+// Imported above so both the Claude Code plugin and the OpenCode plugin
+// apply the same rules and stay in sync.
 
 function queueFeedback(
   client: LogCapableClient,
@@ -2327,16 +2285,7 @@ async function getParentSessionID(
   }
 }
 
-function splitArguments(raw: string): string[] {
-  if (!raw.trim()) return []
-  const args: string[] = []
-  const re = /"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+)/g
-  let match: RegExpExecArray | null
-  while ((match = re.exec(raw)) !== null) {
-    args.push(match[1] ?? match[2] ?? match[3] ?? match[4] ?? "")
-  }
-  return args
-}
+// splitArguments moved to shared/risky-command.ts (imported at top of file).
 
 function renderCommandTemplate(template: string, rawArguments: string): string {
   const args = splitArguments(rawArguments)
