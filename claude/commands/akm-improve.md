@@ -11,3 +11,5 @@ Parse `"$ARGUMENTS"` as an optional asset type or `[origin//]type:name` ref, fol
 4. If this was not a dry run, surface the returned proposal ids or plan summary, then route the user through `/akm-proposal show <id>` and `/akm-proposal accept <id>` or `/akm-proposal reject <id> --reason "..."`.
 
 Use `/akm-improve memory:<name>` or `/akm-improve lesson` when the goal is to distill repeated evidence or clean up memory-driven assets.
+
+Note: in v0.8.0 `--auto-accept` defaults to ON at confidence threshold 90 — high-confidence improvements may auto-promote without an explicit `/akm-proposal accept`. Pass `--auto-accept=false` to preserve the interactive prompt flow.

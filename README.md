@@ -6,11 +6,11 @@ Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0
 
 The v0.8.0 release of akm hard-breaks the old self-improvement CLI and introduces:
 
-- **Proposal queue rename** — `/akm-proposal` (Claude) / `akm_proposal` (OpenCode) now route `list / show / diff / accept / reject` to `akm proposals`, `akm show proposal`, `akm diff proposal`, `akm accept`, and `akm reject`.
+- **Proposal queue rename** — `/akm-proposal` (Claude) / `akm_proposal` (OpenCode) now route `list / show / diff / accept / reject` to `akm proposals`, `akm show proposal`, `akm diff` (positional UUID/prefix/ref — no `proposal` middle word), `akm accept`, and `akm reject`.
 - **`improve` replaces `reflect` and `distill`** — AKM 0.8.0 removes the old public self-improvement commands. This repo now exposes `akm_improve` / `/akm-improve` as the canonical improvement flow.
 - **Task assets** — `akm tasks ...` is now part of the AKM CLI long-tail surface and discoverable here through `akm_help` / `/akm-help`.
 - **`lesson` asset type** — first-class type stored under `lessons/<name>.md` with required `description` and `when_to_use` frontmatter.
-- **`agent.*` config + `akm setup`** — `akm setup` is the human-facing interactive configuration wizard. It can detect installed agent CLIs (`opencode`, `claude`, `codex`, `gemini`, `aider`) and persist `agent.default`, but agents should not invoke it directly.
+- **`defaults.agent` config + `akm setup`** — `akm setup` is the human-facing interactive configuration wizard. It can detect installed agent CLIs (`opencode`, `claude`, `codex`, `gemini`, `aider`) and persist `defaults.agent` plus a matching `profiles.agent.<name>` entry, but agents should not invoke it directly. The legacy `agent.default` shape is auto-migrated on load.
 - **`quality:"proposed"`** — excluded from default search; surface drafts via `--include-proposed` or the proposal-review commands. The plugin's auto-feedback hook automatically skips proposed-quality refs.
 
 See akm's [`docs/migration/release-notes/0.8.0.md`](https://github.com/itlackey/akm/blob/main/docs/migration/release-notes/0.8.0.md) for the full delta.
@@ -98,7 +98,7 @@ Provides:
 - **`/akm-help` discovery flow** — for verbs without a dedicated slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, raw `agent`, vault writes), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
-- **Claude hooks** — the plugin refreshes `akm-cli@latest` (override via `AKM_PACKAGE_REF`) on session start, can set `agent.default` to the current platform in the AKM config file when it is missing, surfaces pending-proposal counts in the SessionStart header, blocks risky raw AKM Bash in `PreToolUse`, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality and `lesson:*` refs. Human users can run `akm setup` manually when interactive setup is needed.
+- **Claude hooks** — the plugin refreshes `akm-cli@^0.8.0` (override via `AKM_PACKAGE_REF`) on session start, can set `defaults.agent` to the current platform in the AKM config file when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces pending-proposal counts in the SessionStart header, blocks risky raw AKM Bash in `PreToolUse`, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality and `lesson:*` refs. Human users can run `akm setup` manually when interactive setup is needed.
 
 ### All Other Agents
 
@@ -137,9 +137,9 @@ Config is stored at `~/.config/akm/config.json` (XDG standard). Use `akm config 
 
 ## Prerequisites
 
-For OpenCode, the plugin checks the installed `akm` version first and only runs `bun install -g akm-cli@latest` when `akm` is missing or older than the latest stable npm release. Newer pre-releases and local builds are left in place. The plugin then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
+For OpenCode, the plugin checks the installed `akm` version first and only runs `bun install -g akm-cli@^0.8.0` when `akm` is missing or older than the required range. Newer pre-releases and local builds are left in place. The plugin then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
 
-For Claude Code, the plugin uses `SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `PreCompact`, `PostCompact`, and `SessionEnd` hooks to refresh `akm-cli@latest`, gate risky raw AKM Bash, inject scoped AKM context, and record redacted memory/event/candidate activity across prompt, tool, task, compaction, and session lifecycle events.
+For Claude Code, the plugin uses `SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `PreCompact`, `PostCompact`, and `SessionEnd` hooks to refresh `akm-cli@^0.8.0`, gate risky raw AKM Bash, inject scoped AKM context, and record redacted memory/event/candidate activity across prompt, tool, task, compaction, and session lifecycle events.
 
 ```sh
 # macOS / Linux
@@ -148,7 +148,7 @@ curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
 irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
 
 # Or via Bun
-bun install -g akm-cli@latest
+bun install -g akm-cli@^0.8.0
 ```
 
 ## Ecosystem

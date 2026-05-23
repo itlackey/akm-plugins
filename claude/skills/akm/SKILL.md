@@ -9,7 +9,7 @@ You have access to the `akm` CLI (AKM, v0.8.0+) to manage extension assets from 
 
 ## Tool surface vs. CLI
 
-The Claude AKM plugin exposes **17 first-class slash commands** for the high-value verbs:
+The Claude AKM plugin exposes **21 first-class slash commands** for the high-value verbs:
 
 - `/akm-search` — search the stash or registry
 - `/akm-show` — fetch the full payload for a ref
@@ -27,6 +27,10 @@ The Claude AKM plugin exposes **17 first-class slash commands** for the high-val
 - `/akm-improve` — generate improvement proposals for the stash, a type, or a specific ref
 - `/akm-propose` — generate a new-asset proposal via the configured agent CLI
 - `/akm-setup` — tell the user to run the interactive `akm setup` wizard manually; agents should not invoke it directly
+- `/akm-memory-audit` — inspect recent AKM memory recall, writes, refs, and safety blocks for this Claude session
+- `/akm-memory-candidates` — review AKM memory candidates captured from Claude checkpoints and hooks
+- `/akm-memory-promote <candidate-id>` — promote a pending AKM memory candidate through the appropriate AKM path
+- `/akm-memory-reject <candidate-id>` — reject a pending AKM memory candidate and record why
 - `/akm-help` — discover the right raw `akm` invocation for the long tail
 
 For every other verb — `add` (install kits / register sources), `save`, `import`, `clone`,
@@ -43,9 +47,11 @@ This table is the curated long-tail reference, embedded verbatim from
 
 | Task | Command | Notes | Keywords |
 | --- | --- | --- | --- |
-| Review pending proposals and decide whether to accept, reject, or revise them | `akm proposals --status pending --format json` | Inspect individual entries with `akm show proposal <id>` and `akm diff proposal <id>`. Accept/reject requires explicit user approval. | proposal, review proposals, pending proposals, accept proposal, reject proposal |
+| Review pending proposals and decide whether to accept, reject, or revise them | `akm proposals --status pending --format json` | Inspect individual entries with `akm show proposal <id>` and `akm diff <id>` (positional id; no `proposal` middle word in 0.8.0). Accept/reject requires explicit user approval. | proposal, review proposals, pending proposals, accept proposal, reject proposal |
 | Improve existing assets or distill repeated evidence into proposals | `akm improve [<type>|<ref>] [--task "..."]` | `improve` replaces the old reflect/distill flow in v0.8.0. Proposed assets are not curated until accepted. | improve, lesson, reflect, distill, drift, failure |
 | Manage scheduled task assets via the OS scheduler | `akm tasks <add|list|show|remove|enable|disable|run|history|sync|doctor> ...` | Tasks are first-class in v0.8.0 but remain a long-tail CLI surface in this plugin. | tasks, scheduled task, cron, launchd, schtasks |
+| Create a proposed asset for a coverage gap | `akm propose <type> <name> --task "..."` | Drafts a `quality:"proposed"` asset that lands in the proposal queue — never directly curated. | propose, coverage gap, proposed asset |
+| Search including proposed-quality assets | `akm search <query> --include-proposed` | Default search hides drafts; this flag merges them into hits. Do not treat proposed assets as curated until accepted. | include-proposed, proposed quality, lesson |
 | Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]` | Confirm with the user before passing `--trust` or registering a website crawler. | add, install, register, kit, source, github, npm |
 | Commit (and optionally push) pending stash changes | `akm save [<source-name>] [-m <msg>] [--push]` | Add `--push` only when the stash is writable; review the diff first. | save, commit, push, publish, git |
 | Import a file (or stdin) into the stash as a typed asset | `akm import <path|-> [--name <name>] [--force]` | Use `-` and pipe content via stdin to import a string. | import, ingest, upload, stdin |
@@ -125,7 +131,7 @@ Use `--full` to force a full reindex instead of incremental. Run this after addi
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki|any] [--limit N] [--source stash|local|registry|both] [--include-proposed]
+akm search [query] [--type skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki|any] [--limit N] [--source stash|local|registry|both|<name>] [--include-proposed]
 ```
 
 Square brackets denote optional arguments; pipe-separated values denote allowed choices for a single flag.
@@ -133,8 +139,9 @@ Square brackets denote optional arguments; pipe-separated values denote allowed 
 The response includes `hits` (ranked results), plus diagnostic fields: `timing` (totalMs, rankMs, embedMs), `warnings` (string array of non-fatal issues), and `tip` (contextual usage hint).
 
 - Local and installed stash hits include `ref`, which you pass to `akm show`. Hits also include optional `quality?` (`curated` / `generated` / `proposed` / unknown) and `warnings?` (string array of non-fatal issues).
-- Registry hits live under a separate `registryHits` key and include `id`, `installRef`, `action` (contains install guidance). The legacy `curated` boolean is removed in v0.7.0; use the per-asset `quality` field instead.
+- Registry hits live under a separate `registryHits` key and include `id`, `installRef`, `action` (contains install guidance).
 - Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once. Note: `local` remains a backward-compatible alias for `stash`.
+- 0.8.0: `--source <name>` scopes the search to a single named source (e.g. `--source itlackey/akm-stash`) — useful when narrowing down to one configured kit.
 - `--include-proposed` merges `quality:"proposed"` rows into `hits`; without it, drafts in the proposal queue are hidden from default search.
 
 ### Show an asset
@@ -209,7 +216,7 @@ When the user wants to browse community kits:
 
 1. Initialize: `akm init` (creates stash dirs, installs ripgrep)
 2. Build the index: `akm index`
-3. Curate assets for your task (primary): `akm curate "<task including project name>"` — LLM-reranked with relevance scores
+3. Curate assets for your task (primary): `akm curate "<task>"` — LLM-reranked with relevance scores. v0.8.0 automatically boosts assets matching the current project (cwd-anchored), so an explicit project name in the query is no longer required for ranking, though concrete task descriptions still help the reranker.
 4. Inspect a result: `akm show <ref>`
 5. Search for a known ref (fallback): `akm search "<known name>"` — only when you know something exists and need its exact ref
 6. Search the registry when needed: `akm search "deploy" --source registry`
@@ -252,7 +259,7 @@ path used by `akm remember` and `akm import`.
 akm proposals                           # all pending drafts
 akm proposals --status pending --format json
 akm show proposal <id>                  # render the draft
-akm diff proposal <id>                  # diff vs. the live ref
+akm diff <id>                            # diff vs. the live ref (id = UUID / prefix / asset ref)
 akm accept <id>                         # validate, then promote
 akm reject <id> --reason "…"            # archive with reason
 ```
@@ -301,24 +308,21 @@ If `defaults.agent` is unset, the plugin should initialize it to the current pla
 
 ## In-tree LLM gates
 
-Every bounded in-tree LLM call site is gated behind exactly one feature flag
-in `llm.features.*`. All defaults are `false`. The seven keys:
+0.8.0 removed the flat `llm.features.*` namespace. Bounded in-tree LLM call
+sites are gated in two new locations:
 
-| Key | Use site |
-| --- | --- |
-| `curate_rerank` | LLM rerank in `akm curate` |
-| `tag_dedup` | LLM tag dedup during indexer enrichment |
-| `memory_consolidation` | `akm remember --enrich` consolidation |
-| `feedback_distillation` | lesson distillation inside `akm improve` |
-| `embedding_fallback_score` | scorer fallback when embeddings unavailable |
-| `memory_inference` | indexer split of pending memories into atomic facts |
-| `graph_extraction` | indexer entity/relation extraction → `graph.json` |
+- **Non-improve gates** live under `index.metadataEnhance.*`,
+  `index.stalenessDetection.*`, and `search.curateRerank.*` in
+  `~/.config/akm/config.json`. These control indexer enrichment and the
+  `akm curate` reranker.
+- **Improve-bound gates** live under
+  `profiles.improve.<name>.processes.{reflect,distill,consolidate,...}` —
+  each process has its own enabled/mode/profile/timeoutMs/allowedTypes
+  knobs that the `akm improve` runner consults.
 
-Every gated call site uses `tryLlmFeature(...)` from akm core: when the gate
-is `false`, the function never runs; when it throws or times out (30 s
-default), the caller's fallback runs and a `warnings` entry is emitted. Don't
-flip these flags without the user's explicit consent — they cost LLM tokens
-and may emit network traffic.
+Refer to the canonical configuration reference in akm-core for the full
+shape. Don't flip these without the user's explicit consent — they cost
+LLM tokens and may emit network traffic.
 
 ## Compound engineering loop
 
@@ -379,7 +383,7 @@ Vaults are `.env`-style key/value stores under `<stashDir>/vaults/<name>.env`, r
 akm vault create <name>                               # scaffold vaults/<name>.env (mode 0600)
 akm vault list [<ref>]                                # list vaults, or list keys + comments of one vault
 akm vault show <ref>                                  # key names + comments only (no values)
-akm vault set <ref> <key> [value] [--comment "..."]   # key may also be KEY=VALUE
+akm vault set <ref> <key> --from-env <VAR> [--comment "..."]  # value read from env var; stdin form: printf '%s' "$SECRET" | akm vault set <ref> <key>  (the positional VALUE and KEY=VALUE forms were removed in 0.8.0)
 akm vault unset <ref> <key>
 akm vault load <ref>                                  # emits shell text: use with eval "$(akm vault load vault:<n>)"
 ```
@@ -415,7 +419,7 @@ To promote a drafted markdown file as a first-class asset, run `/akm-help` topic
 and then `akm import …` via Bash.
 
 Other long-tail verbs covered the same way: `akm help migrate <version>` (release notes),
-`akm enable <skills.sh|context-hub>` and `akm disable …` (toggle optional components).
+`akm enable skills.sh` / `akm disable skills.sh` (toggle the skills.sh registry provider).
 
 ## Dispatching Stash Agents
 

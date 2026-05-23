@@ -9,7 +9,7 @@
 ## Extended Searching
 
 You have access to a searchable library of tools, skills, commands, agents,
-knowledge, lessons, workflows, vaults, and wikis via the `akm` CLI (v0.7.0+).
+knowledge, lessons, workflows, vaults, and wikis via the `akm` CLI (v0.8.0+).
 
 > For any AKM verb that isn't a first-class tool/slash-command, agents should call `akm_help` (OpenCode) or `/akm-help` (Claude Code) to discover the right `akm` CLI invocation before reaching for raw flags.
 
@@ -17,11 +17,11 @@ knowledge, lessons, workflows, vaults, and wikis via the `akm` CLI (v0.7.0+).
 
 Use `akm curate` (primary) for task-oriented discovery — it applies LLM reranking, returns relevance scores, and filters cross-domain noise. Use `akm search` only when you already know an asset exists and need its exact ref.
 
-Always include the current project name or domain in curate queries:
+In v0.8.0 the curator automatically boosts assets that match the current cwd's project anchor, so an explicit project name in the query is no longer required for ranking. Including it still helps the reranker frame intent — keep concrete task descriptions over abstract ones:
 ```sh
-akm curate "<task including project name>"   # PRIMARY: LLM-reranked, scored, project-filtered
-# Good: akm curate "akm CLI improve command performance analysis"
-# Bad:  akm curate "improve performance analysis"  # missing project context — noisy results
+akm curate "<task>"   # PRIMARY: LLM-reranked, scored; auto-project-boost in v0.8.0
+# Good: akm curate "akm CLI improve command performance analysis" (explicit framing)
+# Bad:  akm curate "improve performance analysis"  # too generic — less for the reranker to bite into
 ```
 
 Fall back to `akm search` only for known-ref lookups:
@@ -29,8 +29,11 @@ Fall back to `akm search` only for known-ref lookups:
 akm search "<known name>"              # Only when akm show returned "not found" and you need the exact ref
 akm search "<query>" --type script     # Filter by type (script, skill, command, agent, knowledge, memory, lesson, workflow, vault, wiki)
 akm search "<query>" --source <source> # Filter by source (e.g., "stash", "registry", "both"; "local" is a legacy alias for "stash")
+akm search "<query>" --source <name>   # 0.8.0: scope to a single named stash (e.g., --source itlackey/akm-stash)
 akm search "<query>" --include-proposed  # Merge proposed-quality drafts into hits (default search hides them)
 ```
+
+Project-context ranking is automatic in v0.8.0 — assets matching the current cwd get a small ranking boost, and usage signals are scoped per-project (no cross-project pollution). Set `AKM_DISABLE_PROJECT_CONTEXT=1` or `AKM_DISABLE_SCOPED_UTILITY=1` to opt out (registry searches, tests, etc.).
 Each hit includes a `ref` you use to retrieve the full asset, plus optional `quality?` (`curated`/`generated`/`proposed`/unknown) and `warnings?` fields.
 
 **Using assets:**
@@ -64,7 +67,7 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 - Narrow exception: dedicated CLI entrypoints or fake CLI shims used only to emulate a terminal contract may write to stdout/stderr when that stream output is the behavior under test. Keep those cases isolated from plugin runtime code and document them clearly.
 
 **New in v0.8.0:**
-- `akm proposals` / `akm show proposal <id>` / `akm diff proposal <id>` / `akm accept <id>` / `akm reject <id> --reason "..."` — operate the durable proposal queue. Always confirm with the user before `accept`/`reject`.
+- `akm proposals` / `akm show proposal <id>` / `akm diff <id>` / `akm accept <id>` / `akm reject <id> --reason "..."` — operate the durable proposal queue. `akm diff` accepts UUID, UUID prefix, or asset ref positionally (no `proposal` middle word). Always confirm with the user before `accept`/`reject`.
 - `akm improve [ref|type] [--task "..."]` — generate improvement proposals via the configured agent CLI.
 - `akm propose <type> <name> (--task "..." | --file <path>)` — generate a new-asset proposal via the configured agent CLI.
 - `akm tasks <subcommand> ...` — manage scheduled task assets through the OS scheduler.

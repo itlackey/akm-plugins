@@ -42,8 +42,18 @@ function resolveModel(raw: string | null | undefined): string | null {
   if (mapped) return mapped
   return "sonnet" // unknown alias → safe fallback
 }
+// Two separate constants for two separate concerns:
+//   AKM_REQUIRED_RANGE — used with semver.satisfies() to validate the
+//     installed version. The disjunction is fine here because semver-node
+//     parses `^0.8.0-rc0 || ^0.8.0` as a real range.
+//   AKM_PACKAGE_REF    — used as the install ref. Bun/npm install spec does
+//     NOT parse `akm-cli@^0.8.0-rc0 || ^0.8.0` as a disjunction; it would
+//     splat into three argv tokens and refuse the install. Keep a single
+//     clean range here. `^0.8.0` includes 0.8.0 and all 0.8.x patches; rc
+//     prereleases are still accepted by the validator above when the user
+//     pins a specific rc via AKM_PACKAGE_REF.
 const AKM_REQUIRED_RANGE = "^0.8.0-rc0 || ^0.8.0"
-const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@${AKM_REQUIRED_RANGE}`
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.8.0"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
@@ -67,13 +77,13 @@ const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, im
 const SESSION_START_HEADER = [
   "# AKM is available in this session",
   "",
-  'You have an AKM stash on this machine. Before writing anything from scratch, run `akm curate "<task including project name>"` to find relevant assets with LLM-reranked relevance scores.',
+  'You have an AKM stash on this machine. Before writing anything from scratch, run `akm curate "<task>"` to find relevant assets with LLM-reranked relevance scores.',
   "",
   "**Choosing the right lookup command:**",
   "",
-  '- **`akm curate "<task including project name>"`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. Always include the current project name or domain in the query so the reranker can filter cross-project noise. This is the PRIMARY lookup command.',
-  '  - Good: `akm curate "akm CLI improve command performance analysis"`',
-  '  - Bad: `akm curate "improve performance analysis"` (missing project context — pulls unrelated stash noise)',
+  '- **`akm curate "<task>"`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. v0.8.0 automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is no longer required for ranking — but it still helps the reranker frame intent.',
+  '  - Good: `akm curate "akm CLI improve command performance analysis"` (explicit framing, still ideal)',
+  '  - Bad: `akm curate "improve performance analysis"` (too generic — the reranker has less to work with even with auto-boost)',
   '- **`akm search "<known name>"`** — use ONLY when you already know an asset exists (e.g. after `akm show` returned "not found") and need to locate its exact ref. Do not use as a discovery tool.',
   "",
   'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',

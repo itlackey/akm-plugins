@@ -15,7 +15,11 @@ import { assessRiskyAkmCommand, blockedCommandMessage, splitArguments, type Risk
 let resolvedAkmCommand = "akm"
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b/
-const AKM_REQUIRED_VERSION_RANGE = "^0.8.0"
+// Note: satisfiesAkmVersionRange() implements a custom matcher that accepts
+// any 0.8.x release including prereleases (0.8.0-rc.5, 0.8.0-beta.2, etc.).
+// Strict semver `^0.8.0` would NOT match prereleases, so the constant string
+// is widened to honestly reflect what the matcher accepts.
+const AKM_REQUIRED_VERSION_RANGE = "^0.8.0 || ^0.8.0-rc0"
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
@@ -1413,13 +1417,13 @@ function extractAkmRefsFromAllArgs(args: Record<string, unknown>): string[] {
 const AKM_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
-  "You have an AKM stash on this machine. Before writing anything from scratch, call `akm_curate` with a task description that includes the current project name to find relevant assets with LLM-reranked relevance scores.",
+  "You have an AKM stash on this machine. Before writing anything from scratch, call `akm_curate` with a task description to find relevant assets with LLM-reranked relevance scores.",
   "",
   "**Choosing the right lookup command:**",
   "",
-  "- **`akm_curate` (query including project name)** — use this when starting any new task, looking for patterns, docs, skills, or workflows. Always include the current project name or domain in the query so the reranker can filter cross-project noise. This is the PRIMARY lookup command.",
-  '  - Good: `akm_curate("akm CLI improve command performance analysis")`',
-  '  - Bad: `akm_curate("improve performance analysis")` (missing project context — pulls unrelated stash noise)',
+  "- **`akm_curate`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. v0.8.0 automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is no longer required for ranking — but it still helps the reranker frame intent.",
+  '  - Good: `akm_curate("akm CLI improve command performance analysis")` (explicit framing, still ideal)',
+  '  - Bad: `akm_curate("improve performance analysis")` (too generic — the reranker has less to work with even with auto-boost)',
   "- **`akm_search` (known name)** — use ONLY when you already know an asset exists (e.g. after `akm_show` returned \"not found\") and need to locate its exact ref. Do not use as a discovery tool.",
   "",
   "Record `akm_feedback <ref> positive|negative` whenever an asset materially helps or misses, and use `akm_remember` to persist durable learnings so future sessions inherit them.",
@@ -1478,7 +1482,7 @@ type AkmHelpEntry = {
 const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Review pending proposals and decide whether to accept, reject, or revise them",
-    command: "akm proposals --status pending --format json; akm show proposal <id>; akm diff proposal <id>",
+    command: "akm proposals --status pending --format json; akm show proposal <id>; akm diff <id>",
     notes: "Accept/reject requires explicit user approval.",
     keywords: ["proposal", "review proposals", "pending proposals", "accept proposal", "reject proposal"],
   },
