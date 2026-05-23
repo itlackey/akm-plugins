@@ -14,10 +14,21 @@ knowledge, lessons, workflows, vaults, and wikis via the `akm` CLI (v0.7.0+).
 > For any AKM verb that isn't a first-class tool/slash-command, agents should call `akm_help` (OpenCode) or `/akm-help` (Claude Code) to discover the right `akm` CLI invocation before reaching for raw flags.
 
 **Finding assets:**
+
+Use `akm curate` (primary) for task-oriented discovery — it applies LLM reranking, returns relevance scores, and filters cross-domain noise. Use `akm search` only when you already know an asset exists and need its exact ref.
+
+Always include the current project name or domain in curate queries:
 ```sh
-akm search "<query>"              # Search by keyword
-akm search "<query>" --type script  # Filter by type (script, skill, command, agent, knowledge, memory, lesson, workflow, vault, wiki)
-akm search "<query>" --source <source>  # Filter by source (e.g., "stash", "registry", "both"; "local" is a legacy alias for "stash")
+akm curate "<task including project name>"   # PRIMARY: LLM-reranked, scored, project-filtered
+# Good: akm curate "akm CLI improve command performance analysis"
+# Bad:  akm curate "improve performance analysis"  # missing project context — noisy results
+```
+
+Fall back to `akm search` only for known-ref lookups:
+```sh
+akm search "<known name>"              # Only when akm show returned "not found" and you need the exact ref
+akm search "<query>" --type script     # Filter by type (script, skill, command, agent, knowledge, memory, lesson, workflow, vault, wiki)
+akm search "<query>" --source <source> # Filter by source (e.g., "stash", "registry", "both"; "local" is a legacy alias for "stash")
 akm search "<query>" --include-proposed  # Merge proposed-quality drafts into hits (default search hides them)
 ```
 Each hit includes a `ref` you use to retrieve the full asset, plus optional `quality?` (`curated`/`generated`/`proposed`/unknown) and `warnings?` fields.

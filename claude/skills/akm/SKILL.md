@@ -207,10 +207,11 @@ When the user wants to browse community kits:
 
 1. Initialize: `akm init` (creates stash dirs, installs ripgrep)
 2. Build the index: `akm index`
-3. Search for assets: `akm search "deploy" --type script`
+3. Curate assets for your task (primary): `akm curate "<task including project name>"` — LLM-reranked with relevance scores
 4. Inspect a result: `akm show <ref>`
-5. Search the registry when needed: `akm search "deploy" --source registry`
-6. Install kits: `akm add <package>` (optional)
+5. Search for a known ref (fallback): `akm search "<known name>"` — only when you know something exists and need its exact ref
+6. Search the registry when needed: `akm search "deploy" --source registry`
+7. Install kits: `akm add <package>` (optional)
 
 Default output format is JSON. When you need the most compact machine-readable output, prefer `--format json --detail agent`.
 

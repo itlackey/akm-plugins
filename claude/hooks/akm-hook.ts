@@ -60,7 +60,16 @@ const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, im
 const SESSION_START_HEADER = [
   "# AKM is available in this session",
   "",
-  'You have an AKM stash on this machine. Before writing anything from scratch, call `akm curate "<task>"` or `akm search` to see if the stash already covers it. Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
+  'You have an AKM stash on this machine. Before writing anything from scratch, run `akm curate "<task including project name>"` to find relevant assets with LLM-reranked relevance scores.',
+  "",
+  "**Choosing the right lookup command:**",
+  "",
+  '- **`akm curate "<task including project name>"`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. Always include the current project name or domain in the query so the reranker can filter cross-project noise. This is the PRIMARY lookup command.',
+  '  - Good: `akm curate "akm CLI improve command performance analysis"`',
+  '  - Bad: `akm curate "improve performance analysis"` (missing project context — pulls unrelated stash noise)',
+  '- **`akm search "<known name>"`** — use ONLY when you already know an asset exists (e.g. after `akm show` returned "not found") and need to locate its exact ref. Do not use as a discovery tool.',
+  "",
+  'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
 const REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g
 
