@@ -135,6 +135,41 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | **PostCompact** | Records the compacted summary as a structured event and buffers a short post-compaction note for later recall. |
 | **SessionEnd** | Reuses the session-final memory capture path so Claude can flush the final checkpoint even when `Stop` is not the last lifecycle event observed. |
 
+### Permission and approval policy
+
+The PreToolUse hook applies a **tokenized** check against the actual `akm` argv (using a shared assessor that the OpenCode plugin also calls). It only fires on real shell invocations of `akm <subcommand>` — it does not match the phrase appearing in commit messages, release notes, or heredoc bodies. The full list of subcommands it blocks pending approval is in `shared/risky-command.ts`.
+
+For most users, the plugin's hook is enough. If you prefer Claude Code's built-in permission dialog (a one-time approve/deny prompt rather than a hook stderr block), add the matching rules to your **own** settings — Claude Code plugins cannot ship default permission rules, so this step is opt-in and manual.
+
+Add this block to `~/.claude/settings.json` (user-wide) or `.claude/settings.json` (current project):
+
+```json
+{
+  "permissions": {
+    "ask": [
+      "Bash(akm accept:*)",
+      "Bash(akm reject:*)",
+      "Bash(akm proposal accept:*)",
+      "Bash(akm proposal reject:*)",
+      "Bash(akm remove:*)",
+      "Bash(akm upgrade:*)",
+      "Bash(akm vault create:*)",
+      "Bash(akm vault set:*)",
+      "Bash(akm vault unset:*)",
+      "Bash(akm vault load:*)",
+      "Bash(akm vault show:*)"
+    ]
+  }
+}
+```
+
+Notes:
+
+- The `Bash(pattern:*)` matcher is **prefix-anchored** and only matches the actual bash invocation. It does not trip on the same phrase appearing inside argv (commit messages, heredoc bodies, etc.).
+- Patterns that cannot be expressed as a simple prefix — for example "`akm save` with `--push` anywhere in the flags" — are not coverable by this list. The plugin hook keeps handling those.
+- `akm remember` payload secret-scanning is content-aware (it inspects the literal arguments for things that look like secrets). The plugin hook keeps doing this; native permission rules cannot.
+- If you want a command to skip both the plugin hook and the permission dialog entirely, put it under `permissions.allow` instead of `permissions.ask` — but only do this for commands you genuinely want to auto-approve.
+
 ### Environment overrides
 
 | Variable | Default | Purpose |
