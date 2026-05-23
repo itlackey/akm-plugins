@@ -361,7 +361,7 @@ akm wiki pages <name>                                 # author-written pages onl
 akm wiki search <name> <query> [--limit N]            # scoped wiki search
 akm wiki stash <name> <source> [--as <slug>]          # copy a file/stdin into wikis/<name>/raw/
 akm wiki lint <name>                                  # orphan/xref/description/uncited-raw/stale-index checks
-akm wiki ingest <name>                                # print the ingest workflow for the agent to drive
+akm wiki ingest <name> [--profile <p>] [--model <m>] [--timeout-ms <ms>]  # dispatch an agent inline (uses defaults.agent unless --profile is set)
 akm wiki remove <name> --force [--with-sources]       # preserves raw/ by default
 ```
 
