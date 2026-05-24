@@ -277,6 +277,89 @@ describe("redactSecrets — high-entropy strings (opt-in, WS-7b)", () => {
   })
 })
 
+// ── CLI argv pairs ───────────────────────────────────────────────────────────
+
+describe("redactSecrets — CLI argv pair shapes", () => {
+  test("redacts --password value", () => {
+    const { text, categories } = redactSecrets("akm config set --password hunter2 --user alice")
+    expect(categories).toContain("cli_arg_secret")
+    expect(text).toContain("[REDACTED:CLI_ARG]")
+    expect(text).not.toContain("hunter2")
+    expect(text).toContain("alice") // non-secret flag survives
+  })
+
+  test("redacts --api-key value", () => {
+    const { text, categories } = redactSecrets("client --api-key ABC123DEF")
+    expect(categories).toContain("cli_arg_secret")
+    expect(text).not.toContain("ABC123DEF")
+  })
+
+  test("redacts --auth-token value", () => {
+    const { text } = redactSecrets("svc --auth-token longopaquevalue123 --verbose")
+    expect(text).not.toContain("longopaquevalue123")
+  })
+
+  test("does not redact unrelated --flag value pairs", () => {
+    const { text } = redactSecrets("akm --format json --limit 5")
+    expect(text).toContain("--format json")
+    expect(text).toContain("--limit 5")
+  })
+})
+
+// ── PII opt-in ───────────────────────────────────────────────────────────────
+
+describe("redactSecrets — PII patterns (opt-in, AKM_REDACT_PII=1)", () => {
+  const origEnv = process.env.AKM_REDACT_PII
+
+  afterEach(() => {
+    // Same constraint as high-entropy: PII_PATTERNS is evaluated at module
+    // import time, so a single in-process test can only check default
+    // behavior (off) and contract shape — exhaustive opt-in coverage runs
+    // in CI with AKM_REDACT_PII=1 set before this module loads.
+    if (origEnv === undefined) delete process.env.AKM_REDACT_PII
+    else process.env.AKM_REDACT_PII = origEnv
+  })
+
+  test("credit-card-shaped digits are NOT redacted by default", () => {
+    const { text, categories } = redactSecrets("card 4111 1111 1111 1111 on file")
+    if (process.env.AKM_REDACT_PII === "1") {
+      expect(categories).toContain("credit_card")
+      expect(text).not.toContain("4111 1111 1111 1111")
+    } else {
+      expect(categories).not.toContain("credit_card")
+      expect(text).toContain("4111 1111 1111 1111")
+    }
+  })
+
+  test("SSN-shaped strings are NOT redacted by default", () => {
+    const { text, categories } = redactSecrets("user ssn 123-45-6789")
+    if (process.env.AKM_REDACT_PII === "1") {
+      expect(categories).toContain("ssn")
+      expect(text).not.toContain("123-45-6789")
+    } else {
+      expect(categories).not.toContain("ssn")
+      expect(text).toContain("123-45-6789")
+    }
+  })
+
+  test("US phone numbers are NOT redacted by default", () => {
+    const { text, categories } = redactSecrets("call (555) 123-4567 today")
+    if (process.env.AKM_REDACT_PII === "1") {
+      expect(categories).toContain("phone")
+      expect(text).not.toContain("(555) 123-4567")
+    } else {
+      expect(categories).not.toContain("phone")
+      expect(text).toContain("(555) 123-4567")
+    }
+  })
+
+  test("PII patterns coexist with other categories", () => {
+    const { categories } = redactSecrets("Bearer eyJhbGc.x.y card 4111111111111111")
+    // Bearer should always be redacted; credit_card depends on opt-in.
+    expect(categories).toContain("bearer_token")
+  })
+})
+
 // ── redactObject ─────────────────────────────────────────────────────────────
 
 describe("redactObject", () => {

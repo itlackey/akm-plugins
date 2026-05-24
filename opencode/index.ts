@@ -1612,6 +1612,43 @@ function getCommandVersion(command: string): string | null {
   }
 }
 
+type CommandProbe = {
+  command: string
+  exists: boolean
+  version: string | null
+  failureReason: string | null
+}
+
+// Like getCommandVersion, but distinguishes "binary not found on disk" from
+// "binary found but failed to produce a version" — the latter typically means
+// the binary is corrupt, wrong architecture, or has a runtime dependency missing.
+// Used by the diagnostic resolution trail so the consent banner can tell users
+// which failure mode they're hitting.
+function probeCommand(command: string): CommandProbe {
+  const isAbsolute = path.isAbsolute(command)
+  const exists = isAbsolute ? existsSync(command) : true
+  if (isAbsolute && !exists) {
+    return { command, exists: false, version: null, failureReason: "not_on_disk" }
+  }
+  try {
+    const version = execFileSync(command, ["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    })
+    const parsed = extractFirstSemverMatch(version)
+    if (!parsed) {
+      return { command, exists: true, version: null, failureReason: "no_semver_in_output" }
+    }
+    return { command, exists: true, version: parsed, failureReason: null }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code === "ENOENT") {
+      return { command, exists: false, version: null, failureReason: "not_on_path" }
+    }
+    return { command, exists: true, version: null, failureReason: code ?? "version_check_failed" }
+  }
+}
+
 function satisfiesAkmVersionRange(version: string | null): boolean {
   if (typeof version !== "string") return false
   const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/)
@@ -1658,6 +1695,16 @@ function getPathAkmCandidates(): string[] {
   return candidates
 }
 
+type AkmResolutionTrail = Array<{
+  command: string
+  source: "bundled" | "path"
+  version: string | null
+  outcome: "selected" | "version_out_of_range" | "missing" | "probe_failed"
+  failureReason: string | null
+}>
+
+let lastAkmResolutionTrail: AkmResolutionTrail = []
+
 function getResolvedAkmDetails(): { command: string; version: string; source: "bundled" | "path" } | null {
   const candidates: Array<{ command: string; source: "bundled" | "path" }> = []
   const bundled = getBundledAkmCommand()
@@ -1666,14 +1713,29 @@ function getResolvedAkmDetails(): { command: string; version: string; source: "b
     candidates.push({ command, source: "path" })
   }
 
+  const trail: AkmResolutionTrail = []
   const seen = new Set<string>()
   for (const candidate of candidates) {
     if (!candidate.command || seen.has(candidate.command)) continue
     seen.add(candidate.command)
-    const version = getCommandVersion(candidate.command)
-    if (!satisfiesAkmVersionRange(version)) continue
-    return { ...candidate, version: version! }
+    const probe = probeCommand(candidate.command)
+    if (!probe.exists) {
+      trail.push({ ...candidate, version: null, outcome: "missing", failureReason: probe.failureReason })
+      continue
+    }
+    if (probe.failureReason || !probe.version) {
+      trail.push({ ...candidate, version: probe.version, outcome: "probe_failed", failureReason: probe.failureReason })
+      continue
+    }
+    if (!satisfiesAkmVersionRange(probe.version)) {
+      trail.push({ ...candidate, version: probe.version, outcome: "version_out_of_range", failureReason: null })
+      continue
+    }
+    trail.push({ ...candidate, version: probe.version, outcome: "selected", failureReason: null })
+    lastAkmResolutionTrail = trail
+    return { ...candidate, version: probe.version }
   }
+  lastAkmResolutionTrail = trail
   return null
 }
 
@@ -1693,10 +1755,12 @@ async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<voi
       bundledCommand: getBundledAkmCommand(),
       pathCommand: "akm",
       reason: "no_supported_command",
+      trail: lastAkmResolutionTrail,
     })
     writeAkmConsentBanner({
       detected: getCommandVersion("akm") ?? undefined,
       bundled: getBundledAkmCommand(),
+      trail: lastAkmResolutionTrail,
     })
     return
   }
@@ -1711,15 +1775,25 @@ async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<voi
   })
 }
 
-function writeAkmConsentBanner(info: { detected?: string; bundled?: string | null }) {
+function writeAkmConsentBanner(info: { detected?: string; bundled?: string | null; trail?: AkmResolutionTrail }) {
   const detectedLabel = info.detected ?? "(not found on PATH)"
   const bundledLabel = info.bundled ?? "(none)"
+  const trailLines: string[] = []
+  if (info.trail && info.trail.length > 0) {
+    trailLines.push("", "  resolution trail (in order tried):")
+    for (const entry of info.trail) {
+      const versionLabel = entry.version ?? "no version"
+      const reason = entry.failureReason ? ` reason=${entry.failureReason}` : ""
+      trailLines.push(`    [${entry.source}] ${entry.command} → ${entry.outcome} (${versionLabel})${reason}`)
+    }
+  }
   const banner = [
     "─".repeat(60),
     "akm-opencode plugin: akm CLI not installed or wrong version",
     `  detected on PATH: ${detectedLabel}`,
     `  bundled fallback: ${bundledLabel}`,
     `  required:         ${AKM_REQUIRED_VERSION_RANGE}`,
+    ...trailLines,
     "",
     "Reinstall or update the akm-opencode plugin so OpenCode/Bun",
     "installs the dependency, or install akm-cli manually:",

@@ -73,6 +73,8 @@ Claude will search with `akm search ... --source registry`, inspect the returned
 
 ## Prerequisites
 
+The plugin's hooks shell out through a `bun` runtime. **Bun ^1.0 must be on PATH**; if it isn't, every Claude hook short-circuits and the SessionStart context surfaces a clear "Bun runtime not available" banner. Install Bun from <https://bun.sh> first.
+
 On session start, the plugin enforces the documented AKM baseline by requiring `akm-cli@^0.8.0`. If `akm` is already on PATH and satisfies that range, the plugin uses it as-is. Otherwise it writes a clear stderr banner pointing at the `/akm-setup` slash command — installation requires **explicit user confirmation** through `/akm-setup`; the plugin does **not** silently `bun install` or `npm install` on your behalf. You can also install ahead of time with any of the methods below.
 
 ```sh

@@ -83,6 +83,42 @@ const HIGH_ENTROPY_RE = HIGH_ENTROPY_ENABLED
   ? new RegExp(`\\b[A-Za-z0-9+/=_-]{${Math.max(32, HIGH_ENTROPY_MIN_LEN)},}\\b`, "g")
   : null
 
+/**
+ * Opt-in PII redaction patterns. Off by default because financial / phone
+ * shapes appear in legitimate logs (timestamps, counters, identifiers) and
+ * over-redaction makes session logs unreadable. Enable for hosts that
+ * legitimately process PII through the agent loop:
+ *
+ *   AKM_REDACT_PII=1
+ *
+ * Patterns covered:
+ *   - Credit-card-shaped 13–19 digit sequences with optional `[- ]` delimiters
+ *     (Luhn is intentionally NOT verified — we redact aggressively when opt-in)
+ *   - US Social Security Numbers in `\d{3}-\d{2}-\d{4}` form (delimited only;
+ *     bare 9-digit numbers are too noisy)
+ *   - US/international phone numbers in `[\+]?\d{1,3}[- .]?\d{3}[- .]?\d{3}[- .]?\d{4}` form
+ */
+const PII_REDACTION_ENABLED = process.env.AKM_REDACT_PII === "1"
+const PII_PATTERNS: Array<{ category: string; pattern: RegExp; replacement: string }> = PII_REDACTION_ENABLED
+  ? [
+      {
+        category: "credit_card",
+        pattern: /\b(?:\d[ -]?){12,18}\d\b/g,
+        replacement: "[REDACTED:CREDIT_CARD]",
+      },
+      {
+        category: "ssn",
+        pattern: /\b\d{3}-\d{2}-\d{4}\b/g,
+        replacement: "[REDACTED:SSN]",
+      },
+      {
+        category: "phone",
+        pattern: /(?<![\w./-])\+?\d{1,3}[- .]?\(?\d{3}\)?[- .]?\d{3}[- .]?\d{4}(?![\w./-])/g,
+        replacement: "[REDACTED:PHONE]",
+      },
+    ]
+  : []
+
 function uniq(values: string[]): string[] {
   return [...new Set(values)]
 }
@@ -114,6 +150,18 @@ function redactJsonLikePairs(text: string, categories: string[]): string {
   })
 }
 
+// Redact `--flag value` / `-f value` CLI argv shapes where the flag name
+// contains a sensitive substring (password, token, secret, api-key, etc.).
+// This catches a class of leaks that the env-assignment and JSON-pair
+// regexes miss because CLI args use a space separator rather than `=` / `:`.
+function redactCliArgPairs(text: string, categories: string[]): string {
+  const pairRe = /(--?[A-Za-z0-9_-]*?(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|auth)[A-Za-z0-9_-]*)(\s+)(\S+)/gi
+  return text.replace(pairRe, (_match, flag: string, sep: string) => {
+    categories.push("cli_arg_secret")
+    return `${flag}${sep}[REDACTED:CLI_ARG]`
+  })
+}
+
 export function redactSecrets(input: string): RedactionResult {
   let text = input
   const categories: string[] = []
@@ -126,12 +174,21 @@ export function redactSecrets(input: string): RedactionResult {
 
   text = redactAssignments(text, categories)
   text = redactJsonLikePairs(text, categories)
+  text = redactCliArgPairs(text, categories)
 
   // WS-7b: Optional high-entropy string redaction (opt-in via AKM_REDACT_HIGH_ENTROPY=1).
   if (HIGH_ENTROPY_RE && HIGH_ENTROPY_RE.test(text)) {
     categories.push("high_entropy")
     HIGH_ENTROPY_RE.lastIndex = 0 // reset after .test()
     text = text.replace(HIGH_ENTROPY_RE, "[REDACTED:HIGH_ENTROPY]")
+  }
+
+  // Opt-in PII redaction (AKM_REDACT_PII=1).
+  for (const entry of PII_PATTERNS) {
+    if (!entry.pattern.test(text)) continue
+    categories.push(entry.category)
+    entry.pattern.lastIndex = 0
+    text = text.replace(entry.pattern, entry.replacement)
   }
 
   return {

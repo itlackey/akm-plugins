@@ -824,22 +824,66 @@ function refQuality(ref: string): string {
   return resolved
 }
 
-function detectAgentDefault(): string {
-  if (!akmAvailable()) return ""
+type AgentDefaultResult = { value: string; writeAttempted: boolean; writeOk: boolean }
+
+function detectAgentDefault(): AgentDefaultResult {
+  if (!akmAvailable()) return { value: "", writeAttempted: false, writeOk: false }
   const current = readConfiguredAgentDefault()
-  if (current) return current
-  if (writeConfiguredAgentDefault("claude")) {
+  if (current) return { value: current, writeAttempted: false, writeOk: true }
+  const writeOk = writeConfiguredAgentDefault("claude")
+  if (writeOk) {
     appendLog(SESSION_LOG, "agent_default_initialized", "claude")
   } else {
     appendLog(SESSION_LOG, "agent_default_init_failed", "claude", `failed to write ${getAkmConfigPath()}`)
   }
-  return readConfiguredAgentDefault()
+  return { value: readConfiguredAgentDefault(), writeAttempted: true, writeOk }
 }
 
 function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   if (!INDEX_ON_SESSION_END || !akmAvailable()) return
   const result = akmRunChecked(["index"])
   if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
+}
+
+function gatherSessionStartWarnings(
+  versionCheck: { ok: boolean; version?: string },
+  agentDefault: AgentDefaultResult,
+): string[] {
+  const warnings: string[] = []
+
+  // H1: stash directory does not exist — curation will return empty context
+  // and most akm verbs (search/show/curate) will be no-ops. Surface this
+  // explicitly so the user knows they need to run `/akm-setup` or set
+  // `AKM_STASH_DIR` before akm-aware features will work.
+  const stashRoots = resolveStashRoots()
+  const stashDir = stashRoots[0]
+  if (!stashDir || !existsSync(stashDir)) {
+    warnings.push(
+      stashDir
+        ? `⚠ AKM stash directory \`${stashDir}\` does not exist. Run \`/akm-setup\` to initialize the stash, or set \`AKM_STASH_DIR\` to point at an existing one. AKM curation will be empty until then.`
+        : `⚠ No AKM stash directory is configured. Run \`/akm-setup\` to choose one, or set \`AKM_STASH_DIR\`. AKM curation will be empty until then.`,
+    )
+  }
+
+  // H2: agent default write was attempted but failed — improve/propose
+  // workflows will fall back to the unconfigured CLI and may fail mysteriously
+  // downstream. Surface this so the user can re-run setup.
+  if (agentDefault.writeAttempted && !agentDefault.writeOk) {
+    warnings.push(
+      `⚠ Failed to write \`defaults.agent\` to \`${getAkmConfigPath()}\`. \`/akm-improve\` and \`/akm-propose\` may not work until this is configured. Run \`/akm-setup\` to retry.`,
+    )
+  }
+
+  // L5: detected version is a pre-release. Banner range accepts ^0.8.0-rc0
+  // but stable banner text says ^0.8.0 — make the rc status explicit so users
+  // know to track stable when it lands.
+  if (versionCheck.ok && versionCheck.version && /-/.test(versionCheck.version)) {
+    warnings.push(
+      `ℹ Detected pre-release \`akm-cli@${versionCheck.version}\`. Tracking is fine; upgrade to a stable 0.8.x once published for production use.`,
+    )
+  }
+
+  return warnings
 }
 
 function recordUserFeedback() {
@@ -1056,6 +1100,7 @@ function sessionStart(): string {
   }
 
   const agentDefault = detectAgentDefault()
+  const sessionWarnings = gatherSessionStartWarnings(versionCheck, agentDefault)
   const hints = akmRun(["--format", "text", "-q", "hints"]).trim()
   const cwdContext = gatherCwdContext()
   const curatedRaw = akmRun(["--detail", "agent", "--format", "text", "-q", "curate", cwdContext, "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)]).trim()
@@ -1079,17 +1124,18 @@ function sessionStart(): string {
       ? "There is 1 pending AKM proposal - review with `/akm-review-proposals` or `/akm-proposal list`."
       : `There are ${pending} pending AKM proposals - review with \`/akm-review-proposals\` or \`/akm-proposal list\`.`
 
-  if (!hints && !curatedRaw && !agentDefault && !pendingSummary) return ""
+  if (!hints && !curatedRaw && !agentDefault.value && !pendingSummary && sessionWarnings.length === 0) return ""
   writeMemoryEvent({
     event: "session_started",
     sessionId: sid || undefined,
     scope: buildScope(sid),
-    input: { agentDefault, pendingProposals: pending },
+    input: { agentDefault: agentDefault.value, pendingProposals: pending },
     refs: [...new Set(curatedRaw.match(REF_PATTERN) ?? [])],
     outcome: { status: "ok" },
   })
   let body = SESSION_START_HEADER
-  if (agentDefault) body = `${body}\n\nAgent CLI: ${agentDefault} (configured via \`akm setup\`).`
+  if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
+  if (agentDefault.value) body = `${body}\n\nAgent CLI: ${agentDefault.value} (configured via \`akm setup\`).`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (hints) body = `${body}\n\n${hints}`
   if (curatedFile) body = `${body}\n\nAKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${CURATED_CONTEXT_TAIL}`
