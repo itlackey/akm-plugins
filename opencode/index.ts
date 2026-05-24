@@ -1692,6 +1692,13 @@ function getResolvedAkmDetails(): { command: string; version: string; source: "b
   return null
 }
 
+// The OpenCode plugin has never silently auto-installed akm-cli — it relies on
+// the bundled binary that ships with the plugin, falling back to PATH. When
+// neither path produces a compatible akm we log a warn-level event to the host
+// AND write a stderr banner so the human running OpenCode actually sees the
+// problem. The banner mirrors the Claude plugin's wording: install must be
+// user-driven, never automatic. The recommended consent point is `akm setup`
+// (or the host-specific akm setup slash command if one exists).
 async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<void> {
   const installedAkm = getResolvedAkmDetails()
   if (!installedAkm) {
@@ -1701,6 +1708,10 @@ async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<voi
       bundledCommand: getBundledAkmCommand(),
       pathCommand: "akm",
       reason: "no_supported_command",
+    })
+    writeAkmConsentBanner({
+      detected: getCommandVersion("akm") ?? undefined,
+      bundled: getBundledAkmCommand(),
     })
     return
   }
@@ -1713,6 +1724,30 @@ async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<voi
     version: installedAkm.version,
     requiredRange: AKM_REQUIRED_VERSION_RANGE,
   })
+}
+
+function writeAkmConsentBanner(info: { detected?: string; bundled?: string | null }) {
+  const detectedLabel = info.detected ?? "(not found on PATH)"
+  const bundledLabel = info.bundled ?? "(none)"
+  const banner = [
+    "─".repeat(60),
+    "akm-opencode plugin: akm CLI not installed or wrong version",
+    `  detected on PATH: ${detectedLabel}`,
+    `  bundled fallback: ${bundledLabel}`,
+    `  required:         ${AKM_REQUIRED_VERSION_RANGE}`,
+    "",
+    "Reinstall or update the akm-opencode plugin so OpenCode/Bun",
+    "installs the dependency, or install akm-cli manually:",
+    "  bun install -g akm-cli@^0.8.0",
+    "  npm install -g akm-cli@^0.8.0",
+    "Then run `akm setup` interactively to configure the stash.",
+    "─".repeat(60),
+  ].join("\n")
+  try {
+    process.stderr.write(banner + "\n")
+  } catch {
+    // best-effort; never crash the plugin over a banner
+  }
 }
 
 function resolveAkmCommand(): string | CliError {

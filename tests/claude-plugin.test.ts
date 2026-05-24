@@ -291,59 +291,6 @@ describe("Claude plugin metadata", () => {
 })
 
 describe("Claude hook scripts", () => {
-  it("installs a compatible akm package through npm when bun is unavailable", () => {
-    const tempDir = makeTempDir()
-    const binDir = path.join(tempDir, "bin")
-    const globalBinDir = path.join(tempDir, "global-bin")
-    const stateDir = path.join(tempDir, "state")
-    const npmLogPath = path.join(tempDir, "npm.log")
-    const quotedNpmLogPath = shellQuote(npmLogPath)
-    const quotedGlobalBinDir = shellQuote(globalBinDir)
-    const quotedTempDir = shellQuote(tempDir)
-
-    mkdirSync(binDir, { recursive: true })
-    mkdirSync(globalBinDir, { recursive: true })
-    mkdirSync(stateDir, { recursive: true })
-
-    const fakeNpmPath = path.join(binDir, "npm")
-    writeFileSync(
-      fakeNpmPath,
-      `#!/usr/bin/env sh
-set -eu
-if [ "$1" = "install" ] && [ "\${2:-}" = "-g" ]; then
-    printf '%s %s %s\\n' "$1" "\${2:-}" "\${3:-}" >> ${quotedNpmLogPath}
-    mkdir -p ${quotedGlobalBinDir}
-    cat > ${quotedGlobalBinDir}/akm <<'EOF'
-#!/usr/bin/env sh
-echo "akm 0.8.9"
-EOF
-    chmod +x ${quotedGlobalBinDir}/akm
-elif [ "$1" = "bin" ] && [ "\${2:-}" = "-g" ]; then
-    printf '%s\\n' ${quotedGlobalBinDir}
-elif [ "$1" = "prefix" ] && [ "\${2:-}" = "-g" ]; then
-    printf '%s\\n' ${quotedTempDir}
-elif [ "$1" = "--version" ]; then
-    printf '10.9.0\\n'
-else
-    exit 0
-fi
-`,
-    )
-    chmodSync(fakeNpmPath, 0o755)
-
-    runHook(["ensure-akm"], {
-      env: {
-        HOME: tempDir,
-        PATH: `${binDir}:/usr/bin:/bin`,
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    expect(readFileSync(npmLogPath, "utf8")).toContain("install -g akm-cli@^0.8.0")
-    expect(existsSync(path.join(binDir, "akm"))).toBe(true)
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready")
-  })
-
   it("reuses akm on PATH when its version satisfies the required range", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
@@ -373,57 +320,6 @@ exit 0
 
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.8.3")
-  })
-
-  it("logs a structured failure when install resolves an out-of-range akm version", () => {
-    const tempDir = makeTempDir()
-    const binDir = path.join(tempDir, "bin")
-    const stateDir = path.join(tempDir, "state")
-    const globalBinDir = path.join(tempDir, "global-bin")
-    mkdirSync(binDir, { recursive: true })
-    mkdirSync(stateDir, { recursive: true })
-    mkdirSync(globalBinDir, { recursive: true })
-
-    const fakeNpmPath = path.join(binDir, "npm")
-    writeFileSync(
-      fakeNpmPath,
-      `#!/usr/bin/env sh
-set -eu
-if [ "$1" = "install" ] && [ "\${2:-}" = "-g" ]; then
-    mkdir -p ${shellQuote(globalBinDir)}
-    cat > ${shellQuote(path.join(globalBinDir, "akm"))} <<'EOF'
-#!/usr/bin/env sh
-if [ "$1" = "--version" ]; then
-  echo "akm 0.7.9"
-  exit 0
-fi
-exit 0
-EOF
-    chmod +x ${shellQuote(path.join(globalBinDir, "akm"))}
-    exit 0
-elif [ "$1" = "bin" ] && [ "\${2:-}" = "-g" ]; then
-    printf '%s\n' ${shellQuote(globalBinDir)}
-elif [ "$1" = "prefix" ] && [ "\${2:-}" = "-g" ]; then
-    printf '%s\n' ${shellQuote(tempDir)}
-else
-    exit 0
-fi
-`,
-    )
-    chmodSync(fakeNpmPath, 0o755)
-
-    runHook(["ensure-akm"], {
-      env: {
-        HOME: tempDir,
-        PATH: `${binDir}:/usr/bin:/bin`,
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const entry = getFirstLogEntry(stateDir, "session.log")
-    expect(entry).toContain("akm_install_failed")
-    expect(entry).toContain("0.7.9")
-    expect(entry).toContain("^0.8.0")
   })
 
   it("records user feedback and memory intent from prompt submissions", () => {
@@ -662,12 +558,15 @@ echo "[knowledge] should-not-appear"
     writeFileSync(path.join(tempDir, ".config", "akm", "config.json"), `${JSON.stringify({})}\n`)
 
     // Fake akm: version/install, index no-op, hints + curated output.
+    // The version MUST satisfy the plugin's required range (^0.8.0 in 0.8.0+)
+    // so the new SessionStart consent gate treats akm as healthy and proceeds
+    // with the normal injected-context flow.
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 9.9.9"; exit 0 ;;
+  --version) echo "akm 0.8.3"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in

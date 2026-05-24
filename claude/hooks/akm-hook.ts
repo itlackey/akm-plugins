@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { satisfies, valid } from "semver"
@@ -832,82 +832,51 @@ function sessionEnd(): string {
   return ""
 }
 
-function findWritablePathDir(): string | undefined {
-  for (const entry of (process.env.PATH ?? "").split(":")) {
-    if (!entry) continue
-    try {
-      mkdirSync(entry, { recursive: true })
-      writeFileSync(path.join(entry, ".akm-write-test"), "")
-      rmSync(path.join(entry, ".akm-write-test"), { force: true })
-      return entry
-    } catch {
-      // continue
-    }
-  }
-  return undefined
-}
-
-function ensureOnPath(target: string) {
-  if (!existsSync(target)) return
-  const current = findCommandOnPath("akm")
-  if (current === target) return
-  const writableDir = findWritablePathDir()
-  if (!writableDir) return
-  const linkPath = path.join(writableDir, "akm")
-  try {
-    symlinkSync(target, linkPath)
-  } catch {
-    try {
-      copyFileSync(target, linkPath)
-    } catch {
-      // ignore
-    }
-  }
-}
-
-function npmGlobalBin(): string {
-  const bin = runCommand("npm", ["bin", "-g"])
-  if (bin.ok && bin.stdout.trim()) return bin.stdout.trim()
-  const prefix = runCommand("npm", ["prefix", "-g"])
-  return prefix.ok && prefix.stdout.trim() ? path.join(prefix.stdout.trim(), "bin") : ""
-}
-
-function ensureAkm() {
+// checkAkmVersion replaces the pre-0.8.0 ensureAkm() behavior. Until 0.7.x the
+// plugin silently spawned `bun install -g akm-cli@…` (or npm) on every
+// SessionStart whenever akm was missing or out of range. Installing global
+// packages without explicit user consent is too aggressive for a public
+// release. Starting with 0.8.0 we detect-and-warn instead: if akm is missing
+// or out of range, we write a clear stderr banner pointing at `/akm-setup` —
+// which IS the explicit consent point — and return a structured verdict.
+// Callers decide how to degrade. We never spawn an install from this path.
+function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; path?: string } {
   const existing = findCommandOnPath("akm")
   if (existing) {
     const current = akmVersionSatisfies(existing)
     if (current.ok) {
       appendLog(SESSION_LOG, "akm_ready", "path", existing, current.version)
-      return
+      return { ok: true, version: current.version, path: existing }
     }
     appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
+    writeAkmConsentBanner({ detected: current.version, detectedPath: existing })
+    return { ok: false, reason: "version-mismatch", version: current.version, path: existing }
   }
+  appendLog(SESSION_LOG, "akm_missing", "path", AKM_PACKAGE_REF, AKM_REQUIRED_RANGE)
+  writeAkmConsentBanner({ detected: undefined, detectedPath: undefined })
+  return { ok: false, reason: "not-installed" }
+}
 
-  let installer = "path"
-  let installedBin = ""
-  if (findCommandOnPath("bun")) {
-    installer = "bun"
-    const globalBin = runCommand("bun", ["pm", "bin", "-g"])
-    const install = runCommand("bun", ["install", "-g", AKM_PACKAGE_REF])
-    if (install.ok && globalBin.ok && globalBin.stdout.trim()) installedBin = path.join(globalBin.stdout.trim(), "akm")
-  }
-  if (!installedBin && findCommandOnPath("npm")) {
-    installer = "npm"
-    const install = runCommand("npm", ["install", "-g", AKM_PACKAGE_REF])
-    const globalBin = npmGlobalBin()
-    if (install.ok && globalBin) installedBin = path.join(globalBin, "akm")
-  }
-  if (installedBin) ensureOnPath(installedBin)
-  const resolved = findCommandOnPath("akm")
-  if (resolved) {
-    const current = akmVersionSatisfies(resolved)
-    if (current.ok) {
-      appendLog(SESSION_LOG, "akm_ready", installer, resolved, current.version)
-    } else {
-      appendLog(SESSION_LOG, "akm_install_failed", installer, resolved, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
-    }
-  } else {
-    appendLog(SESSION_LOG, "akm_missing", installer, AKM_PACKAGE_REF, AKM_REQUIRED_RANGE)
+function writeAkmConsentBanner(info: { detected?: string; detectedPath?: string }) {
+  const detectedLabel = info.detected
+    ? `${info.detected}${info.detectedPath ? ` (${info.detectedPath})` : ""}`
+    : "(not found on PATH)"
+  const banner = [
+    "─".repeat(60),
+    "akm-plugin: akm CLI not installed or wrong version",
+    `  detected: ${detectedLabel}`,
+    `  required: ${AKM_REQUIRED_RANGE}`,
+    "",
+    "Run `/akm-setup` in this Claude Code session to install/upgrade",
+    "with your explicit confirmation, or install manually:",
+    `  bun install -g ${AKM_PACKAGE_REF}`,
+    `  npm install -g ${AKM_PACKAGE_REF}`,
+    "─".repeat(60),
+  ].join("\n")
+  try {
+    process.stderr.write(banner + "\n")
+  } catch {
+    // best-effort; never crash the hook over a banner
   }
 }
 
@@ -1128,7 +1097,24 @@ function curatePrompt(): string {
 function sessionStart(): string {
   const rawInput = readStdin()
   const sid = extractSessionId(rawInput)
-  ensureAkm()
+  const versionCheck = checkAkmVersion()
+  if (!versionCheck.ok) {
+    // checkAkmVersion already wrote a stderr banner pointing the user at
+    // `/akm-setup` for explicit-consent install. Emit a degraded SessionStart
+    // context so the agent knows akm CLI tooling is unavailable this session
+    // and won't keep trying to call it. We intentionally do NOT crash the
+    // hook — the rest of Claude Code stays fully functional.
+    return emitHookContext(
+      "SessionStart",
+      [
+        "# AKM is NOT available in this session",
+        "",
+        `The akm CLI is missing or does not satisfy \`${AKM_REQUIRED_RANGE}\` (reason: ${versionCheck.reason ?? "unknown"}).`,
+        "Do not call any `akm` Bash command. Tell the user to run `/akm-setup`",
+        "in this session to install/upgrade akm-cli with their confirmation.",
+      ].join("\n"),
+    )
+  }
   if (!akmAvailable()) return ""
 
   const akm = findCommandOnPath("akm")
@@ -1366,7 +1352,11 @@ function preToolAgent(): string {
 function main(): string {
   switch (COMMAND) {
     case "ensure-akm":
-      ensureAkm()
+    case "check-akm":
+      // Legacy alias "ensure-akm" no longer installs anything; both subcommands
+      // are now version checks that warn-and-point-at-/akm-setup. See
+      // checkAkmVersion() for the rationale (Item 2, 0.8.0 polish plan).
+      checkAkmVersion()
       return ""
     case "session-start":
       return sessionStart()

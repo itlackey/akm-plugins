@@ -73,7 +73,7 @@ Claude will search with `akm search ... --source registry`, inspect the returned
 
 ## Prerequisites
 
-On session start, the plugin enforces the documented AKM baseline by requiring `akm-cli@^0.8.0`. If `akm` is already on PATH and satisfies that range, the plugin reuses it. Otherwise it installs the required range with Bun first and npm as a fallback. The standalone installers remain available when you want to preinstall manually.
+On session start, the plugin enforces the documented AKM baseline by requiring `akm-cli@^0.8.0`. If `akm` is already on PATH and satisfies that range, the plugin uses it as-is. Otherwise it writes a clear stderr banner pointing at the `/akm-setup` slash command — installation requires **explicit user confirmation** through `/akm-setup`; the plugin does **not** silently `bun install` or `npm install` on your behalf. You can also install ahead of time with any of the methods below.
 
 ```sh
 # macOS / Linux
@@ -121,7 +121,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 | Event | What happens |
 | --- | --- |
-| **SessionStart** | Reuses `akm` when the resolved CLI already satisfies the required `^0.8.0` range; otherwise installs the required package ref (override via `AKM_PACKAGE_REF`; Bun → npm fallback), verifies the resolved version, sets `defaults.agent` to `claude` (and ensures `profiles.agent.claude` exists) in `~/.config/akm/config.json` when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
+| **SessionStart** | Verifies `akm` on PATH satisfies the required `^0.8.0` range (override via `AKM_PACKAGE_REF`). When `akm` is missing or out of range, the hook does **not** install anything — it writes a clear stderr banner pointing the user at the `/akm-setup` slash command (the explicit-consent install path) and emits a degraded SessionStart context telling the agent `akm` tooling is unavailable for this session. When `akm` is healthy, the hook sets `defaults.agent` to `claude` (and ensures `profiles.agent.claude` exists) in `~/.config/akm/config.json` when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
 | **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
 | **UserPromptExpansion** | Logs expanded `/akm-*` slash-command usage, injects a short reminder when a mutating memory/proposal command is expanded without explicit confirmation language, and takes a fresh proposal-prep checkpoint before `/akm-improve`, `/akm-evolve`, or `/akm-propose` when the local session buffer has unflushed evidence. |
 | **PreToolUse** (Bash) | Blocks risky raw AKM shell commands before execution, including proposal acceptance without explicit approval and suspicious `akm remember` payloads that appear to contain secrets. |
@@ -173,7 +173,7 @@ Notes:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AKM_PACKAGE_REF` | `akm-cli@^0.8.0` | Override the npm/bun package spec used by SessionStart range enforcement/install (for example, to pin a compatible AKM build in CI). |
+| `AKM_PACKAGE_REF` | `akm-cli@^0.8.0` | Override the npm/bun package spec displayed in the SessionStart consent banner and used by `/akm-setup` (for example, to pin a compatible AKM build in CI). The plugin never installs this automatically — it is only quoted in the banner. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
 | `AKM_INDEX_ON_SESSION_END` | `0` | Set to `1` to run `akm index` after a session-end memory is captured. |
