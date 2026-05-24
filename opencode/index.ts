@@ -296,46 +296,20 @@ function readConfiguredAgentDefault(): string {
 
 function writeConfiguredAgentDefault(platform: string): boolean {
   if (!platform.trim()) return false
+  // #463: route through `akm config set` so akm's schema-walker / validator
+  // is the single source of truth for the on-disk shape. Direct JSON writes
+  // here would bypass strict-mode validation and the 5-backup ring buffer,
+  // and historically clobbered nearby keys when the legacy `agent.default`
+  // slot triggered an auto-migration.
+  const command = resolveAkmCommand()
+  if (typeof command !== "string") return false
   try {
-    const configPath = getAkmConfigPath()
-    const configDir = path.dirname(configPath)
-    mkdirSync(configDir, { recursive: true })
-    const current = readAkmConfig()
-    // 0.8.0 canonical shape: defaults.agent + profiles.agent.<name>.platform.
-    // Writing the legacy agent.default slot triggers a config-migrate write on
-    // the next akm load, which clobbers nearby keys (the "config clobber
-    // trap"). Write the canonical shape directly so akm's auto-migration is a
-    // no-op.
-    const defaults = current.defaults && typeof current.defaults === "object"
-      ? { ...(current.defaults as Record<string, unknown>) }
-      : {}
-    defaults.agent = platform
-
-    const profiles = current.profiles && typeof current.profiles === "object"
-      ? { ...(current.profiles as Record<string, unknown>) }
-      : {}
-    const agentProfiles = profiles.agent && typeof profiles.agent === "object"
-      ? { ...(profiles.agent as Record<string, unknown>) }
-      : {}
-    if (!(platform in agentProfiles) || typeof agentProfiles[platform] !== "object") {
-      agentProfiles[platform] = { platform }
-    }
-    profiles.agent = agentProfiles
-
-    // Strip the legacy agent.default slot so akm's auto-migration doesn't
-    // re-trigger on every load. Preserve other top-level fields verbatim.
-    const next: Record<string, unknown> = { ...current, defaults, profiles }
-    if (next.agent && typeof next.agent === "object") {
-      const legacyAgent = { ...(next.agent as Record<string, unknown>) }
-      delete legacyAgent.default
-      if (Object.keys(legacyAgent).length === 0) {
-        delete next.agent
-      } else {
-        next.agent = legacyAgent
-      }
-    }
-
-    writeFileSync(configPath, `${JSON.stringify(next, null, 2)}\n`)
+    execFileSync(
+      command,
+      ["config", "set", `profiles.agent.${platform}`, JSON.stringify({ platform })],
+      { stdio: "ignore" },
+    )
+    execFileSync(command, ["config", "set", "defaults.agent", platform], { stdio: "ignore" })
     return true
   } catch {
     return false

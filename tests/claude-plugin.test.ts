@@ -570,12 +570,42 @@ echo "[knowledge] should-not-appear"
     // The version MUST satisfy the plugin's required range (^0.8.0 in 0.8.0+)
     // so the new SessionStart consent gate treats akm as healthy and proceeds
     // with the normal injected-context flow.
+    // Fake-akm helper: persist `akm config set <dottedKey> <jsonOrString>` calls
+    // into $HOME/.config/akm/config.json so tests that assert against the file
+    // still observe the plugin's writes after #463 moved them through the CLI.
+    const fakeAkmConfigSet = path.join(binDir, "fake-akm-config-set.cjs")
+    writeFileSync(
+      fakeAkmConfigSet,
+      `const fs = require("node:fs");
+const path = require("node:path");
+const [, , configPath, dottedKey, rawValue] = process.argv;
+const segs = dottedKey.split(".");
+let v;
+try { v = JSON.parse(rawValue); } catch { v = rawValue; }
+const cur = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+let node = cur;
+for (let i = 0; i < segs.length - 1; i++) {
+  if (typeof node[segs[i]] !== "object" || node[segs[i]] === null) node[segs[i]] = {};
+  node = node[segs[i]];
+}
+node[segs[segs.length - 1]] = v;
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, JSON.stringify(cur, null, 2) + "\\n");
+`,
+    )
+
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
   --version) echo "akm 0.8.3"; exit 0 ;;
+  config)
+    if [ "$2" = "set" ]; then
+      node ${shellQuote(fakeAkmConfigSet)} "$HOME/.config/akm/config.json" "$3" "$4"
+      exit $?
+    fi
+    exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in

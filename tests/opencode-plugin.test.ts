@@ -9,6 +9,39 @@ import opencodePackage from "../opencode/package.json"
 // Mock execFileSync and execSync before importing the plugin
 const mockExecFileSync = mock(() => "mock output")
 const mockExecSync = mock(() => "exec output")
+
+/**
+ * Fake-akm shim for `akm config set <dottedKey> <jsonOrString>`. Persists the
+ * write into $XDG_CONFIG_HOME/akm/config.json (or $HOME/.config/akm/config.json)
+ * so tests that assert against the on-disk shape still observe the writes after
+ * issue #463 moved them through the CLI.
+ */
+function applyFakeAkmConfigSet(args: string[]): void {
+  const [, , dottedKey, rawValue] = args
+  if (typeof dottedKey !== "string" || typeof rawValue !== "string") return
+  const configHome = process.env.XDG_CONFIG_HOME
+    ? path.join(process.env.XDG_CONFIG_HOME, "akm")
+    : path.join(process.env.HOME ?? "", ".config", "akm")
+  const configPath = path.join(configHome, "config.json")
+  mkdirSync(configHome, { recursive: true })
+  const current = existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {}
+  const segments = dottedKey.split(".")
+  let value: unknown
+  try {
+    value = JSON.parse(rawValue)
+  } catch {
+    value = rawValue
+  }
+  let node: Record<string, unknown> = current
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i]
+    if (typeof node[seg] !== "object" || node[seg] === null) node[seg] = {}
+    node = node[seg] as Record<string, unknown>
+  }
+  node[segments[segments.length - 1]] = value
+  writeFileSync(configPath, `${JSON.stringify(current, null, 2)}\n`)
+}
+
 const execFileSyncShim = (...args: any[]) => {
   const [command, commandArgs] = args as [string, string[]]
   const isAkmCommand = typeof command === "string"
@@ -21,6 +54,12 @@ const execFileSyncShim = (...args: any[]) => {
     } catch {
       return "akm 0.8.9\n"
     }
+  }
+  // #463: route `akm config set` through the fake shim so the on-disk shape
+  // matches what the real CLI would produce.
+  if (isAkmCommand && Array.isArray(commandArgs) && commandArgs[0] === "config" && commandArgs[1] === "set") {
+    applyFakeAkmConfigSet(commandArgs)
+    return ""
   }
   return (mockExecFileSync as any)(...args)
 }
