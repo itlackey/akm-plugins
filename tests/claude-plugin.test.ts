@@ -197,11 +197,22 @@ describe("Claude plugin metadata", () => {
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
   })
 
-  it("re-exports shared memory helpers to reduce harness drift", async () => {
-    const candidateShared = readFileSync(path.join(repoRoot, "claude/shared/memory-candidates.ts"), "utf8")
-    const eventShared = readFileSync(path.join(repoRoot, "claude/shared/memory-events.ts"), "utf8")
-    expect(candidateShared.trim()).toBe('export * from "../../shared/memory-candidates"')
-    expect(eventShared.trim()).toBe('export * from "../../shared/memory-events"')
+  it("re-exports shared helpers to prevent silent drift", async () => {
+    // Every duplicated file under claude/shared/ MUST be a one-line shim that
+    // re-exports the canonical version at shared/. ref-extraction.ts is the
+    // sole intentional exception — its drift is tracked in-file because the
+    // resolver contract test exercises both copies against the same fixture.
+    const shimmedFiles = [
+      "memory-candidates",
+      "memory-events",
+      "redaction",
+      "feedback-signals",
+      "recall-policy",
+    ]
+    for (const name of shimmedFiles) {
+      const contents = readFileSync(path.join(repoRoot, `claude/shared/${name}.ts`), "utf8")
+      expect(contents.trim()).toBe(`export * from "../../shared/${name}"`)
+    }
   })
 
   it("v0.8.0 slash commands carry the canonical proposal-flow guard rails", () => {

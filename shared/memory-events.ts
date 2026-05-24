@@ -7,6 +7,7 @@ export type AkmMemoryEventType =
   | "prompt_recall"
   | "tool_observation"
   | "tool_batch_observation"
+  | "tool_ref_observed"
   | "workflow_step"
   | "workflow_started"
   | "workflow_next_loaded"

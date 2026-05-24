@@ -2800,6 +2800,12 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
     "tool.execute.after": async (input, output) => {
       try {
         const isAkmTool = input.tool.startsWith("akm_")
+        // The SDK type for `tool.execute.after` input does not expose `directory`,
+        // but the OpenCode runtime does provide it for tool-scoped hooks. Read
+        // it via a structural cast so we get the value when present without
+        // accepting `any` everywhere it's used.
+        const inputDirectory = (input as { directory?: unknown }).directory
+        const directory = typeof inputDirectory === "string" ? inputDirectory : undefined
 
         const allArgRefs = extractAkmRefsFromAllArgs(input.args as Record<string, unknown>)
         const allOutputRefs = extractAkmRefsFromString(output.output)
@@ -2809,7 +2815,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           writeStructuredEvent({
             event: "tool_ref_observed",
             sessionId: input.sessionID,
-            scope: buildEventScope(input.sessionID, input.directory, input.tool),
+            scope: buildEventScope(input.sessionID, directory, input.tool),
             input: { tool: input.tool, callID: input.callID },
             refs: allRefs,
             outcome: { status: "ok" },
@@ -2859,7 +2865,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         writeStructuredEvent({
           event: "tool_observation",
           sessionId: input.sessionID,
-          scope: buildEventScope(input.sessionID, input.directory, input.tool),
+          scope: buildEventScope(input.sessionID, directory, input.tool),
           input: { tool: input.tool, callID: input.callID, args: input.args as Record<string, unknown>, output: parsed as Record<string, unknown> },
           refs: refResult.refs,
           outcome: { status: feedback === "negative" ? "failed" : "ok" },
@@ -2879,7 +2885,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               (sessionSuccessfulAssetTouchCount.get(input.sessionID) ?? 0) + 1,
             )
             const checkpointRef = maybeCheckpointSessionMemory(input.sessionID, {
-              directory: input.directory,
+              directory,
               agent: input.tool,
             })
             if (checkpointRef) {
@@ -2927,7 +2933,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               writeStructuredEvent({
                 event: "feedback_recorded",
                 sessionId: input.sessionID,
-                scope: buildEventScope(input.sessionID, input.directory, input.tool),
+                scope: buildEventScope(input.sessionID, directory, input.tool),
                 refs: [ref],
                 input: { source: signal.source, confidence: signal.confidence, note: signal.note },
                 outcome: { status: "skipped", warnings: ["confidence below automatic submission threshold"] },
@@ -2937,14 +2943,14 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             const ok = queueFeedback(logClient, ref, feedback, signal.note, {
               toolName: input.tool,
               sessionID: input.sessionID,
-              directory: input.directory,
+              directory,
               agent: input.tool,
             }, dedupe)
             if (ok) {
               writeStructuredEvent({
                 event: "feedback_recorded",
                 sessionId: input.sessionID,
-                scope: buildEventScope(input.sessionID, input.directory, input.tool),
+                scope: buildEventScope(input.sessionID, directory, input.tool),
                 refs: [ref],
                 input: { source: signal.source, confidence: signal.confidence, note: signal.note },
                 outcome: { status: "ok" },
