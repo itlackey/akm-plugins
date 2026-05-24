@@ -83,3 +83,29 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 - `akm help migrate <version>` — release notes / migration guidance
 
 Use `akm -h` for more options and details on searching and using assets.
+
+## Locking down destructive commands
+
+The akm-plugin used to ship a `PreToolUse` (Claude Code) and
+`permission.ask` / `command.execute.before` (OpenCode) hook that
+tokenized each bash invocation and blocked a hard-coded list of risky
+`akm` subcommands. That gate has been removed in 0.8.0 because tokenized
+matching produced false positives on commit messages, heredoc bodies,
+and other prose containing `akm <verb>` substrings, and because gating
+destructive shell calls is properly the host platform's responsibility.
+
+The replacement is documented in the platform-specific READMEs:
+
+- **Claude Code** — use `permissions.ask` / `permissions.deny` in
+  `~/.claude/settings.json`. See
+  [claude/README.md "Locking down destructive commands"](./claude/README.md#locking-down-destructive-commands).
+- **OpenCode** — no first-class permission DSL exists today; wrap
+  `akm` in a confirmation script on `PATH`, or use OS-level access
+  controls. See
+  [opencode/README.md "Locking down destructive commands"](./opencode/README.md#locking-down-destructive-commands).
+
+Agents should still treat destructive verbs (`accept`, `reject`,
+`revert`, `save --push`, `remove`, vault writes, `tasks add` / `tasks
+run`, `upgrade`, `update --all`, `config set`) as requiring explicit
+user approval before invocation — that contract is independent of the
+platform's permission machinery.

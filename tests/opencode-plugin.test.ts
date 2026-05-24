@@ -1463,88 +1463,16 @@ describe("akm-opencode plugin", () => {
       expect(mockSpawn).not.toHaveBeenCalled()
     })
 
-    it("denies risky raw akm shell commands", async () => {
-      const client = createMockClient()
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      const output = { status: "ask" as "ask" | "deny" | "allow" }
-      await hooks["permission.ask"]?.({
-        sessionID: "session-1",
-        permission: "bash",
-        patterns: ["akm accept 123"],
-        metadata: { command: "akm accept 123" },
-      } as any, output)
-      expect(output.status).toBe("deny")
-      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
-        body: expect.objectContaining({
-          message: "akm.raw_cli.blocked",
-          extra: expect.objectContaining({ category: "proposal-accept" }),
-        }),
-      }))
-    })
-
-    it("blocks risky command.execute.before raw akm commands with explanatory text", async () => {
-      const client = createMockClient()
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      const output = { parts: [] as Array<{ type: string; text: string }> }
-      await hooks["command.execute.before"]?.({
-        sessionID: "session-1",
-        command: "akm",
-        arguments: "upgrade",
-      } as any, output as any)
-      expect(output.parts[0].text).toContain("Blocked risky AKM command: akm upgrade")
-      expect(output.parts[0].text).toContain("approve the exact `akm upgrade` command")
-    })
-
-    it("denies akm revert as proposal-revert (rollback of accepted proposal)", async () => {
-      const client = createMockClient()
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      const output = { status: "ask" as "ask" | "deny" | "allow" }
-      await hooks["permission.ask"]?.({
-        sessionID: "session-1",
-        permission: "bash",
-        patterns: ["akm revert p_xyz"],
-        metadata: { command: "akm revert p_xyz" },
-      } as any, output)
-      expect(output.status).toBe("deny")
-      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
-        body: expect.objectContaining({
-          message: "akm.raw_cli.blocked",
-          extra: expect.objectContaining({ category: "proposal-revert" }),
-        }),
-      }))
-    })
-
-    it("denies akm tasks add as tasks-mutate (OS scheduler change)", async () => {
-      const client = createMockClient()
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      const output = { status: "ask" as "ask" | "deny" | "allow" }
-      await hooks["permission.ask"]?.({
-        sessionID: "session-1",
-        permission: "bash",
-        patterns: ["akm tasks add nightly --cron \"0 2 * * *\""],
-        metadata: { command: "akm tasks add nightly --cron \"0 2 * * *\"" },
-      } as any, output)
-      expect(output.status).toBe("deny")
-      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
-        body: expect.objectContaining({
-          message: "akm.raw_cli.blocked",
-          extra: expect.objectContaining({ category: "tasks-mutate" }),
-        }),
-      }))
-    })
-
-    it("allows akm tasks list (read-only) — no gate fires", async () => {
-      const client = createMockClient()
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-      const output = { status: "ask" as "ask" | "deny" | "allow" }
-      await hooks["permission.ask"]?.({
-        sessionID: "session-1",
-        permission: "bash",
-        patterns: ["akm tasks list"],
-        metadata: { command: "akm tasks list" },
-      } as any, output)
-      // tasks list is read-only and must not trip the tasks-mutate gate.
-      expect(output.status).toBe("ask")
+    it("does not register permission.ask or command.execute.before hooks (Bash gating removed)", async () => {
+      // 0.8.0 removed the tokenized risky-command gate from both
+      // permission.ask and command.execute.before. Raw akm CLI invocations
+      // are now governed by OS-level permission tools and (on Claude Code)
+      // platform permission rules. See opencode/README.md "Locking down
+      // destructive commands". This test pins the absence so a regression
+      // re-introducing tokenized blocking would be caught.
+      const hooks = await AkmPlugin(createPluginInput())
+      expect(hooks["permission.ask"]).toBeUndefined()
+      expect(hooks["command.execute.before"]).toBeUndefined()
     })
 
     it("caps fresh-session injected context to AKM_CONTEXT_BUDGET_CHARS", async () => {

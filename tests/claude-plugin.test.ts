@@ -121,8 +121,17 @@ describe("Claude plugin metadata", () => {
     const userPromptExpansion = plugin.hooks.UserPromptExpansion[0].hooks[0].command as string
     expect(userPromptExpansion).toContain("user-prompt-expansion")
 
+    // PreToolUse no longer registers a Bash matcher — risky-command gating
+    // was removed in 0.8.0 in favor of platform permission rules (see
+    // claude/README.md "Locking down destructive commands"). The PreToolUse
+    // array still exists for Agent / Read / Write / Edit / Glob / Grep
+    // matchers used by model-alias resolution and ref observation.
     expect(plugin.hooks.PreToolUse).toBeDefined()
-    expect(plugin.hooks.PreToolUse[0].hooks[0].command as string).toContain("pre-tool bash")
+    const preToolMatchers = plugin.hooks.PreToolUse.map(
+      (entry: { matcher?: string }) => entry.matcher,
+    )
+    expect(preToolMatchers).not.toContain("Bash")
+    expect(preToolMatchers).toContain("Agent")
 
     // PostToolUse runs both post-tool and auto-feedback
     const postToolCommands = plugin.hooks.PostToolUse[0].hooks.map(
@@ -1576,126 +1585,40 @@ exit 0
     expect(args).toContain("--channel nightly")
   })
 
-  it("pre-tool blocks risky proposal acceptance commands", () => {
+  it("pre-tool returns an empty verdict (Bash gating removed; defer to platform permissions)", () => {
+    // 0.8.0 removed the tokenized risky-command gate. The hook is still
+    // wired for pre-tool calls but never blocks — destructive akm verbs are
+    // now gated via Claude Code's `permissions.ask` / `permissions.deny`
+    // entries (documented in claude/README.md "Locking down destructive
+    // commands"). This test pins the no-block behavior so a future regression
+    // re-introducing tokenized blocking would be caught.
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
     mkdirSync(stateDir, { recursive: true })
 
-    const stdout = runHook(["pre-tool", "bash"], {
-      input: JSON.stringify({
-        session_id: "sess-pretool-1",
-        tool: "Bash",
-        input: { command: "akm accept p_123" },
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const payload = JSON.parse(stdout.trim())
-    expect(payload.decision).toBe("block")
-    expect(payload.reason).toContain("explicit user approval")
-    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("pretool_blocked") && line.includes("akm accept"))).toBe(true)
-  })
-
-  it("pre-tool blocks akm revert (proposal-revert) on the tokenized gate", () => {
-    const tempDir = makeTempDir()
-    const stateDir = path.join(tempDir, "state")
-    mkdirSync(stateDir, { recursive: true })
-
-    const stdout = runHook(["pre-tool", "bash"], {
-      input: JSON.stringify({
-        session_id: "sess-pretool-revert",
-        tool: "Bash",
-        input: { command: "akm revert p_abc" },
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const payload = JSON.parse(stdout.trim())
-    expect(payload.decision).toBe("block")
-    expect(payload.reason).toContain("akm revert <id>")
-    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("pretool_blocked") && line.includes("akm revert"))).toBe(true)
-  })
-
-  it("pre-tool blocks akm tasks add (tasks-mutate) on the tokenized gate", () => {
-    const tempDir = makeTempDir()
-    const stateDir = path.join(tempDir, "state")
-    mkdirSync(stateDir, { recursive: true })
-
-    const stdout = runHook(["pre-tool", "bash"], {
-      input: JSON.stringify({
-        session_id: "sess-pretool-tasks",
-        tool: "Bash",
-        input: { command: "akm tasks add nightly --cron \"0 2 * * *\"" },
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const payload = JSON.parse(stdout.trim())
-    expect(payload.decision).toBe("block")
-    expect(payload.reason).toMatch(/OS scheduler|tasks add/)
-  })
-
-  it("pre-tool allows akm tasks list (read-only verb, no gate)", () => {
-    const tempDir = makeTempDir()
-    const stateDir = path.join(tempDir, "state")
-    mkdirSync(stateDir, { recursive: true })
-
-    const stdout = runHook(["pre-tool", "bash"], {
-      input: JSON.stringify({
-        session_id: "sess-pretool-tasks-list",
-        tool: "Bash",
-        input: { command: "akm tasks list" },
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    // Hook outputs nothing (or a non-block decision) for non-risky commands.
-    const trimmed = stdout.trim()
-    if (trimmed) {
-      const payload = JSON.parse(trimmed)
-      expect(payload.decision).not.toBe("block")
+    for (const command of [
+      "akm accept p_123",
+      "akm revert p_abc",
+      "akm tasks add nightly --cron \"0 2 * * *\"",
+      "akm vault set vault:dev MYKEY",
+      "akm remember OPENAI_API_KEY=sk-secret-value",
+    ]) {
+      const stdout = runHook(["pre-tool", "bash"], {
+        input: JSON.stringify({
+          session_id: "sess-pretool-passthrough",
+          tool: "Bash",
+          input: { command },
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+      // No stdout / no block decision for any of these — the hook is a
+      // no-op for the Bash matcher post-removal.
+      expect(stdout.trim()).toBe("")
     }
-  })
-
-  it("pre-tool blocks suspicious raw remember payloads containing secrets", () => {
-    const tempDir = makeTempDir()
-    const stateDir = path.join(tempDir, "state")
-    mkdirSync(stateDir, { recursive: true })
-
-    const stdout = runHook(["pre-tool", "bash"], {
-      input: JSON.stringify({
-        session_id: "sess-pretool-2",
-        tool: "Bash",
-        input: { command: "akm remember OPENAI_API_KEY=sk-secret-value" },
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const payload = JSON.parse(stdout.trim())
-    expect(payload.decision).toBe("block")
-    expect(payload.reason).toContain("include secrets")
   })
 
   it("user-prompt-expansion emits guidance for mutating slash commands", () => {

@@ -10,7 +10,22 @@ import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } fr
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
 import { extractAkmRefsFromString } from "../shared/ref-extraction"
-import { assessRiskyAkmCommand, blockedCommandMessage, splitArguments, type RiskyCommandAssessment } from "../shared/risky-command"
+
+// Quote-aware shell tokenizer. Splits on whitespace but respects single,
+// double, and backtick quotes. Used by renderCommandTemplate() to fill
+// `$1`/`$2` positional placeholders from raw `$ARGUMENTS` strings. Was
+// previously co-located with the risky-command assessor in
+// shared/risky-command.ts; inlined here when that gate was removed.
+function splitArguments(raw: string): string[] {
+  if (!raw.trim()) return []
+  const args: string[] = []
+  const re = /"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+)/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(raw)) !== null) {
+    args.push(match[1] ?? match[2] ?? match[3] ?? match[4] ?? "")
+  }
+  return args
+}
 
 let resolvedAkmCommand = "akm"
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
@@ -1023,10 +1038,6 @@ async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: 
   }
   retrospectiveState.set(sessionID, { recentRefs })
 }
-
-// Risk assessment for `akm` CLI invocations moved to shared/risky-command.ts.
-// Imported above so both the Claude Code plugin and the OpenCode plugin
-// apply the same rules and stay in sync.
 
 function queueFeedback(
   client: LogCapableClient,
@@ -2375,8 +2386,6 @@ async function getParentSessionID(
   }
 }
 
-// splitArguments moved to shared/risky-command.ts (imported at top of file).
-
 function renderCommandTemplate(template: string, rawArguments: string): string {
   const args = splitArguments(rawArguments)
   return template
@@ -2625,59 +2634,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         await logHookFailure(logClient, "tool.execute.before", error, {
           toolName: input?.tool,
           sessionID: input?.sessionID,
-        })
-      }
-    },
-    "permission.ask": async (input, output) => {
-      try {
-        const command = typeof input?.metadata?.command === "string"
-          ? input.metadata.command
-          : Array.isArray(input?.patterns)
-            ? input.patterns.join(" && ")
-            : ""
-        if (!command.includes("akm")) return
-        await emitWorkflowTelemetry(logClient, "info", "akm.raw_cli.invoked", {
-          sessionID: input.sessionID,
-          toolName: "bash",
-          outcome: "requested",
-          command,
-        })
-        const assessment = assessRiskyAkmCommand(command)
-        if (!assessment) return
-        output.status = "deny"
-        await emitWorkflowTelemetry(logClient, "warn", "akm.raw_cli.blocked", {
-          sessionID: input.sessionID,
-          toolName: "bash",
-          outcome: "blocked",
-          reason: assessment.reason,
-          command,
-          category: assessment.category,
-        })
-      } catch (error: unknown) {
-        await logHookFailure(logClient, "permission.ask", error, {
-          sessionID: input?.sessionID,
-          command: typeof input?.metadata?.command === "string" ? input.metadata.command : undefined,
-        })
-      }
-    },
-    "command.execute.before": async (input, output) => {
-      try {
-        const command = `${input.command ?? ""} ${input.arguments ?? ""}`.trim()
-        const assessment = assessRiskyAkmCommand(command)
-        if (!assessment) return
-        output.parts = [{ type: "text", text: blockedCommandMessage(command, assessment) }]
-        await emitWorkflowTelemetry(logClient, "warn", "akm.raw_cli.blocked", {
-          sessionID: input.sessionID,
-          toolName: String(input.command ?? "bash"),
-          outcome: "blocked",
-          reason: assessment.reason,
-          command,
-          category: assessment.category,
-        })
-      } catch (error: unknown) {
-        await logHookFailure(logClient, "command.execute.before", error, {
-          sessionID: input?.sessionID,
-          command: input?.command,
         })
       }
     },

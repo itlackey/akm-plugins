@@ -49,12 +49,60 @@ fails silently when a compatible `akm` is not resolvable — the TUI is never af
 | **`session.created`** (event hook) | Sets the AKM default agent in `~/.config/akm/config.json` to `opencode` when missing, warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions start with relevant stash context. |
 | **`chat.message`** | Records user feedback/memory intent and appends a short reminder to use `akm_search` / `akm_curate` when more stash context is needed. It does not auto-run AKM CLI lookups on every message. |
 | **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, pending proposal summaries, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
-| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations until `confirm:true` is provided. |
-| **`permission.ask`** / **`command.execute.before`** | Detects risky raw `akm` CLI commands executed through shell/commands and denies them until the user explicitly approves the exact operation. |
+| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations on the plugin's own typed tools (`akm_vault show`, `akm_proposal accept`, etc.) until `confirm:true` is provided. This contract is per-tool, not a generic shell-command gate. |
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, checkpoints memories every `AKM_MEMORY_CHECKPOINT_EVERY` successful asset-touching tool calls, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
 | **`shell.env`** | Exposes `AKM_PROJECT`, `AKM_PLUGIN_VERSION`, and the resolved `AKM_STASH_DIR` to shell tools so raw shell checks and plain `akm` invocations see the same stash path as the plugin. |
 | **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Flushes the per-session buffer into a `memory:opencode-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. The persisted memory now includes compact event/candidate summaries plus explicit file paths to the full-detail plugin state and OpenCode host logs so `akm improve` can inspect deeper evidence when needed. Requires at least two observations before persisting. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows a successful flush with `akm index` so upstream inference/graph passes run immediately. |
+
+### Locking down destructive commands
+
+Earlier versions of this plugin shipped `permission.ask` and
+`command.execute.before` hooks that tokenized each raw `akm` CLI invocation
+and **denied** a hard-coded list of risky subcommands (vault writes,
+`save --push`, `accept` / `reject` / `revert`, `tasks add` / `tasks run`,
+`upgrade`, `update --all`, etc.) until the user re-approved them inline.
+That gate has been removed in 0.8.0. The tokenized matcher was brittle — it
+produced false positives on commit messages, heredoc bodies, and other
+prose that happened to contain `akm <verb>` substrings — and gating
+destructive shell calls is fundamentally the host platform's job, not a
+plugin's.
+
+OpenCode does not currently expose a first-class declarative permission
+DSL equivalent to Claude Code's `permissions.ask` / `permissions.deny`.
+For the verbs that historically tripped the plugin's gate, lock things
+down at the OS level instead:
+
+- **Run `akm` under a wrapper script** that prompts (or denies) on the
+  destructive subcommands you care about. Put the wrapper earlier on
+  `PATH` than the real `akm`. For example:
+
+  ```sh
+  #!/usr/bin/env bash
+  # ~/bin/akm — wraps the real akm to confirm destructive verbs
+  case "$1 $2 $3" in
+    "vault set "*|"vault unset "*|"vault load "*|"vault create "*|\
+    "save --push"*|"remove "*|"accept "*|"reject "*|"revert "*|\
+    "tasks add "*|"tasks remove "*|"tasks enable "*|"tasks disable "*|\
+    "tasks run "*|"upgrade"*|"update --all"*|"config set "*)
+      read -rp "Run 'akm $*' ? [y/N] " ans
+      [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted"; exit 1; } ;;
+  esac
+  exec /usr/local/bin/akm-real "$@"
+  ```
+
+- **Use OS-level access controls** (`sudo`, `chmod`, mount restrictions,
+  AppArmor / SELinux profiles) when running OpenCode in shared or
+  sandboxed environments.
+- **Vault writes still bypass the chat turn entirely.** Use the typed
+  `akm_vault` tool only for read paths (`list`, `show` of key names,
+  `load` for shell-eval pipelines). To create vaults or set/unset values,
+  run `akm vault …` directly in the shell so secret values never pass
+  through the chat turn.
+
+The plugin's typed `akm_*` tools (`akm_vault show`, `akm_proposal accept`,
+etc.) still apply their per-tool `confirm:true` contracts at
+`tool.execute.before`. Only the raw-shell tokenized gate has been removed.
 
 ### Environment overrides
 

@@ -10,7 +10,6 @@ import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } fr
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
 import { extractAkmRefsFromString, extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
-import { assessRiskyAkmCommand } from "../shared/risky-command"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
@@ -291,10 +290,6 @@ function resolveStashRoots(): string[] {
   const home = process.env.HOME
   if (home) return [path.join(home, "akm")]
   return []
-}
-
-function emitBlockDecision(reason: string): string {
-  return JSON.stringify({ decision: "block", reason })
 }
 
 function logRuntimeError(detail: string) {
@@ -609,44 +604,6 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
       ? parsed.sessionId.replace(/[^A-Za-z0-9._-]/g, "")
       : ""
   return { toolName, commandText, outputText, statusText: mode || "success", refs, commandRefs, outputRefs, sid }
-}
-
-function assessRiskyClaudeCommand(command: string): string | undefined {
-  // Tokenized assessment of canonical risky `akm` subcommands (shared with the
-  // OpenCode plugin). Token-aware matching avoids false positives on prose
-  // mentions of these phrases inside commit messages, heredoc bodies, or
-  // release notes.
-  const assessment = assessRiskyAkmCommand(command)
-  if (assessment) {
-    return `${assessment.reason} ${assessment.approval} This requires explicit user approval.`
-  }
-
-  // Content-scan check: `akm remember` with a payload that looks like it
-  // contains secrets. This is intentionally regex-based — we want to fire on
-  // *any* occurrence of a secret in the argv, even if `akm remember` itself
-  // is being invoked safely. The redactor uses its own heuristics; we just
-  // gate on its verdict.
-  const normalized = command.trim()
-  if (/\bakm\s+remember\b/.test(normalized) && redactSecrets(normalized).redacted) {
-    return "Raw `akm remember` payload appears to include secrets; redact it before writing memory."
-  }
-  return undefined
-}
-
-function preToolBash(): string {
-  const rawInput = readStdin()
-  const { commandText, sid } = extractPostToolFields(rawInput, "pre")
-  const blocked = assessRiskyClaudeCommand(commandText)
-  if (!blocked) return ""
-  appendLog(SESSION_LOG, "pretool_blocked", commandText, blocked)
-  writeMemoryEvent({
-    event: "safety_blocked",
-    sessionId: sid || undefined,
-    scope: buildScope(sid),
-    input: { tool: "Bash", commandPreview: commandText.slice(0, 280) },
-    outcome: { status: "blocked", warnings: [blocked] },
-  })
-  return emitBlockDecision(blocked)
 }
 
 function pretoolNonBash(): string {
@@ -1368,7 +1325,10 @@ function main(): string {
     case "user-prompt-expansion":
       return userPromptExpansion()
     case "pre-tool":
-      if (MODE === "bash") return preToolBash()
+      // Bash gating was removed in 0.8.0 — defer to the platform's
+      // permission system (see claude/README.md "Locking down destructive
+      // commands"). Non-bash matchers still flow through pre-tool-nonbash
+      // for ref observation.
       return ""
     case "pre-tool-agent":
       return preToolAgent()

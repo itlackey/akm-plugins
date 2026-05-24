@@ -124,7 +124,8 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | **SessionStart** | Verifies `akm` on PATH satisfies the required `^0.8.0` range (override via `AKM_PACKAGE_REF`). When `akm` is missing or out of range, the hook does **not** install anything — it writes a clear stderr banner pointing the user at the `/akm-setup` slash command (the explicit-consent install path) and emits a degraded SessionStart context telling the agent `akm` tooling is unavailable for this session. When `akm` is healthy, the hook sets `defaults.agent` to `claude` (and ensures `profiles.agent.claude` exists) in `~/.config/akm/config.json` when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
 | **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
 | **UserPromptExpansion** | Logs expanded `/akm-*` slash-command usage, injects a short reminder when a mutating memory/proposal command is expanded without explicit confirmation language, and takes a fresh proposal-prep checkpoint before `/akm-improve`, `/akm-evolve`, or `/akm-propose` when the local session buffer has unflushed evidence. |
-| **PreToolUse** (Bash) | Blocks risky raw AKM shell commands before execution, including proposal acceptance without explicit approval and suspicious `akm remember` payloads that appear to contain secrets. |
+| **PreToolUse** (Agent) | Resolves invalid Claude Code subagent model aliases (e.g. `balanced`, `gpt-4o`) to the four valid aliases (`sonnet`, `opus`, `haiku`, `inherit`) so dispatch is never rejected upstream. |
+| **PreToolUse** (Read / Write / Edit / Glob / Grep) | Observes asset refs in tool input for memory-event capture. Never blocks. |
 | **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs (including `lesson:*`) from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. Skips `memory:*`, `vault:*`, `lesson:*`, and any ref the indexer reports as `quality:"proposed"`. |
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
 | **PostToolBatch** | Records grouped tool-batch observations as structured events and appends a short batch summary to the local session buffer for later checkpoint extraction. |
@@ -135,13 +136,22 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | **PostCompact** | Records the compacted summary as a structured event and buffers a short post-compaction note for later recall. |
 | **SessionEnd** | Reuses the session-final memory capture path so Claude can flush the final checkpoint even when `Stop` is not the last lifecycle event observed. |
 
-### Permission and approval policy
+### Locking down destructive commands
 
-The PreToolUse hook applies a **tokenized** check against the actual `akm` argv (using a shared assessor that the OpenCode plugin also calls). It only fires on real shell invocations of `akm <subcommand>` — it does not match the phrase appearing in commit messages, release notes, or heredoc bodies. The full list of subcommands it blocks pending approval is in `shared/risky-command.ts`.
+Earlier versions of this plugin shipped a `PreToolUse` Bash hook that tokenized
+each shell invocation and **blocked** a hard-coded list of risky `akm`
+subcommands (vault writes, `save --push`, `accept` / `reject` / `revert`,
+`tasks add` / `tasks run`, `upgrade`, `update --all`, etc.) until the user
+re-approved them inline. That gate has been removed in 0.8.0. The tokenized
+matcher was brittle — it produced false positives on commit messages,
+heredoc bodies, and other prose that happened to contain `akm <verb>`
+substrings — and gating destructive shell calls is fundamentally the host
+platform's job, not a plugin's.
 
-For most users, the plugin's hook is enough. If you prefer Claude Code's built-in permission dialog (a one-time approve/deny prompt rather than a hook stderr block), add the matching rules to your **own** settings — Claude Code plugins cannot ship default permission rules, so this step is opt-in and manual.
-
-Add this block to `~/.claude/settings.json` (user-wide) or `.claude/settings.json` (current project):
+The replacement is to use Claude Code's first-class permission system. Drop
+the following block into `~/.claude/settings.json` (user-wide) or
+`.claude/settings.json` (current project). Claude Code plugins cannot ship
+default permission rules, so this step is opt-in and manual:
 
 ```json
 {
@@ -151,12 +161,22 @@ Add this block to `~/.claude/settings.json` (user-wide) or `.claude/settings.jso
       "Bash(akm reject:*)",
       "Bash(akm revert:*)",
       "Bash(akm remove:*)",
+      "Bash(akm save --push:*)",
       "Bash(akm upgrade:*)",
+      "Bash(akm update --all:*)",
+      "Bash(akm config set:*)",
+      "Bash(akm tasks add:*)",
+      "Bash(akm tasks remove:*)",
+      "Bash(akm tasks enable:*)",
+      "Bash(akm tasks disable:*)",
+      "Bash(akm tasks run:*)",
       "Bash(akm vault create:*)",
       "Bash(akm vault set:*)",
       "Bash(akm vault unset:*)",
-      "Bash(akm vault load:*)",
-      "Bash(akm vault show:*)"
+      "Bash(akm vault load:*)"
+    ],
+    "deny": [
+      "Bash(akm upgrade --force:*)"
     ]
   }
 }
@@ -164,10 +184,23 @@ Add this block to `~/.claude/settings.json` (user-wide) or `.claude/settings.jso
 
 Notes:
 
-- The `Bash(pattern:*)` matcher is **prefix-anchored** and only matches the actual bash invocation. It does not trip on the same phrase appearing inside argv (commit messages, heredoc bodies, etc.).
-- Patterns that cannot be expressed as a simple prefix — for example "`akm save` with `--push` anywhere in the flags" — are not coverable by this list. The plugin hook keeps handling those.
-- `akm remember` payload secret-scanning is content-aware (it inspects the literal arguments for things that look like secrets). The plugin hook keeps doing this; native permission rules cannot.
-- If you want a command to skip both the plugin hook and the permission dialog entirely, put it under `permissions.allow` instead of `permissions.ask` — but only do this for commands you genuinely want to auto-approve.
+- `permissions.ask` shows a one-time confirm-then-proceed dialog. Use it for
+  reversible mutations the user occasionally wants to run.
+- `permissions.deny` is a hard block with no override at the prompt — the
+  user has to remove the rule to run the command. Use it for irreversible
+  toolchain mutations (the example above hard-blocks `akm upgrade --force`).
+- The `Bash(prefix:*)` matcher is **prefix-anchored** and only fires on the
+  actual bash invocation. It does not trip on the same phrase appearing
+  inside argv (commit messages, heredoc bodies, README quotes, etc.), so it
+  does not suffer the tokenizer's false-positive class.
+- Patterns that cannot be expressed as a simple prefix (for example "any
+  `akm vault` subcommand that includes a secret-looking value") aren't
+  coverable by these rules. For those, prefer to type the command into the
+  shell directly rather than route it through the chat turn — vault writes
+  should bypass the agent entirely (see `claude/README.md` "Vault" notes).
+- If you want a command to skip the permission dialog entirely, put it
+  under `permissions.allow` instead of `permissions.ask` — but only do this
+  for commands you genuinely want to auto-approve.
 
 ### Environment overrides
 
