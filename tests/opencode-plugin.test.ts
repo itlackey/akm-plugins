@@ -2700,9 +2700,10 @@ describe("akm-opencode plugin", () => {
         { action: "accept", id: "p_123" } as any,
         {} as any,
       )
+      // WS-7a: accept now passes --yes (non-interactive mode); runCli auto-appends --format json.
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["accept", "p_123", "--format", "json"],
+        ["accept", "p_123", "--yes", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })

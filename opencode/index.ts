@@ -3836,12 +3836,19 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
           case "accept": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='accept'. Confirm with the user before accepting." })
-            return runCli(client as unknown as LogCapableClient, ["accept", id], logMeta)
+            const acceptResult = await runCli(client as unknown as LogCapableClient, ["accept", id, "--yes"], logMeta)
+            // Invalidate the proposal-count cache so the next getPendingProposalCount() call
+            // reflects the updated queue immediately (WS-7a: no stale 60s TTL after mutations).
+            pendingProposalSummaryCache.clear()
+            return acceptResult
           }
           case "reject": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='reject'. Confirm with the user before rejecting." })
             if (!reason || !reason.trim()) return JSON.stringify({ ok: false, error: "'reason' is required for action='reject'. Ask the user why the proposal is being rejected." })
-            return runCli(client as unknown as LogCapableClient, ["reject", id, "--reason", reason], logMeta)
+            const rejectResult = await runCli(client as unknown as LogCapableClient, ["reject", id, "--reason", reason, "--yes"], logMeta)
+            // Invalidate the proposal-count cache (WS-7a).
+            pendingProposalSummaryCache.clear()
+            return rejectResult
           }
         }
       },
@@ -3865,7 +3872,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (scope) args.push(scope)
         if (task) args.push("--task", task)
         if (dry_run) args.push("--dry-run")
-        return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_improve", sessionID: context.sessionID, directory: context.directory, agent: context.agent })
+        const improveResult = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_improve", sessionID: context.sessionID, directory: context.directory, agent: context.agent })
+        // Invalidate the proposal-count cache after improve (may have added proposals) (WS-7a).
+        if (!dry_run) pendingProposalSummaryCache.clear()
+        return improveResult
       },
     }),
     akm_propose: tool({

@@ -57,9 +57,9 @@ The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.exec
 | --- | --- | --- |
 | Session-start retrieval | #27 | Shipped in both plugins |
 | Auto-attach scope | #28 | Shipped in both plugins |
-| Conversation-derived feedback | #29 | Open |
+| Conversation-derived feedback | #29 | Deferred to 0.9.0 — structured recall/candidate pipeline ships in 0.8.0; per-conversation fine-grained feedback extraction requires conversation transcript access not yet exposed by harnesses |
 | Session-end `akm index` | #30 | Shipped in both plugins |
-| Harness-provided LLM fallback | #31 | Open |
+| Harness-provided LLM fallback | #31 | Deferred to 0.9.0 — agents currently use their own configured model; harness-level model injection requires SDK support not yet available |
 | Shared secret redaction | #64 | Shipped in both plugins |
 | Structured memory events | #55 | Shipped in both plugins |
 | Claude PreToolUse safety guard | #56 | Shipped in Claude |
@@ -70,6 +70,13 @@ The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.exec
 | Expanded Claude lifecycle coverage | #61 | Shipped in Claude |
 | Subagent context/result capture | #62 | Shipped in both plugins |
 | Workflow compliance telemetry | #63 | Shipped in both plugins |
+
+#### Coming in 0.9.0
+
+Two features in the tracker above are planned for 0.9.0 and explicitly deferred from 0.8.0:
+
+- **[#29 Conversation-derived feedback](https://github.com/itlackey/akm-plugin/issues/29)** — Extracting per-message asset feedback signals from the full conversation transcript. The structured recall/candidate pipeline already ships in 0.8.0; this feature requires per-conversation transcript access that harnesses do not yet expose.
+- **[#31 Harness-provided LLM fallback](https://github.com/itlackey/akm-plugin/issues/31)** — Injecting an alternate model at the harness level for tool calls. Requires SDK support for model-override injection that is not yet available in either harness SDK.
 
 ### Claude Code
 

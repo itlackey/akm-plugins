@@ -44,7 +44,44 @@ const SIMPLE_REPLACEMENTS: Array<{ category: string; pattern: RegExp; replacemen
     pattern: /\bxox[baprs]-[A-Za-z0-9-]+\b/g,
     replacement: "[REDACTED:SLACK_TOKEN]",
   },
+  // WS-7b: Database connection strings — redact credentials portion.
+  // Matches postgres://, mysql://, mongodb+srv://, mongodb://, redis:// with user:pass@ form.
+  {
+    category: "connection_string",
+    pattern: /((?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis):\/\/)([^@\s]+@)([^\s"'`,]+)/gi,
+    replacement: "$1[REDACTED:CREDENTIALS]@$3",
+  },
+  // WS-7b: AWS ARN structures with embedded account IDs (12-digit).
+  // Matches arn:aws:...:123456789012:... patterns.
+  {
+    category: "aws_arn",
+    pattern: /arn:aws:[a-z0-9_-]+:[a-z0-9-]*:(\d{12}):[^\s"'`,]*/gi,
+    replacement: "arn:aws:...[REDACTED:ACCOUNT_ID]:...",
+  },
+  // WS-7b: JWT-shaped tokens — three base64url segments separated by dots (eyJ prefix).
+  {
+    category: "jwt_token",
+    pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+    replacement: "[REDACTED:JWT_TOKEN]",
+  },
 ]
+
+/**
+ * High-entropy string redaction (WS-7b).
+ *
+ * Generic strings >= 32 chars matching [A-Za-z0-9+/=_-]+ that look like
+ * base64/hex secrets. Disabled by default to avoid false positives (e.g.
+ * long identifiers, file paths, etc.). Opt in by setting the env var:
+ *
+ *   AKM_REDACT_HIGH_ENTROPY=1
+ *
+ * The threshold is 32 chars, configurable via AKM_REDACT_ENTROPY_MIN_LEN.
+ */
+const HIGH_ENTROPY_ENABLED = process.env.AKM_REDACT_HIGH_ENTROPY === "1"
+const HIGH_ENTROPY_MIN_LEN = Number.parseInt(process.env.AKM_REDACT_ENTROPY_MIN_LEN ?? "32", 10)
+const HIGH_ENTROPY_RE = HIGH_ENTROPY_ENABLED
+  ? new RegExp(`\\b[A-Za-z0-9+/=_-]{${Math.max(32, HIGH_ENTROPY_MIN_LEN)},}\\b`, "g")
+  : null
 
 function uniq(values: string[]): string[] {
   return [...new Set(values)]
@@ -89,6 +126,13 @@ export function redactSecrets(input: string): RedactionResult {
 
   text = redactAssignments(text, categories)
   text = redactJsonLikePairs(text, categories)
+
+  // WS-7b: Optional high-entropy string redaction (opt-in via AKM_REDACT_HIGH_ENTROPY=1).
+  if (HIGH_ENTROPY_RE && HIGH_ENTROPY_RE.test(text)) {
+    categories.push("high_entropy")
+    HIGH_ENTROPY_RE.lastIndex = 0 // reset after .test()
+    text = text.replace(HIGH_ENTROPY_RE, "[REDACTED:HIGH_ENTROPY]")
+  }
 
   return {
     text,
