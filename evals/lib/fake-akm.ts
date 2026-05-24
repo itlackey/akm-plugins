@@ -370,7 +370,12 @@ if (verb === "feedback" || verb === "index" || verb === "show") {
 }
 
 if (verb === "--version" || verb === "-V") {
-  process.stdout.write("fake-akm 0.6.1\\n")
+  // Plugin gates feature paths on satisfiesAkmVersionRange() which only
+  // accepts 0.8.x. Reporting an older fake version made the OpenCode plugin
+  // treat the shim as an incompatible CLI and silently short-circuit
+  // auto-feedback (queueFeedback bails before spawning). Keep this in lockstep
+  // with the plugin's required range so eval harnesses exercise the real path.
+  process.stdout.write("fake-akm 0.8.0\\n")
   process.exit(0)
 }
 
