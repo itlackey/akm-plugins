@@ -17,7 +17,21 @@ const mockExecSync = mock(() => "exec output")
  * issue #463 moved them through the CLI.
  */
 function applyFakeAkmConfigSet(args: string[]): void {
-  const [, , dottedKey, rawValue] = args
+  // Skip past `config set` and any hook-driven flags (--silent, --layer <v>)
+  // that akm-cli 0.8.0 added for safe hook writes (issue #463). After
+  // stripping, args[0] is the dotted key and args[1] is the raw value.
+  const positional = args.slice(2)
+  while (positional.length > 0) {
+    const head = positional[0]
+    if (head === "--silent") {
+      positional.shift()
+    } else if (head === "--layer") {
+      positional.splice(0, 2)
+    } else {
+      break
+    }
+  }
+  const [dottedKey, rawValue] = positional
   if (typeof dottedKey !== "string" || typeof rawValue !== "string") return
   const configHome = process.env.XDG_CONFIG_HOME
     ? path.join(process.env.XDG_CONFIG_HOME, "akm")

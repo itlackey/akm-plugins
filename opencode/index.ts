@@ -304,12 +304,28 @@ function writeConfiguredAgentDefault(platform: string): boolean {
   const command = resolveAkmCommand()
   if (typeof command !== "string") return false
   try {
+    // #463: --silent --layer user (akm-cli 0.8.0+) pins writes to the user
+    // config layer regardless of merged-read scope and silences hook-driven
+    // CLI output. Without them, hook writes could race with a project-layer
+    // override or pollute the parent process stdout.
     execFileSync(
       command,
-      ["config", "set", `profiles.agent.${platform}`, JSON.stringify({ platform })],
+      [
+        "config",
+        "set",
+        "--silent",
+        "--layer",
+        "user",
+        `profiles.agent.${platform}`,
+        JSON.stringify({ platform }),
+      ],
       { stdio: "ignore" },
     )
-    execFileSync(command, ["config", "set", "defaults.agent", platform], { stdio: "ignore" })
+    execFileSync(
+      command,
+      ["config", "set", "--silent", "--layer", "user", "defaults.agent", platform],
+      { stdio: "ignore" },
+    )
     return true
   } catch {
     return false

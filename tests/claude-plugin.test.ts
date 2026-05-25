@@ -663,7 +663,18 @@ case "$1" in
   --version) echo "akm 0.8.3"; exit 0 ;;
   config)
     if [ "$2" = "set" ]; then
-      node ${shellQuote(fakeAkmConfigSet)} "$HOME/.config/akm/config.json" "$3" "$4"
+      # Strip the akm-cli 0.8.0+ hook-driven flags before passing positional args.
+      # The plugin now calls: akm config set --silent --layer user <key> <value>
+      # The fake helper only understands positional <key> <value>.
+      shift 2
+      while :; do
+        case "$1" in
+          --silent) shift ;;
+          --layer) shift 2 ;;
+          *) break ;;
+        esac
+      done
+      node ${shellQuote(fakeAkmConfigSet)} "$HOME/.config/akm/config.json" "$1" "$2"
       exit $?
     fi
     exit 0 ;;

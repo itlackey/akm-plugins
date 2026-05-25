@@ -462,19 +462,35 @@ function readConfiguredAgentDefault(): string {
 
 function writeConfiguredAgentDefault(platform: string): boolean {
   if (!platform.trim()) return false
-  // #463: route through `akm config set` so akm's schema-walker / validator
-  // is the single source of truth for the on-disk shape. Direct JSON writes
-  // here would bypass strict-mode validation and the 5-backup ring buffer,
-  // and historically clobbered nearby keys when the legacy `agent.default`
-  // slot triggered an auto-migration.
+  // #463: route through `akm config set --silent --layer user` so akm's
+  // schema-walker / validator is the single source of truth for the on-disk
+  // shape. Direct JSON writes here would bypass strict-mode validation and
+  // the 5-backup ring buffer, and historically clobbered nearby keys when
+  // the legacy `agent.default` slot triggered an auto-migration.
+  //
+  // --silent suppresses akm's normal stdout (we're invoked from a hook, not
+  // a user prompt), and --layer user pins the write to the user-layer
+  // config file regardless of where merged reads look — both flags were
+  // added in akm-cli 0.8.0 specifically to make hook-driven writes safe.
   const profileSet = akmRunChecked([
     "config",
     "set",
+    "--silent",
+    "--layer",
+    "user",
     `profiles.agent.${platform}`,
     JSON.stringify({ platform }),
   ])
   if (!profileSet.ok) return false
-  const defaultSet = akmRunChecked(["config", "set", "defaults.agent", platform])
+  const defaultSet = akmRunChecked([
+    "config",
+    "set",
+    "--silent",
+    "--layer",
+    "user",
+    "defaults.agent",
+    platform,
+  ])
   return defaultSet.ok
 }
 
