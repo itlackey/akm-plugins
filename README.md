@@ -75,8 +75,8 @@ The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.exec
 
 Two features in the tracker above are planned for 0.9.0 and explicitly deferred from 0.8.0:
 
-- **[#29 Conversation-derived feedback](https://github.com/itlackey/akm-plugin/issues/29)** — Extracting per-message asset feedback signals from the full conversation transcript. The structured recall/candidate pipeline already ships in 0.8.0; this feature requires per-conversation transcript access that harnesses do not yet expose.
-- **[#31 Harness-provided LLM fallback](https://github.com/itlackey/akm-plugin/issues/31)** — Injecting an alternate model at the harness level for tool calls. Requires SDK support for model-override injection that is not yet available in either harness SDK.
+- **[#29 Conversation-derived feedback](https://github.com/itlackey/akm-plugins/issues/29)** — Extracting per-message asset feedback signals from the full conversation transcript. The structured recall/candidate pipeline already ships in 0.8.0; this feature requires per-conversation transcript access that harnesses do not yet expose.
+- **[#31 Harness-provided LLM fallback](https://github.com/itlackey/akm-plugins/issues/31)** — Injecting an alternate model at the harness level for tool calls. Requires SDK support for model-override injection that is not yet available in either harness SDK.
 
 ### Claude Code
 

@@ -3,7 +3,7 @@
 import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
-import { satisfies, valid } from "semver"
+import { satisfies, valid } from "./vendor-semver"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
 import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates } from "../shared/memory-candidates"
 import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
@@ -61,7 +61,11 @@ function resolveModel(raw: string | null | undefined): string | null {
 //     clean range here. `^0.8.0` includes 0.8.0 and all 0.8.x patches; rc
 //     prereleases are still accepted by the validator above when the user
 //     pins a specific rc via AKM_PACKAGE_REF.
-const AKM_REQUIRED_RANGE = "^0.8.0-rc0 || ^0.8.0"
+// Use the dotted prerelease form (`rc.0`) so the lower bound accepts both
+// `0.8.0-rc.N` (npm-style) AND `0.8.0-rcN` (mono-style) identifiers. Strict
+// semver makes `0.8.0-rc.5` < `0.8.0-rc0`, so a mono-form lower bound would
+// silently reject every published RC of akm-cli (#70).
+const AKM_REQUIRED_RANGE = "^0.8.0-rc.0 || ^0.8.0"
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.8.0"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
