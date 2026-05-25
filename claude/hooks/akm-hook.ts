@@ -516,6 +516,49 @@ function akmRun(args: string[], input?: string): string {
   return result.stdout
 }
 
+/**
+ * Async variant of `akmRun` — same args + behavior, but returns Promise<string>
+ * so independent akm invocations can be issued concurrently via Promise.all.
+ *
+ * Used by `sessionStart` (#71) to run hints + curate + proposals in parallel
+ * instead of sequentially. Worst-case perceived latency drops from ~3×timeout
+ * to ~1×timeout for the typical case where all three calls hit the same
+ * embedding/LLM bottleneck.
+ */
+async function akmRunAsync(args: string[], input?: string): Promise<string> {
+  const akm = findCommandOnPath("akm")
+  if (!akm) return ""
+  const timeout = findCommandOnPath("timeout")
+  const cmd = timeout ? timeout : akm
+  const fullArgs = timeout ? ["--preserve-status", CURATE_TIMEOUT, akm, ...args] : args
+  try {
+    const proc = Bun.spawn([cmd, ...fullArgs], {
+      stdin: input !== undefined ? new TextEncoder().encode(input) : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    const exitCode = await proc.exited
+    if (exitCode !== 0) {
+      logSubprocessFailure("akm_failed", {
+        command: cmd,
+        args: fullArgs.join(" "),
+        error: `akm invocation failed (exit ${exitCode})`,
+        stderr: sanitize(stderr),
+      })
+    }
+    return stdout
+  } catch (error) {
+    logSubprocessFailure("akm_failed", {
+      command: cmd,
+      args: fullArgs.join(" "),
+      error: error instanceof Error ? error.message : String(error),
+      stderr: "",
+    })
+    return ""
+  }
+}
+
 function akmRunChecked(args: string[], input?: string): { ok: boolean; stdout: string; stderr: string } {
   const akm = findCommandOnPath("akm")
   if (!akm) return { ok: false, stdout: "", stderr: "akm not found on PATH" }
@@ -893,19 +936,44 @@ function refQuality(ref: string): string {
   return resolved
 }
 
-type AgentDefaultResult = { value: string; writeAttempted: boolean; writeOk: boolean }
+type AgentDefaultResult = {
+  value: string
+  writeAttempted: boolean
+  writeOk: boolean
+  /** True when this SessionStart freshly initialised defaults.agent=claude. */
+  initialized: boolean
+}
 
+/**
+ * Resolve (and lazily initialise) `defaults.agent` for the Claude plugin.
+ *
+ * Pre-#72 behavior: when `defaults.agent` was empty, silently wrote
+ * `defaults.agent=claude` + `profiles.agent.claude` to ~/.config/akm/config.json
+ * with no user-visible signal. OpenCode users who installed the Claude plugin
+ * to experiment saw their config silently flipped.
+ *
+ * Post-#72 behavior: we still write (the plugin needs the default to dispatch
+ * improve/propose), but we ALSO surface a SessionStart additionalContext line
+ * AND a stderr banner on the first write — see gatherSessionStartWarnings.
+ * Users can opt OUT of the write entirely with `AKM_PLUGIN_NO_AUTO_DEFAULT=1`
+ * (in which case the agent stays unset and improve/propose will refuse until
+ * the user runs `/akm-setup`).
+ */
 function detectAgentDefault(): AgentDefaultResult {
-  if (!akmAvailable()) return { value: "", writeAttempted: false, writeOk: false }
+  if (!akmAvailable()) return { value: "", writeAttempted: false, writeOk: false, initialized: false }
   const current = readConfiguredAgentDefault()
-  if (current) return { value: current, writeAttempted: false, writeOk: true }
+  if (current) return { value: current, writeAttempted: false, writeOk: true, initialized: false }
+  if (process.env.AKM_PLUGIN_NO_AUTO_DEFAULT === "1") {
+    appendLog(SESSION_LOG, "agent_default_skipped", "AKM_PLUGIN_NO_AUTO_DEFAULT=1")
+    return { value: "", writeAttempted: false, writeOk: false, initialized: false }
+  }
   const writeOk = writeConfiguredAgentDefault("claude")
   if (writeOk) {
     appendLog(SESSION_LOG, "agent_default_initialized", "claude")
   } else {
     appendLog(SESSION_LOG, "agent_default_init_failed", "claude", `failed to write ${getAkmConfigPath()}`)
   }
-  return { value: readConfiguredAgentDefault(), writeAttempted: true, writeOk }
+  return { value: readConfiguredAgentDefault(), writeAttempted: true, writeOk, initialized: writeOk }
 }
 
 function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
@@ -968,6 +1036,33 @@ function gatherSessionStartWarnings(
     warnings.push(
       `⚠ Failed to write \`defaults.agent\` to \`${getAkmConfigPath()}\`. \`/akm-improve\` and \`/akm-propose\` may not work until this is configured. Run \`/akm-setup\` to retry.`,
     )
+  }
+
+  // H3 (#72): agent default was just initialised by THIS SessionStart.
+  // Surface the write so OpenCode users (who installed the Claude plugin to
+  // experiment) see that their config was modified. Suppresses subsequent
+  // SessionStart firings — only the initial write generates this notice.
+  if (agentDefault.initialized) {
+    warnings.push(
+      `ℹ The Claude plugin set \`defaults.agent=claude\` in \`${getAkmConfigPath()}\` so \`/akm-improve\` and \`/akm-propose\` can dispatch tasks. ` +
+        `To use a different default, run \`/akm-setup\`. To suppress this auto-write on future installs, set \`AKM_PLUGIN_NO_AUTO_DEFAULT=1\` before SessionStart.`,
+    )
+    try {
+      process.stderr.write(
+        [
+          "─".repeat(60),
+          "akm-plugin: defaults.agent initialized → claude",
+          `  config: ${getAkmConfigPath()}`,
+          "",
+          "  Run /akm-setup to change defaults, or set",
+          "  AKM_PLUGIN_NO_AUTO_DEFAULT=1 to opt out of this auto-write.",
+          "─".repeat(60),
+          "",
+        ].join("\n"),
+      )
+    } catch {
+      // best-effort; never crash the hook over a banner
+    }
   }
 
   // L5: detected version is a pre-release. Banner range accepts ^0.8.0-rc0
@@ -1162,7 +1257,7 @@ function curatePrompt(): string {
   return emitHookContext("UserPromptSubmit", `AKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this task. ${CURATED_CONTEXT_TAIL}`)
 }
 
-function sessionStart(): string {
+async function sessionStart(): Promise<string> {
   const rawInput = readStdin()
   const sid = extractSessionId(rawInput)
   const versionCheck = checkAkmVersion()
@@ -1197,36 +1292,57 @@ function sessionStart(): string {
 
   const agentDefault = detectAgentDefault()
   const sessionWarnings = gatherSessionStartWarnings(versionCheck, agentDefault)
-  const hints = akmRun(["--format", "text", "-q", "hints"]).trim()
+
+  // #71 perceived-latency fix: hints, curate, and proposals have no
+  // inter-dependency — issue them concurrently via Promise.all instead of
+  // running them sequentially. Worst-case wall-clock drops from ~3×CURATE_TIMEOUT
+  // to ~1×CURATE_TIMEOUT when all three calls hit the same embedding bottleneck.
   const cwdContext = gatherCwdContext()
-  const curatedRaw = akmRun(["--detail", "agent", "--format", "text", "-q", "curate", cwdContext, "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)]).trim()
+  const [hintsRaw, curatedRaw, pendingRaw] = await Promise.all([
+    akmRunAsync(["--format", "text", "-q", "hints"]),
+    akmRunAsync([
+      "--detail",
+      "agent",
+      "--format",
+      "text",
+      "-q",
+      "curate",
+      cwdContext,
+      "--limit",
+      String(CURATE_LIMIT),
+      ...buildRunScopeArgs(sid),
+    ]),
+    akmRunAsync(["--format", "json", "-q", "proposals", "--status", "pending"]),
+  ])
+  const hints = hintsRaw.trim()
+  const curatedTrimmed = curatedRaw.trim()
   let curatedFile = ""
-  if (curatedRaw) {
+  if (curatedTrimmed) {
     curatedFile = path.join(CURATED_DIR, `session-${sid ?? "unknown"}.md`)
     try {
-      writeFileSync(curatedFile, curatedRaw)
+      writeFileSync(curatedFile, curatedTrimmed)
     } catch {}
   }
-  const pendingRaw = akmRun(["--format", "json", "-q", "proposals", "--status", "pending"])
   const pendingItems = safeJsonParse<Record<string, unknown>>(pendingRaw)
   const pending = Array.isArray(pendingItems?.proposals)
     ? pendingItems?.proposals.length
     : Array.isArray(pendingItems?.hits)
       ? pendingItems?.hits.length
       : 0
-  const pendingSummary = pending <= 0
-    ? ""
-    : pending === 1
-      ? "There is 1 pending AKM proposal - review with `/akm-review-proposals` or `/akm-proposal list`."
-      : `There are ${pending} pending AKM proposals - review with \`/akm-review-proposals\` or \`/akm-proposal list\`.`
+  const pendingSummary =
+    pending <= 0
+      ? ""
+      : pending === 1
+        ? "There is 1 pending AKM proposal - review with `/akm-review-proposals` or `/akm-proposal list`."
+        : `There are ${pending} pending AKM proposals - review with \`/akm-review-proposals\` or \`/akm-proposal list\`.`
 
-  if (!hints && !curatedRaw && !agentDefault.value && !pendingSummary && sessionWarnings.length === 0) return ""
+  if (!hints && !curatedTrimmed && !agentDefault.value && !pendingSummary && sessionWarnings.length === 0) return ""
   writeMemoryEvent({
     event: "session_started",
     sessionId: sid || undefined,
     scope: buildScope(sid),
     input: { agentDefault: agentDefault.value, pendingProposals: pending },
-    refs: [...new Set(curatedRaw.match(REF_PATTERN) ?? [])],
+    refs: [...new Set(curatedTrimmed.match(REF_PATTERN) ?? [])],
     outcome: { status: "ok" },
   })
   let body = SESSION_START_HEADER
@@ -1419,7 +1535,7 @@ function preToolAgent(): string {
   })
 }
 
-function main(): string {
+async function main(): Promise<string> {
   switch (COMMAND) {
     case "ensure-akm":
     case "check-akm":
@@ -1429,7 +1545,7 @@ function main(): string {
       checkAkmVersion()
       return ""
     case "session-start":
-      return sessionStart()
+      return await sessionStart()
     case "user-feedback":
       recordUserFeedback()
       return ""
@@ -1477,8 +1593,11 @@ function main(): string {
   }
 }
 
+// `main` is async (#71 made sessionStart parallel via Promise.all). Bun
+// supports top-level await; this guarantees the process does not exit
+// until the awaits resolve and stdout.write has run.
 try {
-  const output = main()
+  const output = await main()
   if (output) process.stdout.write(output)
 } catch (error: unknown) {
   logRuntimeError(error instanceof Error ? error.message : String(error))

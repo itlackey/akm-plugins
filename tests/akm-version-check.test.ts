@@ -184,15 +184,37 @@ describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
     // (which lights up on missing stash regardless of akm install state)
     // does not fire. The banner is a separate signal exercised by its own
     // describe() block below.
+    //
+    // #72: also set AKM_PLUGIN_NO_AUTO_DEFAULT=1 so the new "defaults.agent
+    // initialized" notice does not fire. That notice IS the intended
+    // behavior on first SessionStart (we now surface the auto-write to
+    // OpenCode users who install the Claude plugin); a dedicated test
+    // below exercises that path.
+    const stashDir = makeTempDir()
+    const result = runHookSandboxed(["session-start"], {
+      akmVersion: "0.8.3",
+      env: { AKM_STASH_DIR: stashDir, AKM_PLUGIN_NO_AUTO_DEFAULT: "1" },
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).not.toContain("akm-plugin:")
+    // No degraded banner in the additionalContext either.
+    expect(result.stdout).not.toContain("AKM is NOT available")
+    expect(result.installLog).toBe("")
+  })
+
+  it("session-start surfaces the auto-default-agent write on first run (#72)", () => {
+    // Without AKM_PLUGIN_NO_AUTO_DEFAULT, the first SessionStart writes
+    // defaults.agent=claude AND prints a stderr banner + an
+    // additionalContext notice so OpenCode users who install the Claude
+    // plugin to experiment see that their config was modified.
     const stashDir = makeTempDir()
     const result = runHookSandboxed(["session-start"], {
       akmVersion: "0.8.3",
       env: { AKM_STASH_DIR: stashDir },
     })
     expect(result.exitCode).toBe(0)
-    expect(result.stderr).not.toContain("akm-plugin:")
-    // No degraded banner in the additionalContext either.
-    expect(result.stdout).not.toContain("AKM is NOT available")
+    expect(result.stderr).toContain("akm-plugin: defaults.agent initialized")
+    expect(result.stderr).toContain("AKM_PLUGIN_NO_AUTO_DEFAULT=1")
     expect(result.installLog).toBe("")
   })
 
