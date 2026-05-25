@@ -1,6 +1,21 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { redactObject } from "./redaction"
+
+// Memory candidates can contain prompt fragments, ref names, and (despite
+// redaction) potentially sensitive contextual data harvested from session
+// activity. Lock the on-disk file down to user-only read/write so multi-user
+// hosts (CI runners, shared VMs, dev sandboxes) cannot side-read another
+// user's stash signals.
+function chmodSafe(filePath: string, mode: number): void {
+  try {
+    chmodSync(filePath, mode)
+  } catch {
+    // Best-effort: filesystems without POSIX mode (FAT, some FUSE mounts) or
+    // platforms where chmod is a no-op (Windows) silently skip. Don't crash
+    // the hook over a hardening attempt.
+  }
+}
 
 export type AkmMemoryCandidate = {
   id: string
@@ -134,12 +149,15 @@ export function extractCandidatesFromText(input: {
 export function appendCandidates(filePath: string, candidates: AkmMemoryCandidate[]): { ok: true; count: number; categories: string[] } | { ok: false; error: string } {
   try {
     mkdirSync(path.dirname(filePath), { recursive: true })
+    chmodSafe(path.dirname(filePath), 0o700)
     const categories: string[] = []
+    const created = !existsSync(filePath)
     for (const candidate of candidates) {
       const redacted = redactObject(candidate)
       categories.push(...redacted.categories)
       appendFileSync(filePath, `${JSON.stringify(redacted.value)}\n`)
     }
+    if (created) chmodSafe(filePath, 0o600)
     return { ok: true, count: candidates.length, categories: [...new Set(categories)] }
   } catch (error: unknown) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
@@ -162,7 +180,9 @@ export function readCandidates(filePath: string): AkmMemoryCandidate[] {
 
 export function replaceCandidates(filePath: string, candidates: AkmMemoryCandidate[]): void {
   mkdirSync(path.dirname(filePath), { recursive: true })
+  chmodSafe(path.dirname(filePath), 0o700)
   writeFileSync(filePath, candidates.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""))
+  chmodSafe(filePath, 0o600)
 }
 
 export function updateCandidateStatus(filePath: string, id: string, status: "promoted" | "rejected", reason?: string): AkmMemoryCandidate | undefined {

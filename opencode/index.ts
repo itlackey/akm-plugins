@@ -2770,7 +2770,22 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           })
         }
 
-        if (input.sessionID && AKM_AUTO_FEEDBACK && AKM_RETROSPECTIVE_FEEDBACK_RE.test(text)) {
+        // Retrospective positive feedback: the loose "thanks|perfect|worked"
+        // matcher previously fired on `thanks, but it didn't work` because it
+        // only checked for a positive token without considering negation in
+        // the same message. Gate the path with the same negative/correction
+        // matchers used by `recordRetrospectiveFeedback` so a mixed-signal
+        // message is treated as ambiguous (skip rather than misattribute).
+        // Refs still flow through the shared confidence gate so Claude and
+        // OpenCode produce parallel auto-feedback verdicts for the same
+        // signal (README "Confidence-scored auto-feedback" parity claim).
+        if (
+          input.sessionID
+          && AKM_AUTO_FEEDBACK
+          && AKM_RETROSPECTIVE_FEEDBACK_RE.test(text)
+          && !AKM_RETROSPECTIVE_NEGATIVE_RE.test(text)
+          && !AKM_EXPLICIT_CORRECTION_RE.test(text)
+        ) {
           const recentRefs = (sessionBuffer.get(input.sessionID) ?? [])
             .filter((entry) => entry.kind === "tool-ref" && !!entry.ref)
             .map((entry) => entry.ref!)
@@ -2778,7 +2793,16 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             .slice(-3)
           const dedupe = new Set<string>()
           for (const ref of recentRefs) {
-            queueFeedback(logClient, ref, "positive", "opencode retrospective: user confirmed it worked", {
+            const signal = classifyFeedbackSignal({
+              ref,
+              polarity: "positive",
+              harness: "opencode",
+              sessionId: input.sessionID,
+              retrospective: true,
+              note: "opencode retrospective: user confirmed it worked",
+            })
+            if (!shouldSubmitAutomaticFeedback(signal)) continue
+            queueFeedback(logClient, ref, "positive", signal.note, {
               toolName: "chat.message",
               sessionID: input.sessionID,
               agent: input.agent,

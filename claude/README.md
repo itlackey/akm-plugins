@@ -151,9 +151,9 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
 | **PostToolBatch** | Records grouped tool-batch observations as structured events and appends a short batch summary to the local session buffer for later checkpoint extraction. |
 | **SubagentStart** | Injects concise AKM subagent context, including the detected role, task preview, and any active workflow summary. |
-| **Stop** / **SubagentStop** | Flushes the per-session buffer into a `memory:claude-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. Session memories now include explicit paths to the local state, buffer, event/candidate logs, and optional harness log plus higher-value evidence aggregates so follow-on improve agents can inspect the full artifacts directly. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows that flush with `akm index` so upstream inference/graph passes run immediately. |
+| **Stop** / **SubagentStop** | Flushes the per-session buffer into a `memory:claude-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. Session memories now include explicit paths to the local state, buffer, event/candidate logs, and optional harness log plus higher-value evidence aggregates so follow-on improve agents can inspect the full artifacts directly. The hook also follows that flush with `akm index` so upstream inference/graph passes run immediately. Set `AKM_INDEX_ON_SESSION_END=0` to opt out (e.g. low-power dev machines, CI runners). |
 | **TaskCreated** / **TaskCompleted** | Records task lifecycle events, appends task summaries to the local session buffer, and lets completed-task summaries feed candidate extraction through the normal checkpoint/session flush path. |
-| **PreCompact** | Same memory capture before Claude Code compacts the transcript, with the same optional post-flush `akm index` run when `AKM_INDEX_ON_SESSION_END=1`. |
+| **PreCompact** | Same memory capture before Claude Code compacts the transcript, with the same default-on post-flush `akm index` run (set `AKM_INDEX_ON_SESSION_END=0` to skip). |
 | **PostCompact** | Records the compacted summary as a structured event and buffers a short post-compaction note for later recall. |
 | **SessionEnd** | Reuses the session-final memory capture path so Claude can flush the final checkpoint even when `Stop` is not the last lifecycle event observed. |
 
@@ -230,7 +230,7 @@ Notes:
 | `AKM_PACKAGE_REF` | `akm-cli@^0.8.0` | Override the npm/bun package spec displayed in the SessionStart consent banner and used by `/akm-setup` (for example, to pin a compatible AKM build in CI). The plugin never installs this automatically — it is only quoted in the banner. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
-| `AKM_INDEX_ON_SESSION_END` | `0` | Set to `1` to run `akm index` after a session-end memory is captured. |
+| `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the post-session `akm index` run (e.g. low-power dev machines or CI runners). |
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |

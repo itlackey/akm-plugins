@@ -1,6 +1,17 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { redactObject } from "./redaction"
+
+// Memory events log session activity (refs touched, outcomes, scope). Even
+// post-redaction this is a privileged record; lock the directory + file down
+// to owner-only access. Mirrors memory-candidates' chmodSafe helper.
+function chmodSafe(target: string, mode: number): void {
+  try {
+    chmodSync(target, mode)
+  } catch {
+    // Best-effort; see memory-candidates.ts for rationale.
+  }
+}
 
 export type AkmMemoryEventType =
   | "session_started"
@@ -78,6 +89,7 @@ export function getEventLogPath(harness: "claude-code" | "opencode"): string {
 export function appendMemoryEvent(filePath: string, event: AkmMemoryEvent): { ok: true; redacted: boolean; categories: string[] } | { ok: false; error: string } {
   try {
     mkdirSync(path.dirname(filePath), { recursive: true })
+    chmodSafe(path.dirname(filePath), 0o700)
     const redacted = redactObject(event)
     const enriched = {
       ...redacted.value,
@@ -86,7 +98,9 @@ export function appendMemoryEvent(filePath: string, event: AkmMemoryEvent): { ok
         categories: redacted.categories,
       },
     }
+    const created = !existsSync(filePath)
     appendFileSync(filePath, `${JSON.stringify(enriched)}\n`)
+    if (created) chmodSafe(filePath, 0o600)
     return { ok: true, redacted: redacted.redacted, categories: redacted.categories }
   } catch (error: unknown) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }

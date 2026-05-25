@@ -44,6 +44,47 @@ const SIMPLE_REPLACEMENTS: Array<{ category: string; pattern: RegExp; replacemen
     pattern: /\bxox[baprs]-[A-Za-z0-9-]+\b/g,
     replacement: "[REDACTED:SLACK_TOKEN]",
   },
+  // 0.8.0 release-hardening: AWS access key (AKIA prefix, 16 alphanumerics).
+  // IAM user access keys are 20 chars total starting with AKIA; STS temporary
+  // creds use ASIA but those are paired with a session token and short-lived,
+  // so the AKIA prefix is the high-value leak.
+  {
+    category: "aws_access_key",
+    pattern: /\bAKIA[0-9A-Z]{16}\b/g,
+    replacement: "[REDACTED:AWS_ACCESS_KEY_ID]",
+  },
+  // Google Cloud API key (AIza prefix, 35 base64url-safe chars). Pattern is
+  // documented at cloud.google.com/docs/authentication/api-keys.
+  {
+    category: "google_api_key",
+    pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g,
+    replacement: "[REDACTED:GOOGLE_API_KEY]",
+  },
+  // Stripe live-mode secret/publishable keys (sk_live_, pk_live_). Stripe
+  // documents these as the high-severity leak surface in their API docs.
+  {
+    category: "stripe_live_key",
+    pattern: /\b(?:sk|pk)_live_[0-9a-zA-Z]+\b/g,
+    replacement: "[REDACTED:STRIPE_LIVE_KEY]",
+  },
+  // Stripe test-mode keys (sk_test_, pk_test_). Lower severity but still
+  // sensitive — test keys often grant access to test webhooks and dashboards
+  // that mirror production object shapes.
+  {
+    category: "stripe_test_key",
+    pattern: /\b(?:sk|pk)_test_[0-9a-zA-Z]+\b/g,
+    replacement: "[REDACTED:STRIPE_TEST_KEY]",
+  },
+  // Raw `Authorization: <token>` header without the `Bearer` keyword. Some
+  // services (legacy AWS, internal APIs, OAuth1 signed requests) send the
+  // token directly. The Bearer-form pattern above handles the common case.
+  // We require at least 12 chars of token to avoid matching `Authorization: ?`
+  // or other very short placeholder values.
+  {
+    category: "authorization_header",
+    pattern: /(Authorization:\s+)(?!Bearer\b)([A-Za-z0-9._~+/=-]{12,})/gi,
+    replacement: "$1[REDACTED:AUTHORIZATION]",
+  },
   // WS-7b: Database connection strings — redact credentials portion.
   // Matches postgres://, mysql://, mongodb+srv://, mongodb://, redis:// with user:pass@ form.
   {

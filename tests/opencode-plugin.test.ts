@@ -1945,6 +1945,45 @@ describe("akm-opencode plugin", () => {
       expect(retrospectiveRefs).toEqual(["skill:first", "skill:second", "skill:third"])
     })
 
+    it("does NOT record retrospective positive feedback when the same message contains a negation", async () => {
+      // Historical false-positive shape: a message like "thanks, but it didn't
+      // work" contains BOTH the positive token (`thanks`) AND a negation
+      // (`didn't work`). The old loose matcher fired positive feedback; the
+      // negation-gate added in 0.8.0 must skip the path entirely so the
+      // referenced skills are not falsely boosted.
+      const hooks = await AkmPlugin(createPluginInput())
+      mockSpawn.mockClear()
+
+      for (const ref of ["skill:alpha", "skill:beta"]) {
+        await hooks["tool.execute.after"]!(
+          { tool: "akm_show", sessionID: "session-retro-neg-1", callID: ref, args: { ref } } as any,
+          { title: "show", output: JSON.stringify({ type: "skill", ref }), metadata: {} } as any,
+        )
+      }
+      mockSpawn.mockClear()
+
+      const negatedAcknowledgements = [
+        "thanks, but it didn't work",
+        "Thanks — perfect explanation, but the build failed",
+        "that worked the first time but is broken now",
+      ]
+      for (const text of negatedAcknowledgements) {
+        await hooks["chat.message"]!(
+          { sessionID: "session-retro-neg-1", messageID: "m", agent: "build" } as any,
+          { message: {} as any, parts: [{ type: "text", text }] as any },
+        )
+      }
+
+      // recordRetrospectiveFeedback DOES legitimately fire negative feedback
+      // for these messages (correct behavior). The bug we're guarding against
+      // is the spurious POSITIVE feedback: no call should carry the
+      // retrospective-positive note.
+      const positiveRetroCalls = (mockSpawn.mock.calls as any[]).filter(
+        ([, args]) => Array.isArray(args) && args.includes("opencode retrospective: user confirmed it worked"),
+      )
+      expect(positiveRetroCalls).toEqual([])
+    })
+
     it("captures a session memory on stop when the buffer has enough entries", async () => {
       const hooks = await AkmPlugin(createPluginInput())
 

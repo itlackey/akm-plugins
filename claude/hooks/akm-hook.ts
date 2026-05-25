@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { satisfies, valid } from "semver"
@@ -77,7 +77,12 @@ const CURATE_TIMEOUT = String(Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8
 const CONTEXT_BUDGET_CHARS = Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000
 const AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") === "1"
 const AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") === "1"
-const INDEX_ON_SESSION_END = (process.env.AKM_INDEX_ON_SESSION_END ?? "0") === "1"
+// SessionEnd `akm index` is opt-OUT (default enabled) because the README
+// parity matrix advertises "Session-end `akm index` Shipped in both plugins";
+// shipping it gated behind an opt-in env var made the claim a lie. Users
+// who want to disable it (e.g. CI runners, low-power dev machines) set
+// AKM_INDEX_ON_SESSION_END=0.
+const INDEX_ON_SESSION_END = (process.env.AKM_INDEX_ON_SESSION_END ?? "1") !== "0"
 const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM stash - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM stash - assets relevant to this session"
@@ -165,6 +170,17 @@ function gatherCwdContext(): string {
 mkdirSync(STATE_DIR, { recursive: true })
 mkdirSync(CURATED_DIR, { recursive: true })
 mkdirSync(SESSIONS_DIR, { recursive: true })
+// State directory holds session feedback / memory / candidate logs that may
+// retain sensitive context post-redaction. Lock to owner-only.
+for (const dir of [STATE_DIR, CURATED_DIR, SESSIONS_DIR]) {
+  try {
+    chmodSync(dir, 0o700)
+  } catch {
+    // Best-effort: filesystems / platforms without POSIX mode are silently
+    // skipped (Windows, FAT, some FUSE mounts). We never crash a hook over
+    // a hardening attempt.
+  }
+}
 
 function timestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
