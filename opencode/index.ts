@@ -2711,29 +2711,63 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (AKM_AUTO_CURATE && input.sessionID) {
           const decision = shouldRecall(text, { activeWorkflow: !!sessionWorkflow.get(input.sessionID), recentAssetFailure: retrospectiveState.get(input.sessionID)?.lastNegativeSignalAt != null })
           if (decision.shouldRecall) {
-            const curated = await runCurateForPrompt(logClient, decision.query, input.sessionID)
-            const refs = [...new Set((curated ?? "").match(/(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g) ?? [])]
-            sessionRecallAudit.set(input.sessionID, {
+            // Do NOT block the model on `akm curate` — previously this awaited
+            // an 8s-timeout sync curate on every user message, adding up to 8s
+            // to the time-to-first-token of every turn. Fire-and-forget the
+            // curate; when it completes, store the result in `sessionCurated`
+            // which gets picked up by `experimental.chat.system.transform` on
+            // the NEXT message. The current message proceeds with whatever
+            // curated context (if any) was cached from previous turns.
+            const sessionID = input.sessionID
+            const directorySnapshot = directory
+            const agentSnapshot = input.agent
+            const previewText = text
+            // Record the audit row immediately so callers (akm_memory audit)
+            // see the decision; the `injectedRefs` field is populated lazily
+            // when the background curate resolves.
+            sessionRecallAudit.set(sessionID, {
               shouldRecall: true,
               reason: decision.reason,
               query: decision.query,
-              injectedRefs: refs,
-              injectedChars: curated?.length ?? 0,
-              warnings: [],
+              injectedRefs: [],
+              injectedChars: 0,
+              warnings: ["curate dispatched asynchronously; result injected on next message"],
             })
-            writeStructuredEvent({
-              event: "prompt_recall",
-              sessionId: input.sessionID,
-              scope: buildEventScope(input.sessionID, directory, input.agent),
-              input: { promptPreview: text.slice(0, 280), query: decision.query, reason: decision.reason },
-              refs,
-              outcome: { status: curated ? "ok" : "skipped" },
-            })
-            if (curated) {
-              sessionCurated.set(input.sessionID, curated)
-              writeCuratedFile(input.sessionID, curated)
-              bumpCuratedVersion(input.sessionID)
-            }
+            void (async () => {
+              try {
+                const curated = await runCurateForPrompt(logClient, decision.query, sessionID)
+                const refs = [...new Set((curated ?? "").match(/(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g) ?? [])]
+                const prior = sessionRecallAudit.get(sessionID)
+                if (prior) {
+                  sessionRecallAudit.set(sessionID, {
+                    ...prior,
+                    injectedRefs: refs,
+                    injectedChars: curated?.length ?? 0,
+                    warnings: prior.warnings.filter((warning) => !warning.startsWith("curate dispatched asynchronously")),
+                  })
+                }
+                writeStructuredEvent({
+                  event: "prompt_recall",
+                  sessionId: sessionID,
+                  scope: buildEventScope(sessionID, directorySnapshot, agentSnapshot),
+                  input: { promptPreview: previewText.slice(0, 280), query: decision.query, reason: decision.reason },
+                  refs,
+                  outcome: { status: curated ? "ok" : "skipped" },
+                })
+                if (curated) {
+                  sessionCurated.set(sessionID, curated)
+                  writeCuratedFile(sessionID, curated)
+                  bumpCuratedVersion(sessionID)
+                }
+              } catch (error: unknown) {
+                await writePluginLog(logClient, "warn", "AKM background curate failed", {
+                  subsystem: "curation",
+                  sessionID,
+                  directory: directorySnapshot,
+                  error: formatCliError(error),
+                })
+              }
+            })()
           } else {
             const hint = "Need more AKM context? Use `akm_search` or `akm_curate` before writing from scratch."
             sessionRecallAudit.set(input.sessionID, {

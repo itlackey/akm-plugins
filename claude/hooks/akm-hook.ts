@@ -343,15 +343,38 @@ function readStdin(): string {
 }
 
 function findCommandOnPath(command: string): string | undefined {
+  const isWindows = process.platform === "win32"
   const searchPath = process.env.PATH ?? ""
-  for (const entry of searchPath.split(":")) {
+  const separator = isWindows ? ";" : ":"
+  // On Windows PATHEXT controls which extensions are tried; default to the
+  // documented stock set. We try the bare name first (some installers drop
+  // a side-by-side `akm` shim) and then each extension in turn. On POSIX
+  // we only try the bare name with an executable-bit check.
+  const extensions = isWindows
+    ? [
+        "",
+        ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+          .split(";")
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+      ]
+    : [""]
+  for (const entry of searchPath.split(separator)) {
     if (!entry) continue
-    const candidate = path.join(entry, command)
-    try {
-      accessSync(candidate, constants.X_OK)
-      return candidate
-    } catch {
-      // keep searching
+    for (const ext of extensions) {
+      const candidate = path.join(entry, command + ext)
+      try {
+        if (isWindows) {
+          // X_OK is unreliable on Windows; existence + PATHEXT match is
+          // the documented resolution rule (see CreateProcess on MSDN).
+          accessSync(candidate, constants.F_OK)
+        } else {
+          accessSync(candidate, constants.X_OK)
+        }
+        return candidate
+      } catch {
+        // keep searching
+      }
     }
   }
   return undefined
@@ -871,6 +894,30 @@ function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
 }
 
+function writeStashMissingBanner(stashDir: string | undefined) {
+  // additionalContext alone is often ignored by Claude in long-running
+  // sessions, so we mirror the akm-missing path and write a clearly-marked
+  // banner to stderr where the user can see it in their terminal. Hooks
+  // never crash over a banner — wrap in try/catch.
+  const banner = [
+    "─".repeat(60),
+    "akm-plugin: AKM stash directory missing",
+    stashDir
+      ? `  configured: ${stashDir} (path does not exist)`
+      : "  configured: (none — neither AKM_STASH_DIR nor stashDir in config)",
+    "",
+    "AKM curation, search, and show will return empty until you run",
+    "`/akm-setup` to initialize the stash, or set `AKM_STASH_DIR` to an",
+    "existing directory. All other Claude features keep working.",
+    "─".repeat(60),
+  ].join("\n")
+  try {
+    process.stderr.write(banner + "\n")
+  } catch {
+    // best-effort; never crash the hook over a banner
+  }
+}
+
 function gatherSessionStartWarnings(
   versionCheck: { ok: boolean; version?: string },
   agentDefault: AgentDefaultResult,
@@ -878,9 +925,10 @@ function gatherSessionStartWarnings(
   const warnings: string[] = []
 
   // H1: stash directory does not exist — curation will return empty context
-  // and most akm verbs (search/show/curate) will be no-ops. Surface this
-  // explicitly so the user knows they need to run `/akm-setup` or set
-  // `AKM_STASH_DIR` before akm-aware features will work.
+  // and most akm verbs (search/show/curate) will be no-ops. Surface this on
+  // BOTH channels: additionalContext (so the agent sees the cue) AND stderr
+  // (so the user sees it in their terminal, which is the more reliable
+  // signal — additionalContext often gets compacted away).
   const stashRoots = resolveStashRoots()
   const stashDir = stashRoots[0]
   if (!stashDir || !existsSync(stashDir)) {
@@ -889,6 +937,8 @@ function gatherSessionStartWarnings(
         ? `⚠ AKM stash directory \`${stashDir}\` does not exist. Run \`/akm-setup\` to initialize the stash, or set \`AKM_STASH_DIR\` to point at an existing one. AKM curation will be empty until then.`
         : `⚠ No AKM stash directory is configured. Run \`/akm-setup\` to choose one, or set \`AKM_STASH_DIR\`. AKM curation will be empty until then.`,
     )
+    writeStashMissingBanner(stashDir)
+    appendLog(SESSION_LOG, "stash_missing", stashDir ?? "(unconfigured)")
   }
 
   // H2: agent default write was attempted but failed — improve/propose

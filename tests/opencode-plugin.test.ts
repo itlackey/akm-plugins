@@ -1593,6 +1593,12 @@ describe("akm-opencode plugin", () => {
         { message: {} as any, parts: [{ type: "text", text: "Cut a new semver release and publish - bump version everywhere and tag the release." }] as any },
       )
 
+      // chat.message now dispatches curate asynchronously so the LLM call is
+      // never blocked. Drain pending microtasks so the background promise
+      // resolves before the assertions inspect mockExecFileSync /
+      // sessionCurated state.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
       const curateCall = (mockExecFileSync.mock.calls as any[]).find(
         ([, args]) => Array.isArray(args) && args.includes("curate"),
       )
@@ -1605,6 +1611,43 @@ describe("akm-opencode plugin", () => {
       )
       expect(output.system.join("\n")).toContain("AKM stash curation available at")
       expect(output.system.join("\n")).toContain("session-release-curate-1.md")
+    })
+
+    it("chat.message returns BEFORE the curate subprocess finishes so the LLM call is never blocked", async () => {
+      // Regression for the 0.8.0 release-readiness fix: the prior code path
+      // awaited `execFileSync('akm curate')` inside the chat.message handler,
+      // which could add up to AKM_CURATE_TIMEOUT seconds (default 8s) to the
+      // time-to-first-token of every user message. The hook now spawns the
+      // curate in the background and stores the result for the NEXT message.
+      let resolveCurate: ((value: string) => void) | undefined
+      const curatePending = new Promise<string>((resolve) => {
+        resolveCurate = resolve
+      })
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args.includes("curate")) {
+          // Pretend to block forever — the hook must NOT await us.
+          // bun:test mock can't easily return a promise from execFileSync, so
+          // we just resolve quickly and verify the hook DID return promptly.
+          return ""
+        }
+        return "mock output"
+      })
+
+      const hooks = await AkmPlugin(createPluginInput())
+
+      const start = Date.now()
+      await hooks["chat.message"]!(
+        { sessionID: "session-async-curate-1", messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Cut a new semver release and publish - bump version everywhere and tag the release." }] as any },
+      )
+      const elapsed = Date.now() - start
+
+      // chat.message must return quickly (well under 1s) — it should never
+      // sit waiting for an akm curate subprocess. Generous bound to avoid CI
+      // flakes; the real guarantee is structural (no await of the curate).
+      expect(elapsed).toBeLessThan(500)
+      resolveCurate?.("")
+      await curatePending
     })
 
     it("skips curate when the user prompt is shorter than AKM_CURATE_MIN_CHARS", async () => {

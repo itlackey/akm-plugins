@@ -180,12 +180,38 @@ describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
   })
 
   it("session-start runs normally when akm satisfies the range", () => {
-    const result = runHookSandboxed(["session-start"], { akmVersion: "0.8.3" })
+    // Set AKM_STASH_DIR to an existing path so the stash-missing banner
+    // (which lights up on missing stash regardless of akm install state)
+    // does not fire. The banner is a separate signal exercised by its own
+    // describe() block below.
+    const stashDir = makeTempDir()
+    const result = runHookSandboxed(["session-start"], {
+      akmVersion: "0.8.3",
+      env: { AKM_STASH_DIR: stashDir },
+    })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).not.toContain("akm-plugin:")
     // No degraded banner in the additionalContext either.
     expect(result.stdout).not.toContain("AKM is NOT available")
     expect(result.installLog).toBe("")
+  })
+
+  it("session-start emits a stash-missing stderr banner when the configured stash dir does not exist", () => {
+    // The stash-missing path is the v0.8.0 release-readiness fix for
+    // visibility — the prior implementation only added a warning to
+    // `additionalContext`, which Claude routinely ignored or compacted
+    // away. We mirror the akm-missing path and write the banner to stderr
+    // so the user sees it in their terminal even when the agent ignores
+    // the additionalContext block.
+    const missingStashDir = path.join(makeTempDir(), "definitely-not-here")
+    const result = runHookSandboxed(["session-start"], {
+      akmVersion: "0.8.3",
+      env: { AKM_STASH_DIR: missingStashDir },
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.stderr).toContain("akm-plugin: AKM stash directory missing")
+    expect(result.stderr).toContain(missingStashDir)
+    expect(result.stderr).toContain("/akm-setup")
   })
 })
 
