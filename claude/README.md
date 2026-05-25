@@ -77,6 +77,25 @@ The plugin's hooks shell out through a `bun` runtime. **Bun ^1.0 must be on PATH
 
 On session start, the plugin enforces the documented AKM baseline by requiring `akm-cli@^0.8.0`. If `akm` is already on PATH and satisfies that range, the plugin uses it as-is. Otherwise it writes a clear stderr banner pointing at the `/akm-setup` slash command — installation requires **explicit user confirmation** through `/akm-setup`; the plugin does **not** silently `bun install` or `npm install` on your behalf. You can also install ahead of time with any of the methods below.
 
+#### First-session behavior
+
+If `akm` is missing or out of range when Claude Code starts, you will see a banner like this on stderr (visible in your terminal — *not* in the chat panel):
+
+```
+────────────────────────────────────────────────────────────
+akm-plugin: akm CLI not installed or wrong version
+  detected: (not found on PATH)
+  required: ^0.8.0 || ^0.8.0-rc0
+
+Run `/akm-setup` in this Claude Code session to install/upgrade
+with your explicit confirmation, or install manually:
+  bun install -g akm-cli@^0.8.0
+  npm install -g akm-cli@^0.8.0
+────────────────────────────────────────────────────────────
+```
+
+This is your cue to run `/akm-setup` from inside Claude Code — the slash command walks you through the install with explicit confirmation. The session continues without akm-aware features until then; nothing else is broken.
+
 ```sh
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash

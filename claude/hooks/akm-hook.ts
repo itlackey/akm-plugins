@@ -34,9 +34,19 @@ const MODEL_ALIAS_MAP: Record<string, string> = {
   "gpt-5.4": "opus",
 }
 
+// Full Anthropic model IDs (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`,
+// `claude-haiku-4-5-20251001`, `claude-3-5-sonnet-20241022`) are valid model
+// selectors in Claude Code's Agent tool — the four short aliases are NOT the
+// only accepted values. Pass full IDs straight through; only short aliases
+// (`balanced`, `gpt-4o`, etc.) need remapping or the safe-fallback floor.
+// The family token (opus/sonnet/haiku) can appear after an optional
+// version-prefix block such as `3-5-` (claude-3-5-sonnet-20241022).
+const FULL_CLAUDE_MODEL_ID_RE = /^claude-(?:[0-9]+(?:[.-][0-9]+)*-)?(?:opus|sonnet|haiku)\b/i
+
 function resolveModel(raw: string | null | undefined): string | null {
   if (!raw) return null
   if (CC_VALID_MODEL_ALIASES.has(raw)) return raw
+  if (FULL_CLAUDE_MODEL_ID_RE.test(raw)) return raw
   const mapped = MODEL_ALIAS_MAP[raw.toLowerCase()]
   if (mapped) return mapped
   return "sonnet" // unknown alias → safe fallback

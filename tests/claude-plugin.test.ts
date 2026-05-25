@@ -405,6 +405,56 @@ exit 0
     expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skill:release --negative --note stale")
   })
 
+  describe("pre-tool-agent model alias resolution", () => {
+    function runPreToolAgent(model: string | null, options?: { env?: Record<string, string> }) {
+      const payload: Record<string, unknown> = { tool_input: model === null ? {} : { model } }
+      return runHook(["pre-tool-agent"], {
+        input: JSON.stringify(payload),
+        env: {
+          HOME: process.env.HOME ?? "/tmp",
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          ...options?.env,
+        },
+      })
+    }
+
+    it("passes full Claude model IDs through unchanged (no silent downgrade to sonnet)", () => {
+      const fullIds = [
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+        "claude-3-5-sonnet-20241022",
+      ]
+      for (const id of fullIds) {
+        const stdout = runPreToolAgent(id)
+        // Empty stdout means resolveModel returned the input unchanged — no
+        // rewrite was emitted. The Agent tool keeps the full ID intact.
+        expect(stdout.trim()).toBe("")
+      }
+    })
+
+    it("keeps the four short aliases (sonnet/opus/haiku/inherit) as-is", () => {
+      for (const alias of ["sonnet", "opus", "haiku", "inherit"]) {
+        const stdout = runPreToolAgent(alias)
+        expect(stdout.trim()).toBe("")
+      }
+    })
+
+    it("remaps known cross-provider aliases to the configured Claude short alias", () => {
+      const stdout = runPreToolAgent("balanced")
+      const payload = JSON.parse(stdout)
+      expect(payload.hookSpecificOutput.hookEventName).toBe("PreToolUse")
+      expect(payload.hookSpecificOutput.permissionDecision).toBe("allow")
+      expect(payload.hookSpecificOutput.updatedInput.model).toBe("sonnet")
+    })
+
+    it("falls back unknown aliases to sonnet so dispatch is never rejected upstream", () => {
+      const stdout = runPreToolAgent("totally-made-up-alias")
+      const payload = JSON.parse(stdout)
+      expect(payload.hookSpecificOutput.updatedInput.model).toBe("sonnet")
+    })
+  })
+
   it("shell shim notifies the agent and disables Claude hooks when Bun is unavailable", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
