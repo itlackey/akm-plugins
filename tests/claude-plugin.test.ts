@@ -288,7 +288,7 @@ describe("Claude plugin metadata", () => {
     expect(body).toContain("| Shared secret redaction | #64 | Shipped in both plugins |")
     expect(body).toContain("| Structured memory events | #55 | Shipped in both plugins |")
     expect(body).toContain("| Claude PreToolUse safety guard | #56 | Shipped in Claude |")
-    expect(body).toContain("| Checkpoint + candidates | #57 | Shipped in both plugins |")
+    expect(body).toContain("| Checkpoint + candidates | #57 | Candidates shipped in both plugins; session-checkpoint memory writer removed in 0.8.0 from both Claude and OpenCode (replaced by `akm extract --type claude-code` / `akm extract --type opencode`) |")
     expect(body).toContain("| Memory audit and candidate review | #58 | Shipped in both plugins |")
     expect(body).toContain("| Shared recall policy | #59 | Shipped in both plugins |")
     expect(body).toContain("| Confidence-scored auto-feedback | #60 | Shipped in both plugins |")
