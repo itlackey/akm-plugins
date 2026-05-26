@@ -80,12 +80,6 @@ const CURATE_MIN_CHARS = Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16
 const CURATE_TIMEOUT = String(Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8)
 const CONTEXT_BUDGET_CHARS = Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000
 const AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") === "1"
-// SessionEnd `akm index` is opt-OUT (default enabled) because the README
-// parity matrix advertises "Session-end `akm index` Shipped in both plugins";
-// shipping it gated behind an opt-in env var made the claim a lie. Users
-// who want to disable it (e.g. CI runners, low-power dev machines) set
-// AKM_INDEX_ON_SESSION_END=0.
-const INDEX_ON_SESSION_END = (process.env.AKM_INDEX_ON_SESSION_END ?? "1") !== "0"
 const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM stash - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM stash - assets relevant to this session"
@@ -770,9 +764,11 @@ function postCompact(): string {
 // replaced by the new `akm extract --type claude-code --session-id <id>`
 // CLI that reads the native Claude Code session JSONL files directly.
 //
-// We still run `akm index` here so the parity-matrix feature
-// "Session-end `akm index`" (#30) keeps working, gated by
-// `AKM_INDEX_ON_SESSION_END` for low-power dev machines / CI runners.
+// The plugin is intentionally a thin integration layer — indexing is not a
+// plugin responsibility. Session-end indexing belongs in akm-core: users
+// (or cron / the extractor / the improve flow) run `akm index` explicitly
+// when they want a fresh index, so the previous `akm index` invocation and
+// its `AKM_INDEX_ON_SESSION_END` env-var gate have been removed.
 function sessionEnd(): string {
   const rawInput = readStdin()
   const sid = extractSessionId(rawInput)
@@ -782,9 +778,6 @@ function sessionEnd(): string {
     scope: buildScope(sid),
     outcome: { status: "ok" },
   })
-  if (!INDEX_ON_SESSION_END || !akmAvailable()) return ""
-  const result = akmRunChecked(["index"])
-  if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", MODE || "session-end", sid, sanitize(result.stderr))
   return ""
 }
 

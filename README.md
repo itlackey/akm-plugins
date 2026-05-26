@@ -58,7 +58,7 @@ The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.exec
 | Session-start retrieval | #27 | Shipped in both plugins |
 | Auto-attach scope | #28 | Shipped in both plugins |
 | Conversation-derived feedback | #29 | Deferred to 0.9.0 — structured recall/candidate pipeline ships in 0.8.0; per-conversation fine-grained feedback extraction requires conversation transcript access not yet exposed by harnesses |
-| Session-end `akm index` | #30 | Shipped in both plugins |
+| Session-end `akm index` | #30 | Dropped from the Claude plugin in 0.8.0 — indexing is an akm-core responsibility (run `akm index` on demand, via cron, or via the extractor / improve flow). Still shipped in the OpenCode plugin (opt-in via `AKM_INDEX_ON_SESSION_END=1`). |
 | Harness-provided LLM fallback | #31 | Deferred to 0.9.0 — agents currently use their own configured model; harness-level model injection requires SDK support not yet available |
 | Shared secret redaction | #64 | Shipped in both plugins |
 | Structured memory events | #55 | Shipped in both plugins |

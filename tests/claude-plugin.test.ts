@@ -141,8 +141,9 @@ describe("Claude plugin metadata", () => {
 
     // Stop / SubagentStop / PreCompact / SessionEnd all run the lightweight
     // session-end handler. The pre-0.8.0 session-checkpoint memory writer was
-    // removed (replaced by `akm extract --type claude-code`), so these hooks
-    // only run `akm index` and log a structured session_ended event now.
+    // removed (replaced by `akm extract --type claude-code`), and the
+    // session-end `akm index` trigger was also dropped (indexing belongs in
+    // akm-core), so these hooks only emit a structured session_ended event now.
     expect(plugin.hooks.Stop[0].hooks[0].command as string).toContain("session-end stop")
     expect(plugin.hooks.SubagentStop[0].hooks[0].command as string).toContain(
       "session-end subagent-end",
@@ -285,7 +286,7 @@ describe("Claude plugin metadata", () => {
     expect(body).toContain("| Session-start retrieval | #27 | Shipped in both plugins |")
     expect(body).toContain("| Auto-attach scope | #28 | Shipped in both plugins |")
     expect(body).toContain("| Conversation-derived feedback | #29 | Deferred to 0.9.0")
-    expect(body).toContain("| Session-end `akm index` | #30 | Shipped in both plugins |")
+    expect(body).toContain("| Session-end `akm index` | #30 | Dropped from the Claude plugin in 0.8.0")
     expect(body).toContain("| Harness-provided LLM fallback | #31 | Deferred to 0.9.0")
     expect(body).toContain("| Shared secret redaction | #64 | Shipped in both plugins |")
     expect(body).toContain("| Structured memory events | #55 | Shipped in both plugins |")
@@ -1049,11 +1050,14 @@ exit 0
     expect(sessionLog.some((line) => line.includes("runtime_error\tunknown_command\tnot-a-real-command"))).toBe(true)
   })
 
-  it("session-end runs `akm index` after the lifecycle hook (feature #30)", () => {
-    // Pre-0.8.0 this also flushed a session-checkpoint memory; that writer is
-    // gone (replaced by `akm extract --type claude-code`). The lightweight
-    // session-end handler still runs `akm index` so the parity-matrix feature
-    // "Session-end `akm index`" keeps working.
+  it("session-end does NOT invoke `akm index` (indexing belongs in akm-core)", () => {
+    // Pre-0.8.0 this lifecycle hook also flushed a session-checkpoint memory
+    // (writer removed; replaced by `akm extract --type claude-code`) and ran
+    // `akm index` on every session end (gated by AKM_INDEX_ON_SESSION_END).
+    // The index trigger was also dropped — the plugin is intentionally a thin
+    // integration layer and indexing is an akm-core responsibility (run
+    // `akm index` on demand, via cron, or let the extractor / improve flow
+    // refresh it).
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
@@ -1073,69 +1077,6 @@ exit 0
     runHook(["session-end", "stop"], {
       input: JSON.stringify({ session_id: "sess-idx-1" }),
       env: {
-        AKM_INDEX_ON_SESSION_END: "1",
-        HOME: tempDir,
-        PATH: `${binDir}:/usr/bin:/bin`,
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const commands = readFileSync(commandLog, "utf8").trim().split("\n").filter(Boolean)
-    expect(commands).toContain("index")
-  })
-
-  it("session-end logs index failures without aborting cleanup", () => {
-    const tempDir = makeTempDir()
-    const binDir = path.join(tempDir, "bin")
-    const stateDir = path.join(tempDir, "state")
-    mkdirSync(binDir, { recursive: true })
-
-    writeFileSync(
-      path.join(binDir, "akm"),
-      `#!/usr/bin/env sh
-if [ "$1" = "index" ]; then
-  exit 1
-fi
-exit 0
-`,
-    )
-    chmodSync(path.join(binDir, "akm"), 0o755)
-
-    runHook(["session-end", "stop"], {
-      input: JSON.stringify({ session_id: "sess-idx-fail" }),
-      env: {
-        AKM_INDEX_ON_SESSION_END: "1",
-        HOME: tempDir,
-        PATH: `${binDir}:/usr/bin:/bin`,
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("\takm_index_failed\tstop\tsess-idx-fail"))).toBe(true)
-  })
-
-  it("session-end respects AKM_INDEX_ON_SESSION_END=0 (no akm index call)", () => {
-    const tempDir = makeTempDir()
-    const binDir = path.join(tempDir, "bin")
-    const stateDir = path.join(tempDir, "state")
-    const commandLog = path.join(tempDir, "commands.log")
-    mkdirSync(binDir, { recursive: true })
-
-    const quotedLog = shellQuote(commandLog)
-    writeFileSync(
-      path.join(binDir, "akm"),
-      `#!/usr/bin/env sh
-printf '%s\\n' "$*" >> ${quotedLog}
-exit 0
-`,
-    )
-    chmodSync(path.join(binDir, "akm"), 0o755)
-
-    runHook(["session-end", "stop"], {
-      input: JSON.stringify({ session_id: "sess-idx-off" }),
-      env: {
-        AKM_INDEX_ON_SESSION_END: "0",
         HOME: tempDir,
         PATH: `${binDir}:/usr/bin:/bin`,
         XDG_STATE_HOME: stateDir,

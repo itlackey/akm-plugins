@@ -151,11 +151,11 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
 | **PostToolBatch** | Records grouped tool-batch observations as structured events. |
 | **SubagentStart** | Injects concise AKM subagent context, including the detected role, task preview, and any active workflow summary. |
-| **Stop** / **SubagentStop** | Records a structured `session_ended` event and runs `akm index` so upstream inference/graph passes run immediately. Set `AKM_INDEX_ON_SESSION_END=0` to opt out (e.g. low-power dev machines, CI runners). The pre-0.8.0 session-checkpoint memory writer that produced `memory:claude-session-*` / `memory:claude-checkpoint-*` files was removed — use `akm extract --type claude-code --session-id <sid>` to derive proposal candidates directly from the native Claude Code session JSONL files when you want a durable record. |
+| **Stop** / **SubagentStop** | Emits a structured `session_ended` event. The plugin is intentionally a thin integration layer — it no longer runs `akm index` on session end; indexing is an akm-core responsibility (run `akm index` on demand, via cron, or let the extractor / improve flow refresh it). The pre-0.8.0 session-checkpoint memory writer that produced `memory:claude-session-*` / `memory:claude-checkpoint-*` files was also removed — use `akm extract --type claude-code --session-id <sid>` to derive proposal candidates directly from the native Claude Code session JSONL files when you want a durable record. |
 | **TaskCreated** / **TaskCompleted** | Records task lifecycle events as structured memory events. Completed-task summaries also feed the memory-candidate pipeline (`/akm-memory-candidates`). |
-| **PreCompact** | Runs the same lightweight session-end handler (structured event + opt-out `akm index`) before Claude Code compacts the transcript. |
+| **PreCompact** | Runs the same lightweight session-end handler (emits the structured `session_ended` event) before Claude Code compacts the transcript. |
 | **PostCompact** | Records the compacted summary as a structured event. |
-| **SessionEnd** | Same lightweight session-end handler — emits a structured `session_ended` event and runs `akm index` (subject to `AKM_INDEX_ON_SESSION_END`). Use `akm extract --type claude-code` after a session to derive proposal candidates from the session JSONL when desired. |
+| **SessionEnd** | Same lightweight session-end handler — emits a structured `session_ended` event. Use `akm extract --type claude-code` after a session to derive proposal candidates from the session JSONL when desired. |
 
 ### Locking down destructive commands
 
@@ -229,8 +229,6 @@ Notes:
 | --- | --- | --- |
 | `AKM_PACKAGE_REF` | `akm-cli@^0.8.0` | Override the npm/bun package spec displayed in the SessionStart consent banner and used by `/akm-setup` (for example, to pin a compatible AKM build in CI). The plugin never installs this automatically — it is only quoted in the banner. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
-| `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
-| `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the post-session `akm index` run (e.g. low-power dev machines or CI runners). |
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
