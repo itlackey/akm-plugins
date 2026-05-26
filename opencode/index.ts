@@ -488,10 +488,6 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
-function shouldIndexOnSessionEnd(): boolean {
-  return (process.env.AKM_INDEX_ON_SESSION_END ?? "0") === "1"
-}
-
 function buildDateTag(): string {
   return new Date().toISOString().replace(/[-:]/g, "").slice(0, SESSION_DATE_TAG_LENGTH)
 }
@@ -1013,11 +1009,14 @@ function rememberTextAsMemory(name: string, body: string, context?: Record<strin
 // candidate proposals via a bounded LLM call — explicit, on-demand, and not
 // gated on a per-session buffer that the plugin has to manage out-of-band.
 //
-// We still run `akm index` here so the parity-matrix feature
-// "Session-end `akm index`" (#30) keeps working, gated by
-// `AKM_INDEX_ON_SESSION_END` for low-power dev machines / CI runners.
+// The plugin is intentionally a thin integration layer — indexing is not a
+// plugin responsibility. Session-end indexing belongs in akm-core (users,
+// cron, the extractor, or the improve flow run `akm index` explicitly when
+// they want a fresh index), so the previous `akm index` invocation and its
+// `AKM_INDEX_ON_SESSION_END` env-var gate have been removed. This parallels
+// the Claude-side index drop and builds on 66bf7f0 (the prior
+// session-checkpoint writer removal on this branch).
 async function handleSessionEnd(
-  client: LogCapableClient,
   sessionID: string,
   reason: string,
   directory?: string,
@@ -1029,16 +1028,6 @@ async function handleSessionEnd(
     scope: buildEventScope(sessionID, directory),
     memory: { reason },
     outcome: { status: "ok" },
-  })
-  if (!shouldIndexOnSessionEnd()) return
-  const result = runCliSyncRaw(["index"], AKM_CURATE_TIMEOUT_MS)
-  if (result.ok) return
-  await writePluginLog(client, "warn", "AKM session indexing failed", {
-    subsystem: "memory",
-    actor: "system",
-    sessionID,
-    reason,
-    error: result.error,
   })
 }
 
@@ -2267,7 +2256,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
         } else if (type === "session.compacted" || type === "session.idle" || type === "session.deleted") {
           if (!sid) return
-          await handleSessionEnd(logClient, sid, type, directory)
+          await handleSessionEnd(sid, type, directory)
           if (type === "session.compacted") {
             writeStructuredEvent({
               event: "post_compact_summary",
@@ -2296,18 +2285,19 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       }
     },
     // Stop is the closest analogue to Claude's Stop/SubagentStop — the user or
-    // agent halted the active run. Emit a structured session_ended event and
-    // run `akm index` so upstream inference / graph passes get a chance to
-    // pick up new candidates. The pre-0.8.0 session-checkpoint memory writer
-    // that produced `memory:opencode-session-*` / `memory:opencode-checkpoint-*`
-    // files was removed — use `akm extract --type opencode --session-id <sid>`
+    // agent halted the active run. Emit a structured session_ended event so
+    // upstream consumers can react. Indexing is not a plugin responsibility
+    // and belongs in akm-core, so the previous `akm index` invocation has
+    // been dropped. The pre-0.8.0 session-checkpoint memory writer that
+    // produced `memory:opencode-session-*` / `memory:opencode-checkpoint-*`
+    // files was also removed — use `akm extract --type opencode --session-id <sid>`
     // to derive proposal candidates directly from the native OpenCode session
     // JSON when you want a durable record.
     stop: async (input: unknown) => {
       try {
         const sid = extractSessionIdFromEvent(input)
         if (!sid) return
-        await handleSessionEnd(logClient, sid, "stop", directory)
+        await handleSessionEnd(sid, "stop", directory)
       } catch (error: unknown) {
         await logHookFailure(logClient, "stop", error)
       }

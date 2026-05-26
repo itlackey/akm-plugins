@@ -53,7 +53,7 @@ fails silently when a compatible `akm` is not resolvable — the TUI is never af
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage as structured `tool_ref_observed` / `tool_observation` events, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, keeps `retrospectiveState.recentRefs` warm for the chat.message retrospective-positive path, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
 | **`shell.env`** | Exposes `AKM_PROJECT`, `AKM_PLUGIN_VERSION`, and the resolved `AKM_STASH_DIR` to shell tools so raw shell checks and plain `akm` invocations see the same stash path as the plugin. |
-| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Records a structured `session_ended` event (and a `post_compact_summary` event for `session.compacted`) and runs `akm index` so upstream inference/graph passes run immediately. Gated by `AKM_INDEX_ON_SESSION_END` (default off). The pre-0.8.0 session-checkpoint memory writer that produced `memory:opencode-session-*` / `memory:opencode-checkpoint-*` files was removed — use `akm extract --type opencode --session-id <sid>` to derive proposal candidates directly from the native OpenCode session JSON when you want a durable record. |
+| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Records a structured `session_ended` event (and a `post_compact_summary` event for `session.compacted`). The plugin does not trigger `akm index` here — indexing is not a plugin responsibility and belongs in akm-core (users, cron, the extractor, or the improve flow run `akm index` explicitly when they want a fresh index). The pre-0.8.0 session-checkpoint memory writer that produced `memory:opencode-session-*` / `memory:opencode-checkpoint-*` files was also removed — use `akm extract --type opencode --session-id <sid>` to derive proposal candidates directly from the native OpenCode session JSON when you want a durable record. |
 
 ### Locking down destructive commands
 
@@ -111,7 +111,6 @@ etc.) still apply their per-tool `confirm:true` contracts at
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic `akm curate` on user messages. Session start no longer auto-curates. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip injecting `akm hints` at session start. |
-| `AKM_INDEX_ON_SESSION_END` | `0` | Set to `1` to run `akm index` after the session-end structured event is recorded. |
 | `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
 | `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |

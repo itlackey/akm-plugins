@@ -2045,11 +2045,12 @@ describe("akm-opencode plugin", () => {
     // session buffer into `memory:opencode-session-*` / `memory:opencode-
     // checkpoint-*` on Stop / session.idle / session.compacted /
     // session.deleted (and on pre-improve / pre-propose / pre-evolve) was
-    // removed. The Stop handler now only emits a structured `session_ended`
-    // event and runs `akm index` so feature #30 (Session-end `akm index`)
-    // still works. Durable per-session candidates are now derived on-demand
-    // via `akm extract --type opencode --session-id <sid>`.
-    it("emits a structured session_ended event on stop and does NOT call akm remember", async () => {
+    // removed. The follow-up commit then dropped the `akm index` invocation
+    // on session-end too — the plugin is a thin integration layer and
+    // indexing belongs in akm-core. The Stop handler now only emits a
+    // structured `session_ended` event. Durable per-session candidates are
+    // derived on-demand via `akm extract --type opencode --session-id <sid>`.
+    it("emits a structured session_ended event on stop and calls neither akm remember nor akm index", async () => {
       const hooks = await AkmPlugin(createPluginInput())
 
       await hooks["tool.execute.after"]!(
@@ -2064,69 +2065,17 @@ describe("akm-opencode plugin", () => {
       mockExecFileSync.mockClear()
       await hooks.stop!({ sessionID: "session-capture-1" } as any)
 
-      const rememberCall = (mockExecFileSync.mock.calls as any[]).find(
-        ([, args]) => Array.isArray(args) && args.includes("remember"),
-      )
+      const calls = mockExecFileSync.mock.calls as Array<[string, string[]]>
+      const rememberCall = calls.find(([, args]) => Array.isArray(args) && args.includes("remember"))
+      const indexCalls = calls.filter(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")
       expect(rememberCall).toBeUndefined()
+      expect(indexCalls).toHaveLength(0)
     })
 
-    it("runs akm index after session-end when AKM_INDEX_ON_SESSION_END=1", async () => {
-      await withEnvVar("AKM_INDEX_ON_SESSION_END", "1", async () => {
-        const hooks = await AkmPlugin(createPluginInput())
-
-        await hooks["tool.execute.after"]!(
-          { tool: "akm_show", sessionID: "session-index-1", callID: "c1", args: { ref: "skill:alpha" } } as any,
-          { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:alpha" }), metadata: {} } as any,
-        )
-
-        mockExecFileSync.mockClear()
-        await hooks.stop!({ sessionID: "session-index-1" } as any)
-
-        const calls = mockExecFileSync.mock.calls as Array<[string, string[]]>
-        const indexCalls = calls.filter(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")
-        const rememberCalls = calls.filter(([, args]) => Array.isArray(args) && args.includes("remember"))
-
-        expect(indexCalls).toHaveLength(1)
-        expect(rememberCalls).toHaveLength(0)
-      })
-    })
-
-    it("session-end respects AKM_INDEX_ON_SESSION_END=0 (no akm index call)", async () => {
-      await withEnvVar("AKM_INDEX_ON_SESSION_END", "0", async () => {
-        const hooks = await AkmPlugin(createPluginInput())
-
-        mockExecFileSync.mockClear()
-        await hooks.stop!({ sessionID: "session-index-off" } as any)
-
-        const calls = mockExecFileSync.mock.calls as Array<[string, string[]]>
-        const indexCalls = calls.filter(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")
-        expect(indexCalls).toHaveLength(0)
-      })
-    })
-
-    it("logs akm index failures without aborting session cleanup", async () => {
-      await withEnvVar("AKM_INDEX_ON_SESSION_END", "1", async () => {
-        const client = createMockClient()
-        mockExecFileSync.mockImplementation((_, args) => {
-          if (Array.isArray(args) && args.length === 1 && args[0] === "index") {
-            throw new Error("index failed")
-          }
-          return "mock output"
-        })
-
-        const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-
-        await hooks.stop!({ sessionID: "session-index-2" } as any)
-
-        const logCalls = (client.app.log as any).mock.calls as Array<
-          [{ body: { level: string; message: string; extra?: Record<string, unknown> } }]
-        >
-        const failureLog = logCalls.find(([entry]) => entry.body.message === "AKM session indexing failed")
-        expect(failureLog).toBeDefined()
-        expect(failureLog?.[0].body.level).toBe("warn")
-        expect(failureLog?.[0].body.extra?.sessionID).toBe("session-index-2")
-      })
-    })
+    // Session-end `akm index` was dropped in the follow-up to 66bf7f0 — the
+    // plugin is a thin integration layer and indexing belongs in akm-core.
+    // Only the structured `session_ended` event emission remains (covered by
+    // the "emits a structured session_ended event on stop" test above).
 
     it("injects AKM shell environment variables for bash tools", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
