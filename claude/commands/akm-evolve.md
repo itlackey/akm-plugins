@@ -5,7 +5,7 @@ argument-hint: [optional focus area]
 
 Dispatch the `akm-curator` subagent with the following task:
 
-> Review the recent Claude Code session activity (see `~/.local/state/akm-claude/` and the session-summary memories named `memory:claude-session-*`), plus any focus area provided in `"$ARGUMENTS"`. Identify:
+> Review the recent Claude Code session activity (see `~/.local/state/akm-claude/` for the structured event/candidate logs, and run `akm extract --type claude-code --session-id <sid>` on a relevant session if you need a candidate dump from the native Claude Code session JSONL), plus any focus area provided in `"$ARGUMENTS"`. Identify:
 >
 > 1. Assets that repeatedly helped — promote them by adding crisper descriptions or tags.
 > 2. Assets that repeatedly failed — propose edits or deprecations.

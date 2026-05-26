@@ -271,7 +271,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory session-end",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-end stop",
             "timeout": 30
           }
         ]
@@ -282,7 +282,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory subagent-end",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-end subagent-end",
             "timeout": 30
           }
         ]
@@ -326,7 +326,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory pre-compact",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-end pre-compact",
             "timeout": 30
           }
         ]

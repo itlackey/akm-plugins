@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { satisfies, valid } from "./vendor-semver"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
-import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates } from "../shared/memory-candidates"
-import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
+import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from "../shared/memory-candidates"
+import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
-import { extractAkmRefsFromString, extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
+import { extractAkmRefsFromString, extractAllRefs } from "../shared/ref-extraction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
@@ -80,7 +80,6 @@ const CURATE_MIN_CHARS = Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16
 const CURATE_TIMEOUT = String(Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8)
 const CONTEXT_BUDGET_CHARS = Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000
 const AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") === "1"
-const AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") === "1"
 // SessionEnd `akm index` is opt-OUT (default enabled) because the README
 // parity matrix advertises "Session-end `akm index` Shipped in both plugins";
 // shipping it gated behind an opt-in env var made the claim a lie. Users
@@ -108,30 +107,6 @@ const SESSION_START_HEADER = [
 ].join("\n")
 const REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g
 const CURATED_DIR = path.join(STATE_DIR, "curated")
-const PROPOSAL_FLOW_RE = /\/akm-(improve|evolve|propose)\b/
-
-function formatPathBullet(label: string, filePath: string): string {
-  return `- ${label}: ${filePath}`
-}
-
-function countByValue(values: string[]): Array<[string, number]> {
-  const counts = new Map<string, number>()
-  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
-  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-}
-
-function uniqueRecent<T>(values: T[], key: (value: T) => string, limit: number): T[] {
-  const selected: T[] = []
-  const seen = new Set<string>()
-  for (let index = values.length - 1; index >= 0 && selected.length < limit; index -= 1) {
-    const value = values[index]
-    const id = key(value)
-    if (!id || seen.has(id)) continue
-    seen.add(id)
-    selected.push(value)
-  }
-  return selected.reverse()
-}
 
 function gatherCwdContext(): string {
   const parts: string[] = []
@@ -225,79 +200,11 @@ function writeMemoryEvent(event: Omit<import("../shared/memory-events").AkmMemor
   if (!result.ok) appendLog(SESSION_LOG, "event_write_failed", event.event, result.error)
 }
 
-function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
-  if (!sid) return
-  const redacted = redactSecrets(body).text
-  appendFileSync(path.join(SESSIONS_DIR, `${sid}.md`), `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
-}
-
 /**
- * Append ref candidates to a per-session sidecar file. The sidecar is
- * consumed by captureMemory() at session end: the candidates are validated
- * against the live stash and survivors are written to the durable memory's
- * YAML frontmatter as `refs: [...]`. Candidates that never resolve are
- * silently dropped, so heredoc / grep-pattern / JSON-value literals never
- * appear in the durable memory's ref list (and therefore never trigger
- * `missing-ref` lint flags).
- */
-function appendSessionRefCandidates(sid: string, candidates: readonly string[]) {
-  if (!sid || candidates.length === 0) return
-  const sidecar = path.join(SESSIONS_DIR, `${sid}.refs.jsonl`)
-  try {
-    const payload = candidates.map((ref) => JSON.stringify({ ref })).join("\n")
-    appendFileSync(sidecar, `${payload}\n`)
-  } catch {
-    // sidecar failure is non-fatal; refs will simply be absent from frontmatter
-  }
-}
-
-function readSessionRefCandidates(sid: string): string[] {
-  if (!sid) return []
-  const sidecar = path.join(SESSIONS_DIR, `${sid}.refs.jsonl`)
-  if (!existsSync(sidecar)) return []
-  try {
-    const lines = readFileSync(sidecar, "utf8").split("\n").filter(Boolean)
-    const out: string[] = []
-    for (const line of lines) {
-      try {
-        const parsed = JSON.parse(line) as { ref?: unknown }
-        if (typeof parsed.ref === "string" && parsed.ref) out.push(parsed.ref)
-      } catch {
-        // skip malformed lines
-      }
-    }
-    return out
-  } catch {
-    return []
-  }
-}
-
-/**
- * Build a frontmatter fragment containing the validated `refs:` array.
- * Candidates are validated against the local stash; survivors are sorted
- * and deduplicated. When zero candidates survive, returns the empty
- * string so the frontmatter omits the key entirely (matches how the
- * `tags:` / `keywords:` keys are omitted when empty in
- * `src/commands/remember.ts#buildMemoryFrontmatter`).
- *
- * Returned string starts with a newline (no trailing newline) so it can
- * be concatenated directly into a template like
- * `reason: ${reason}${refsBlock}\n---`.
- */
-function buildRefsFrontmatterBlock(candidates: readonly string[]): string {
-  const stashRoots = resolveStashRoots()
-  if (stashRoots.length === 0 || candidates.length === 0) return ""
-  const validated = validateRefCandidates(candidates, stashRoots)
-  if (validated.length === 0) return ""
-  const lines = validated.map((ref) => `  - ${ref}`).join("\n")
-  return `\nrefs:\n${lines}`
-}
-
-/**
- * Resolve the stash root(s) used for ref validation. Prefers explicit
- * environment override (`AKM_STASH_DIR`) so tests / sandboxed harnesses
- * don't have to spawn `akm`. Falls back to `akm config get stashDir`, then
- * to the conventional `$HOME/akm` location.
+ * Resolve the stash root(s) used by the SessionStart "stash missing" warning.
+ * Prefers explicit environment override (`AKM_STASH_DIR`) so tests /
+ * sandboxed harnesses don't have to spawn `akm`. Falls back to
+ * `akm config get stashDir`, then to the conventional `$HOME/akm` location.
  *
  * Returns an array because future work may surface multiple roots; today
  * the array has at most one entry.
@@ -645,14 +552,6 @@ function extractUserText(raw: string): string {
   return ""
 }
 
-function sessionHasPendingCheckpointEvidence(sessionID: string | undefined): boolean {
-  if (!sessionID) return false
-  const bufferPath = path.join(SESSIONS_DIR, `${sessionID}.md`)
-  if (!existsSync(bufferPath)) return false
-  const buffer = readFileSync(bufferPath, "utf8")
-  return (buffer.match(/^## /gm) ?? []).length >= 2
-}
-
 function extractPostToolFields(raw: string, mode: string): { toolName: string; commandText: string; outputText: string; statusText: string; refs: string[]; commandRefs: string[]; outputRefs: string[]; sid: string } {
   const parsed = safeJsonParse<Record<string, unknown>>(raw)
   if (!parsed) return { toolName: "", commandText: sanitize(raw), outputText: "", statusText: mode || "success", refs: [], commandRefs: [], outputRefs: [], sid: "" }
@@ -665,10 +564,9 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
         : ""
   // Capture the *raw* (pre-sanitize) command/output text so we can collect
   // ref candidates from any sub-string position (heredocs, fenced code,
-  // JSON values, prose). Candidates are intentionally permissive — the
-  // validation step in captureMemory() drops anything that doesn't resolve
-  // to a real asset in the local stash, so string-literal false positives
-  // never make it into the durable memory frontmatter.
+  // JSON values, prose). Candidates feed the structured memory-event log
+  // (and feedback/auto-feedback paths) — string-literal false positives are
+  // silently ignored downstream when they do not resolve to a real asset.
   // (sanitize() is still used for log-line readability.)
   const rawCommandText = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || ""
   const rawOutputText = getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || ""
@@ -721,9 +619,6 @@ function posttoolNonBash(): string {
     refs,
     outcome: { status: MODE === "failure" ? "failed" : "ok" },
   })
-  for (const ref of refs) {
-    writeSessionBuffer(sid, `${toolName} ref`, `- ref: ${ref}`)
-  }
   return ""
 }
 
@@ -746,7 +641,6 @@ function userPromptExpansion(): string {
   if (/\/akm-(memory-promote|memory-reject|proposal)\b/.test(expanded) && !/\b(confirm|approved|approval)\b/i.test(expanded)) {
     return emitHookContext("UserPromptExpansion", "AKM note: mutating memory/proposal flows should be explicit. Confirm promotion/rejection or proposal acceptance before changing durable state.")
   }
-  if (PROPOSAL_FLOW_RE.test(expanded)) ensureFreshProposalCheckpoint(rawInput)
   if (/\/akm-/.test(expanded)) {
     return emitHookContext("UserPromptExpansion", "AKM note: slash-command expansion should keep mutating actions explicit and prefer review before durable writes.")
   }
@@ -768,7 +662,6 @@ function postToolBatch(): string {
     refs,
     outcome: { status: "ok" },
   })
-  if (sid && flattened) writeSessionBuffer(sid, "tool batch", `- summary: ${flattened}`)
   return ""
 }
 
@@ -809,7 +702,6 @@ function taskCreated(): string {
     input: { taskId: parsed.task_id ?? parsed.taskId ?? null, title },
     outcome: { status: "ok" },
   })
-  if (sid && title) writeSessionBuffer(sid, "task created", `- title: ${title}`)
   return ""
 }
 
@@ -826,7 +718,10 @@ function taskCompleted(): string {
     outcome: { status: "ok" },
   })
   if (sid && summary) {
-    writeSessionBuffer(sid, "task completed", summary)
+    // Buffer path is preserved as a sourcePath string for candidate
+    // traceability even though the per-session buffer file is no longer
+    // written: the session-checkpoint memory writer that consumed it was
+    // removed (replaced by `akm extract --type claude-code`).
     const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
     const targetRefHints = [...new Set(summary.match(REF_PATTERN) ?? [])]
     const candidates = extractCandidatesFromText({
@@ -863,12 +758,33 @@ function postCompact(): string {
     input: { summary },
     outcome: { status: summary ? "ok" : "skipped" },
   })
-  if (sid && summary) writeSessionBuffer(sid, "post compact", summary)
   return ""
 }
 
+// Session-end / Stop / SubagentStop / PreCompact lifecycle hook.
+//
+// Until 0.8.0-rcN this hook also flushed an in-memory session buffer into a
+// durable `memory:claude-session-*` (the "session-checkpoint memory writer").
+// That writer was removed because it produced low-signal `akm_memory_kind:
+// session_checkpoint` files (often with a stacked-frontmatter bug) and is
+// replaced by the new `akm extract --type claude-code --session-id <id>`
+// CLI that reads the native Claude Code session JSONL files directly.
+//
+// We still run `akm index` here so the parity-matrix feature
+// "Session-end `akm index`" (#30) keeps working, gated by
+// `AKM_INDEX_ON_SESSION_END` for low-power dev machines / CI runners.
 function sessionEnd(): string {
-  captureMemory()
+  const rawInput = readStdin()
+  const sid = extractSessionId(rawInput)
+  writeMemoryEvent({
+    event: "session_ended",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    outcome: { status: "ok" },
+  })
+  if (!INDEX_ON_SESSION_END || !akmAvailable()) return ""
+  const result = akmRunChecked(["index"])
+  if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", MODE || "session-end", sid, sanitize(result.stderr))
   return ""
 }
 
@@ -976,12 +892,6 @@ function detectAgentDefault(): AgentDefaultResult {
   return { value: readConfiguredAgentDefault(), writeAttempted: true, writeOk, initialized: writeOk }
 }
 
-function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
-  if (!INDEX_ON_SESSION_END || !akmAvailable()) return
-  const result = akmRunChecked(["index"])
-  if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
-}
-
 function writeStashMissingBanner(stashDir: string | undefined) {
   // additionalContext alone is often ignored by Claude in long-running
   // sessions, so we mirror the akm-missing path and write a clearly-marked
@@ -1085,7 +995,6 @@ function recordUserFeedback() {
   appendLog(FEEDBACK_LOG, "user", "prompt", text)
   if (/\b(remember|memory|memories)\b/i.test(text)) {
     appendLog(MEMORY_LOG, "user", "intent", text)
-    writeSessionBuffer(sid, "user memory intent", text)
   }
 }
 
@@ -1096,18 +1005,6 @@ function recordPostTool() {
   for (const ref of refs) {
     appendLog(MEMORY_LOG, "system", toolName || "Bash", ref, commandText)
   }
-  // Record one buffer section per post-tool event (command + status) and
-  // accumulate ref candidates in a sidecar file. We deliberately do NOT
-  // inject `- ref: <type>:<slug>` lines into the body — those lines were
-  // the producer-side source of `missing-ref` lint flags whenever a
-  // candidate turned out to be a heredoc/grep literal rather than a real
-  // asset. Candidates are validated against the live stash at capture time
-  // and written to frontmatter (`refs:` array), which is the authoritative
-  // ref list for session-checkpoint memories.
-  if (sid && refs.length > 0) {
-    writeSessionBuffer(sid, `${toolName || "Bash"} ${statusText}`, `- command: ${commandText}`)
-    appendSessionRefCandidates(sid, refs)
-  }
   writeMemoryEvent({
     event: "tool_observation",
     sessionId: sid || undefined,
@@ -1116,14 +1013,6 @@ function recordPostTool() {
     refs,
     outcome: { status: statusText === "failure" ? "failed" : "ok" },
   })
-}
-
-function ensureFreshProposalCheckpoint(rawInput?: string): string | null {
-  if (!AUTO_MEMORY || !akmAvailable()) return null
-  const payload = rawInput ?? readStdin()
-  const sid = extractSessionId(payload)
-  if (!sid || !sessionHasPendingCheckpointEvidence(sid)) return null
-  return captureMemory({ rawInput: payload, reason: "proposal-prep", checkpoint: true })
 }
 
 function autoFeedback() {
@@ -1174,49 +1063,6 @@ function autoFeedback() {
   }
 }
 
-function formatEvidenceSummary(events: AkmMemoryEvent[], candidates: ReturnType<typeof readCandidates>, buffer: string): string[] {
-  const lines: string[] = []
-  const bufferedEntries = (buffer.match(/^## /gm) ?? []).length
-  const allRefs = [...new Set(buffer.match(REF_PATTERN) ?? [])]
-  const eventTypes = countByValue(events.map((event) => event.event))
-  const statuses = countByValue(events.map((event) => event.outcome?.status ?? "unknown"))
-  const candidateTypes = countByValue(candidates.map((candidate) => candidate.type))
-  const targetedCandidates = countByValue(candidates.map((candidate) => candidate.targetRef).filter((value): value is string => !!value))
-
-  lines.push("## Evidence aggregates")
-  lines.push(`- buffered observations: ${bufferedEntries}`)
-  if (allRefs.length > 0) lines.push(`- referenced assets: ${allRefs.slice(0, 6).join(", ")}`)
-  if (eventTypes.length > 0) lines.push(`- event types: ${eventTypes.slice(0, 6).map(([event, count]) => `${event} (${count})`).join(", ")}`)
-  if (statuses.length > 0) lines.push(`- event outcomes: ${statuses.map(([status, count]) => `${status} (${count})`).join(", ")}`)
-  if (candidateTypes.length > 0) lines.push(`- candidate types: ${candidateTypes.map(([type, count]) => `${type} (${count})`).join(", ")}`)
-  if (targetedCandidates.length > 0) lines.push(`- candidate targets: ${targetedCandidates.slice(0, 5).map(([ref, count]) => `${ref} (${count})`).join(", ")}`)
-  lines.push("")
-
-  const notableEvents = uniqueRecent(events, (event) => `${event.timestamp}:${event.event}:${(event.refs ?? []).join(",")}`, 5)
-  if (notableEvents.length > 0) {
-    lines.push("## Notable recent events")
-    for (const event of notableEvents) {
-      const status = event.outcome?.status ?? "unknown"
-      const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` refs=${event.refs.join(", ")}` : ""
-      const warning = event.outcome?.warnings?.[0] ? ` warning=${sanitize(event.outcome.warnings[0]).slice(0, 120)}` : ""
-      lines.push(`- ${event.timestamp} ${event.event} (${status})${refs}${warning}`)
-    }
-    lines.push("")
-  }
-
-  const notableCandidates = uniqueRecent(candidates, (candidate) => candidate.id, 5)
-  if (notableCandidates.length > 0) {
-    lines.push("## Candidate highlights")
-    for (const candidate of notableCandidates) {
-      const target = candidate.targetRef ? ` target=${candidate.targetRef}` : ""
-      lines.push(`- [${candidate.status}] ${candidate.type}/${candidate.scope}${target} :: ${candidate.content.slice(0, 180)}`)
-    }
-    lines.push("")
-  }
-
-  return lines
-}
-
 function curatePrompt(): string {
   const rawInput = readStdin()
   const text = extractUserText(rawInput)
@@ -1225,7 +1071,6 @@ function curatePrompt(): string {
     appendLog(FEEDBACK_LOG, "user", "prompt", text)
     if (/\b(remember|memory|memories)\b/i.test(text)) {
       appendLog(MEMORY_LOG, "user", "intent", text)
-      writeSessionBuffer(sid, "user memory intent", text)
     }
   }
   if (!text) return ""
@@ -1355,139 +1200,6 @@ async function sessionStart(): Promise<string> {
   return emitHookContext("SessionStart", body)
 }
 
-function captureMemory(options?: { rawInput?: string; reason?: string; checkpoint?: boolean }) {
-  const reason = options?.reason ?? MODE ?? "session-end"
-  const isCheckpoint = options?.checkpoint === true
-  if (!AUTO_MEMORY || !akmAvailable()) return null
-  const rawInput = options?.rawInput ?? readStdin()
-  const sid = extractSessionId(rawInput)
-  if (!sid) return null
-  const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
-  const refSidecar = path.join(SESSIONS_DIR, `${sid}.refs.jsonl`)
-  if (!existsSync(bufferPath)) {
-    if (!isCheckpoint) rmSync(refSidecar, { force: true })
-    return null
-  }
-  const buffer = readFileSync(bufferPath, "utf8")
-  const entries = (buffer.match(/^## /gm) ?? []).length
-  if (entries < 2) {
-    if (!isCheckpoint) {
-      rmSync(bufferPath, { force: true })
-      rmSync(refSidecar, { force: true })
-    }
-    return null
-  }
-  const dateTag = isCheckpoint
-    ? timestamp().replace(/[-:TZ.]/g, "").slice(0, 14)
-    : timestamp().slice(0, 10).replace(/-/g, "")
-  const shortSid = sid.slice(0, 8)
-  const name = isCheckpoint
-    ? `claude-checkpoint-${dateTag}-${shortSid}`
-    : `claude-session-${dateTag}-${shortSid}`
-  const relatedEvents = readJsonl<AkmMemoryEvent>(EVENT_LOG)
-    .filter((event) => event.sessionId === sid)
-    .slice(-12)
-  const relatedCandidates = readCandidates(CANDIDATE_LOG)
-    .filter((candidate) => candidate.sessionId === sid)
-    .slice(-8)
-  const targetRefHints = relatedCandidates.flatMap((candidate) => candidate.targetRef ? [candidate.targetRef] : [])
-  const summarySections: string[] = [buffer.trimEnd()]
-  summarySections.push([
-    "## Full-detail evidence files",
-    formatPathBullet("Claude state dir", STATE_DIR),
-    formatPathBullet("Session buffer", bufferPath),
-    formatPathBullet("Structured event log", EVENT_LOG),
-    formatPathBullet("Memory candidate log", CANDIDATE_LOG),
-    formatPathBullet("Session log", SESSION_LOG),
-    formatPathBullet("Feedback log", FEEDBACK_LOG),
-    formatPathBullet("Memory log", MEMORY_LOG),
-    process.env.AKM_EVAL_HARNESS_LOG?.trim() ? formatPathBullet("Harness log", process.env.AKM_EVAL_HARNESS_LOG.trim()) : "",
-  ].filter(Boolean).join("\n"))
-  summarySections.push(formatEvidenceSummary(relatedEvents, relatedCandidates, buffer).join("\n").trimEnd())
-  if (relatedEvents.length > 0) {
-    summarySections.push([
-      "## Plugin event summary",
-      ...relatedEvents.map((event) => {
-        const status = event.outcome?.status ?? "unknown"
-        const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` — refs: ${event.refs.join(", ")}` : ""
-        return `- ${event.timestamp} — ${event.event} (${status})${refs}`
-      }),
-    ].join("\n"))
-  }
-  if (relatedCandidates.length > 0) {
-    summarySections.push([
-      "## Memory candidates observed",
-      ...relatedCandidates.map((candidate) => {
-        const target = candidate.targetRef ? ` target=${candidate.targetRef}` : ""
-        return `- [${candidate.status}] ${candidate.type}/${candidate.scope}${target}: ${candidate.content}`
-      }),
-    ].join("\n"))
-  }
-  // Validate any ref candidates that accumulated during the session: only
-  // candidates that resolve to a real asset in the local stash become
-  // entries in the durable memory's frontmatter `refs:` array. Literal
-  // strings (heredocs, grep patterns, JSON values) silently drop out, so
-  // `akm lint` will not flag them as `missing-ref`. The captured-memory
-  // body still contains the raw command/heredoc text — the lint
-  // carve-out treats the frontmatter `refs:` array as authoritative for
-  // session-checkpoint memories.
-  const refCandidates = readSessionRefCandidates(sid)
-  const refsBlock = buildRefsFrontmatterBlock(refCandidates)
-  const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}${refsBlock}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${summarySections.join("\n\n")}`
-  const redactedBody = redactSecrets(rawBody).text
-  const result = akmRun(["--format", "json", "-q", "remember", "--name", name, "--force", ...buildRunScopeArgs(sid)], redactedBody)
-  if (result.trim()) {
-    appendLog(MEMORY_LOG, "system", "captured", `memory:${name}`, reason)
-    writeMemoryEvent({
-      event: reason === "pre-compact" ? "pre_compact_checkpoint" : "durable_memory_written",
-      sessionId: sid || undefined,
-      scope: buildScope(sid),
-      memory: { ref: `memory:${name}`, reason, kind: "session_checkpoint" },
-      refs: [`memory:${name}`],
-      outcome: { status: "ok" },
-    })
-    const candidates = extractCandidatesFromText({
-      harness: "claude-code",
-      sessionId: sid,
-      text: redactedBody,
-      evidence: [`memory:${name}`, reason, ...targetRefHints],
-      sourcePaths: [bufferPath, EVENT_LOG, CANDIDATE_LOG, SESSION_LOG, FEEDBACK_LOG, MEMORY_LOG].concat(
-        process.env.AKM_EVAL_HARNESS_LOG?.trim() ? [process.env.AKM_EVAL_HARNESS_LOG.trim()] : [],
-      ),
-      targetRefHints,
-    })
-    if (candidates.length > 0) {
-      appendCandidates(CANDIDATE_LOG, candidates)
-      writeMemoryEvent({
-        event: "candidate_extracted",
-        sessionId: sid || undefined,
-        scope: buildScope(sid),
-        memory: { sourceRef: `memory:${name}`, count: candidates.length },
-        refs: [`memory:${name}`],
-        outcome: { status: "ok" },
-      })
-    }
-    runIndexOnSessionEnd(reason, sid, `memory:${name}`)
-    // Auto-signal so improve picks up this session memory on the next run.
-    // Without a positive feedback event the signal gate would exclude it (minRetrievalCount=1).
-    akmRun(["--format", "json", "-q", "feedback", `memory:${name}`, "--positive", "--note", "session checkpoint: auto-signal for improve eligibility"])
-  } else {
-    appendLog(MEMORY_LOG, "system", "capture_failed", `memory:${name}`, reason, "empty stdout from akm remember")
-    writeMemoryEvent({
-      event: reason === "pre-compact" ? "pre_compact_checkpoint" : "session_ended",
-      sessionId: sid || undefined,
-      scope: buildScope(sid),
-      memory: { ref: `memory:${name}`, reason, kind: "session_checkpoint" },
-      outcome: { status: "failed", error: "empty stdout from akm remember" },
-    })
-  }
-  if (!isCheckpoint) {
-    rmSync(bufferPath, { force: true })
-    rmSync(refSidecar, { force: true })
-  }
-  return `memory:${name}`
-}
-
 function preToolAgent(): string {
   const rawInput = readStdin()
   let payload: Record<string, unknown>
@@ -1583,9 +1295,6 @@ async function main(): Promise<string> {
       return ""
     case "auto-feedback":
       autoFeedback()
-      return ""
-    case "capture-memory":
-      captureMemory({ checkpoint: MODE === "proposal-prep" })
       return ""
     default:
       appendLog(SESSION_LOG, "runtime_error", "unknown_command", COMMAND)
