@@ -8,8 +8,8 @@
     {
       "name": "akm",
       "source": "./claude",
-      "description": "Search, show, curate, and manage akm stash assets — skills, commands, agents, knowledge, memories, scripts, workflows, vaults, and wikis — from local directories and registries via the akm CLI.",
-      "version": "0.8.0-rc.8"
+      "description": "Search, show, curate, and manage akm stash assets — skills, commands, agents, knowledge, memories, lessons, scripts, workflows, vaults, wikis, and the v0.8.0 proposal queue — from local directories and registries via the akm CLI.",
+      "version": "0.8.0"
     }
   ]
 }

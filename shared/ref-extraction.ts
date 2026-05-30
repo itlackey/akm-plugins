@@ -77,6 +77,32 @@ export function extractAllRefs(text: string): string[] {
   return [...new Set(text.match(REF_PATTERN) ?? [])];
 }
 
+// Tokenized whitespace-split fallback used by callers that need a strict
+// "this token, in isolation, is a ref" answer (e.g. PreToolUse non-Bash
+// observation, which inspects a single tool input field rather than a
+// transcript-style body). Kept for backward compatibility with existing
+// callers in `claude/hooks/akm-hook.ts` and the opencode plugin.
+const AKM_REF_STRICT =
+  /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/;
+const EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"]);
+
+function normalizeToken(token: string): string {
+  let start = 0;
+  let end = token.length;
+  while (start < end && EDGE_PUNCTUATION.has(token[start] ?? "")) start += 1;
+  while (end > start && EDGE_PUNCTUATION.has(token[end - 1] ?? "")) end -= 1;
+  return token.slice(start, end);
+}
+
+export function extractAkmRefsFromString(text: string): string[] {
+  const refs = new Set<string>();
+  for (const token of text.split(/\s+/)) {
+    const normalized = normalizeToken(token);
+    if (normalized && AKM_REF_STRICT.test(normalized)) refs.add(normalized);
+  }
+  return [...refs];
+}
+
 /**
  * Map ref type → relative path within a stash root.
  * Returns `null` for types that cannot be resolved by direct path

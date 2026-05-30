@@ -1,15 +1,15 @@
 ---
 name: akm
-description: Search, show, dispatch agents, execute commands, run workflows, manage wikis and vaults, route the proposal queue, distill lessons, and curate stash assets via the akm CLI. Use when the user wants to find or use tools, skills, commands, agents, knowledge, lessons, wikis, vaults, or workflows.
+description: Search, show, dispatch agents, execute commands, run workflows, manage wikis and vaults, route the proposal queue, improve assets, and curate stash assets via the akm CLI. Use when the user wants to find or use tools, skills, commands, agents, knowledge, lessons, wikis, vaults, or workflows.
 ---
 
 # AKM Stash
 
-You have access to the `akm` CLI (AKM, v0.7.0+) to manage extension assets from a stash directory.
+You have access to the `akm` CLI (AKM, v0.8.0+) to manage extension assets from a stash directory.
 
 ## Tool surface vs. CLI
 
-The Claude AKM plugin exposes **18 first-class slash commands** for the high-value verbs:
+The Claude AKM plugin exposes **21 first-class slash commands** for the high-value verbs:
 
 - `/akm-search` — search the stash or registry
 - `/akm-show` — fetch the full payload for a ref
@@ -22,17 +22,20 @@ The Claude AKM plugin exposes **18 first-class slash commands** for the high-val
 - `/akm-wiki` — wiki create/register/list/show/pages/search/stash/lint/ingest/remove
 - `/akm-workflow` — start/next/complete/status/list/create/resume/template
 - `/akm-vault` — vault `list` / `show` (key names) / `load` (shell-eval snippet)
-- `/akm-proposal` — operate the v0.7.0 proposal queue (list/show/diff/accept/reject)
+- `/akm-proposal` — operate the v0.8.0 proposal queue (list/show/diff/accept/reject)
 - `/akm-review-proposals` — list and diff every pending proposal in one pass
-- `/akm-reflect` — generate a reflection proposal via the configured agent CLI
+- `/akm-improve` — generate improvement proposals for the stash, a type, or a specific ref
 - `/akm-propose` — generate a new-asset proposal via the configured agent CLI
-- `/akm-distill` — distill a ref into a `lesson` proposal (gated by `llm.features.feedback_distillation`)
 - `/akm-setup` — tell the user to run the interactive `akm setup` wizard manually; agents should not invoke it directly
+- `/akm-memory-audit` — inspect recent AKM memory recall, writes, refs, and safety blocks for this Claude session
+- `/akm-memory-candidates` — review AKM memory candidates captured from Claude checkpoints and hooks
+- `/akm-memory-promote <candidate-id>` — promote a pending AKM memory candidate through the appropriate AKM path
+- `/akm-memory-reject <candidate-id>` — reject a pending AKM memory candidate and record why
 - `/akm-help` — discover the right raw `akm` invocation for the long tail
 
 For every other verb — `add` (install kits / register sources), `save`, `import`, `clone`,
 `update`, `remove` (uninstall a source), `list` (configured sources), `registry search`,
-`index` (reindex), `config`, `upgrade`, ad-hoc `run`, `agent` (raw agent-CLI shell-out),
+`index` (reindex), `config`, `upgrade`, `tasks`, ad-hoc `run`, `agent` (raw agent-CLI shell-out),
 vault writes (`set` / `unset`), and any flag not exposed by the slash commands above —
 **call `/akm-help` first** to discover the right `akm` CLI form, then run it via Bash.
 
@@ -44,8 +47,13 @@ This table is the curated long-tail reference, embedded verbatim from
 
 | Task | Command | Notes | Keywords |
 | --- | --- | --- | --- |
-| Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]` | Confirm with the user before passing `--trust` or registering a website crawler. | add, install, register, kit, source, github, npm |
-| Commit (and optionally push) pending stash changes | `akm save [<source-name>] [-m <msg>] [--push]` | Add `--push` only when the stash is writable; review the diff first. | save, commit, push, publish, git |
+| Review pending proposals and decide whether to accept, reject, or revise them | `akm proposals --status pending --format json` | Inspect individual entries with `akm show proposal <id>` and `akm diff <id>` (positional id; no `proposal` middle word in 0.8.0). Accept/reject requires explicit user approval. | proposal, review proposals, pending proposals, accept proposal, reject proposal |
+| Improve existing assets or distill repeated evidence into proposals | `akm improve [<type>|<ref>] [--task "..."]` | `improve` replaces the old reflect/distill flow in v0.8.0. Proposed assets are not curated until accepted. | improve, lesson, reflect, distill, drift, failure |
+| Manage scheduled task assets via the OS scheduler | `akm tasks <add|list|show|remove|enable|disable|run|history|sync|doctor> ...` | Tasks are first-class in v0.8.0 but remain a long-tail CLI surface in this plugin. | tasks, scheduled task, cron, launchd, schtasks |
+| Create a proposed asset for a coverage gap | `akm propose <type> <name> --task "..."` | Drafts a `quality:"proposed"` asset that lands in the proposal queue — never directly curated. | propose, coverage gap, proposed asset |
+| Search including proposed-quality assets | `akm search <query> --include-proposed` | Default search hides drafts; this flag merges them into hits. Do not treat proposed assets as curated until accepted. | include-proposed, proposed quality, lesson |
+| Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--provider <p>] [--max-pages N] [--max-depth N] [--allow-insecure]` | Confirm with the user before registering a website crawler or passing `--allow-insecure`. | add, install, register, kit, source, github, npm |
+| Commit (and optionally push) pending stash changes | `akm save [<source-name>] [-m <msg>]` | For writable git-backed sources, save commits and pushes; review the diff first. | save, commit, push, publish, git |
 | Import a file (or stdin) into the stash as a typed asset | `akm import <path|-> [--name <name>] [--force]` | Use `-` and pipe content via stdin to import a string. | import, ingest, upload, stdin |
 | Clone an asset from any source for editing | `akm clone <ref> [--name <new>] [--dest <dir>] [--force]` | Type subdirectory is appended automatically; ref may include origin (e.g. `npm:@scope/pkg//script:foo`). | clone, copy, fork, edit |
 | Update a managed source (or all of them) | `akm update [<package_ref>|--all] [--force]` |  | update, upgrade kit, refresh, pull |
@@ -73,12 +81,12 @@ The stash directory contains:
 - **agents/** — markdown agent definition files
 - **knowledge/** — markdown knowledge files
 - **memories/** — markdown memory files recorded with `akm remember`
-- **lessons/** — markdown lesson files (`lesson:<name>`) with required `description` and `when_to_use` frontmatter; normally produced by `akm distill <ref>` as a proposed-quality proposal and promoted via `akm proposal accept`
+- **lessons/** — markdown lesson files (`lesson:<name>`) with required `description` and `when_to_use` frontmatter; normally produced through `akm improve <ref>` as a proposed-quality proposal and promoted via `akm accept`
 - **scripts/** — executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
 - **workflows/** — multi-step procedures (`workflow:<name>`) driven by `akm workflow`
 - **vaults/** — `.env` files (`vault:<name>`) whose values are managed by `akm vault` and **never** surface in JSON, logs, or search indexes
 - **wikis/** — per-wiki directories (`<stashDir>/wikis/<name>/`) containing `schema.md`, `index.md`, `log.md`, `raw/`, and agent-authored pages referenced as `wiki:<name>/<page>`
-- **.akm/proposals/** — v0.7.0 proposal queue (one directory per proposal). Drafts here never leak into search or commits; promote them with `akm proposal accept <id>`.
+- **.akm/proposals/** — v0.8.0 proposal queue (one directory per proposal). Drafts here never leak into search or commits; promote them with `akm accept <id>`.
 
 ### Multi-source resolution
 
@@ -102,7 +110,7 @@ Refs use the format `[origin//]type:name`. The known types are `skill`, `command
 `SearchHit.quality` is an open string set with three well-known values:
 - `"curated"` — accepted into the stash; included in default search.
 - `"generated"` — auto-generated but accepted; included in default search.
-- `"proposed"` — drafts in the proposal queue; **excluded from default search** and only surface via `akm search ... --include-proposed` or `akm proposal *`.
+- `"proposed"` — drafts in the proposal queue; **excluded from default search** and only surface via `akm search ... --include-proposed` or the proposal-review commands.
 
 Unknown quality values parse-warn-include (they remain searchable). Treat `proposed` assets as candidates only — never feed them through `akm feedback` until they are promoted via `/akm-proposal accept`. The plugin's auto-feedback hook automatically skips proposed-quality refs.
 
@@ -123,7 +131,7 @@ Use `--full` to force a full reindex instead of incremental. Run this after addi
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki|any] [--limit N] [--source stash|local|registry|both] [--include-proposed]
+akm search [query] [--type skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki|any] [--limit N] [--source stash|local|registry|both|<name>] [--include-proposed]
 ```
 
 Square brackets denote optional arguments; pipe-separated values denote allowed choices for a single flag.
@@ -131,8 +139,9 @@ Square brackets denote optional arguments; pipe-separated values denote allowed 
 The response includes `hits` (ranked results), plus diagnostic fields: `timing` (totalMs, rankMs, embedMs), `warnings` (string array of non-fatal issues), and `tip` (contextual usage hint).
 
 - Local and installed stash hits include `ref`, which you pass to `akm show`. Hits also include optional `quality?` (`curated` / `generated` / `proposed` / unknown) and `warnings?` (string array of non-fatal issues).
-- Registry hits live under a separate `registryHits` key and include `id`, `installRef`, `action` (contains install guidance). The legacy `curated` boolean is removed in v0.7.0; use the per-asset `quality` field instead.
+- Registry hits live under a separate `registryHits` key and include `id`, `installRef`, `action` (contains install guidance).
 - Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once. Note: `local` remains a backward-compatible alias for `stash`.
+- 0.8.0: `--source <name>` scopes the search to a single named source (e.g. `--source itlackey/akm-stash`) — useful when narrowing down to one configured kit.
 - `--include-proposed` merges `quality:"proposed"` rows into `hits`; without it, drafts in the proposal queue are hidden from default search.
 
 ### Show an asset
@@ -207,7 +216,7 @@ When the user wants to browse community kits:
 
 1. Initialize: `akm init` (creates stash dirs, installs ripgrep)
 2. Build the index: `akm index`
-3. Curate assets for your task (primary): `akm curate "<task including project name>"` — LLM-reranked with relevance scores
+3. Curate assets for your task (primary): `akm curate "<task>"` — LLM-reranked with relevance scores. v0.8.0 automatically boosts assets matching the current project (cwd-anchored), so an explicit project name in the query is no longer required for ranking, though concrete task descriptions still help the reranker.
 4. Inspect a result: `akm show <ref>`
 5. Search for a known ref (fallback): `akm search "<known name>"` — only when you know something exists and need its exact ref
 6. Search the registry when needed: `akm search "deploy" --source registry`
@@ -239,21 +248,20 @@ Auto-feedback (recorded by the plugin hooks on Bash tool success/failure) skips
 direct `akm feedback`. Override an automatic signal by running `akm feedback`
 explicitly.
 
-## Proposal queue (v0.7.0)
+## Proposal queue (v0.8.0)
 
-All proposal-producing commands (`akm reflect`, `akm propose`, `akm distill`,
-plus any plugin-emitted proposals) write through one durable queue at
+All proposal-producing commands (`akm improve`, `akm propose`, plus any plugin-emitted proposals) write through one durable queue at
 `<stashRoot>/.akm/proposals/`. Drafts there never leak into search or commits;
 acceptance runs full validation before routing through the same single write
 path used by `akm remember` and `akm import`.
 
 ```bash
-akm proposal list                       # all pending drafts
-akm proposal list --status pending --format json
-akm proposal show <id>                  # render the draft
-akm proposal diff <id>                  # diff vs. the live ref
-akm proposal accept <id>                # validate, then promote
-akm proposal reject <id> --reason "…"   # archive with reason
+akm proposals                           # all pending drafts
+akm proposals --status pending --format json
+akm show proposal <id>                  # render the draft
+akm diff <id>                            # diff vs. the live ref (id = UUID / prefix / asset ref)
+akm accept <id>                         # validate, then promote
+akm reject <id> --reason "…"            # archive with reason
 ```
 
 Use the slash commands rather than the raw CLI:
@@ -269,7 +277,7 @@ commonly `curated` after acceptance). To search drafts directly, run
 
 ## Lessons
 
-`lesson` is a first-class v0.7.0 asset type stored under `<stashDir>/lessons/<name>.md`.
+`lesson` is a first-class asset type stored under `<stashDir>/lessons/<name>.md`.
 Frontmatter is required:
 
 ```markdown
@@ -281,47 +289,40 @@ when_to_use: When this insight applies (problem context, signals, etc.).
 Body in markdown.
 ```
 
-The canonical creation path is **`/akm-distill <ref>`** — run it on a memory,
-knowledge doc, or session summary that contains repeated evidence. `distill`
-emits a `lesson` proposal at `quality:"proposed"` which the user then reviews
+The canonical improvement path is **`/akm-improve <ref>`** — run it on a memory,
+knowledge doc, or session summary that contains repeated evidence. `improve`
+can emit lesson-oriented proposals at `quality:"proposed"`, which the user then reviews
 via `/akm-proposal accept`. Direct authoring via `akm import` and `akm
 remember`-style flows is also supported.
 
-Distill is gated behind `llm.features.feedback_distillation` (default `false`).
-If the gate is off, `/akm-distill` falls back gracefully — confirm with the
-user before flipping the gate via `akm config set llm.features.feedback_distillation true`.
+## Improve / Propose
 
-## Reflect / Propose
-
-`/akm-reflect` and `/akm-propose` shell out to the configured agent CLI
-(`agent.default`, typically configured by the user via `akm setup`) and write **only** to the proposal
+`/akm-improve` and `/akm-propose` shell out to the configured agent CLI
+(`defaults.agent` + `profiles.agent.<name>`, typically configured by the user via `akm setup`; the legacy `agent.default` shape is auto-migrated on load) and write **only** to the proposal
 queue — they never mutate live stash content. Use them when:
 
-- An asset misbehaved and you want a corrective draft → `/akm-reflect <ref> [--task "..."]`.
+- An asset misbehaved and you want a corrective draft or lesson proposal → `/akm-improve <ref> [--task "..."]`.
 - A coverage gap appeared in the conversation and you want a new draft asset → `/akm-propose <type> <name> --task "..."`.
 
-If `agent.default` is unset, the plugin should initialize it to the current platform when possible. If further interactive configuration is still needed, ask the user to run `akm setup` manually. Agents should not invoke the interactive setup flow themselves.
+If `defaults.agent` is unset, the plugin should initialize it to the current platform when possible (writing the canonical `defaults.agent` + `profiles.agent.<name>` shape). If further interactive configuration is still needed, ask the user to run `akm setup` manually. Agents should not invoke the interactive setup flow themselves.
 
 ## In-tree LLM gates
 
-Every bounded in-tree LLM call site is gated behind exactly one feature flag
-in `llm.features.*`. All defaults are `false`. The seven keys:
+0.8.0 removed the flat `llm.features.*` namespace. Bounded in-tree LLM call
+sites are gated in two new locations:
 
-| Key | Use site |
-| --- | --- |
-| `curate_rerank` | LLM rerank in `akm curate` |
-| `tag_dedup` | LLM tag dedup during indexer enrichment |
-| `memory_consolidation` | `akm remember --enrich` consolidation |
-| `feedback_distillation` | `akm distill <ref>` |
-| `embedding_fallback_score` | scorer fallback when embeddings unavailable |
-| `memory_inference` | indexer split of pending memories into atomic facts |
-| `graph_extraction` | indexer entity/relation extraction → `graph.json` |
+- **Non-improve gates** live under `index.metadataEnhance.*`,
+  `index.stalenessDetection.*`, and `search.curateRerank.*` in
+  `~/.config/akm/config.json`. These control indexer enrichment and the
+  `akm curate` reranker.
+- **Improve-bound gates** live under
+  `profiles.improve.<name>.processes.{reflect,distill,consolidate,...}` —
+  each process has its own enabled/mode/profile/timeoutMs/allowedTypes
+  knobs that the `akm improve` runner consults.
 
-Every gated call site uses `tryLlmFeature(...)` from akm core: when the gate
-is `false`, the function never runs; when it throws or times out (30 s
-default), the caller's fallback runs and a `warnings` entry is emitted. Don't
-flip these flags without the user's explicit consent — they cost LLM tokens
-and may emit network traffic.
+Refer to the canonical configuration reference in akm-core for the full
+shape. Don't flip these without the user's explicit consent — they cost
+LLM tokens and may emit network traffic.
 
 ## Compound engineering loop
 
@@ -332,17 +333,17 @@ intent-bearing parts.
 
 | Phase | Automatic (hooks) | Your responsibility |
 | --- | --- | --- |
-| Session start | `akm` installed/refreshed; `agent.default` initialized to the current platform when missing; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. If further interactive configuration is still needed, ask the user to run `akm setup` manually. |
+| Session start | `akm` installed/refreshed; `defaults.agent` (+ a matching `profiles.agent.<name>` entry) initialized to the current platform when missing — the legacy `agent.default` slot is auto-migrated on load; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. If further interactive configuration is still needed, ask the user to run `akm setup` manually. |
 | Each user prompt | `akm curate "<prompt>"` runs and its top matches are injected into context as `additionalContext`. | Prefer the curated assets over writing new code; fetch full payloads with `akm show <ref>` before using. |
 | Each Bash tool call | Asset refs in the command/output are logged. Auto-feedback skips `memory:*` / `vault:*` / `lesson:*` / `quality:"proposed"` refs and records positive/negative feedback for everything else on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
-| Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings — distill the session memory into a `lesson` via `/akm-distill memory:<name>`, review the resulting proposal, and accept it via `/akm-proposal accept <id>`. |
+| Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings — improve the session memory into a proposal via `/akm-improve memory:<name>`, review the resulting proposal, and accept it via `/akm-proposal accept <id>`. |
 
 When you discover a pattern worth keeping, **write it back to the stash**
 rather than only answering the user. Options:
 
 - `/akm-remember` (or `akm remember --name <slug>`) — short markdown note (reads stdin).
-- `/akm-distill <ref>` — distill repeated evidence into a `lesson` proposal; review and accept via `/akm-proposal accept`.
-- `/akm-reflect <ref>` / `/akm-propose <type> <name> --task "..."` — generate a corrective or new-asset proposal via the configured agent CLI. Both write only to the proposal queue.
+- `/akm-improve [<type>|<ref>] [--task "..."]` — generate corrective or lesson-oriented proposals via the configured agent CLI. It writes only to the proposal queue.
+- `/akm-propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI. It writes only to the proposal queue.
 - `akm import <file>` — promote a drafted file into the knowledge index. Run `/akm-help`
   topic="import" if you need a refresher on the flag surface.
 - `akm clone <ref>` + edit — fork an existing asset, then rewrite with your
@@ -357,18 +358,18 @@ Wikis are first-class knowledge bases under `<stashDir>/wikis/<name>/`. Each wik
 
 ```bash
 akm wiki create <name>                                # scaffold a new wiki
-akm wiki register <name> <ref> [--writable] [--trust] [--max-pages N] [--max-depth N]
+akm wiki register <name> <ref> [--writable] [--max-pages N] [--max-depth N]
 akm wiki list                                         # summaries with counts + last-modified
 akm wiki show <name>                                  # path, description, last 3 log entries
 akm wiki pages <name>                                 # author-written pages only (excludes schema/index/log/raw)
 akm wiki search <name> <query> [--limit N]            # scoped wiki search
 akm wiki stash <name> <source> [--as <slug>]          # copy a file/stdin into wikis/<name>/raw/
 akm wiki lint <name>                                  # orphan/xref/description/uncited-raw/stale-index checks
-akm wiki ingest <name>                                # print the ingest workflow for the agent to drive
+akm wiki ingest <name> [--profile <p>] [--model <m>] [--timeout-ms <ms>]  # dispatch an agent inline (uses defaults.agent unless --profile is set)
 akm wiki remove <name> --force [--with-sources]       # preserves raw/ by default
 ```
 
-`register` accepts directory paths, git URLs (`github:owner/repo`, `git+https://…`), and website roots (`https://…`). `--writable` marks a git-backed source as push-writable for `akm save`. `--trust` bypasses the install-audit block for this one registration.
+`register` accepts directory paths, git URLs (`github:owner/repo`, `git+https://…`), and website roots (`https://…`). `--writable` marks a git-backed source as push-writable for `akm save`.
 
 Page frontmatter fields: `description`, `pageKind`, `xrefs: wiki:<name>/<page>[]` (bidirectional — lint enforces), `sources: raw/<slug>[]`. `wikiRole` is reserved for `index`/`raw`.
 
@@ -382,7 +383,7 @@ Vaults are `.env`-style key/value stores under `<stashDir>/vaults/<name>.env`, r
 akm vault create <name>                               # scaffold vaults/<name>.env (mode 0600)
 akm vault list [<ref>]                                # list vaults, or list keys + comments of one vault
 akm vault show <ref>                                  # key names + comments only (no values)
-akm vault set <ref> <key> [value] [--comment "..."]   # key may also be KEY=VALUE
+akm vault set <ref> <key> --from-env <VAR> [--comment "..."]  # value read from env var; stdin form: printf '%s' "$SECRET" | akm vault set <ref> <key>  (the positional VALUE and KEY=VALUE forms were removed in 0.8.0)
 akm vault unset <ref> <key>
 akm vault load <ref>                                  # emits shell text: use with eval "$(akm vault load vault:<n>)"
 ```
@@ -418,11 +419,11 @@ To promote a drafted markdown file as a first-class asset, run `/akm-help` topic
 and then `akm import …` via Bash.
 
 Other long-tail verbs covered the same way: `akm help migrate <version>` (release notes),
-`akm enable <skills.sh|context-hub>` and `akm disable …` (toggle optional components).
+`akm enable skills.sh` / `akm disable skills.sh` (toggle the skills.sh registry provider).
 
 ## Dispatching Stash Agents
 
-You can dynamically spawn a stash agent to work on a task. The agent's prompt, tool constraints, and model preferences are defined in its markdown file and loaded at runtime.
+You can dispatch a stash agent as a dedicated Claude Code CLI session. The agent's prompt, tool constraints, and model preferences are defined in its markdown file and translated into Claude CLI flags at dispatch time.
 
 ### Agent payload shape
 
@@ -460,25 +461,23 @@ When the user asks you to dispatch, run, or use a stash agent:
    ```
    Parse the JSON. Verify `type` is `"agent"` and `prompt` is non-empty. If validation fails, inform the user.
 
-3. **Compose the subagent prompt.** Build a prompt that embeds the stash agent's persona and the user's task:
+3. **Compose the Claude CLI invocation.** Build a one-shot CLI call that embeds the stash agent's persona and the user's task:
 
-   ```
-   <agent-persona>
-   {value of the "prompt" field from akm show}
-   </agent-persona>
-
-   <tool-constraints>
-   {render toolPolicy as natural language, e.g.:
-    - "You may read files but must NOT edit files or run shell commands."
-    - If toolPolicy is absent, omit this section.}
-   </tool-constraints>
-
-   Task: {the user's task description}
+   ```bash
+   claude -p \
+     --agents '{"stash-agent":{"description":"{description}","prompt":"{prompt}"}}' \
+     --agent stash-agent \
+     --model {modelHint-or-default} \
+     --allowed-tools {tool-list} \
+     --permission-mode bypassPermissions \
+     --no-session-persistence \
+     --output-format json \
+     --system-prompt '{task/context}'
    ```
 
-4. **Spawn the subagent** using the Agent tool with `subagent_type: "general-purpose"` and the composed prompt.
+4. **Run the CLI through Bash** so this becomes a real Claude Code session with the requested agent, model, and tool constraints.
 
-5. **Report results** to the user. If `modelHint` was present, note that Claude Code does not support per-subagent model selection so it was not enforced.
+5. **Report results** to the user. If `modelHint` is absent or invalid, omit `--model` and fall back to the session default.
 
 ### Example
 

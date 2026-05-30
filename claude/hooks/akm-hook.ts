@@ -1,19 +1,25 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
+import { satisfies, valid } from "./vendor-semver"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
-import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from "../shared/memory-candidates"
-import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
+import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates } from "../shared/memory-candidates"
+import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactObject, redactSecrets } from "../shared/redaction"
-import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
+import { extractAkmRefsFromString, extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
 
 // ── Agent model alias resolution ─────────────────────────────────────────────
+// The only valid Claude Code subagent model identifiers are the four Anthropic
+// aliases below. Everything else (cross-provider aliases like `balanced`,
+// `gpt-4o`, or full-ID prefixes like `anthropic/...` and `lab/...`) gets
+// remapped via MODEL_ALIAS_MAP or falls back to `sonnet` so the Agent tool
+// dispatch is never rejected upstream.
 const CC_VALID_MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "inherit"])
 const MODEL_ALIAS_MAP: Record<string, string> = {
   balanced: "sonnet",
@@ -28,15 +34,39 @@ const MODEL_ALIAS_MAP: Record<string, string> = {
   "gpt-5.4": "opus",
 }
 
+// Full Anthropic model IDs (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`,
+// `claude-haiku-4-5-20251001`, `claude-3-5-sonnet-20241022`) are valid model
+// selectors in Claude Code's Agent tool — the four short aliases are NOT the
+// only accepted values. Pass full IDs straight through; only short aliases
+// (`balanced`, `gpt-4o`, etc.) need remapping or the safe-fallback floor.
+// The family token (opus/sonnet/haiku) can appear after an optional
+// version-prefix block such as `3-5-` (claude-3-5-sonnet-20241022).
+const FULL_CLAUDE_MODEL_ID_RE = /^claude-(?:[0-9]+(?:[.-][0-9]+)*-)?(?:opus|sonnet|haiku)\b/i
+
 function resolveModel(raw: string | null | undefined): string | null {
   if (!raw) return null
   if (CC_VALID_MODEL_ALIASES.has(raw)) return raw
+  if (FULL_CLAUDE_MODEL_ID_RE.test(raw)) return raw
   const mapped = MODEL_ALIAS_MAP[raw.toLowerCase()]
   if (mapped) return mapped
   return "sonnet" // unknown alias → safe fallback
 }
-
-const PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@latest"
+// Two separate constants for two separate concerns:
+//   AKM_REQUIRED_RANGE — used with semver.satisfies() to validate the
+//     installed version. The disjunction is fine here because semver-node
+//     parses `^0.8.0-rc0 || ^0.8.0` as a real range.
+//   AKM_PACKAGE_REF    — used as the install ref. Bun/npm install spec does
+//     NOT parse `akm-cli@^0.8.0-rc0 || ^0.8.0` as a disjunction; it would
+//     splat into three argv tokens and refuse the install. Keep a single
+//     clean range here. `^0.8.0` includes 0.8.0 and all 0.8.x patches; rc
+//     prereleases are still accepted by the validator above when the user
+//     pins a specific rc via AKM_PACKAGE_REF.
+// Use the dotted prerelease form (`rc.0`) so the lower bound accepts both
+// `0.8.0-rc.N` (npm-style) AND `0.8.0-rcN` (mono-style) identifiers. Strict
+// semver makes `0.8.0-rc.5` < `0.8.0-rc0`, so a mono-form lower bound would
+// silently reject every published RC of akm-cli (#70).
+const AKM_REQUIRED_RANGE = "^0.8.0-rc.0 || ^0.8.0"
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.8.0"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
@@ -51,30 +81,110 @@ const CURATE_TIMEOUT = String(Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8
 const CONTEXT_BUDGET_CHARS = Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000
 const AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") === "1"
 const AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") === "1"
-const INDEX_ON_SESSION_END = (process.env.AKM_INDEX_ON_SESSION_END ?? "0") === "1"
+// SessionEnd `akm index` is opt-OUT (default enabled) because the README
+// parity matrix advertises "Session-end `akm index` Shipped in both plugins";
+// shipping it gated behind an opt-in env var made the claim a lie. Users
+// who want to disable it (e.g. CI runners, low-power dev machines) set
+// AKM_INDEX_ON_SESSION_END=0.
+const INDEX_ON_SESSION_END = (process.env.AKM_INDEX_ON_SESSION_END ?? "1") !== "0"
 const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM stash - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM stash - assets relevant to this session"
 const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content, and record `akm feedback <ref> --positive|--negative` once you know whether the asset helped."
-const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, agent, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. v0.7.0 adds the `/akm-proposal`, `/akm-reflect`, `/akm-propose`, `/akm-distill`, `/akm-review-proposals`, and `/akm-setup` slash commands for the proposal queue and agent-CLI integration."
+const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, agent, tasks, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. v0.8.0 adds the `/akm-proposal`, `/akm-improve`, `/akm-propose`, `/akm-review-proposals`, and `/akm-setup` slash commands for the proposal queue and agent-CLI integration."
 const SESSION_START_HEADER = [
   "# AKM is available in this session",
   "",
-  'You have an AKM stash on this machine. Before writing anything from scratch, run `akm curate "<task including project name>"` to find relevant assets with LLM-reranked relevance scores.',
+  'You have an AKM stash on this machine. Before writing anything from scratch, run `akm curate "<task>"` to find relevant assets with LLM-reranked relevance scores.',
   "",
   "**Choosing the right lookup command:**",
   "",
-  '- **`akm curate "<task including project name>"`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. Always include the current project name or domain in the query so the reranker can filter cross-project noise. This is the PRIMARY lookup command.',
-  '  - Good: `akm curate "akm CLI improve command performance analysis"`',
-  '  - Bad: `akm curate "improve performance analysis"` (missing project context — pulls unrelated stash noise)',
+  '- **`akm curate "<task>"`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. v0.8.0 automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is no longer required for ranking — but it still helps the reranker frame intent.',
+  '  - Good: `akm curate "akm CLI improve command performance analysis"` (explicit framing, still ideal)',
+  '  - Bad: `akm curate "improve performance analysis"` (too generic — the reranker has less to work with even with auto-boost)',
   '- **`akm search "<known name>"`** — use ONLY when you already know an asset exists (e.g. after `akm show` returned "not found") and need to locate its exact ref. Do not use as a discovery tool.',
   "",
   'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
 const REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g
+const CURATED_DIR = path.join(STATE_DIR, "curated")
+const PROPOSAL_FLOW_RE = /\/akm-(improve|evolve|propose)\b/
+
+function formatPathBullet(label: string, filePath: string): string {
+  return `- ${label}: ${filePath}`
+}
+
+function countByValue(values: string[]): Array<[string, number]> {
+  const counts = new Map<string, number>()
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+}
+
+function uniqueRecent<T>(values: T[], key: (value: T) => string, limit: number): T[] {
+  const selected: T[] = []
+  const seen = new Set<string>()
+  for (let index = values.length - 1; index >= 0 && selected.length < limit; index -= 1) {
+    const value = values[index]
+    const id = key(value)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    selected.push(value)
+  }
+  return selected.reverse()
+}
+
+function gatherCwdContext(): string {
+  const parts: string[] = []
+  const cwd = process.cwd()
+  const indicators: Array<{ file: string; label: string }> = [
+    { file: "package.json", label: "Node" },
+    { file: "Cargo.toml", label: "Rust" },
+    { file: "pyproject.toml", label: "Python" },
+    { file: "go.mod", label: "Go" },
+    { file: "Gemfile", label: "Ruby" },
+    { file: "Makefile", label: "Make" },
+    { file: "Dockerfile", label: "Docker" },
+    { file: "docker-compose.yml", label: "Docker Compose" },
+    { file: ".github/workflows", label: "GitHub Actions" },
+    { file: "composer.json", label: "PHP" },
+  ]
+  for (const indicator of indicators) {
+    try {
+      if (existsSync(path.join(cwd, indicator.file))) parts.push(indicator.label)
+    } catch {}
+  }
+  try {
+    const pkgPath = path.join(cwd, "package.json")
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"))
+      if (pkg.name) parts.push(pkg.name)
+      if (pkg.description) parts.push(String(pkg.description).slice(0, 120))
+    }
+  } catch {}
+  try {
+    const readme = path.join(cwd, "README.md")
+    if (existsSync(readme)) {
+      const firstContent = readFileSync(readme, "utf8").split("\n").find((l) => l.trim() && !l.startsWith("#"))
+      if (firstContent) parts.push(firstContent.trim().slice(0, 100))
+    }
+  } catch {}
+  return parts.join(", ")
+}
 
 mkdirSync(STATE_DIR, { recursive: true })
+mkdirSync(CURATED_DIR, { recursive: true })
 mkdirSync(SESSIONS_DIR, { recursive: true })
+// State directory holds session feedback / memory / candidate logs that may
+// retain sensitive context post-redaction. Lock to owner-only.
+for (const dir of [STATE_DIR, CURATED_DIR, SESSIONS_DIR]) {
+  try {
+    chmodSync(dir, 0o700)
+  } catch {
+    // Best-effort: filesystems / platforms without POSIX mode are silently
+    // skipped (Windows, FAT, some FUSE mounts). We never crash a hook over
+    // a hardening attempt.
+  }
+}
 
 function timestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z")
@@ -163,15 +273,6 @@ function readSessionRefCandidates(sid: string): string[] {
 }
 
 /**
- * Resolve the stash root(s) used for ref validation. Prefers explicit
- * environment override (`AKM_STASH_DIR`) so tests / sandboxed harnesses
- * don't have to spawn `akm`. Falls back to `akm config get stashDir`, then
- * to the conventional `$HOME/akm` location.
- *
- * Returns an array because future work may surface multiple roots; today
- * the array has at most one entry.
- */
-/**
  * Build a frontmatter fragment containing the validated `refs:` array.
  * Candidates are validated against the local stash; survivors are sorted
  * and deduplicated. When zero candidates survive, returns the empty
@@ -192,6 +293,15 @@ function buildRefsFrontmatterBlock(candidates: readonly string[]): string {
   return `\nrefs:\n${lines}`
 }
 
+/**
+ * Resolve the stash root(s) used for ref validation. Prefers explicit
+ * environment override (`AKM_STASH_DIR`) so tests / sandboxed harnesses
+ * don't have to spawn `akm`. Falls back to `akm config get stashDir`, then
+ * to the conventional `$HOME/akm` location.
+ *
+ * Returns an array because future work may surface multiple roots; today
+ * the array has at most one entry.
+ */
 function resolveStashRoots(): string[] {
   const envOverride = process.env.AKM_STASH_DIR?.trim()
   if (envOverride) return [envOverride]
@@ -210,10 +320,6 @@ function resolveStashRoots(): string[] {
   const home = process.env.HOME
   if (home) return [path.join(home, "akm")]
   return []
-}
-
-function emitBlockDecision(reason: string): string {
-  return JSON.stringify({ decision: "block", reason })
 }
 
 function logRuntimeError(detail: string) {
@@ -241,15 +347,38 @@ function readStdin(): string {
 }
 
 function findCommandOnPath(command: string): string | undefined {
+  const isWindows = process.platform === "win32"
   const searchPath = process.env.PATH ?? ""
-  for (const entry of searchPath.split(":")) {
+  const separator = isWindows ? ";" : ":"
+  // On Windows PATHEXT controls which extensions are tried; default to the
+  // documented stock set. We try the bare name first (some installers drop
+  // a side-by-side `akm` shim) and then each extension in turn. On POSIX
+  // we only try the bare name with an executable-bit check.
+  const extensions = isWindows
+    ? [
+        "",
+        ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+          .split(";")
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+      ]
+    : [""]
+  for (const entry of searchPath.split(separator)) {
     if (!entry) continue
-    const candidate = path.join(entry, command)
-    try {
-      accessSync(candidate, constants.X_OK)
-      return candidate
-    } catch {
-      // keep searching
+    for (const ext of extensions) {
+      const candidate = path.join(entry, command + ext)
+      try {
+        if (isWindows) {
+          // X_OK is unreliable on Windows; existence + PATHEXT match is
+          // the documented resolution rule (see CreateProcess on MSDN).
+          accessSync(candidate, constants.F_OK)
+        } else {
+          accessSync(candidate, constants.X_OK)
+        }
+        return candidate
+      } catch {
+        // keep searching
+      }
     }
   }
   return undefined
@@ -257,6 +386,25 @@ function findCommandOnPath(command: string): string | undefined {
 
 function firstLine(value: string): string {
   return value.replace(/\r/g, "").split("\n")[0] ?? ""
+}
+
+function parseAkmVersion(value: string): string {
+  const line = firstLine(value).trim()
+  const match = /\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\b/.exec(line)
+  return match?.[1] ?? ""
+}
+
+function readAkmVersion(commandPath: string): string {
+  const result = runCommand(commandPath, ["--version"])
+  return parseAkmVersion(result.stdout)
+}
+
+function akmVersionSatisfies(commandPath: string): { ok: boolean; version: string; error?: string } {
+  const version = readAkmVersion(commandPath)
+  if (!version) return { ok: false, version: "unknown", error: "unable to parse akm version" }
+  if (!valid(version)) return { ok: false, version, error: "akm version is not valid semver" }
+  if (!satisfies(version, AKM_REQUIRED_RANGE)) return { ok: false, version, error: `akm version does not satisfy ${AKM_REQUIRED_RANGE}` }
+  return { ok: true, version }
 }
 
 function runCommand(command: string, args: string[], options?: { input?: string; suppressStderr?: boolean }): { ok: boolean; stdout: string; stderr: string } {
@@ -284,6 +432,72 @@ function akmAvailable(): boolean {
   return !!findCommandOnPath("akm")
 }
 
+function getAkmConfigPath(): string {
+  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? ".", ".config")
+  return path.join(configHome, "akm", "config.json")
+}
+
+function readAkmConfig(): Record<string, unknown> {
+  try {
+    const raw = readFileSync(getAkmConfigPath(), "utf8")
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function readConfiguredAgentDefault(): string {
+  const config = readAkmConfig()
+  // 0.8.0 canonical shape: defaults.agent. Fall back to the legacy agent.default
+  // slot when running against a pre-0.8 config that has not been migrated yet.
+  const defaults = config.defaults
+  if (defaults && typeof defaults === "object") {
+    const value = (defaults as Record<string, unknown>).agent
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  const agent = config.agent
+  if (agent && typeof agent === "object") {
+    const value = (agent as Record<string, unknown>).default
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return ""
+}
+
+function writeConfiguredAgentDefault(platform: string): boolean {
+  if (!platform.trim()) return false
+  // #463: route through `akm config set --silent --layer user` so akm's
+  // schema-walker / validator is the single source of truth for the on-disk
+  // shape. Direct JSON writes here would bypass strict-mode validation and
+  // the 5-backup ring buffer, and historically clobbered nearby keys when
+  // the legacy `agent.default` slot triggered an auto-migration.
+  //
+  // --silent suppresses akm's normal stdout (we're invoked from a hook, not
+  // a user prompt), and --layer user pins the write to the user-layer
+  // config file regardless of where merged reads look — both flags were
+  // added in akm-cli 0.8.0 specifically to make hook-driven writes safe.
+  const profileSet = akmRunChecked([
+    "config",
+    "set",
+    "--silent",
+    "--layer",
+    "user",
+    `profiles.agent.${platform}`,
+    JSON.stringify({ platform }),
+  ])
+  if (!profileSet.ok) return false
+  const defaultSet = akmRunChecked([
+    "config",
+    "set",
+    "--silent",
+    "--layer",
+    "user",
+    "defaults.agent",
+    platform,
+  ])
+  return defaultSet.ok
+}
+
 function akmRun(args: string[], input?: string): string {
   const akm = findCommandOnPath("akm")
   if (!akm) return ""
@@ -300,6 +514,49 @@ function akmRun(args: string[], input?: string): string {
     })
   }
   return result.stdout
+}
+
+/**
+ * Async variant of `akmRun` — same args + behavior, but returns Promise<string>
+ * so independent akm invocations can be issued concurrently via Promise.all.
+ *
+ * Used by `sessionStart` (#71) to run hints + curate + proposals in parallel
+ * instead of sequentially. Worst-case perceived latency drops from ~3×timeout
+ * to ~1×timeout for the typical case where all three calls hit the same
+ * embedding/LLM bottleneck.
+ */
+async function akmRunAsync(args: string[], input?: string): Promise<string> {
+  const akm = findCommandOnPath("akm")
+  if (!akm) return ""
+  const timeout = findCommandOnPath("timeout")
+  const cmd = timeout ? timeout : akm
+  const fullArgs = timeout ? ["--preserve-status", CURATE_TIMEOUT, akm, ...args] : args
+  try {
+    const proc = Bun.spawn([cmd, ...fullArgs], {
+      stdin: input !== undefined ? new TextEncoder().encode(input) : "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    const exitCode = await proc.exited
+    if (exitCode !== 0) {
+      logSubprocessFailure("akm_failed", {
+        command: cmd,
+        args: fullArgs.join(" "),
+        error: `akm invocation failed (exit ${exitCode})`,
+        stderr: sanitize(stderr),
+      })
+    }
+    return stdout
+  } catch (error) {
+    logSubprocessFailure("akm_failed", {
+      command: cmd,
+      args: fullArgs.join(" "),
+      error: error instanceof Error ? error.message : String(error),
+      stderr: "",
+    })
+    return ""
+  }
 }
 
 function akmRunChecked(args: string[], input?: string): { ok: boolean; stdout: string; stderr: string } {
@@ -388,6 +645,14 @@ function extractUserText(raw: string): string {
   return ""
 }
 
+function sessionHasPendingCheckpointEvidence(sessionID: string | undefined): boolean {
+  if (!sessionID) return false
+  const bufferPath = path.join(SESSIONS_DIR, `${sessionID}.md`)
+  if (!existsSync(bufferPath)) return false
+  const buffer = readFileSync(bufferPath, "utf8")
+  return (buffer.match(/^## /gm) ?? []).length >= 2
+}
+
 function extractPostToolFields(raw: string, mode: string): { toolName: string; commandText: string; outputText: string; statusText: string; refs: string[]; commandRefs: string[]; outputRefs: string[]; sid: string } {
   const parsed = safeJsonParse<Record<string, unknown>>(raw)
   if (!parsed) return { toolName: "", commandText: sanitize(raw), outputText: "", statusText: mode || "success", refs: [], commandRefs: [], outputRefs: [], sid: "" }
@@ -424,38 +689,42 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
   return { toolName, commandText, outputText, statusText: mode || "success", refs, commandRefs, outputRefs, sid }
 }
 
-function assessRiskyClaudeCommand(command: string): string | undefined {
-  const normalized = command.trim()
-  if (!normalized) return undefined
-  if (/^\s*akm\s+proposal\s+(accept|reject)\b/.test(normalized)) return "Proposal acceptance/rejection requires explicit user approval."
-  if (/\bakm\s+save\b[\s\S]*--push\b/.test(normalized)) return "`akm save --push` requires explicit user approval."
-  if (/\bakm\s+remove\b/.test(normalized)) return "`akm remove` is destructive and requires explicit user approval."
-  if (/\bakm\s+update\b[\s\S]*--all\b/.test(normalized)) return "`akm update --all` requires explicit user approval."
-  if (/\bakm\s+upgrade\b(?:[\s\S]*--force\b|\b)/.test(normalized)) return "`akm upgrade` requires explicit user approval."
-  if (/\bakm\s+vault\s+(create|set|unset|load)\b/.test(normalized)) {
-    if (/^\s*eval\s+["']?\$\(akm\s+vault\s+load\s+/.test(normalized)) return undefined
-    return "Vault create/set/unset/load requires explicit approval, and raw `akm vault load` output must not be exposed in logs or chat."
-  }
-  if (/\bakm\s+config\s+set\s+(?:llm\.features\.|registries|searchPaths|stashDir)/.test(normalized)) return "AKM config mutations require explicit user approval."
-  if (/\bakm\s+(?:add|wiki\s+register)\b[\s\S]*--trust\b/.test(normalized)) return "Trusted source registration requires explicit user approval."
-  if (/\bakm\s+remember\b/.test(normalized) && redactSecrets(normalized).redacted) return "Raw `akm remember` payload appears to include secrets; redact it before writing memory."
-  return undefined
-}
-
-function preToolBash(): string {
+function pretoolNonBash(): string {
   const rawInput = readStdin()
-  const { commandText, sid } = extractPostToolFields(rawInput, "pre")
-  const blocked = assessRiskyClaudeCommand(commandText)
-  if (!blocked) return ""
-  appendLog(SESSION_LOG, "pretool_blocked", commandText, blocked)
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput)
+  if (!parsed) return ""
+  const text = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || sanitize(rawInput)
+  const refs = extractAkmRefsFromString(text)
+  if (refs.length === 0) return ""
+  const sid = extractSessionId(rawInput)
+  const toolName = typeof parsed.tool === "string" ? parsed.tool : typeof parsed.tool_name === "string" ? parsed.tool_name : "nonbash"
   writeMemoryEvent({
-    event: "safety_blocked",
+    event: "tool_ref_observed",
     sessionId: sid || undefined,
     scope: buildScope(sid),
-    input: { tool: "Bash", commandPreview: commandText.slice(0, 280) },
-    outcome: { status: "blocked", warnings: [blocked] },
+    input: { tool: toolName, phase: "pre" },
+    refs,
+    outcome: { status: "ok" },
   })
-  return emitBlockDecision(blocked)
+  return ""
+}
+
+function posttoolNonBash(): string {
+  const rawInput = readStdin()
+  const { commandText, outputText, refs, sid, toolName } = extractPostToolFields(rawInput, MODE)
+  if (refs.length === 0) return ""
+  writeMemoryEvent({
+    event: "tool_ref_observed",
+    sessionId: sid || undefined,
+    scope: buildScope(sid),
+    input: { tool: toolName, command: commandText, phase: "post", outputPreview: outputText.slice(0, 400) },
+    refs,
+    outcome: { status: MODE === "failure" ? "failed" : "ok" },
+  })
+  for (const ref of refs) {
+    writeSessionBuffer(sid, `${toolName} ref`, `- ref: ${ref}`)
+  }
+  return ""
 }
 
 function userPromptExpansion(): string {
@@ -477,6 +746,7 @@ function userPromptExpansion(): string {
   if (/\/akm-(memory-promote|memory-reject|proposal)\b/.test(expanded) && !/\b(confirm|approved|approval)\b/i.test(expanded)) {
     return emitHookContext("UserPromptExpansion", "AKM note: mutating memory/proposal flows should be explicit. Confirm promotion/rejection or proposal acceptance before changing durable state.")
   }
+  if (PROPOSAL_FLOW_RE.test(expanded)) ensureFreshProposalCheckpoint(rawInput)
   if (/\/akm-/.test(expanded)) {
     return emitHookContext("UserPromptExpansion", "AKM note: slash-command expansion should keep mutating actions explicit and prefer review before durable writes.")
   }
@@ -557,11 +827,15 @@ function taskCompleted(): string {
   })
   if (sid && summary) {
     writeSessionBuffer(sid, "task completed", summary)
+    const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
+    const targetRefHints = [...new Set(summary.match(REF_PATTERN) ?? [])]
     const candidates = extractCandidatesFromText({
       harness: "claude-code",
       sessionId: sid,
       text: summary,
       evidence: [summary],
+      sourcePaths: [bufferPath, EVENT_LOG, CANDIDATE_LOG],
+      targetRefHints,
     })
     if (candidates.length > 0) {
       appendCandidates(CANDIDATE_LOG, candidates)
@@ -598,75 +872,51 @@ function sessionEnd(): string {
   return ""
 }
 
-function findWritablePathDir(): string | undefined {
-  for (const entry of (process.env.PATH ?? "").split(":")) {
-    if (!entry) continue
-    try {
-      mkdirSync(entry, { recursive: true })
-      writeFileSync(path.join(entry, ".akm-write-test"), "")
-      rmSync(path.join(entry, ".akm-write-test"), { force: true })
-      return entry
-    } catch {
-      // continue
-    }
-  }
-  return undefined
-}
-
-function ensureOnPath(target: string) {
-  if (!existsSync(target)) return
-  const current = findCommandOnPath("akm")
-  if (current === target) return
-  const writableDir = findWritablePathDir()
-  if (!writableDir) return
-  const linkPath = path.join(writableDir, "akm")
-  try {
-    symlinkSync(target, linkPath)
-  } catch {
-    try {
-      copyFileSync(target, linkPath)
-    } catch {
-      // ignore
-    }
-  }
-}
-
-function npmGlobalBin(): string {
-  const bin = runCommand("npm", ["bin", "-g"])
-  if (bin.ok && bin.stdout.trim()) return bin.stdout.trim()
-  const prefix = runCommand("npm", ["prefix", "-g"])
-  return prefix.ok && prefix.stdout.trim() ? path.join(prefix.stdout.trim(), "bin") : ""
-}
-
-function ensureAkm() {
+// checkAkmVersion replaces the pre-0.8.0 ensureAkm() behavior. Until 0.7.x the
+// plugin silently spawned `bun install -g akm-cli@…` (or npm) on every
+// SessionStart whenever akm was missing or out of range. Installing global
+// packages without explicit user consent is too aggressive for a public
+// release. Starting with 0.8.0 we detect-and-warn instead: if akm is missing
+// or out of range, we write a clear stderr banner pointing at `/akm-setup` —
+// which IS the explicit consent point — and return a structured verdict.
+// Callers decide how to degrade. We never spawn an install from this path.
+function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; path?: string } {
   const existing = findCommandOnPath("akm")
   if (existing) {
-    const version = firstLine(runCommand(existing, ["--version"]).stdout) || "unknown"
-    appendLog(SESSION_LOG, "akm_ready", "path", existing, version)
-    return
+    const current = akmVersionSatisfies(existing)
+    if (current.ok) {
+      appendLog(SESSION_LOG, "akm_ready", "path", existing, current.version)
+      return { ok: true, version: current.version, path: existing }
+    }
+    appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
+    writeAkmConsentBanner({ detected: current.version, detectedPath: existing })
+    return { ok: false, reason: "version-mismatch", version: current.version, path: existing }
   }
+  appendLog(SESSION_LOG, "akm_missing", "path", AKM_PACKAGE_REF, AKM_REQUIRED_RANGE)
+  writeAkmConsentBanner({ detected: undefined, detectedPath: undefined })
+  return { ok: false, reason: "not-installed" }
+}
 
-  let installer = "path"
-  let installedBin = ""
-  if (findCommandOnPath("bun")) {
-    installer = "bun"
-    const globalBin = runCommand("bun", ["pm", "bin", "-g"])
-    const install = runCommand("bun", ["install", "-g", PACKAGE_REF])
-    if (install.ok && globalBin.ok && globalBin.stdout.trim()) installedBin = path.join(globalBin.stdout.trim(), "akm")
-  }
-  if (!installedBin && findCommandOnPath("npm")) {
-    installer = "npm"
-    const install = runCommand("npm", ["install", "-g", PACKAGE_REF])
-    const globalBin = npmGlobalBin()
-    if (install.ok && globalBin) installedBin = path.join(globalBin, "akm")
-  }
-  if (installedBin) ensureOnPath(installedBin)
-  const resolved = findCommandOnPath("akm")
-  if (resolved) {
-    const version = firstLine(runCommand(resolved, ["--version"]).stdout) || "unknown"
-    appendLog(SESSION_LOG, "akm_ready", installer, resolved, version)
-  } else {
-    appendLog(SESSION_LOG, "akm_missing", installer, PACKAGE_REF)
+function writeAkmConsentBanner(info: { detected?: string; detectedPath?: string }) {
+  const detectedLabel = info.detected
+    ? `${info.detected}${info.detectedPath ? ` (${info.detectedPath})` : ""}`
+    : "(not found on PATH)"
+  const banner = [
+    "─".repeat(60),
+    "akm-plugin: akm CLI not installed or wrong version",
+    `  detected: ${detectedLabel}`,
+    `  required: ${AKM_REQUIRED_RANGE}`,
+    "",
+    "Run `/akm-setup` in this Claude Code session to install/upgrade",
+    "with your explicit confirmation, or install manually:",
+    `  bun install -g ${AKM_PACKAGE_REF}`,
+    `  npm install -g ${AKM_PACKAGE_REF}`,
+    "─".repeat(60),
+  ].join("\n")
+  try {
+    process.stderr.write(banner + "\n")
+  } catch {
+    // best-effort; never crash the hook over a banner
   }
 }
 
@@ -686,34 +936,145 @@ function refQuality(ref: string): string {
   return resolved
 }
 
-function detectAgentDefault(): string {
-  if (!akmAvailable()) return ""
-  const readCurrent = () => {
-    const raw = akmRun(["--format", "json", "-q", "config", "get", "agent.default"])
-    const parsed = safeJsonParse<unknown>(raw)
-    if (typeof parsed === "string") return parsed
-    if (parsed && typeof parsed === "object") {
-      const record = parsed as Record<string, unknown>
-      const value = record.value ?? record["agent.default"]
-      return typeof value === "string" ? value : ""
-    }
-    return ""
+type AgentDefaultResult = {
+  value: string
+  writeAttempted: boolean
+  writeOk: boolean
+  /** True when this SessionStart freshly initialised defaults.agent=claude. */
+  initialized: boolean
+}
+
+/**
+ * Resolve (and lazily initialise) `defaults.agent` for the Claude plugin.
+ *
+ * Pre-#72 behavior: when `defaults.agent` was empty, silently wrote
+ * `defaults.agent=claude` + `profiles.agent.claude` to ~/.config/akm/config.json
+ * with no user-visible signal. OpenCode users who installed the Claude plugin
+ * to experiment saw their config silently flipped.
+ *
+ * Post-#72 behavior: we still write (the plugin needs the default to dispatch
+ * improve/propose), but we ALSO surface a SessionStart additionalContext line
+ * AND a stderr banner on the first write — see gatherSessionStartWarnings.
+ * Users can opt OUT of the write entirely with `AKM_PLUGIN_NO_AUTO_DEFAULT=1`
+ * (in which case the agent stays unset and improve/propose will refuse until
+ * the user runs `/akm-setup`).
+ */
+function detectAgentDefault(): AgentDefaultResult {
+  if (!akmAvailable()) return { value: "", writeAttempted: false, writeOk: false, initialized: false }
+  const current = readConfiguredAgentDefault()
+  if (current) return { value: current, writeAttempted: false, writeOk: true, initialized: false }
+  if (process.env.AKM_PLUGIN_NO_AUTO_DEFAULT === "1") {
+    appendLog(SESSION_LOG, "agent_default_skipped", "AKM_PLUGIN_NO_AUTO_DEFAULT=1")
+    return { value: "", writeAttempted: false, writeOk: false, initialized: false }
   }
-  const current = readCurrent()
-  if (current) return current
-  const setResult = akmRun(["--format", "json", "-q", "config", "set", "agent.default", "claude"])
-  if (setResult.trim()) {
+  const writeOk = writeConfiguredAgentDefault("claude")
+  if (writeOk) {
     appendLog(SESSION_LOG, "agent_default_initialized", "claude")
   } else {
-    appendLog(SESSION_LOG, "agent_default_init_failed", "claude", "empty stdout from akm config set agent.default")
+    appendLog(SESSION_LOG, "agent_default_init_failed", "claude", `failed to write ${getAkmConfigPath()}`)
   }
-  return readCurrent()
+  return { value: readConfiguredAgentDefault(), writeAttempted: true, writeOk, initialized: writeOk }
 }
 
 function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   if (!INDEX_ON_SESSION_END || !akmAvailable()) return
   const result = akmRunChecked(["index"])
   if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
+}
+
+function writeStashMissingBanner(stashDir: string | undefined) {
+  // additionalContext alone is often ignored by Claude in long-running
+  // sessions, so we mirror the akm-missing path and write a clearly-marked
+  // banner to stderr where the user can see it in their terminal. Hooks
+  // never crash over a banner — wrap in try/catch.
+  const banner = [
+    "─".repeat(60),
+    "akm-plugin: AKM stash directory missing",
+    stashDir
+      ? `  configured: ${stashDir} (path does not exist)`
+      : "  configured: (none — neither AKM_STASH_DIR nor stashDir in config)",
+    "",
+    "AKM curation, search, and show will return empty until you run",
+    "`/akm-setup` to initialize the stash, or set `AKM_STASH_DIR` to an",
+    "existing directory. All other Claude features keep working.",
+    "─".repeat(60),
+  ].join("\n")
+  try {
+    process.stderr.write(banner + "\n")
+  } catch {
+    // best-effort; never crash the hook over a banner
+  }
+}
+
+function gatherSessionStartWarnings(
+  versionCheck: { ok: boolean; version?: string },
+  agentDefault: AgentDefaultResult,
+): string[] {
+  const warnings: string[] = []
+
+  // H1: stash directory does not exist — curation will return empty context
+  // and most akm verbs (search/show/curate) will be no-ops. Surface this on
+  // BOTH channels: additionalContext (so the agent sees the cue) AND stderr
+  // (so the user sees it in their terminal, which is the more reliable
+  // signal — additionalContext often gets compacted away).
+  const stashRoots = resolveStashRoots()
+  const stashDir = stashRoots[0]
+  if (!stashDir || !existsSync(stashDir)) {
+    warnings.push(
+      stashDir
+        ? `⚠ AKM stash directory \`${stashDir}\` does not exist. Run \`/akm-setup\` to initialize the stash, or set \`AKM_STASH_DIR\` to point at an existing one. AKM curation will be empty until then.`
+        : `⚠ No AKM stash directory is configured. Run \`/akm-setup\` to choose one, or set \`AKM_STASH_DIR\`. AKM curation will be empty until then.`,
+    )
+    writeStashMissingBanner(stashDir)
+    appendLog(SESSION_LOG, "stash_missing", stashDir ?? "(unconfigured)")
+  }
+
+  // H2: agent default write was attempted but failed — improve/propose
+  // workflows will fall back to the unconfigured CLI and may fail mysteriously
+  // downstream. Surface this so the user can re-run setup.
+  if (agentDefault.writeAttempted && !agentDefault.writeOk) {
+    warnings.push(
+      `⚠ Failed to write \`defaults.agent\` to \`${getAkmConfigPath()}\`. \`/akm-improve\` and \`/akm-propose\` may not work until this is configured. Run \`/akm-setup\` to retry.`,
+    )
+  }
+
+  // H3 (#72): agent default was just initialised by THIS SessionStart.
+  // Surface the write so OpenCode users (who installed the Claude plugin to
+  // experiment) see that their config was modified. Suppresses subsequent
+  // SessionStart firings — only the initial write generates this notice.
+  if (agentDefault.initialized) {
+    warnings.push(
+      `ℹ The Claude plugin set \`defaults.agent=claude\` in \`${getAkmConfigPath()}\` so \`/akm-improve\` and \`/akm-propose\` can dispatch tasks. ` +
+        `To use a different default, run \`/akm-setup\`. To suppress this auto-write on future installs, set \`AKM_PLUGIN_NO_AUTO_DEFAULT=1\` before SessionStart.`,
+    )
+    try {
+      process.stderr.write(
+        [
+          "─".repeat(60),
+          "akm-plugin: defaults.agent initialized → claude",
+          `  config: ${getAkmConfigPath()}`,
+          "",
+          "  Run /akm-setup to change defaults, or set",
+          "  AKM_PLUGIN_NO_AUTO_DEFAULT=1 to opt out of this auto-write.",
+          "─".repeat(60),
+          "",
+        ].join("\n"),
+      )
+    } catch {
+      // best-effort; never crash the hook over a banner
+    }
+  }
+
+  // L5: detected version is a pre-release. Banner range accepts ^0.8.0-rc0
+  // but stable banner text says ^0.8.0 — make the rc status explicit so users
+  // know to track stable when it lands.
+  if (versionCheck.ok && versionCheck.version && /-/.test(versionCheck.version)) {
+    warnings.push(
+      `ℹ Detected pre-release \`akm-cli@${versionCheck.version}\`. Tracking is fine; upgrade to a stable 0.8.x once published for production use.`,
+    )
+  }
+
+  return warnings
 }
 
 function recordUserFeedback() {
@@ -755,6 +1116,14 @@ function recordPostTool() {
     refs,
     outcome: { status: statusText === "failure" ? "failed" : "ok" },
   })
+}
+
+function ensureFreshProposalCheckpoint(rawInput?: string): string | null {
+  if (!AUTO_MEMORY || !akmAvailable()) return null
+  const payload = rawInput ?? readStdin()
+  const sid = extractSessionId(payload)
+  if (!sid || !sessionHasPendingCheckpointEvidence(sid)) return null
+  return captureMemory({ rawInput: payload, reason: "proposal-prep", checkpoint: true })
 }
 
 function autoFeedback() {
@@ -805,6 +1174,49 @@ function autoFeedback() {
   }
 }
 
+function formatEvidenceSummary(events: AkmMemoryEvent[], candidates: ReturnType<typeof readCandidates>, buffer: string): string[] {
+  const lines: string[] = []
+  const bufferedEntries = (buffer.match(/^## /gm) ?? []).length
+  const allRefs = [...new Set(buffer.match(REF_PATTERN) ?? [])]
+  const eventTypes = countByValue(events.map((event) => event.event))
+  const statuses = countByValue(events.map((event) => event.outcome?.status ?? "unknown"))
+  const candidateTypes = countByValue(candidates.map((candidate) => candidate.type))
+  const targetedCandidates = countByValue(candidates.map((candidate) => candidate.targetRef).filter((value): value is string => !!value))
+
+  lines.push("## Evidence aggregates")
+  lines.push(`- buffered observations: ${bufferedEntries}`)
+  if (allRefs.length > 0) lines.push(`- referenced assets: ${allRefs.slice(0, 6).join(", ")}`)
+  if (eventTypes.length > 0) lines.push(`- event types: ${eventTypes.slice(0, 6).map(([event, count]) => `${event} (${count})`).join(", ")}`)
+  if (statuses.length > 0) lines.push(`- event outcomes: ${statuses.map(([status, count]) => `${status} (${count})`).join(", ")}`)
+  if (candidateTypes.length > 0) lines.push(`- candidate types: ${candidateTypes.map(([type, count]) => `${type} (${count})`).join(", ")}`)
+  if (targetedCandidates.length > 0) lines.push(`- candidate targets: ${targetedCandidates.slice(0, 5).map(([ref, count]) => `${ref} (${count})`).join(", ")}`)
+  lines.push("")
+
+  const notableEvents = uniqueRecent(events, (event) => `${event.timestamp}:${event.event}:${(event.refs ?? []).join(",")}`, 5)
+  if (notableEvents.length > 0) {
+    lines.push("## Notable recent events")
+    for (const event of notableEvents) {
+      const status = event.outcome?.status ?? "unknown"
+      const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` refs=${event.refs.join(", ")}` : ""
+      const warning = event.outcome?.warnings?.[0] ? ` warning=${sanitize(event.outcome.warnings[0]).slice(0, 120)}` : ""
+      lines.push(`- ${event.timestamp} ${event.event} (${status})${refs}${warning}`)
+    }
+    lines.push("")
+  }
+
+  const notableCandidates = uniqueRecent(candidates, (candidate) => candidate.id, 5)
+  if (notableCandidates.length > 0) {
+    lines.push("## Candidate highlights")
+    for (const candidate of notableCandidates) {
+      const target = candidate.targetRef ? ` target=${candidate.targetRef}` : ""
+      lines.push(`- [${candidate.status}] ${candidate.type}/${candidate.scope}${target} :: ${candidate.content.slice(0, 180)}`)
+    }
+    lines.push("")
+  }
+
+  return lines
+}
+
 function curatePrompt(): string {
   const rawInput = readStdin()
   const text = extractUserText(rawInput)
@@ -838,13 +1250,34 @@ function curatePrompt(): string {
     outcome: { status: curated.trim() ? "ok" : "skipped" },
   })
   if (!curated.trim()) return ""
-  return emitHookContext("UserPromptSubmit", `${CURATED_PROMPT_HEADER}\n${curated.trim()}\n\n${CURATED_CONTEXT_TAIL}`)
+  const curatedFile = path.join(CURATED_DIR, `prompt-${sid ?? "unknown"}.md`)
+  try {
+    writeFileSync(curatedFile, curated.trim())
+  } catch {}
+  return emitHookContext("UserPromptSubmit", `AKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this task. ${CURATED_CONTEXT_TAIL}`)
 }
 
-function sessionStart(): string {
+async function sessionStart(): Promise<string> {
   const rawInput = readStdin()
   const sid = extractSessionId(rawInput)
-  ensureAkm()
+  const versionCheck = checkAkmVersion()
+  if (!versionCheck.ok) {
+    // checkAkmVersion already wrote a stderr banner pointing the user at
+    // `/akm-setup` for explicit-consent install. Emit a degraded SessionStart
+    // context so the agent knows akm CLI tooling is unavailable this session
+    // and won't keep trying to call it. We intentionally do NOT crash the
+    // hook — the rest of Claude Code stays fully functional.
+    return emitHookContext(
+      "SessionStart",
+      [
+        "# AKM is NOT available in this session",
+        "",
+        `The akm CLI is missing or does not satisfy \`${AKM_REQUIRED_RANGE}\` (reason: ${versionCheck.reason ?? "unknown"}).`,
+        "Do not call any `akm` Bash command. Tell the user to run `/akm-setup`",
+        "in this session to install/upgrade akm-cli with their confirmation.",
+      ].join("\n"),
+    )
+  }
   if (!akmAvailable()) return ""
 
   const akm = findCommandOnPath("akm")
@@ -858,61 +1291,138 @@ function sessionStart(): string {
   }
 
   const agentDefault = detectAgentDefault()
-  const hints = akmRun(["--format", "text", "-q", "hints"]).trim()
-  const curated = akmRun(["--detail", "agent", "--format", "text", "-q", "curate", "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)]).trim()
-  const pendingRaw = akmRun(["--format", "json", "-q", "proposal", "list", "--status", "pending"])
+  const sessionWarnings = gatherSessionStartWarnings(versionCheck, agentDefault)
+
+  // #71 perceived-latency fix: hints, curate, and proposals have no
+  // inter-dependency — issue them concurrently via Promise.all instead of
+  // running them sequentially. Worst-case wall-clock drops from ~3×CURATE_TIMEOUT
+  // to ~1×CURATE_TIMEOUT when all three calls hit the same embedding bottleneck.
+  const cwdContext = gatherCwdContext()
+  const [hintsRaw, curatedRaw, pendingRaw] = await Promise.all([
+    akmRunAsync(["--format", "text", "-q", "hints"]),
+    akmRunAsync([
+      "--detail",
+      "agent",
+      "--format",
+      "text",
+      "-q",
+      "curate",
+      cwdContext,
+      "--limit",
+      String(CURATE_LIMIT),
+      ...buildRunScopeArgs(sid),
+    ]),
+    akmRunAsync(["--format", "json", "-q", "proposals", "--status", "pending"]),
+  ])
+  const hints = hintsRaw.trim()
+  const curatedTrimmed = curatedRaw.trim()
+  let curatedFile = ""
+  if (curatedTrimmed) {
+    curatedFile = path.join(CURATED_DIR, `session-${sid ?? "unknown"}.md`)
+    try {
+      writeFileSync(curatedFile, curatedTrimmed)
+    } catch {}
+  }
   const pendingItems = safeJsonParse<Record<string, unknown>>(pendingRaw)
   const pending = Array.isArray(pendingItems?.proposals)
     ? pendingItems?.proposals.length
     : Array.isArray(pendingItems?.hits)
       ? pendingItems?.hits.length
       : 0
-  const pendingSummary = pending <= 0
-    ? ""
-    : pending === 1
-      ? "There is 1 pending AKM proposal - review with `/akm-review-proposals` or `/akm-proposal list`."
-      : `There are ${pending} pending AKM proposals - review with \`/akm-review-proposals\` or \`/akm-proposal list\`.`
+  const pendingSummary =
+    pending <= 0
+      ? ""
+      : pending === 1
+        ? "There is 1 pending AKM proposal - review with `/akm-review-proposals` or `/akm-proposal list`."
+        : `There are ${pending} pending AKM proposals - review with \`/akm-review-proposals\` or \`/akm-proposal list\`.`
 
-  if (!hints && !curated && !agentDefault && !pendingSummary) return ""
+  if (!hints && !curatedTrimmed && !agentDefault.value && !pendingSummary && sessionWarnings.length === 0) return ""
   writeMemoryEvent({
     event: "session_started",
     sessionId: sid || undefined,
     scope: buildScope(sid),
-    input: { agentDefault, pendingProposals: pending },
-    refs: [...new Set(curated.match(REF_PATTERN) ?? [])],
+    input: { agentDefault: agentDefault.value, pendingProposals: pending },
+    refs: [...new Set(curatedTrimmed.match(REF_PATTERN) ?? [])],
     outcome: { status: "ok" },
   })
   let body = SESSION_START_HEADER
-  if (agentDefault) body = `${body}\n\nAgent CLI: ${agentDefault} (configured via \`akm setup\`).`
+  if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
+  if (agentDefault.value) body = `${body}\n\nAgent CLI: ${agentDefault.value} (configured via \`akm setup\`).`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (hints) body = `${body}\n\n${hints}`
-  if (curated) body = `${body}\n\n${CURATED_SESSION_HEADER}\n${curated}\n\n${CURATED_CONTEXT_TAIL}`
+  if (curatedFile) body = `${body}\n\nAKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${CURATED_CONTEXT_TAIL}`
   body = `${body}\n\n${SESSION_START_FOOTER}`
   return emitHookContext("SessionStart", body)
 }
 
-function captureMemory() {
-  const reason = MODE || "session-end"
-  if (!AUTO_MEMORY || !akmAvailable()) return
-  const rawInput = readStdin()
+function captureMemory(options?: { rawInput?: string; reason?: string; checkpoint?: boolean }) {
+  const reason = options?.reason ?? MODE ?? "session-end"
+  const isCheckpoint = options?.checkpoint === true
+  if (!AUTO_MEMORY || !akmAvailable()) return null
+  const rawInput = options?.rawInput ?? readStdin()
   const sid = extractSessionId(rawInput)
-  if (!sid) return
+  if (!sid) return null
   const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
   const refSidecar = path.join(SESSIONS_DIR, `${sid}.refs.jsonl`)
   if (!existsSync(bufferPath)) {
-    rmSync(refSidecar, { force: true })
-    return
+    if (!isCheckpoint) rmSync(refSidecar, { force: true })
+    return null
   }
   const buffer = readFileSync(bufferPath, "utf8")
   const entries = (buffer.match(/^## /gm) ?? []).length
   if (entries < 2) {
-    rmSync(bufferPath, { force: true })
-    rmSync(refSidecar, { force: true })
-    return
+    if (!isCheckpoint) {
+      rmSync(bufferPath, { force: true })
+      rmSync(refSidecar, { force: true })
+    }
+    return null
   }
-  const dateTag = timestamp().slice(0, 10).replace(/-/g, "")
+  const dateTag = isCheckpoint
+    ? timestamp().replace(/[-:TZ.]/g, "").slice(0, 14)
+    : timestamp().slice(0, 10).replace(/-/g, "")
   const shortSid = sid.slice(0, 8)
-  const name = `claude-session-${dateTag}-${shortSid}`
+  const name = isCheckpoint
+    ? `claude-checkpoint-${dateTag}-${shortSid}`
+    : `claude-session-${dateTag}-${shortSid}`
+  const relatedEvents = readJsonl<AkmMemoryEvent>(EVENT_LOG)
+    .filter((event) => event.sessionId === sid)
+    .slice(-12)
+  const relatedCandidates = readCandidates(CANDIDATE_LOG)
+    .filter((candidate) => candidate.sessionId === sid)
+    .slice(-8)
+  const targetRefHints = relatedCandidates.flatMap((candidate) => candidate.targetRef ? [candidate.targetRef] : [])
+  const summarySections: string[] = [buffer.trimEnd()]
+  summarySections.push([
+    "## Full-detail evidence files",
+    formatPathBullet("Claude state dir", STATE_DIR),
+    formatPathBullet("Session buffer", bufferPath),
+    formatPathBullet("Structured event log", EVENT_LOG),
+    formatPathBullet("Memory candidate log", CANDIDATE_LOG),
+    formatPathBullet("Session log", SESSION_LOG),
+    formatPathBullet("Feedback log", FEEDBACK_LOG),
+    formatPathBullet("Memory log", MEMORY_LOG),
+    process.env.AKM_EVAL_HARNESS_LOG?.trim() ? formatPathBullet("Harness log", process.env.AKM_EVAL_HARNESS_LOG.trim()) : "",
+  ].filter(Boolean).join("\n"))
+  summarySections.push(formatEvidenceSummary(relatedEvents, relatedCandidates, buffer).join("\n").trimEnd())
+  if (relatedEvents.length > 0) {
+    summarySections.push([
+      "## Plugin event summary",
+      ...relatedEvents.map((event) => {
+        const status = event.outcome?.status ?? "unknown"
+        const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` — refs: ${event.refs.join(", ")}` : ""
+        return `- ${event.timestamp} — ${event.event} (${status})${refs}`
+      }),
+    ].join("\n"))
+  }
+  if (relatedCandidates.length > 0) {
+    summarySections.push([
+      "## Memory candidates observed",
+      ...relatedCandidates.map((candidate) => {
+        const target = candidate.targetRef ? ` target=${candidate.targetRef}` : ""
+        return `- [${candidate.status}] ${candidate.type}/${candidate.scope}${target}: ${candidate.content}`
+      }),
+    ].join("\n"))
+  }
   // Validate any ref candidates that accumulated during the session: only
   // candidates that resolve to a real asset in the local stash become
   // entries in the durable memory's frontmatter `refs:` array. Literal
@@ -923,7 +1433,7 @@ function captureMemory() {
   // session-checkpoint memories.
   const refCandidates = readSessionRefCandidates(sid)
   const refsBlock = buildRefsFrontmatterBlock(refCandidates)
-  const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}${refsBlock}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${buffer}`
+  const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}${refsBlock}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${summarySections.join("\n\n")}`
   const redactedBody = redactSecrets(rawBody).text
   const result = akmRun(["--format", "json", "-q", "remember", "--name", name, "--force", ...buildRunScopeArgs(sid)], redactedBody)
   if (result.trim()) {
@@ -940,7 +1450,11 @@ function captureMemory() {
       harness: "claude-code",
       sessionId: sid,
       text: redactedBody,
-      evidence: [`memory:${name}`, reason],
+      evidence: [`memory:${name}`, reason, ...targetRefHints],
+      sourcePaths: [bufferPath, EVENT_LOG, CANDIDATE_LOG, SESSION_LOG, FEEDBACK_LOG, MEMORY_LOG].concat(
+        process.env.AKM_EVAL_HARNESS_LOG?.trim() ? [process.env.AKM_EVAL_HARNESS_LOG.trim()] : [],
+      ),
+      targetRefHints,
     })
     if (candidates.length > 0) {
       appendCandidates(CANDIDATE_LOG, candidates)
@@ -967,8 +1481,11 @@ function captureMemory() {
       outcome: { status: "failed", error: "empty stdout from akm remember" },
     })
   }
-  rmSync(bufferPath, { force: true })
-  rmSync(refSidecar, { force: true })
+  if (!isCheckpoint) {
+    rmSync(bufferPath, { force: true })
+    rmSync(refSidecar, { force: true })
+  }
+  return `memory:${name}`
 }
 
 function preToolAgent(): string {
@@ -984,7 +1501,12 @@ function preToolAgent(): string {
   const subagentType = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : null
   const rawModel = typeof toolInput.model === "string" ? toolInput.model : null
 
-  // Read model from agent frontmatter if not set on the tool call directly
+  // Read model from agent frontmatter if not set on the tool call directly.
+  // Note: we deliberately do NOT special-case `akm:` prefixed subagent_type
+  // values — the Agent tool's subagent_type is always a known
+  // ~/.claude/agents/<name>.md file reference, not a runtime-resolved stash
+  // ref. Stash agents are surfaced via the `/akm-agent` slash command
+  // (which materializes them at user request), not via on-the-fly dispatch.
   let frontmatterModel: string | null = null
   if (subagentType) {
     const agentFilePath = path.join(process.env.HOME ?? ".", ".claude", "agents", `${subagentType}.md`)
@@ -1013,13 +1535,17 @@ function preToolAgent(): string {
   })
 }
 
-function main(): string {
+async function main(): Promise<string> {
   switch (COMMAND) {
     case "ensure-akm":
-      ensureAkm()
+    case "check-akm":
+      // Legacy alias "ensure-akm" no longer installs anything; both subcommands
+      // are now version checks that warn-and-point-at-/akm-setup. See
+      // checkAkmVersion() for the rationale (Item 2, 0.8.0 polish plan).
+      checkAkmVersion()
       return ""
     case "session-start":
-      return sessionStart()
+      return await sessionStart()
     case "user-feedback":
       recordUserFeedback()
       return ""
@@ -1028,7 +1554,17 @@ function main(): string {
     case "user-prompt-expansion":
       return userPromptExpansion()
     case "pre-tool":
-      if (MODE === "bash") return preToolBash()
+      // Bash gating was removed in 0.8.0 — defer to the platform's
+      // permission system (see claude/README.md "Locking down destructive
+      // commands"). Non-bash matchers still flow through pre-tool-nonbash
+      // for ref observation.
+      return ""
+    case "pre-tool-agent":
+      return preToolAgent()
+    case "pre-tool-nonbash":
+      return pretoolNonBash()
+    case "post-tool-nonbash":
+      posttoolNonBash()
       return ""
     case "pre-tool-agent":
       return preToolAgent()
@@ -1051,7 +1587,7 @@ function main(): string {
       autoFeedback()
       return ""
     case "capture-memory":
-      captureMemory()
+      captureMemory({ checkpoint: MODE === "proposal-prep" })
       return ""
     default:
       appendLog(SESSION_LOG, "runtime_error", "unknown_command", COMMAND)
@@ -1059,8 +1595,11 @@ function main(): string {
   }
 }
 
+// `main` is async (#71 made sessionStart parallel via Promise.all). Bun
+// supports top-level await; this guarantees the process does not exit
+// until the awaits resolve and stdout.write has run.
 try {
-  const output = main()
+  const output = await main()
   if (output) process.stdout.write(output)
 } catch (error: unknown) {
   logRuntimeError(error instanceof Error ? error.message : String(error))

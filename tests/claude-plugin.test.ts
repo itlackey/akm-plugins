@@ -121,8 +121,17 @@ describe("Claude plugin metadata", () => {
     const userPromptExpansion = plugin.hooks.UserPromptExpansion[0].hooks[0].command as string
     expect(userPromptExpansion).toContain("user-prompt-expansion")
 
+    // PreToolUse no longer registers a Bash matcher — risky-command gating
+    // was removed in 0.8.0 in favor of platform permission rules (see
+    // claude/README.md "Locking down destructive commands"). The PreToolUse
+    // array still exists for Agent / Read / Write / Edit / Glob / Grep
+    // matchers used by model-alias resolution and ref observation.
     expect(plugin.hooks.PreToolUse).toBeDefined()
-    expect(plugin.hooks.PreToolUse[0].hooks[0].command as string).toContain("pre-tool bash")
+    const preToolMatchers = plugin.hooks.PreToolUse.map(
+      (entry: { matcher?: string }) => entry.matcher,
+    )
+    expect(preToolMatchers).not.toContain("Bash")
+    expect(preToolMatchers).toContain("Agent")
 
     // PostToolUse runs both post-tool and auto-feedback
     const postToolCommands = plugin.hooks.PostToolUse[0].hooks.map(
@@ -174,9 +183,8 @@ describe("Claude plugin metadata", () => {
       "akm-vault",
       "akm-proposal",
       "akm-review-proposals",
-      "akm-reflect",
+      "akm-improve",
       "akm-propose",
-      "akm-distill",
       "akm-setup",
       "akm-help",
     ]) {
@@ -189,21 +197,39 @@ describe("Claude plugin metadata", () => {
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
   })
 
-  it("v0.7.0 slash commands carry the canonical proposal-flow guard rails", () => {
+  it("re-exports shared helpers to prevent silent drift", async () => {
+    // Every duplicated file under claude/shared/ MUST be a one-line shim that
+    // re-exports the canonical version at shared/. ref-extraction.ts is the
+    // sole intentional exception — its drift is tracked in-file because the
+    // resolver contract test exercises both copies against the same fixture.
+    const shimmedFiles = [
+      "memory-candidates",
+      "memory-events",
+      "redaction",
+      "feedback-signals",
+      "recall-policy",
+    ]
+    for (const name of shimmedFiles) {
+      const contents = readFileSync(path.join(repoRoot, `claude/shared/${name}.ts`), "utf8")
+      expect(contents.trim()).toBe(`export * from "../../shared/${name}"`)
+    }
+  })
+
+  it("v0.8.0 slash commands carry the canonical proposal-flow guard rails", () => {
     const commandsDir = path.join(repoRoot, "claude/commands")
     const proposal = readFileSync(path.join(commandsDir, "akm-proposal.md"), "utf8")
-    expect(proposal).toContain("proposal list")
-    expect(proposal).toContain("proposal accept")
-    expect(proposal).toContain("proposal reject")
+    expect(proposal).toContain("akm --format json -q proposals")
+    expect(proposal).toContain("akm --format json -q accept <id>")
+    expect(proposal).toContain("akm --format json -q reject <id>")
     expect(proposal).toMatch(/[Cc]onfirm with the user/)
 
     const review = readFileSync(path.join(commandsDir, "akm-review-proposals.md"), "utf8")
-    expect(review).toContain("proposal list --status pending")
-    expect(review).toMatch(/[Dd]o not call `?akm proposal accept/)
+    expect(review).toContain("proposals --status pending")
+    expect(review).toMatch(/[Dd]o not call `?akm accept/)
 
-    const distill = readFileSync(path.join(commandsDir, "akm-distill.md"), "utf8")
-    expect(distill).toContain("llm.features.feedback_distillation")
-    expect(distill).toContain("distill <ref>")
+    const improve = readFileSync(path.join(commandsDir, "akm-improve.md"), "utf8")
+    expect(improve).toContain("improve")
+    expect(improve).toContain("replaces the old reflect/distill split")
 
     const setup = readFileSync(path.join(commandsDir, "akm-setup.md"), "utf8")
     expect(setup).toContain("agent.default")
@@ -256,9 +282,9 @@ describe("Claude plugin metadata", () => {
     expect(body).toContain("## Feature parity tracker")
     expect(body).toContain("| Session-start retrieval | #27 | Shipped in both plugins |")
     expect(body).toContain("| Auto-attach scope | #28 | Shipped in both plugins |")
-    expect(body).toContain("| Conversation-derived feedback | #29 | Open |")
+    expect(body).toContain("| Conversation-derived feedback | #29 | Deferred to 0.9.0")
     expect(body).toContain("| Session-end `akm index` | #30 | Shipped in both plugins |")
-    expect(body).toContain("| Harness-provided LLM fallback | #31 | Open |")
+    expect(body).toContain("| Harness-provided LLM fallback | #31 | Deferred to 0.9.0")
     expect(body).toContain("| Shared secret redaction | #64 | Shipped in both plugins |")
     expect(body).toContain("| Structured memory events | #55 | Shipped in both plugins |")
     expect(body).toContain("| Claude PreToolUse safety guard | #56 | Shipped in Claude |")
@@ -270,48 +296,39 @@ describe("Claude plugin metadata", () => {
     expect(body).toContain("| Subagent context/result capture | #62 | Shipped in both plugins |")
     expect(body).toContain("| Workflow compliance telemetry | #63 | Shipped in both plugins |")
   })
+
+  it("documents the Claude CLI one-shot agent dispatch path", () => {
+    const commandPath = path.join(repoRoot, "claude/commands/akm-agent.md")
+    const body = readFileSync(commandPath, "utf8")
+
+    expect(body).toContain("--agents")
+    expect(body).toContain("--agent")
+    expect(body).toContain("--model")
+    expect(body).toContain("--tools")
+    expect(body).toContain("--print")
+    expect(body).toContain("-p")
+  })
 })
 
 describe("Claude hook scripts", () => {
-  it("ensures the latest akm package through npm when bun is unavailable", () => {
+  it("reuses akm on PATH when its version satisfies the required range", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
-    const globalBinDir = path.join(tempDir, "global-bin")
     const stateDir = path.join(tempDir, "state")
-    const npmLogPath = path.join(tempDir, "npm.log")
-    const quotedNpmLogPath = shellQuote(npmLogPath)
-    const quotedGlobalBinDir = shellQuote(globalBinDir)
-    const quotedTempDir = shellQuote(tempDir)
-
     mkdirSync(binDir, { recursive: true })
-    mkdirSync(globalBinDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
 
-    const fakeNpmPath = path.join(binDir, "npm")
     writeFileSync(
-      fakeNpmPath,
+      path.join(binDir, "akm"),
       `#!/usr/bin/env sh
-set -eu
-if [ "$1" = "install" ] && [ "\${2:-}" = "-g" ]; then
-    printf '%s %s %s\\n' "$1" "\${2:-}" "\${3:-}" >> ${quotedNpmLogPath}
-    mkdir -p ${quotedGlobalBinDir}
-    cat > ${quotedGlobalBinDir}/akm <<'EOF'
-#!/usr/bin/env sh
-echo "akm 9.9.9"
-EOF
-    chmod +x ${quotedGlobalBinDir}/akm
-elif [ "$1" = "bin" ] && [ "\${2:-}" = "-g" ]; then
-    printf '%s\\n' ${quotedGlobalBinDir}
-elif [ "$1" = "prefix" ] && [ "\${2:-}" = "-g" ]; then
-    printf '%s\\n' ${quotedTempDir}
-elif [ "$1" = "--version" ]; then
-    printf '10.9.0\\n'
-else
-    exit 0
+if [ "$1" = "--version" ]; then
+  echo "akm 0.8.3"
+  exit 0
 fi
+exit 0
 `,
     )
-    chmodSync(fakeNpmPath, 0o755)
+    chmodSync(path.join(binDir, "akm"), 0o755)
 
     runHook(["ensure-akm"], {
       env: {
@@ -321,9 +338,8 @@ fi
       },
     })
 
-    expect(readFileSync(npmLogPath, "utf8")).toContain("install -g akm-cli@latest")
-    expect(existsSync(path.join(binDir, "akm"))).toBe(true)
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.8.3")
   })
 
   it("records user feedback and memory intent from prompt submissions", () => {
@@ -387,6 +403,56 @@ fi
     })
 
     expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skill:release --negative --note stale")
+  })
+
+  describe("pre-tool-agent model alias resolution", () => {
+    function runPreToolAgent(model: string | null, options?: { env?: Record<string, string> }) {
+      const payload: Record<string, unknown> = { tool_input: model === null ? {} : { model } }
+      return runHook(["pre-tool-agent"], {
+        input: JSON.stringify(payload),
+        env: {
+          HOME: process.env.HOME ?? "/tmp",
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          ...options?.env,
+        },
+      })
+    }
+
+    it("passes full Claude model IDs through unchanged (no silent downgrade to sonnet)", () => {
+      const fullIds = [
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+        "claude-3-5-sonnet-20241022",
+      ]
+      for (const id of fullIds) {
+        const stdout = runPreToolAgent(id)
+        // Empty stdout means resolveModel returned the input unchanged — no
+        // rewrite was emitted. The Agent tool keeps the full ID intact.
+        expect(stdout.trim()).toBe("")
+      }
+    })
+
+    it("keeps the four short aliases (sonnet/opus/haiku/inherit) as-is", () => {
+      for (const alias of ["sonnet", "opus", "haiku", "inherit"]) {
+        const stdout = runPreToolAgent(alias)
+        expect(stdout.trim()).toBe("")
+      }
+    })
+
+    it("remaps known cross-provider aliases to the configured Claude short alias", () => {
+      const stdout = runPreToolAgent("balanced")
+      const payload = JSON.parse(stdout)
+      expect(payload.hookSpecificOutput.hookEventName).toBe("PreToolUse")
+      expect(payload.hookSpecificOutput.permissionDecision).toBe("allow")
+      expect(payload.hookSpecificOutput.updatedInput.model).toBe("sonnet")
+    })
+
+    it("falls back unknown aliases to sonnet so dispatch is never rejected upstream", () => {
+      const stdout = runPreToolAgent("totally-made-up-alias")
+      const payload = JSON.parse(stdout)
+      expect(payload.hookSpecificOutput.updatedInput.model).toBe("sonnet")
+    })
   })
 
   it("shell shim notifies the agent and disables Claude hooks when Bun is unavailable", () => {
@@ -479,8 +545,8 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("knowledge:release-plan")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/prompt-sess-curate-2.md")
   })
 
   it("curate-prompt recalls release workflow prompts", () => {
@@ -517,8 +583,8 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("command:bump-version")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("workflow:release")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/prompt-sess-curate-release-1.md")
   })
 
   it("curate-prompt skips curation for very short prompts", () => {
@@ -558,21 +624,61 @@ echo "[knowledge] should-not-appear"
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(invokeLog)
 
+    mkdirSync(path.join(tempDir, ".config", "akm"), { recursive: true })
+    writeFileSync(path.join(tempDir, ".config", "akm", "config.json"), `${JSON.stringify({})}\n`)
+
     // Fake akm: version/install, index no-op, hints + curated output.
+    // The version MUST satisfy the plugin's required range (^0.8.0 in 0.8.0+)
+    // so the new SessionStart consent gate treats akm as healthy and proceeds
+    // with the normal injected-context flow.
+    // Fake-akm helper: persist `akm config set <dottedKey> <jsonOrString>` calls
+    // into $HOME/.config/akm/config.json so tests that assert against the file
+    // still observe the plugin's writes after #463 moved them through the CLI.
+    const fakeAkmConfigSet = path.join(binDir, "fake-akm-config-set.cjs")
+    writeFileSync(
+      fakeAkmConfigSet,
+      `const fs = require("node:fs");
+const path = require("node:path");
+const [, , configPath, dottedKey, rawValue] = process.argv;
+const segs = dottedKey.split(".");
+let v;
+try { v = JSON.parse(rawValue); } catch { v = rawValue; }
+const cur = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+let node = cur;
+for (let i = 0; i < segs.length - 1; i++) {
+  if (typeof node[segs[i]] !== "object" || node[segs[i]] === null) node[segs[i]] = {};
+  node = node[segs[i]];
+}
+node[segs[segs.length - 1]] = v;
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, JSON.stringify(cur, null, 2) + "\\n");
+`,
+    )
+
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 9.9.9"; exit 0 ;;
+  --version) echo "akm 0.8.3"; exit 0 ;;
+  config)
+    if [ "$2" = "set" ]; then
+      # Strip the akm-cli 0.8.0+ hook-driven flags before passing positional args.
+      # The plugin now calls: akm config set --silent --layer user <key> <value>
+      # The fake helper only understands positional <key> <value>.
+      shift 2
+      while :; do
+        case "$1" in
+          --silent) shift ;;
+          --layer) shift 2 ;;
+          *) break ;;
+        esac
+      done
+      node ${shellQuote(fakeAkmConfigSet)} "$HOME/.config/akm/config.json" "$1" "$2"
+      exit $?
+    fi
+    exit 0 ;;
 esac
-if [ "$1" = "--format" ] && [ "$2" = "json" ] && [ "$3" = "-q" ] && [ "$4" = "config" ] && [ "$5" = "get" ] && [ "$6" = "agent.default" ]; then
-  exit 0
-fi
-if [ "$1" = "--format" ] && [ "$2" = "json" ] && [ "$3" = "-q" ] && [ "$4" = "config" ] && [ "$5" = "set" ] && [ "$6" = "agent.default" ] && [ "$7" = "claude" ]; then
-  echo '{"ok":true}'
-  exit 0
-fi
 for arg in "$@"; do
   case "$arg" in
     hints) echo "# Stash hints"; echo "akm search <query>"; exit 0 ;;
@@ -595,14 +701,20 @@ exit 0
     })
 
     const payload = JSON.parse(stdout.trim())
+    const config = JSON.parse(readFileSync(path.join(tempDir, ".config", "akm", "config.json"), "utf8"))
     expect(payload.hookSpecificOutput.hookEventName).toBe("SessionStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM is available")
     expect(payload.hookSpecificOutput.additionalContext).toContain("Stash hints")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash - assets relevant to this session")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("skill:deploy")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/session-sess-start-1.md")
+    // 0.8.0 canonical shape: defaults.agent + profiles.agent.<name>; the legacy
+    // agent.default slot is no longer written so akm's auto-migrate doesn't
+    // clobber sibling keys on load.
+    expect(config.defaults.agent).toBe("claude")
+    expect(config.profiles.agent.claude).toEqual({ platform: "claude" })
+    expect(config.agent).toBeUndefined()
 
     const invocations = readFileSync(invokeLog, "utf8")
-    expect(invocations).toContain("config set agent.default claude")
     expect(invocations).toContain("curate")
     expect(invocations).toContain("--detail agent")
     expect(invocations).not.toContain("--for-agent")
@@ -964,8 +1076,58 @@ exit 0
     const body = readFileSync(rememberBody, "utf8")
     expect(body).toContain("# Session summary")
     expect(body).toContain("Reason: session-end")
+    expect(body).toContain("## Full-detail evidence files")
+    expect(body).toContain("events.jsonl")
+    expect(body).toContain("memory-candidates.jsonl")
+    expect(body).toContain("session.log")
+    expect(body).toContain("## Evidence aggregates")
     expect(body).toContain("- ref: skill:rollout")
     expect(existsSync(bufferPath)).toBe(false)
+  })
+
+  it("capture-memory writes checkpoint memories for proposal prep without clearing the final buffer", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const rememberLog = path.join(tempDir, "remember.log")
+    const rememberBody = path.join(tempDir, "remember.body")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    const bufferPath = path.join(sessionsDir, "sess-prep-1.md")
+    writeFileSync(
+      bufferPath,
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember the rollout\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    const quotedLog = shellQuote(rememberLog)
+    const quotedBody = shellQuote(rememberBody)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+if printf '%s' "$*" | grep -q 'remember'; then
+  cat > ${quotedBody}
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "proposal-prep"], {
+      input: JSON.stringify({ session_id: "sess-prep-1" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const args = readFileSync(rememberLog, "utf8")
+    expect(args).toMatch(/--format json -q remember --name claude-checkpoint-\d{14}-sess-pre --force/)
+    expect(readFileSync(rememberBody, "utf8")).toContain("Reason: proposal-prep")
+    expect(existsSync(bufferPath)).toBe(true)
   })
 
   it("capture-memory validates ref candidates against the live stash and writes only survivors to frontmatter", () => {
@@ -1525,52 +1687,40 @@ exit 0
     expect(args).toContain("--channel nightly")
   })
 
-  it("pre-tool blocks risky proposal acceptance commands", () => {
+  it("pre-tool returns an empty verdict (Bash gating removed; defer to platform permissions)", () => {
+    // 0.8.0 removed the tokenized risky-command gate. The hook is still
+    // wired for pre-tool calls but never blocks — destructive akm verbs are
+    // now gated via Claude Code's `permissions.ask` / `permissions.deny`
+    // entries (documented in claude/README.md "Locking down destructive
+    // commands"). This test pins the no-block behavior so a future regression
+    // re-introducing tokenized blocking would be caught.
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
     mkdirSync(stateDir, { recursive: true })
 
-    const stdout = runHook(["pre-tool", "bash"], {
-      input: JSON.stringify({
-        session_id: "sess-pretool-1",
-        tool: "Bash",
-        input: { command: "akm proposal accept p_123" },
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const payload = JSON.parse(stdout.trim())
-    expect(payload.decision).toBe("block")
-    expect(payload.reason).toContain("explicit user approval")
-    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("pretool_blocked") && line.includes("proposal accept"))).toBe(true)
-  })
-
-  it("pre-tool blocks suspicious raw remember payloads containing secrets", () => {
-    const tempDir = makeTempDir()
-    const stateDir = path.join(tempDir, "state")
-    mkdirSync(stateDir, { recursive: true })
-
-    const stdout = runHook(["pre-tool", "bash"], {
-      input: JSON.stringify({
-        session_id: "sess-pretool-2",
-        tool: "Bash",
-        input: { command: "akm remember OPENAI_API_KEY=sk-secret-value" },
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        XDG_STATE_HOME: stateDir,
-      },
-    })
-
-    const payload = JSON.parse(stdout.trim())
-    expect(payload.decision).toBe("block")
-    expect(payload.reason).toContain("include secrets")
+    for (const command of [
+      "akm accept p_123",
+      "akm revert p_abc",
+      "akm tasks add nightly --cron \"0 2 * * *\"",
+      "akm vault set vault:dev MYKEY",
+      "akm remember OPENAI_API_KEY=sk-secret-value",
+    ]) {
+      const stdout = runHook(["pre-tool", "bash"], {
+        input: JSON.stringify({
+          session_id: "sess-pretool-passthrough",
+          tool: "Bash",
+          input: { command },
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+      // No stdout / no block decision for any of these — the hook is a
+      // no-op for the Bash matcher post-removal.
+      expect(stdout.trim()).toBe("")
+    }
   })
 
   it("user-prompt-expansion emits guidance for mutating slash commands", () => {
@@ -1609,6 +1759,71 @@ exit 0
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
     expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+  })
+
+  it("user-prompt-expansion captures a fresh checkpoint before improve/propose flows", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const rememberLog = path.join(tempDir, "remember.log")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+    writeFileSync(
+      path.join(sessionsDir, "sess-expand-prep.md"),
+      "## 2026-04-22T03:00:00Z — user memory intent\nremember release lessons\n\n## 2026-04-22T03:05:00Z — Bash success\n- ref: skill:rollout\n",
+    )
+
+    const quotedLog = shellQuote(rememberLog)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["user-prompt-expansion"], {
+      input: JSON.stringify({ session_id: "sess-expand-prep", command: "/akm-improve memory:release-summary --task refine lesson" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const recorded = readFileSync(rememberLog, "utf8")
+    expect(recorded).toContain("remember --name claude-checkpoint-")
+    expect(existsSync(path.join(sessionsDir, "sess-expand-prep.md"))).toBe(true)
+  })
+
+  it("task-completed candidate extraction keeps source paths and targets the touched ref", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["task-completed"], {
+      input: JSON.stringify({
+        session_id: "sess-task-candidate",
+        task_id: "task-1",
+        summary: "The release workflow failed with skill:deploy, and the fix worked after updating the checklist.",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const candidates = readFileSync(path.join(stateDir, "akm-claude/memory-candidates.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+    expect(candidates.length).toBeGreaterThan(0)
+    expect(candidates.some((candidate) => candidate.targetRef === "skill:deploy")).toBe(true)
+    expect(candidates.some((candidate) => Array.isArray(candidate.sourcePaths) && candidate.sourcePaths.some((entry: string) => entry.includes("sessions/sess-task-candidate.md")))).toBe(true)
   })
 
   it("post-tool-batch records a grouped tool observation without throwing", () => {

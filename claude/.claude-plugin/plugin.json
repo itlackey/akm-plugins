@@ -1,7 +1,7 @@
 {
   "name": "akm",
-  "description": "Search, show, curate, and manage akm stash assets (skills, commands, agents, knowledge, memories, lessons, scripts, workflows, vaults, wikis) from local directories and registries, with agentic hooks that auto-load relevant assets, record memories, route the akm v0.7.0 proposal queue, and feed asset-usage feedback back into the stash so it improves with every session.",
-  "version": "0.8.0-rc.8",
+  "description": "Search, show, curate, and manage akm stash assets (skills, commands, agents, knowledge, memories, lessons, scripts, workflows, vaults, wikis) from local directories and registries, with agentic hooks that auto-load relevant assets, record memories, route the akm v0.8.0 proposal queue, and feed asset-usage feedback back into the stash so it improves with every session.",
+  "version": "0.8.0",
   "author": {
     "name": "itlackey",
     "url": "https://github.com/itlackey"
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" session-start",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-start",
             "timeout": 120,
             "statusMessage": "Ensuring AKM is available and loading stash hints..."
           }
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" curate-prompt",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" curate-prompt",
             "timeout": 15
           }
         ]
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" user-prompt-expansion",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" user-prompt-expansion",
             "timeout": 10
           }
         ]
@@ -61,12 +61,62 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Agent",
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" pre-tool bash",
-            "timeout": 10
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-agent",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
+            "timeout": 5
           }
         ]
       },
@@ -87,13 +137,63 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" post-tool success",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool success",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" auto-feedback success",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" auto-feedback success",
             "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash success",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash success",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash success",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash success",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash success",
+            "timeout": 5
           }
         ]
       }
@@ -104,13 +204,63 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" post-tool failure",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool failure",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" auto-feedback failure",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" auto-feedback failure",
             "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash failure",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash failure",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash failure",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash failure",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-nonbash failure",
+            "timeout": 5
           }
         ]
       }
@@ -120,7 +270,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" post-tool-batch",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool-batch",
             "timeout": 15
           }
         ]
@@ -131,7 +281,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" capture-memory session-end",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory session-end",
             "timeout": 30
           }
         ]
@@ -142,7 +292,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" capture-memory subagent-end",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory subagent-end",
             "timeout": 30
           }
         ]
@@ -153,7 +303,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" subagent-start",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" subagent-start",
             "timeout": 15
           }
         ]
@@ -164,7 +314,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" task-created",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" task-created",
             "timeout": 10
           }
         ]
@@ -175,7 +325,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" task-completed",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" task-completed",
             "timeout": 15
           }
         ]
@@ -186,7 +336,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" capture-memory pre-compact",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory pre-compact",
             "timeout": 30
           }
         ]
@@ -197,7 +347,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" post-compact",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-compact",
             "timeout": 15
           }
         ]
@@ -208,7 +358,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" session-end",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-end",
             "timeout": 30
           }
         ]

@@ -38,10 +38,9 @@
           "claude:akm-vault",
           "claude:akm-wiki",
           "claude:akm-workflow",
-          "opencode:akm-distill-lesson",
+          "opencode:akm-improve-asset",
           "opencode:akm-evolve-session",
           "opencode:akm-propose-asset",
-          "opencode:akm-reflect-on-failure",
           "opencode:akm-review-proposals",
           "opencode:akm-workflow-status"
         ],
@@ -102,7 +101,7 @@
           [
             "opencode commands",
             6,
-            "akm-distill-lesson, akm-evolve-session, akm-propose-asset, akm-reflect-on-failure, akm-review-proposals, akm-workflow-status"
+            "akm-improve-asset, akm-evolve-session, akm-propose-asset, akm-review-proposals, akm-workflow-status"
           ],
           [
             "opencode agents",

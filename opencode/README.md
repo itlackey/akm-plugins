@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.7.0+). Registers tools that let your AI agent **search**, **show**, and **manage** stash assets — skills, commands, agents, knowledge, memories, lessons, scripts, workflows, vaults, and wikis — **operate the v0.7.0 proposal queue** and **distill lessons** through dedicated tools, plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used (skipping proposed-quality drafts), and harvest session memories so the stash improves with every session.
+OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Registers tools that let your AI agent **search**, **show**, and **manage** stash assets — skills, commands, agents, knowledge, memories, lessons, scripts, workflows, vaults, and wikis — **operate the v0.8.0 proposal queue** and **improve assets** through dedicated tools, plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used (skipping proposed-quality drafts), and harvest session memories so the stash improves with every session.
 
 ## Installation
 
@@ -14,7 +14,7 @@ Add to your OpenCode config (`opencode.json`):
 
 ## Tools
 
-The plugin exposes **20 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, ad-hoc `run`, raw `agent`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
+The plugin exposes **19 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, `tasks`, ad-hoc `run`, raw `agent`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
 
 | Tool | Description |
 |------|-------------|
@@ -32,10 +32,9 @@ The plugin exposes **20 high-value tools**. Long-tail verbs (`add`, `save`, `imp
 | `akm_vault` | Vault `list` / `show` (key names) / `create` / `set` / `unset` / `load` (opaque shell-eval text). **Values never surface** through `list`/`show`; `load` output is meant for `eval` and must not be displayed back |
 | `akm_wiki` | Manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`) |
 | `akm_workflow` | Drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`) |
-| `akm_proposal` | Operate the v0.7.0 proposal queue (`list` / `show` / `diff` / `accept` / `reject`). Always confirm with the user before `accept`/`reject` — those operations require explicit approval |
-| `akm_reflect` | Generate a reflection proposal via the configured agent CLI; output lands in the proposal queue only |
+| `akm_proposal` | Operate the v0.8.0 proposal queue (`list` / `show` / `diff` / `accept` / `reject`). Always confirm with the user before `accept`/`reject` — those operations require explicit approval |
+| `akm_improve` | Generate improvement proposals for an existing ref, a whole asset type, or the current stash scope; output lands in the proposal queue only |
 | `akm_propose` | Generate a new-asset proposal via the configured agent CLI; the result is `quality:"proposed"` until accepted |
-| `akm_distill` | Distill an AKM ref (typically `memory:*` or `knowledge:*`) into a proposed `lesson` (gated by `llm.features.feedback_distillation`) |
 | `akm_init` | Initialize AKM's working stash directory and persist `stashDir` in config. This is the agent-safe initialization path; interactive `akm setup` is human-facing |
 | `akm_help` | Discover the right `akm` CLI invocation for non-first-class verbs. Returns a curated quick-reference table plus live `akm <subcommand> --help` output |
 
@@ -43,19 +42,67 @@ The plugin exposes **20 high-value tools**. Long-tail verbs (`add`, `save`, `imp
 
 The plugin subscribes to OpenCode lifecycle events so AKM participates in the
 session loop instead of waiting to be called. Every hook is non-blocking and
-fails silently when `akm` is not on PATH — the TUI is never affected.
+fails silently when a compatible `akm` is not resolvable — the TUI is never affected.
 
 | Event | What happens |
 | --- | --- |
-| **`session.created`** (event hook) | Sets `agent.default` to `opencode` when missing, warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions start with relevant stash context. |
+| **`session.created`** (event hook) | Sets the AKM default agent in `~/.config/akm/config.json` to `opencode` when missing, warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions start with relevant stash context. |
 | **`chat.message`** | Records user feedback/memory intent and appends a short reminder to use `akm_search` / `akm_curate` when more stash context is needed. It does not auto-run AKM CLI lookups on every message. |
 | **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, pending proposal summaries, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
-| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations until `confirm:true` is provided. |
-| **`permission.ask`** / **`command.execute.before`** | Detects risky raw `akm` CLI commands executed through shell/commands and denies them until the user explicitly approves the exact operation. |
+| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations on the plugin's own typed tools (`akm_vault show`, `akm_proposal accept`, etc.) until `confirm:true` is provided. This contract is per-tool, not a generic shell-command gate. |
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, checkpoints memories every `AKM_MEMORY_CHECKPOINT_EVERY` successful asset-touching tool calls, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
-| **`shell.env`** | Exposes `AKM_STASH_DIR`, `AKM_PROJECT`, and `AKM_PLUGIN_VERSION` to shell tools so plain `akm` calls inherit the right context. |
-| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Flushes the per-session buffer into a `memory:opencode-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. Requires at least two observations before persisting. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows a successful flush with `akm index` so upstream inference/graph passes run immediately. |
+| **`shell.env`** | Exposes `AKM_PROJECT`, `AKM_PLUGIN_VERSION`, and the resolved `AKM_STASH_DIR` to shell tools so raw shell checks and plain `akm` invocations see the same stash path as the plugin. |
+| **`stop`** / **`session.idle`** / **`session.compacted`** / **`session.deleted`** | Flushes the per-session buffer into a `memory:opencode-session-YYYYMMDD-<sid>` memory so every meaningful session contributes durable context for future searches. The persisted memory now includes compact event/candidate summaries plus explicit file paths to the full-detail plugin state and OpenCode host logs so `akm improve` can inspect deeper evidence when needed. Requires at least two observations before persisting. When `AKM_INDEX_ON_SESSION_END=1`, the hook follows a successful flush with `akm index` so upstream inference/graph passes run immediately. |
+
+### Locking down destructive commands
+
+Earlier versions of this plugin shipped `permission.ask` and
+`command.execute.before` hooks that tokenized each raw `akm` CLI invocation
+and **denied** a hard-coded list of risky subcommands (vault writes,
+`save --push`, `accept` / `reject` / `revert`, `tasks add` / `tasks run`,
+`upgrade`, `update --all`, etc.) until the user re-approved them inline.
+That gate has been removed in 0.8.0. The tokenized matcher was brittle — it
+produced false positives on commit messages, heredoc bodies, and other
+prose that happened to contain `akm <verb>` substrings — and gating
+destructive shell calls is fundamentally the host platform's job, not a
+plugin's.
+
+OpenCode does not currently expose a first-class declarative permission
+DSL equivalent to Claude Code's `permissions.ask` / `permissions.deny`.
+For the verbs that historically tripped the plugin's gate, lock things
+down at the OS level instead:
+
+- **Run `akm` under a wrapper script** that prompts (or denies) on the
+  destructive subcommands you care about. Put the wrapper earlier on
+  `PATH` than the real `akm`. For example:
+
+  ```sh
+  #!/usr/bin/env bash
+  # ~/bin/akm — wraps the real akm to confirm destructive verbs
+  case "$1 $2 $3" in
+    "vault set "*|"vault unset "*|"vault load "*|"vault create "*|\
+    "save --push"*|"remove "*|"accept "*|"reject "*|"revert "*|\
+    "tasks add "*|"tasks remove "*|"tasks enable "*|"tasks disable "*|\
+    "tasks run "*|"upgrade"*|"update --all"*|"config set "*)
+      read -rp "Run 'akm $*' ? [y/N] " ans
+      [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted"; exit 1; } ;;
+  esac
+  exec /usr/local/bin/akm-real "$@"
+  ```
+
+- **Use OS-level access controls** (`sudo`, `chmod`, mount restrictions,
+  AppArmor / SELinux profiles) when running OpenCode in shared or
+  sandboxed environments.
+- **Vault writes still bypass the chat turn entirely.** Use the typed
+  `akm_vault` tool only for read paths (`list`, `show` of key names,
+  `load` for shell-eval pipelines). To create vaults or set/unset values,
+  run `akm vault …` directly in the shell so secret values never pass
+  through the chat turn.
+
+The plugin's typed `akm_*` tools (`akm_vault show`, `akm_proposal accept`,
+etc.) still apply their per-tool `confirm:true` contracts at
+`tool.execute.before`. Only the raw-shell tokenized gate has been removed.
 
 ### Environment overrides
 
@@ -76,7 +123,6 @@ fails silently when `akm` is not on PATH — the TUI is never affected.
 | `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong|failed|broken|didn't work|did not work|bad)\b` | Case-insensitive regex used for negative retrospective feedback signals. |
 | `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Comma-separated list of scope fields to attach on every `akm_remember`, `akm_curate`, and `akm_feedback` call. Remove a key to opt out of that dimension. |
 | `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Seconds allowed for lightweight pending-proposal count checks during context injection. |
-| `AKM_PACKAGE_REF` | `akm-cli@latest` | Override the npm/bun package spec used for auto-install (e.g. pin to `akm-cli@0.7.0` in CI). |
 
 ### Curator agent
 
@@ -96,14 +142,13 @@ The plugin injects a concise AKM workflow instruction pack into context so agent
 - record feedback after the result is known;
 - treat `lesson:*` as first-class durable assets;
 - treat proposed-quality assets as uncurated until accepted;
-- use `akm_help` to route `proposal`, `distill`, `reflect`, and `propose` CLI workflows;
+- use `akm_help` to route `proposal`, `improve`, `propose`, and `tasks` CLI workflows;
 - require explicit user approval before proposal acceptance/rejection, push saves, source removal, CLI upgrades, update-all, or vault value access.
 
 The package also ships OpenCode command docs for common workflows:
 
 - `/akm-review-proposals`
-- `/akm-distill-lesson`
-- `/akm-reflect-on-failure`
+- `/akm-improve-asset`
 - `/akm-propose-asset`
 - `/akm-evolve-session`
 - `/akm-workflow-status`
@@ -120,7 +165,7 @@ Inputs:
 - `ref` (optional): stash ref like `agent:coach.md`
 - `query` (optional): resolve best matching stash agent when `ref` is omitted
 - `task_prompt` (required): user task to run
-- `dispatch_agent` (optional): OpenCode agent name (defaults to `general`)
+- `dispatch_agent` (optional): OpenCode agent name, or a `provider/model` override like `openai/gpt-5.3-codex` (defaults to `general`)
 - `as_subtask` (optional): create child session (defaults to `true`)
 
 At least one of `ref` or `query` is required.
@@ -128,6 +173,7 @@ At least one of `ref` or `query` is required.
 Behavior:
 - Loads the stash agent via `akm show`
 - Uses stash `prompt` verbatim as OpenCode `system`
+- Treats `dispatch_agent` values in `provider/model` form as model overrides and keeps a valid OpenCode agent in the `agent` field
 - Applies stash `modelHint` when in `provider/model` format
 - Applies stash `toolPolicy` when it maps to boolean tool flags
 
@@ -139,24 +185,24 @@ Inputs:
 - `ref` (optional): stash ref like `command:review.md`
 - `query` (optional): resolve best matching stash command when `ref` is omitted
 - `arguments` (optional): raw command arguments for `$ARGUMENTS`, `$1`, `$2`, etc.
-- `dispatch_agent` (optional): OpenCode agent name (defaults to current agent)
+- `dispatch_agent` (optional): OpenCode agent name, or a `provider/model` override like `openai/gpt-5.3-codex` (defaults to current agent)
 - `as_subtask` (optional): create child session (defaults to `false`)
 
 At least one of `ref` or `query` is required.
 
 ## Prerequisites
 
-When the plugin loads, it checks the installed `akm` version first and only runs `bun install -g akm-cli@latest` when `akm` is missing or older than the latest stable npm release. Newer pre-releases and local builds are left in place. It then prefers the Bun-installed binary and falls back to an existing `akm` on PATH when needed. It does not run the standalone shell installers automatically.
+When the plugin loads, it resolves the bundled `akm-cli` dependency installed with the plugin and requires an `akm` version that satisfies `^0.8.0`. It prefers that bundled binary first, falls back to an existing `akm` on PATH only when it also satisfies the same range, and otherwise returns a structured error telling you to reinstall or update the plugin so OpenCode/Bun installs the dependency. It does not run global installers from plugin runtime.
 
 ```sh
 # macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
 # PowerShell (Windows)
 irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
-
-# Or via Bun
-bun install -g akm-cli@latest
 ```
+
+Reinstall or update the plugin to let OpenCode/Bun install the bundled `akm-cli`
+dependency automatically.
 
 ## Stash model
 
@@ -176,11 +222,11 @@ stash/
 ├── agents/     # markdown files
 ├── knowledge/  # markdown files
 ├── memories/   # markdown memory files (akm remember)
-├── lessons/    # first-class durable learnings (lesson:<name>) — produced by akm distill, accepted via akm_proposal accept
+├── lessons/    # first-class durable learnings (lesson:<name>) — often produced by akm improve, accepted via akm accept
 ├── workflows/  # multi-step procedures (workflow:<name>)
 ├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
 ├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
-└── .akm/proposals/  # v0.7.0 proposal queue — drafts that never leak into search or commits
+└── .akm/proposals/  # v0.8.0 proposal queue — drafts that never leak into search or commits
 ```
 
 ## Vaults

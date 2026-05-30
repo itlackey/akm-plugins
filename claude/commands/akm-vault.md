@@ -52,7 +52,8 @@ explicitly confirms each call.
 - For `load <ref>`: pipe the output straight to the consumer (typically `eval`); do not
   surface the snippet body in the chat turn.
 - If the user shares a value to be stored, do **not** repeat it back. Direct them to
-  `/akm-help` topic="vault" so they can run `akm vault set <ref> <key>` themselves, or
-  pipe it through stdin where supported.
+  `/akm-help` topic="vault" so they can run `akm vault set <ref> <key> --from-env <VAR>`
+  themselves (or pipe via stdin: `printf '%s' "$SECRET" | akm vault set <ref> <key>`).
+  The positional VALUE and KEY=VALUE forms were removed in 0.8.0 for security.
 - If `akm vault list` or `akm vault show` output ever contains something that looks like
   a value (it should not), redact it before surfacing the response to the user.
