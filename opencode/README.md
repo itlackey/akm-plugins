@@ -165,7 +165,7 @@ Inputs:
 - `ref` (optional): stash ref like `agent:coach.md`
 - `query` (optional): resolve best matching stash agent when `ref` is omitted
 - `task_prompt` (required): user task to run
-- `dispatch_agent` (optional): OpenCode agent name (defaults to `general`)
+- `dispatch_agent` (optional): OpenCode agent name, or a `provider/model` override like `openai/gpt-5.3-codex` (defaults to `general`)
 - `as_subtask` (optional): create child session (defaults to `true`)
 
 At least one of `ref` or `query` is required.
@@ -173,6 +173,7 @@ At least one of `ref` or `query` is required.
 Behavior:
 - Loads the stash agent via `akm show`
 - Uses stash `prompt` verbatim as OpenCode `system`
+- Treats `dispatch_agent` values in `provider/model` form as model overrides and keeps a valid OpenCode agent in the `agent` field
 - Applies stash `modelHint` when in `provider/model` format
 - Applies stash `toolPolicy` when it maps to boolean tool flags
 
@@ -184,7 +185,7 @@ Inputs:
 - `ref` (optional): stash ref like `command:review.md`
 - `query` (optional): resolve best matching stash command when `ref` is omitted
 - `arguments` (optional): raw command arguments for `$ARGUMENTS`, `$1`, `$2`, etc.
-- `dispatch_agent` (optional): OpenCode agent name (defaults to current agent)
+- `dispatch_agent` (optional): OpenCode agent name, or a `provider/model` override like `openai/gpt-5.3-codex` (defaults to current agent)
 - `as_subtask` (optional): create child session (defaults to `false`)
 
 At least one of `ref` or `query` is required.

@@ -162,7 +162,7 @@ bun install -g akm-cli@^0.8.0
 
 | Repo | What it is |
 | --- | --- |
-| [itlackey/akm](https://github.com/itlackey/akm) | Core Agent Kit Manager CLI (v0.8.0+) |
+| [itlackey/akm](https://github.com/itlackey/akm) | Core Agent Knowledge Management CLI (v0.8.0+) |
 | [itlackey/akm-stash](https://github.com/itlackey/akm-stash) | Official stash — ready-made skills, workflows, commands, and knowledge |
 | [itlackey/akm-registry](https://github.com/itlackey/akm-registry) | Official registry index — pre-configured in every akm install |
 | [itlackey/akm-bench](https://github.com/itlackey/akm-bench) | Benchmark harness for measuring agent performance with akm |

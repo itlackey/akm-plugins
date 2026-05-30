@@ -52,8 +52,8 @@ This table is the curated long-tail reference, embedded verbatim from
 | Manage scheduled task assets via the OS scheduler | `akm tasks <add|list|show|remove|enable|disable|run|history|sync|doctor> ...` | Tasks are first-class in v0.8.0 but remain a long-tail CLI surface in this plugin. | tasks, scheduled task, cron, launchd, schtasks |
 | Create a proposed asset for a coverage gap | `akm propose <type> <name> --task "..."` | Drafts a `quality:"proposed"` asset that lands in the proposal queue — never directly curated. | propose, coverage gap, proposed asset |
 | Search including proposed-quality assets | `akm search <query> --include-proposed` | Default search hides drafts; this flag merges them into hits. Do not treat proposed assets as curated until accepted. | include-proposed, proposed quality, lesson |
-| Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]` | Confirm with the user before passing `--trust` or registering a website crawler. | add, install, register, kit, source, github, npm |
-| Commit (and optionally push) pending stash changes | `akm save [<source-name>] [-m <msg>] [--push]` | Add `--push` only when the stash is writable; review the diff first. | save, commit, push, publish, git |
+| Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--provider <p>] [--max-pages N] [--max-depth N] [--allow-insecure]` | Confirm with the user before registering a website crawler or passing `--allow-insecure`. | add, install, register, kit, source, github, npm |
+| Commit (and optionally push) pending stash changes | `akm save [<source-name>] [-m <msg>]` | For writable git-backed sources, save commits and pushes; review the diff first. | save, commit, push, publish, git |
 | Import a file (or stdin) into the stash as a typed asset | `akm import <path|-> [--name <name>] [--force]` | Use `-` and pipe content via stdin to import a string. | import, ingest, upload, stdin |
 | Clone an asset from any source for editing | `akm clone <ref> [--name <new>] [--dest <dir>] [--force]` | Type subdirectory is appended automatically; ref may include origin (e.g. `npm:@scope/pkg//script:foo`). | clone, copy, fork, edit |
 | Update a managed source (or all of them) | `akm update [<package_ref>|--all] [--force]` |  | update, upgrade kit, refresh, pull |
@@ -358,7 +358,7 @@ Wikis are first-class knowledge bases under `<stashDir>/wikis/<name>/`. Each wik
 
 ```bash
 akm wiki create <name>                                # scaffold a new wiki
-akm wiki register <name> <ref> [--writable] [--trust] [--max-pages N] [--max-depth N]
+akm wiki register <name> <ref> [--writable] [--max-pages N] [--max-depth N]
 akm wiki list                                         # summaries with counts + last-modified
 akm wiki show <name>                                  # path, description, last 3 log entries
 akm wiki pages <name>                                 # author-written pages only (excludes schema/index/log/raw)
@@ -369,7 +369,7 @@ akm wiki ingest <name> [--profile <p>] [--model <m>] [--timeout-ms <ms>]  # disp
 akm wiki remove <name> --force [--with-sources]       # preserves raw/ by default
 ```
 
-`register` accepts directory paths, git URLs (`github:owner/repo`, `git+https://…`), and website roots (`https://…`). `--writable` marks a git-backed source as push-writable for `akm save`. `--trust` bypasses the install-audit block for this one registration.
+`register` accepts directory paths, git URLs (`github:owner/repo`, `git+https://…`), and website roots (`https://…`). `--writable` marks a git-backed source as push-writable for `akm save`.
 
 Page frontmatter fields: `description`, `pageKind`, `xrefs: wiki:<name>/<page>[]` (bidirectional — lint enforces), `sources: raw/<slug>[]`. `wikiRole` is reserved for `index`/`raw`.
 

@@ -390,7 +390,6 @@ describe("akm-opencode plugin", () => {
       expect(wiki.args.name).toBeDefined()
       expect(wiki.args.source_ref).toBeDefined()
       expect(wiki.args.writable).toBeDefined()
-      expect(wiki.args.trust).toBeDefined()
       expect(wiki.args.max_pages).toBeDefined()
       expect(wiki.args.max_depth).toBeDefined()
       expect(wiki.args.query).toBeDefined()
@@ -2327,6 +2326,45 @@ describe("akm-opencode plugin", () => {
       )
     })
 
+    it("akm_agent treats dispatch_agent model ids as model overrides", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (args[0] === "show") {
+          return JSON.stringify({
+            type: "agent",
+            name: "coach.md",
+            path: "/stash/agents/coach.md",
+            prompt: "Use this exact system prompt.",
+          })
+        }
+        return "mock output"
+      })
+
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_agent.execute(
+        {
+          ref: "agent:coach.md",
+          task_prompt: "Review this repository for bugs",
+          dispatch_agent: "openai/gpt-5.3-codex",
+        } as any,
+        createToolContext(),
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.dispatchAgent).toBe("general")
+      expect(parsed.requestedDispatchTarget).toBe("openai/gpt-5.3-codex")
+      expect(parsed.model).toEqual({ providerID: "openai", modelID: "gpt-5.3-codex" })
+      expect(client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            agent: "general",
+            model: { providerID: "openai", modelID: "gpt-5.3-codex" },
+          }),
+        }),
+      )
+    })
+
     it("akm_agent returns JSON error when session.create throws", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (args[0] === "show") {
@@ -2651,6 +2689,45 @@ describe("akm-opencode plugin", () => {
           }],
         },
       })
+    })
+
+    it("akm_cmd treats dispatch_agent model ids as model overrides", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (args[0] === "show") {
+          return JSON.stringify({
+            type: "command",
+            name: "create-file.md",
+            path: "/stash/commands/create-file.md",
+            template: "Create $1 in $2 with content: $3. All args: $ARGUMENTS",
+          })
+        }
+        return "mock output"
+      })
+
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const result = await hooks.tool!.akm_cmd.execute(
+        {
+          ref: "command:create-file.md",
+          arguments: "config.json src '{\"key\":\"value\"}'",
+          dispatch_agent: "openai/gpt-5.3-codex",
+        } as any,
+        createToolContext(),
+      )
+
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(true)
+      expect(parsed.dispatchAgent).toBe("build")
+      expect(parsed.requestedDispatchTarget).toBe("openai/gpt-5.3-codex")
+      expect(parsed.model).toEqual({ providerID: "openai", modelID: "gpt-5.3-codex" })
+      expect(client.session.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            agent: "build",
+            model: { providerID: "openai", modelID: "gpt-5.3-codex" },
+          }),
+        }),
+      )
     })
 
     it("akm_cmd returns JSON error when session.prompt throws", async () => {
@@ -3227,7 +3304,7 @@ describe("akm-opencode plugin", () => {
       expect(JSON.parse(result as string)).toEqual({ ok: false, error: "'key' is required for action='set'." })
     })
 
-    it("akm_wiki register passes writable, trust, and crawler caps", async () => {
+    it("akm_wiki register passes writable and crawler caps", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_wiki.execute(
         {
@@ -3235,7 +3312,6 @@ describe("akm-opencode plugin", () => {
           name: "team",
           source_ref: "https://example.com/docs",
           writable: true,
-          trust: true,
           max_pages: 120,
           max_depth: 4,
         } as any,
@@ -3249,7 +3325,6 @@ describe("akm-opencode plugin", () => {
           "team",
           "https://example.com/docs",
           "--writable",
-          "--trust",
           "--max-pages",
           "120",
           "--max-depth",

@@ -8,7 +8,7 @@ Parse `"$ARGUMENTS"` as a subcommand followed by its arguments and route to `akm
 Recognized subcommands (see the AKM skill for the full contract):
 
 - `create <name>` — scaffold `<stashDir>/wikis/<name>/` with `schema.md`, `index.md`, `log.md`, and `raw/`.
-- `register <name> <ref> [--writable] [--trust] [--max-pages N] [--max-depth N]` — register an existing directory, git repo, or website as a first-class wiki.
+- `register <name> <ref> [--writable] [--max-pages N] [--max-depth N]` — register an existing directory, git repo, or website as a first-class wiki.
 - `list` — summaries with page/raw counts and last-modified timestamps.
 - `show <name>` — path, description, counts, last 3 log entries.
 - `pages <name>` — author-written pages only (excludes schema/index/log/raw).

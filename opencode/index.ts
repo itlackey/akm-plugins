@@ -245,6 +245,12 @@ type SessionPromptBody = {
   tools?: Record<string, boolean>
 }
 
+type DispatchTarget = {
+  agent: string
+  model?: { providerID: string; modelID: string }
+  requested: string
+}
+
 function formatCliError(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
     return "The 'akm' CLI was not found on PATH. Install it first from https://github.com/itlackey/akm."
@@ -1513,14 +1519,14 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   },
   {
     task: "Install a kit or register an external source (npm, GitHub, git, URL, local dir)",
-    command: "akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--trust] [--provider <p>] [--max-pages N] [--max-depth N]",
-    notes: "Confirm with the user before passing --trust or registering a website crawler.",
+    command: "akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--provider <p>] [--max-pages N] [--max-depth N] [--allow-insecure]",
+    notes: "Confirm with the user before registering a website crawler or passing --allow-insecure.",
     keywords: ["add", "install", "register", "kit", "source", "github", "npm"],
   },
   {
     task: "Commit (and optionally push) pending stash changes",
-    command: "akm save [<source-name>] [-m <msg>] [--push]",
-    notes: "Add --push only when the stash is writable; review the diff first.",
+    command: "akm save [<source-name>] [-m <msg>]",
+    notes: "For writable git-backed sources, save commits and pushes; review the diff first.",
     keywords: ["save", "commit", "push", "publish", "git"],
   },
   {
@@ -2127,6 +2133,18 @@ function parseModelHint(modelHint: unknown): { providerID: string; modelID: stri
   return { providerID, modelID }
 }
 
+function resolveDispatchTarget(requested: string | undefined, fallbackAgent: string): DispatchTarget {
+  const trimmed = requested?.trim()
+  if (!trimmed) {
+    return { agent: fallbackAgent, requested: fallbackAgent }
+  }
+  const model = parseModelHint(trimmed)
+  if (model) {
+    return { agent: fallbackAgent, model, requested: trimmed }
+  }
+  return { agent: trimmed, requested: trimmed }
+}
+
 function parseToolPolicy(toolPolicy: unknown): Record<string, boolean> | undefined {
   const result: Record<string, boolean> = {}
 
@@ -2341,8 +2359,8 @@ async function promptTargetSession(input: {
   try {
     const promptResponse = await input.client.session.prompt({
       path: { id: input.targetSessionID },
-      body: input.promptBody,
-    })
+        body: input.promptBody,
+      })
 
     if (promptResponse.error || !promptResponse.data) {
       const reason = promptResponse.error ? JSON.stringify(promptResponse.error) : "empty response"
@@ -2353,6 +2371,7 @@ async function promptTargetSession(input: {
         directory: input.context.directory,
         targetSessionID: input.targetSessionID,
         dispatchAgent: input.promptBody.agent,
+        dispatchModel: input.promptBody.model ?? null,
         ref: input.ref,
         error: reason,
       })
@@ -2367,10 +2386,11 @@ async function promptTargetSession(input: {
       toolName: input.toolName,
       sessionID: input.context.sessionID,
       directory: input.context.directory,
-      targetSessionID: input.targetSessionID,
-      dispatchAgent: input.promptBody.agent,
-      ref: input.ref,
-    })
+       targetSessionID: input.targetSessionID,
+       dispatchAgent: input.promptBody.agent,
+       dispatchModel: input.promptBody.model ?? null,
+       ref: input.ref,
+     })
     return { ok: true, data: promptResponse.data }
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : String(error)
@@ -2381,6 +2401,7 @@ async function promptTargetSession(input: {
       directory: input.context.directory,
       targetSessionID: input.targetSessionID,
       dispatchAgent: input.promptBody.agent,
+      dispatchModel: input.promptBody.model ?? null,
       ref: input.ref,
       error: reason,
     })
@@ -3427,7 +3448,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         ref: tool.schema.string().optional().describe("Agent ref from akm_search (e.g. agent:my-agent.md)."),
         query: tool.schema.string().optional().describe("If ref is omitted, resolve best matching stash agent for this query."),
         task_prompt: tool.schema.string().describe("Task prompt sent to the dispatched OpenCode agent."),
-        dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the task with. Defaults to 'general'."),
+        dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the task with, or a provider/model override like 'openai/gpt-5.3-codex'. Defaults to 'general'."),
         as_subtask: tool.schema.boolean().optional().describe("Run in child session with parent context. Defaults to true."),
       },
       async execute({ ref, query, task_prompt, dispatch_agent, as_subtask }, context) {
@@ -3460,8 +3481,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         }
 
         const useSubtask = as_subtask ?? true
-        const targetAgent = dispatch_agent ?? "general"
-        const model = parseModelHint(shown.modelHint)
+        const dispatchTarget = resolveDispatchTarget(dispatch_agent, "general")
+        const hintedModel = parseModelHint(shown.modelHint)
+        const model = dispatchTarget.model ?? hintedModel
         const tools = parseToolPolicy(shown.toolPolicy)
         writeStructuredEvent({
           event: "subagent_started",
@@ -3470,7 +3492,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           input: {
             ref: resolved.ref,
             stashAgent: shown.name,
-            dispatchAgent: targetAgent,
+            dispatchAgent: dispatchTarget.agent,
+            requestedDispatchTarget: dispatchTarget.requested,
             taskPrompt: task_prompt,
             advisoryToolPolicy: shown.toolPolicy ?? null,
             appliedToolPolicy: tools ?? null,
@@ -3492,7 +3515,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (!targetSession.ok) return JSON.stringify(targetSession)
 
         const promptBody: SessionPromptBody = {
-          agent: targetAgent,
+          agent: dispatchTarget.agent,
           system: shown.prompt,
           parts: [{ type: "text", text: task_prompt }],
         }
@@ -3525,7 +3548,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           event: "subagent_completed",
           sessionId: context.sessionID,
           scope: buildEventScope(context.sessionID, context.directory, context.agent),
-          input: { childSessionID: targetSession.sessionID, stashAgent: shown.name, dispatchAgent: targetAgent },
+          input: {
+            childSessionID: targetSession.sessionID,
+            stashAgent: shown.name,
+            dispatchAgent: dispatchTarget.agent,
+            requestedDispatchTarget: dispatchTarget.requested,
+            dispatchModel: model ?? null,
+          },
           memory: { parentSessionID: context.sessionID, childSessionID: targetSession.sessionID, candidatesCreated: candidates.length },
           refs: [resolved.ref],
           outcome: { status: "ok" },
@@ -3535,7 +3564,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           ok: true,
           ref: resolved.ref,
           stashAgent: shown.name,
-          dispatchAgent: targetAgent,
+          dispatchAgent: dispatchTarget.agent,
+          requestedDispatchTarget: dispatchTarget.requested,
           usedSubtask: useSubtask,
           sessionID: targetSession.sessionID,
           model,
@@ -3550,7 +3580,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         ref: tool.schema.string().optional().describe("Command ref from akm_search (e.g. command:review.md)."),
         query: tool.schema.string().optional().describe("If ref is omitted, resolve best matching stash command for this query."),
         arguments: tool.schema.string().optional().describe("Command arguments used for $ARGUMENTS and positional placeholders ($1, $2, ...)."),
-        dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the rendered command. Defaults to current agent."),
+        dispatch_agent: tool.schema.string().optional().describe("OpenCode agent to run the rendered command, or a provider/model override like 'openai/gpt-5.3-codex'. Defaults to current agent."),
         as_subtask: tool.schema.boolean().optional().describe("Run in child session with parent context. Defaults to false."),
       },
       async execute({ ref, query, arguments: commandArguments, dispatch_agent, as_subtask }, context) {
@@ -3577,7 +3607,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const argsText = commandArguments ?? ""
         const rendered = renderCommandTemplate(template, argsText)
         const useSubtask = as_subtask ?? false
-        const targetAgent = dispatch_agent ?? context.agent
+        const fallbackAgent = typeof context.agent === "string" && context.agent.trim() ? context.agent : "general"
+        const dispatchTarget = resolveDispatchTarget(dispatch_agent, fallbackAgent)
 
         const targetSession = await ensureTargetSessionID({
           useSubtask,
@@ -3598,7 +3629,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           failureMessage: `Failed to execute command ${resolved.ref}`,
           ref: resolved.ref,
           promptBody: {
-            agent: targetAgent,
+            agent: dispatchTarget.agent,
+            model: dispatchTarget.model,
             parts: [{ type: "text", text: rendered }],
           },
         })
@@ -3608,9 +3640,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           ok: true,
           ref: resolved.ref,
           stashCommand: shown.name,
-          dispatchAgent: targetAgent,
+          dispatchAgent: dispatchTarget.agent,
+          requestedDispatchTarget: dispatchTarget.requested,
           usedSubtask: useSubtask,
           sessionID: targetSession.sessionID,
+          model: dispatchTarget.model,
           arguments: argsText,
           renderedTemplate: rendered,
           text: extractText(promptResponse.data.parts),
@@ -3734,7 +3768,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         name: tool.schema.string().optional().describe("Wiki name (required for every action except 'list')."),
         source_ref: tool.schema.string().optional().describe("Source ref to register (required for action='register'). Accepts directory paths, git URLs, github owner/repo, or https:// website roots."),
         writable: tool.schema.boolean().optional().describe("When registering a git-backed source, mark it as push-writable (used by `akm save`; see akm_help topic='save')."),
-        trust: tool.schema.boolean().optional().describe("Bypass install-audit blocking for this registration only."),
         max_pages: tool.schema.number().optional().describe("Crawler page cap when registering a website (default 50)."),
         max_depth: tool.schema.number().optional().describe("Crawler depth cap when registering a website (default 3)."),
         query: tool.schema.string().optional().describe("Query string for action='search'."),
@@ -3745,7 +3778,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         force: tool.schema.boolean().optional().describe("Required for action='remove'."),
         with_sources: tool.schema.boolean().optional().describe("When removing, also delete the raw/ sources (default false)."),
       },
-      async execute({ action, name, source_ref, writable, trust, max_pages, max_depth, query, limit, source, as_slug, content, force, with_sources }) {
+      async execute({ action, name, source_ref, writable, max_pages, max_depth, query, limit, source, as_slug, content, force, with_sources }) {
         const logMeta = { toolName: "akm_wiki" }
         const requireName = () => {
           if (!name) return JSON.stringify({ ok: false, error: `'name' is required for action='${action}'.` })
@@ -3782,7 +3815,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             if (!source_ref) return JSON.stringify({ ok: false, error: "'source_ref' is required for action='register'." })
             const args = ["wiki", "register", name!, source_ref]
             if (writable) args.push("--writable")
-            if (trust) args.push("--trust")
             if (max_pages != null) args.push("--max-pages", String(max_pages))
             if (max_depth != null) args.push("--max-depth", String(max_depth))
             return runCli(client as unknown as LogCapableClient, args, logMeta)
