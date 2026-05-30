@@ -35,7 +35,7 @@ Provides a surface of twenty tools. Verbs that are not first-class tools (`save`
 - `akm_workflow` — drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`)
 - `akm_remember` — record a memory in the default stash
 - `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
-- `akm_vault` — vault `list`, `show` (key names), and `load` (shell-eval snippet for value injection). `show`/`list` never echo values; writes (`set`, `unset`, `create`) go through raw `akm vault …`
+- `akm_vault` — vault `list`, `show` (key names), and `load` (writes the shell snippet to a temp file path instead of surfacing values inline). `show`/`list` never echo values; writes (`set`, `unset`, `create`) go through raw `akm vault …`
 - `akm_curate` — curate stash assets for a task or topic
 - `akm_evolve` — dispatch the AKM curator subagent (review session activity, propose stash improvements, persist the report as a memory)
 - `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
@@ -49,7 +49,7 @@ Provides a surface of twenty tools. Verbs that are not first-class tools (`save`
 - `akm_parent_messages` — summarize the parent OpenCode session for dispatched stash subagents
 - `akm_help` — quick-reference table for non-first-class `akm` verbs, with live `akm --help` fallback
 
-The OpenCode plugin also hooks `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`, and `shell.env` to gate destructive actions, preserve context through compaction, emit structured redacted memory events/candidates, and record user/system feedback and memory usage in OpenCode app logs when relevant.
+The OpenCode plugin also hooks `event`, `chat.message`, `tool.execute.before`, `tool.execute.after`, `experimental.chat.system.transform`, `shell.env`, and session lifecycle shutdown events to gate destructive actions, preserve context through compaction, emit structured redacted memory events/candidates, and record user/system feedback and memory usage in OpenCode app logs when relevant.
 
 ## Feature parity tracker
 
@@ -106,6 +106,8 @@ Provides:
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
 - **Claude hooks** — on session start the plugin verifies `akm-cli` satisfies `^0.8.0` (override via `AKM_PACKAGE_REF`) and prints a stderr banner pointing at `/akm-setup` when the CLI is missing or out of range (no silent install — installation requires explicit user consent via `/akm-setup`). The hook can also set `defaults.agent` to the current platform in the AKM config file when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces pending-proposal counts in the SessionStart header, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality and `lesson:*` refs. Destructive `akm` subcommands are no longer gated by the plugin — see [claude/README.md "Locking down destructive commands"](./claude/README.md#locking-down-destructive-commands) for the recommended `permissions.ask` / `permissions.deny` recipe. Human users can run `akm setup` manually when interactive setup is needed.
+
+For local development against a sibling `akm` checkout, set `AKM_LOCAL_BUILD_CLI=/abs/path/to/akm/dist/cli.js`. Both plugins will run that built CLI through Bun before falling back to PATH or bundled installs.
 
 ### All Other Agents
 

@@ -228,6 +228,7 @@ Notes:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AKM_PACKAGE_REF` | `akm-cli@^0.8.0` | Override the npm/bun package spec displayed in the SessionStart consent banner and used by `/akm-setup` (for example, to pin a compatible AKM build in CI). The plugin never installs this automatically — it is only quoted in the banner. |
+| `AKM_LOCAL_BUILD_CLI` | _(unset)_ | Optional absolute path to a locally built AKM CLI entrypoint such as `/abs/path/to/akm/dist/cli.js`. When set, the Claude hook runs that build through Bun before checking `akm` on PATH. Useful when developing `akm` and `akm-plugin` side by side. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |
 | `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the post-session `akm index` run (e.g. low-power dev machines or CI runners). |

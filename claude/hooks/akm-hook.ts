@@ -107,6 +107,7 @@ const SESSION_START_HEADER = [
   'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
 const REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g
+const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() || ""
 const CURATED_DIR = path.join(STATE_DIR, "curated")
 const PROPOSAL_FLOW_RE = /\/akm-(improve|evolve|propose)\b/
 
@@ -227,7 +228,7 @@ function writeMemoryEvent(event: Omit<import("../shared/memory-events").AkmMemor
 
 function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
   if (!sid) return
-  const redacted = redactSecrets(body).text
+  const redacted = redactSecrets(body).text.replace(/\b([A-Z][A-Z0-9_]{2,})\s*=\s*(?:\[[^\]]+\]|[^\s"'`,;]+)/g, "[REDACTED_ASSIGNMENT:$1]")
   appendFileSync(path.join(SESSIONS_DIR, `${sid}.md`), `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
 }
 
@@ -346,6 +347,12 @@ function readStdin(): string {
   }
 }
 
+type AkmCommandSpec = {
+  command: string
+  argsPrefix: string[]
+  displayPath: string
+}
+
 function findCommandOnPath(command: string): string | undefined {
   const isWindows = process.platform === "win32"
   const searchPath = process.env.PATH ?? ""
@@ -394,13 +401,25 @@ function parseAkmVersion(value: string): string {
   return match?.[1] ?? ""
 }
 
-function readAkmVersion(commandPath: string): string {
-  const result = runCommand(commandPath, ["--version"])
+function resolveAkmCommandSpec(): AkmCommandSpec | null {
+  if (LOCAL_AKM_BUILD_CLI) {
+    return {
+      command: process.env.BUN || "bun",
+      argsPrefix: [LOCAL_AKM_BUILD_CLI],
+      displayPath: LOCAL_AKM_BUILD_CLI,
+    }
+  }
+  const onPath = findCommandOnPath("akm")
+  return onPath ? { command: onPath, argsPrefix: [], displayPath: onPath } : null
+}
+
+function readAkmVersion(commandSpec: AkmCommandSpec): string {
+  const result = runCommand(commandSpec.command, [...commandSpec.argsPrefix, "--version"])
   return parseAkmVersion(result.stdout)
 }
 
-function akmVersionSatisfies(commandPath: string): { ok: boolean; version: string; error?: string } {
-  const version = readAkmVersion(commandPath)
+function akmVersionSatisfies(commandSpec: AkmCommandSpec): { ok: boolean; version: string; error?: string } {
+  const version = readAkmVersion(commandSpec)
   if (!version) return { ok: false, version: "unknown", error: "unable to parse akm version" }
   if (!valid(version)) return { ok: false, version, error: "akm version is not valid semver" }
   if (!satisfies(version, AKM_REQUIRED_RANGE)) return { ok: false, version, error: `akm version does not satisfy ${AKM_REQUIRED_RANGE}` }
@@ -429,7 +448,7 @@ function runCommand(command: string, args: string[], options?: { input?: string;
 }
 
 function akmAvailable(): boolean {
-  return !!findCommandOnPath("akm")
+  return !!resolveAkmCommandSpec()
 }
 
 function getAkmConfigPath(): string {
@@ -499,16 +518,16 @@ function writeConfiguredAgentDefault(platform: string): boolean {
 }
 
 function akmRun(args: string[], input?: string): string {
-  const akm = findCommandOnPath("akm")
+  const akm = resolveAkmCommandSpec()
   if (!akm) return ""
   const timeout = findCommandOnPath("timeout")
   const result = timeout
-    ? runCommand(timeout, ["--preserve-status", CURATE_TIMEOUT, akm, ...args], { input, suppressStderr: false })
-    : runCommand(akm, args, { input, suppressStderr: false })
+    ? runCommand(timeout, ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args], { input, suppressStderr: false })
+    : runCommand(akm.command, [...akm.argsPrefix, ...args], { input, suppressStderr: false })
   if (!result.ok) {
     logSubprocessFailure("akm_failed", {
-      command: timeout ?? akm,
-      args: (timeout ? ["--preserve-status", CURATE_TIMEOUT, akm, ...args] : args).join(" "),
+      command: timeout ?? akm.command,
+      args: (timeout ? ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args] : [...akm.argsPrefix, ...args]).join(" "),
       error: "akm invocation failed",
       stderr: sanitize(result.stderr),
     })
@@ -526,11 +545,11 @@ function akmRun(args: string[], input?: string): string {
  * embedding/LLM bottleneck.
  */
 async function akmRunAsync(args: string[], input?: string): Promise<string> {
-  const akm = findCommandOnPath("akm")
+  const akm = resolveAkmCommandSpec()
   if (!akm) return ""
   const timeout = findCommandOnPath("timeout")
-  const cmd = timeout ? timeout : akm
-  const fullArgs = timeout ? ["--preserve-status", CURATE_TIMEOUT, akm, ...args] : args
+  const cmd = timeout ? timeout : akm.command
+  const fullArgs = timeout ? ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args] : [...akm.argsPrefix, ...args]
   try {
     const proc = Bun.spawn([cmd, ...fullArgs], {
       stdin: input !== undefined ? new TextEncoder().encode(input) : "ignore",
@@ -560,12 +579,12 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
 }
 
 function akmRunChecked(args: string[], input?: string): { ok: boolean; stdout: string; stderr: string } {
-  const akm = findCommandOnPath("akm")
+  const akm = resolveAkmCommandSpec()
   if (!akm) return { ok: false, stdout: "", stderr: "akm not found on PATH" }
   const timeout = findCommandOnPath("timeout")
   const result = timeout
-    ? runCommand(timeout, ["--preserve-status", CURATE_TIMEOUT, akm, ...args], { input, suppressStderr: false })
-    : runCommand(akm, args, { input, suppressStderr: false })
+    ? runCommand(timeout, ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args], { input, suppressStderr: false })
+    : runCommand(akm.command, [...akm.argsPrefix, ...args], { input, suppressStderr: false })
   return { ok: result.ok, stdout: result.stdout, stderr: result.stderr }
 }
 
@@ -881,16 +900,16 @@ function sessionEnd(): string {
 // which IS the explicit consent point — and return a structured verdict.
 // Callers decide how to degrade. We never spawn an install from this path.
 function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; path?: string } {
-  const existing = findCommandOnPath("akm")
+  const existing = resolveAkmCommandSpec()
   if (existing) {
     const current = akmVersionSatisfies(existing)
     if (current.ok) {
-      appendLog(SESSION_LOG, "akm_ready", "path", existing, current.version)
-      return { ok: true, version: current.version, path: existing }
+      appendLog(SESSION_LOG, "akm_ready", "path", existing.displayPath, current.version)
+      return { ok: true, version: current.version, path: existing.displayPath }
     }
-    appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
-    writeAkmConsentBanner({ detected: current.version, detectedPath: existing })
-    return { ok: false, reason: "version-mismatch", version: current.version, path: existing }
+    appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing.displayPath, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
+    writeAkmConsentBanner({ detected: current.version, detectedPath: existing.displayPath })
+    return { ok: false, reason: "version-mismatch", version: current.version, path: existing.displayPath }
   }
   appendLog(SESSION_LOG, "akm_missing", "path", AKM_PACKAGE_REF, AKM_REQUIRED_RANGE)
   writeAkmConsentBanner({ detected: undefined, detectedPath: undefined })
@@ -1280,10 +1299,10 @@ async function sessionStart(): Promise<string> {
   }
   if (!akmAvailable()) return ""
 
-  const akm = findCommandOnPath("akm")
+  const akm = resolveAkmCommandSpec()
   if (akm) {
     try {
-      const child = spawn(akm, ["index"], { detached: true, stdio: "ignore" })
+      const child = spawn(akm.command, [...akm.argsPrefix, "index"], { detached: true, stdio: "ignore" })
       child.unref()
     } catch {
       // best-effort only
@@ -1434,7 +1453,7 @@ function captureMemory(options?: { rawInput?: string; reason?: string; checkpoin
   const refCandidates = readSessionRefCandidates(sid)
   const refsBlock = buildRefsFrontmatterBlock(refCandidates)
   const rawBody = `---\nakm_memory_kind: session_checkpoint\nharness: claude-code\nsession_id: ${sid}\nreason: ${reason}${refsBlock}\n---\n\n# Session summary (${timestamp()})\nReason: ${reason}\nSession: ${sid}\n\n${summarySections.join("\n\n")}`
-  const redactedBody = redactSecrets(rawBody).text
+  const redactedBody = redactSecrets(rawBody).text.replace(/\b([A-Z][A-Z0-9_]{2,})\s*=\s*(?:\[[^\]]+\]|[^\s"'`,;]+)/g, "[REDACTED_ASSIGNMENT:$1]")
   const result = akmRun(["--format", "json", "-q", "remember", "--name", name, "--force", ...buildRunScopeArgs(sid)], redactedBody)
   if (result.trim()) {
     appendLog(MEMORY_LOG, "system", "captured", `memory:${name}`, reason)
@@ -1566,8 +1585,6 @@ async function main(): Promise<string> {
     case "post-tool-nonbash":
       posttoolNonBash()
       return ""
-    case "pre-tool-agent":
-      return preToolAgent()
     case "post-tool-batch":
       return postToolBatch()
     case "subagent-start":

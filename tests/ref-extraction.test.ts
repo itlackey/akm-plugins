@@ -28,6 +28,7 @@ describe("extractAllRefs", () => {
   it("matches every ref-shaped token regardless of context", () => {
     const text = [
       "Plain prose with memory:hello and knowledge:projects/akm/foo.",
+      "Also task:release-checklist should be recognized.",
       "```",
       "grep -E 'memory:foo|memory:bar' file.md",
       "```",
@@ -37,6 +38,7 @@ describe("extractAllRefs", () => {
     expect(extractAllRefs(text)).toEqual([
       "memory:hello",
       "knowledge:projects/akm/foo",
+      "task:release-checklist",
       "memory:foo",
       "memory:bar",
       "agent:bunjs-coder",
@@ -123,6 +125,12 @@ describe("validateRefCandidates", () => {
     // knowledge/<category>/<name>.md — single level scan mirrors lint walker.
     touch(path.join(stash, "knowledge", "projects", "release-notes.md"), "x")
     expect(validateRefCandidates(["knowledge:release-notes"], [stash])).toEqual(["knowledge:release-notes"])
+  })
+
+  it("recognises task refs", () => {
+    const stash = makeStash()
+    touch(path.join(stash, "tasks", "release-checklist.md"), "x")
+    expect(validateRefCandidates(["task:release-checklist"], [stash])).toEqual(["task:release-checklist"])
   })
 })
 

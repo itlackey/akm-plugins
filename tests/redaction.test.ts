@@ -318,12 +318,14 @@ describe("redactSecrets — env assignments", () => {
     const { text, categories } = redactSecrets(input)
     expect(categories).toContain("env_secret")
     expect(text).toContain("[REDACTED:OPENAI_API_KEY]")
+    expect(text).not.toContain("OPENAI_API_KEY=")
   })
 
   test("redacts ANTHROPIC_API_KEY= assignment", () => {
     const input = "ANTHROPIC_API_KEY=sk-ant-abc123"
     const { text } = redactSecrets(input)
     expect(text).toContain("[REDACTED:ANTHROPIC_API_KEY]")
+    expect(text).not.toContain("ANTHROPIC_API_KEY=")
   })
 
   test("redacts PASSWORD= assignment", () => {
@@ -331,6 +333,15 @@ describe("redactSecrets — env assignments", () => {
     const { text, categories } = redactSecrets(input)
     expect(categories).toContain("password")
     expect(text).toContain("[REDACTED:PASSWORD]")
+    expect(text).not.toContain("PASSWORD=")
+  })
+
+  test("redacts sensitive assignments embedded in prose", () => {
+    const input = "remember this accidental leak DATABASE_URL=postgres://user:pw@db.example.com for later"
+    const { text, categories } = redactSecrets(input)
+    expect(categories).toContain("env_secret")
+    expect(text).toContain("[REDACTED:DATABASE_URL]")
+    expect(text).not.toContain("DATABASE_URL=")
   })
 
   test("does not redact non-sensitive keys", () => {

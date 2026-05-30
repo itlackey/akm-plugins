@@ -370,10 +370,6 @@ describe("akm-opencode plugin", () => {
       const vault = hooks.tool!.akm_vault
       expect(vault.args.action).toBeDefined()
       expect(vault.args.ref).toBeDefined()
-      expect(vault.args.name).toBeDefined()
-      expect(vault.args.key).toBeDefined()
-      expect(vault.args.value).toBeDefined()
-      expect(vault.args.comment).toBeDefined()
       expect(vault.args.confirm).toBeDefined()
     })
 
@@ -425,6 +421,7 @@ describe("akm-opencode plugin", () => {
       expect(tool.args.id).toBeDefined()
       expect(tool.args.status).toBeDefined()
       expect(tool.args.reason).toBeDefined()
+      expect(tool.args.confirm).toBeDefined()
     })
 
     it("akm_improve exposes scope + task args", async () => {
@@ -1076,7 +1073,7 @@ describe("akm-opencode plugin", () => {
           extra: expect.objectContaining({
             subsystem: "akm",
             toolName: "akm_search",
-            command: "akm",
+            command: expect.objectContaining({ command: "akm", argsPrefix: [], displayCommand: "akm" }),
             args: ["search", "deploy", "--source", "stash", "--detail", "normal", "--format", "json"],
             exitCode: 0,
             stdout: "mock output",
@@ -1683,6 +1680,36 @@ describe("akm-opencode plugin", () => {
           tool: "akm_vault",
           sessionID: "session-block-1",
           callID: "call-1",
+        } as any,
+        output as any,
+      )
+
+      expect(output.args.__akmBlocked).toContain("confirm:true")
+    })
+
+    it("tool.execute.before blocks akm_vault load until confirm:true is provided", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const output = { args: { action: "load", ref: "vault:prod" } as any }
+      await hooks["tool.execute.before"]!(
+        {
+          tool: "akm_vault",
+          sessionID: "session-block-2",
+          callID: "call-2",
+        } as any,
+        output as any,
+      )
+
+      expect(output.args.__akmBlocked).toContain("confirm:true")
+    })
+
+    it("tool.execute.before blocks akm_proposal accept until confirm:true is provided", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const output = { args: { action: "accept", id: "p_123" } as any }
+      await hooks["tool.execute.before"]!(
+        {
+          tool: "akm_proposal",
+          sessionID: "session-block-3",
+          callID: "call-3",
         } as any,
         output as any,
       )
@@ -2866,11 +2893,21 @@ describe("akm-opencode plugin", () => {
       expect(parsed.error).toContain("'id' is required")
     })
 
+    it("akm_proposal accept requires confirm:true before mutating the queue", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_proposal.execute(
+        { action: "accept", id: "p_123" } as any,
+        {} as any,
+      )
+      expect(JSON.parse(result).ok).toBe(false)
+      expect(JSON.parse(result).error).toContain("confirm:true")
+    })
+
     it("akm_proposal accept routes through the runCli approval pathway", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockReturnValue("{\"ok\":true}")
       await hooks.tool!.akm_proposal.execute(
-        { action: "accept", id: "p_123" } as any,
+        { action: "accept", id: "p_123", confirm: true } as any,
         {} as any,
       )
       // WS-7a: accept now passes --yes (non-interactive mode); runCli auto-appends --format json.
@@ -2884,12 +2921,26 @@ describe("akm-opencode plugin", () => {
     it("akm_proposal reject requires a reason", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_proposal.execute(
-        { action: "reject", id: "p_123" } as any,
+        { action: "reject", id: "p_123", confirm: true } as any,
         {} as any,
       )
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(false)
       expect(parsed.error).toContain("'reason' is required")
+    })
+
+    it("akm_proposal diff uses the positional v0.8.0 CLI shape", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      mockExecFileSync.mockReturnValue("{\"ok\":true}")
+      await hooks.tool!.akm_proposal.execute(
+        { action: "diff", id: "p_123" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["diff", "p_123", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
     })
 
     it("akm_improve forwards scope + task without auto-injecting --format (akm 0.8.0 rejects --format on improve)", async () => {
@@ -3218,40 +3269,7 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("v0.5.0 tool execution", () => {
-    it("akm_vault set pipes value via stdin (akm 0.8.0 removed positional VALUE)", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.tool!.akm_vault.execute(
-        { action: "set", ref: "vault:prod", key: "API_KEY", value: "s3kret", comment: "prod key" } as any,
-        {} as any,
-      )
-      // The value MUST go via stdin (the `input` option) and MUST NOT appear in argv.
-      expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
-        ["--format", "json", "-q", "vault", "set", "vault:prod", "API_KEY", "--comment", "prod key"],
-        expect.objectContaining({ input: "s3kret" }),
-      )
-    })
-
-    it("akm_vault set rejects KEY=VALUE shape (removed in akm 0.8.0)", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_vault.execute(
-        { action: "set", ref: "vault:prod", key: "API_KEY=s3kret", value: "ignored" } as any,
-        {} as any,
-      )
-      expect(JSON.parse(result as string).ok).toBe(false)
-      expect(JSON.parse(result as string).error).toContain("KEY=VALUE form was removed")
-    })
-
-    it("akm_vault rejects set without a value", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_vault.execute(
-        { action: "set", ref: "vault:prod", key: "API_KEY" } as any,
-        {} as any,
-      )
-      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "'value' is required for action='set'." })
-    })
-
-    it("akm_vault load returns raw shell text wrapped in JSON", async () => {
+    it("akm_vault load writes shell text to a temp file without surfacing contents", async () => {
       // `resolveAkmCommand` probes the binary via --version before the actual
       // command runs, so route shell output only for the vault-load invocation.
       mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -3262,13 +3280,15 @@ describe("akm-opencode plugin", () => {
       })
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_vault.execute(
-        { action: "load", ref: "vault:prod" } as any,
+        { action: "load", ref: "vault:prod", confirm: true } as any,
         {} as any,
       )
       const parsed = JSON.parse(result as string)
       expect(parsed.ok).toBe(true)
       expect(parsed.ref).toBe("vault:prod")
-      expect(parsed.shell).toContain(". '/tmp/vault.sh'")
+      expect(parsed.filePath).toContain("vault_prod.sh")
+      expect(parsed.usage).toContain("temporary file")
+      expect(parsed.shell).toBeUndefined()
     })
 
     it("akm_vault load logs failures through OpenCode logging", async () => {
@@ -3282,7 +3302,7 @@ describe("akm-opencode plugin", () => {
       const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
 
       const result = await hooks.tool!.akm_vault.execute(
-        { action: "load", ref: "vault:prod" } as any,
+        { action: "load", ref: "vault:prod", confirm: true } as any,
         {} as any,
       )
 
@@ -3295,13 +3315,13 @@ describe("akm-opencode plugin", () => {
       }))
     })
 
-    it("akm_vault rejects set without a key", async () => {
+    it("akm_vault rejects load without a ref", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_vault.execute(
-        { action: "set", ref: "vault:prod" } as any,
+        { action: "load", confirm: true } as any,
         {} as any,
       )
-      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "'key' is required for action='set'." })
+      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "'ref' is required for action='load'." })
     })
 
     it("akm_wiki register passes writable and crawler caps", async () => {
@@ -3803,6 +3823,29 @@ describe("akm-opencode plugin", () => {
             && args[0] === "search",
           ),
         ).toBe(false)
+      })
+    })
+
+    it("uses AKM_LOCAL_BUILD_CLI via Bun before PATH fallbacks", async () => {
+      const localRoot = mkdtempSync(path.join(tmpdir(), "akm-local-build-"))
+      const localCli = path.join(localRoot, "dist", "cli.js")
+      mkdirSync(path.dirname(localCli), { recursive: true })
+      writeFileSync(localCli, "#!/usr/bin/env bun\n")
+
+      await withEnvVar("AKM_LOCAL_BUILD_CLI", localCli, async () => {
+        mockExecFileSync.mockImplementation((cmd, args) => {
+          if (cmd === "bun" && Array.isArray(args) && args[0] === localCli && args[1] === "--version") return "0.8.0-rc.8"
+          if (cmd === "bun" && Array.isArray(args) && args[0] === localCli && args[1] === "search") {
+            return JSON.stringify({ hits: [], command: cmd, cli: args[0] })
+          }
+          if (cmd === "akm" && Array.isArray(args) && args[0] === "--version") return "0.7.9"
+          return "mock output"
+        })
+
+        const hooks = await AkmPlugin(createPluginInput())
+        const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
+
+        expect(JSON.parse(result)).toEqual({ hits: [], command: "bun", cli: localCli })
       })
     })
 

@@ -17,6 +17,7 @@
 import path from "node:path"
 import { createRequire } from "node:module"
 import { pathToFileURL } from "node:url"
+import { existsSync, readFileSync } from "node:fs"
 import type { Plugin, PluginInput } from "@opencode-ai/plugin"
 
 let envPatched = false
@@ -247,12 +248,28 @@ export type OpenCodeHarness = {
   toolAfter(args: { sessionID: string; tool: string; toolArgs: Record<string, unknown>; output: string; title?: string }): Promise<{ logs: CapturedLogEntry[]; durationMs: number }>
 }
 
-const REF_RE = /\b(skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._\/-]+/g
+const REF_RE = /\b(skill|command|agent|knowledge|memory|lesson|script|workflow|task|vault|wiki):[A-Za-z0-9._\/-]+/g
+const CURATED_FILE_RE = /AKM stash curation written to `([^`]+)`/g
+
+function hydrateCuratedContext(context: string): string {
+  let expanded = context
+  for (const match of context.matchAll(CURATED_FILE_RE)) {
+    const filePath = match[1]
+    try {
+      if (filePath && existsSync(filePath)) {
+        expanded = `${expanded}\n${readFileSync(filePath, "utf8")}`
+      }
+    } catch {
+      // Best-effort only; keep the original host-injected context if the file disappears.
+    }
+  }
+  return expanded
+}
 
 export function parseRefs(text: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []
-  for (const m of text.matchAll(REF_RE)) {
+  for (const m of hydrateCuratedContext(text).matchAll(REF_RE)) {
     if (!seen.has(m[0])) {
       seen.add(m[0])
       out.push(m[0])

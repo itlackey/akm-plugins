@@ -308,15 +308,16 @@ function writeConfiguredAgentDefault(platform: string): boolean {
   // and historically clobbered nearby keys when the legacy `agent.default`
   // slot triggered an auto-migration.
   const command = resolveAkmCommand()
-  if (typeof command !== "string") return false
+  if (typeof command === "object" && "ok" in command) return false
   try {
     // #463: --silent --layer user (akm-cli 0.8.0+) pins writes to the user
     // config layer regardless of merged-read scope and silences hook-driven
     // CLI output. Without them, hook writes could race with a project-layer
     // override or pollute the parent process stdout.
     execFileSync(
-      command,
+      command.command,
       [
+        ...command.argsPrefix,
         "config",
         "set",
         "--silent",
@@ -328,8 +329,8 @@ function writeConfiguredAgentDefault(platform: string): boolean {
       { stdio: "ignore" },
     )
     execFileSync(
-      command,
-      ["config", "set", "--silent", "--layer", "user", "defaults.agent", platform],
+      command.command,
+      [...command.argsPrefix, "config", "set", "--silent", "--layer", "user", "defaults.agent", platform],
       { stdio: "ignore" },
     )
     return true
@@ -343,7 +344,7 @@ async function ensurePlatformAgentDefault(
   meta: { directory?: string; sessionID?: string; trigger: string; platform: string },
 ): Promise<boolean> {
   const command = resolveAkmCommand()
-  if (typeof command !== "string") {
+  if (typeof command === "object" && "ok" in command) {
     await writePluginLog(client, "warn", "AKM agent default check skipped", {
       subsystem: "akm",
       trigger: meta.trigger,
@@ -452,7 +453,9 @@ function writeStructuredEvent(event: Omit<AkmMemoryEvent, "version" | "timestamp
 }
 
 const CURATED_DIR = path.join(os.tmpdir(), "akm-opencode", "curated")
+const VAULT_LOAD_DIR = path.join(os.tmpdir(), "akm-opencode", "vault-load")
 mkdirSync(CURATED_DIR, { recursive: true })
+mkdirSync(VAULT_LOAD_DIR, { recursive: true })
 
 function gatherCwdContext(directory: string): string {
   const parts: string[] = []
@@ -543,6 +546,13 @@ function writeCuratedFile(sessionID: string, content: string): string {
   return filePath
 }
 
+function writeVaultLoadFile(ref: string, shell: string): string {
+  const sanitized = ref.replace(/[^A-Za-z0-9._-]/g, "_")
+  const filePath = path.join(VAULT_LOAD_DIR, `${sanitized}.sh`)
+  writeFileSync(filePath, shell, { mode: 0o600 })
+  return filePath
+}
+
 function isAkmRef(value: string): boolean {
   return AKM_REF_PATTERN.test(value)
 }
@@ -560,9 +570,9 @@ function parseMaybeJson(value: string): unknown {
 // stash never wedges the session loop.
 function runCliSyncRaw(args: string[], timeoutMs: number): { ok: true; stdout: string } | { ok: false; error: string } {
   const command = resolveAkmCommand()
-  if (typeof command !== "string") return { ok: false, error: command.error }
+  if (typeof command === "object" && "ok" in command) return { ok: false, error: command.error }
   try {
-    const stdout = execFileSync(command, args, {
+    const stdout = execResolvedAkm(command, args, {
       encoding: "utf8",
       timeout: timeoutMs,
       stdio: ["ignore", "pipe", "pipe"],
@@ -902,11 +912,12 @@ async function getAkmStashDir(client?: LogCapableClient): Promise<string | undef
 
 function warmIndexInBackground(): void {
   const command = resolveAkmCommand()
-  if (typeof command !== "string") return
+  if (typeof command === "object" && "ok" in command) return
   try {
     // Fire and forget — execSync with a timeout would block, so spawn via the
     // shell and detach. Errors here are never surfaced to the session.
-    execSync(`${JSON.stringify(command)} index >/dev/null 2>&1 &`, { timeout: 2_000 })
+    const shellArgs = [command.command, ...command.argsPrefix, "index"].map((part) => JSON.stringify(part)).join(" ")
+    execSync(`${shellArgs} >/dev/null 2>&1 &`, { timeout: 2_000 })
   } catch {
     // Intentionally ignore — warming is best-effort.
   }
@@ -978,10 +989,10 @@ async function getPendingProposalCount(client: LogCapableClient, sessionID?: str
   if (cached && cached.expiresAt > Date.now()) return cached
 
   const command = resolveAkmCommand()
-  if (typeof command !== "string") return { count: 0, unsupported: true }
+  if (typeof command === "object" && "ok" in command) return { count: 0, unsupported: true }
   try {
     // 0.8.0: the proposal-list subcommand is `akm proposals` (no "list" verb).
-    const stdout = execFileSync(command, ["proposals", "--status", "pending", "--format", "json"], {
+    const stdout = execResolvedAkm(command, ["proposals", "--status", "pending", "--format", "json"], {
       encoding: "utf8",
       timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
     })
@@ -1048,7 +1059,7 @@ function queueFeedback(
   dedupe?.add(dedupeKey)
 
   const command = resolveAkmCommand()
-  if (typeof command !== "string") {
+  if (typeof command === "object" && "ok" in command) {
     void writePluginLog(client, "warn", "AKM auto-feedback skipped", {
       subsystem: "feedback",
       toolName: meta.toolName,
@@ -1063,8 +1074,9 @@ function queueFeedback(
 
   try {
     const child = spawn(
-      command,
+      command.command,
       [
+        ...command.argsPrefix,
         "--format",
         "json",
         "-q",
@@ -1130,9 +1142,9 @@ function queueFeedback(
 
 function rememberTextAsMemory(name: string, body: string, context?: Record<string, unknown>): string | null {
   const command = resolveAkmCommand()
-  if (typeof command !== "string") return null
+  if (typeof command === "object" && "ok" in command) return null
   try {
-    execFileSync(command, ["--format", "json", "-q", "remember", "--name", name, "--force", ...buildScopedArgs(context)], {
+    execResolvedAkm(command, ["--format", "json", "-q", "remember", "--name", name, "--force", ...buildScopedArgs(context)], {
       encoding: "utf8",
       timeout: AKM_CURATE_TIMEOUT_MS * 2,
       input: redactSecrets(body).text,
@@ -1634,8 +1646,16 @@ function getCommandVersion(command: string): string | null {
   }
 }
 
+type ResolvedAkmCommand = {
+  command: string
+  argsPrefix: string[]
+  displayCommand: string
+}
+
 type CommandProbe = {
   command: string
+  argsPrefix: string[]
+  displayCommand: string
   exists: boolean
   version: string | null
   failureReason: string | null
@@ -1646,28 +1666,47 @@ type CommandProbe = {
 // the binary is corrupt, wrong architecture, or has a runtime dependency missing.
 // Used by the diagnostic resolution trail so the consent banner can tell users
 // which failure mode they're hitting.
-function probeCommand(command: string): CommandProbe {
-  const isAbsolute = path.isAbsolute(command)
-  const exists = isAbsolute ? existsSync(command) : true
-  if (isAbsolute && !exists) {
-    return { command, exists: false, version: null, failureReason: "not_on_disk" }
+function getLocalBuildAkmCommand(): ResolvedAkmCommand | null {
+  const cliPath = process.env.AKM_LOCAL_BUILD_CLI?.trim()
+  if (!cliPath) return null
+  return {
+    command: process.env.BUN || "bun",
+    argsPrefix: [cliPath],
+    displayCommand: cliPath,
+  }
+}
+
+function execResolvedAkm(command: ResolvedAkmCommand, args: string[], options?: Parameters<typeof execFileSync>[2]) {
+  return execFileSync(command.command, [...command.argsPrefix, ...args], options)
+}
+
+function probeCommand(command: ResolvedAkmCommand): CommandProbe {
+  const displayIsAbsolute = path.isAbsolute(command.displayCommand)
+  const displayExists = displayIsAbsolute ? existsSync(command.displayCommand) : true
+  if (displayIsAbsolute && !displayExists) {
+    return { ...command, exists: false, version: null, failureReason: "not_on_disk" }
+  }
+  const commandIsAbsolute = path.isAbsolute(command.command)
+  const commandExists = commandIsAbsolute ? existsSync(command.command) : true
+  if (commandIsAbsolute && !commandExists) {
+    return { ...command, exists: false, version: null, failureReason: "command_not_on_disk" }
   }
   try {
-    const version = execFileSync(command, ["--version"], {
+    const version = execResolvedAkm(command, ["--version"], {
       encoding: "utf8",
       timeout: 10_000,
     })
     const parsed = extractFirstSemverMatch(version)
     if (!parsed) {
-      return { command, exists: true, version: null, failureReason: "no_semver_in_output" }
+      return { ...command, exists: true, version: null, failureReason: "no_semver_in_output" }
     }
-    return { command, exists: true, version: parsed, failureReason: null }
+    return { ...command, exists: true, version: parsed, failureReason: null }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code
     if (code === "ENOENT") {
-      return { command, exists: false, version: null, failureReason: "not_on_path" }
+      return { ...command, exists: false, version: null, failureReason: "not_on_path" }
     }
-    return { command, exists: true, version: null, failureReason: code ?? "version_check_failed" }
+    return { ...command, exists: true, version: null, failureReason: code ?? "version_check_failed" }
   }
 }
 
@@ -1719,7 +1758,7 @@ function getPathAkmCandidates(): string[] {
 
 type AkmResolutionTrail = Array<{
   command: string
-  source: "bundled" | "path"
+  source: "bundled" | "path" | "local_build"
   version: string | null
   outcome: "selected" | "version_out_of_range" | "missing" | "probe_failed"
   failureReason: string | null
@@ -1727,33 +1766,36 @@ type AkmResolutionTrail = Array<{
 
 let lastAkmResolutionTrail: AkmResolutionTrail = []
 
-function getResolvedAkmDetails(): { command: string; version: string; source: "bundled" | "path" } | null {
-  const candidates: Array<{ command: string; source: "bundled" | "path" }> = []
+function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displayCommand: string; version: string; source: "bundled" | "path" | "local_build" } | null {
+  const candidates: Array<{ command: string; argsPrefix: string[]; displayCommand: string; source: "bundled" | "path" | "local_build" }> = []
   const bundled = getBundledAkmCommand()
-  if (bundled) candidates.push({ command: bundled, source: "bundled" })
+  if (bundled) candidates.push({ command: bundled, argsPrefix: [], displayCommand: bundled, source: "bundled" })
+  const localBuild = getLocalBuildAkmCommand()
+  if (localBuild) candidates.push({ ...localBuild, source: "local_build" })
   for (const command of getPathAkmCandidates()) {
-    candidates.push({ command, source: "path" })
+    candidates.push({ command, argsPrefix: [], displayCommand: command, source: "path" })
   }
 
   const trail: AkmResolutionTrail = []
   const seen = new Set<string>()
   for (const candidate of candidates) {
-    if (!candidate.command || seen.has(candidate.command)) continue
-    seen.add(candidate.command)
-    const probe = probeCommand(candidate.command)
+    const cacheKey = `${candidate.command}::${candidate.argsPrefix.join(" ")}`
+    if (!candidate.command || seen.has(cacheKey)) continue
+    seen.add(cacheKey)
+    const probe = probeCommand(candidate)
     if (!probe.exists) {
-      trail.push({ ...candidate, version: null, outcome: "missing", failureReason: probe.failureReason })
+      trail.push({ command: candidate.displayCommand, source: candidate.source, version: null, outcome: "missing", failureReason: probe.failureReason })
       continue
     }
     if (probe.failureReason || !probe.version) {
-      trail.push({ ...candidate, version: probe.version, outcome: "probe_failed", failureReason: probe.failureReason })
+      trail.push({ command: candidate.displayCommand, source: candidate.source, version: probe.version, outcome: "probe_failed", failureReason: probe.failureReason })
       continue
     }
     if (!satisfiesAkmVersionRange(probe.version)) {
-      trail.push({ ...candidate, version: probe.version, outcome: "version_out_of_range", failureReason: null })
+      trail.push({ command: candidate.displayCommand, source: candidate.source, version: probe.version, outcome: "version_out_of_range", failureReason: null })
       continue
     }
-    trail.push({ ...candidate, version: probe.version, outcome: "selected", failureReason: null })
+    trail.push({ command: candidate.displayCommand, source: candidate.source, version: probe.version, outcome: "selected", failureReason: null })
     lastAkmResolutionTrail = trail
     return { ...candidate, version: probe.version }
   }
@@ -1831,14 +1873,22 @@ function writeAkmConsentBanner(info: { detected?: string; bundled?: string | nul
   }
 }
 
-function resolveAkmCommand(): string | CliError {
+function resolveAkmCommand(): ResolvedAkmCommand | CliError {
+  const localBuild = getLocalBuildAkmCommand()
+  if (localBuild) {
+    const probe = probeCommand(localBuild)
+    if (probe.exists && satisfiesAkmVersionRange(probe.version)) return localBuild
+  }
+
   const currentVersion = getCommandVersion(resolvedAkmCommand)
-  if (satisfiesAkmVersionRange(currentVersion)) return resolvedAkmCommand
+  if (satisfiesAkmVersionRange(currentVersion)) {
+    return { command: resolvedAkmCommand, argsPrefix: [], displayCommand: resolvedAkmCommand }
+  }
 
   const installedAkm = getResolvedAkmDetails()
   if (installedAkm) {
     resolvedAkmCommand = installedAkm.command
-    return resolvedAkmCommand
+    return { command: installedAkm.command, argsPrefix: installedAkm.argsPrefix, displayCommand: installedAkm.displayCommand }
   }
 
   return {
@@ -1849,7 +1899,7 @@ function resolveAkmCommand(): string | CliError {
 
 async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta): Promise<string> {
   const command = resolveAkmCommand()
-  if (typeof command !== "string") {
+  if (typeof command === "object" && "ok" in command) {
     await writePluginLog(client, "error", "AKM command resolution failed", {
       subsystem: "akm",
       toolName: meta.toolName,
@@ -1938,10 +1988,10 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
   }
 
   try {
-    const stdout = execFileSync(command, fullArgs, {
-      encoding: "utf8",
-      timeout: 60_000,
-    })
+      const stdout = execResolvedAkm(command, fullArgs, {
+        encoding: "utf8",
+        timeout: 60_000,
+      })
     return recordSuccess(stdout)
   } catch (error: unknown) {
     let message = formatCliError(error)
@@ -1954,8 +2004,8 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       toolName: meta.toolName,
       sessionID: meta.sessionID,
       directory: meta.directory,
-      command,
-      args: fullArgs,
+        command: command.displayCommand,
+        args: fullArgs,
       exitCode: getExecStatus(error),
       stdout: toLogString((error as { stdout?: unknown }).stdout) ?? "",
       stderr: toLogString((error as { stderr?: unknown }).stderr) ?? message,
@@ -2700,10 +2750,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (!input.tool.startsWith("akm_")) return
         const args = output.args && typeof output.args === "object" ? output.args as Record<string, unknown> : {}
         const confirm = args.confirm === true
-        if (input.tool === "akm_vault" && (args.action === "show" || args.action === "unset") && !confirm) {
+        if (input.tool === "akm_vault" && (args.action === "show" || args.action === "load") && !confirm) {
           output.args = {
             ...args,
-            __akmBlocked: `akm_vault action='${String(args.action)}' requires confirm:true to avoid accidental secret exposure or deletion.`,
+            __akmBlocked: `akm_vault action='${String(args.action)}' requires confirm:true because vault reads are sensitive.`,
           }
           return
         }
@@ -2711,6 +2761,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           output.args = {
             ...args,
             __akmBlocked: `akm_memory action='${String(args.action)}' requires confirm:true because it mutates candidate or memory state.`,
+          }
+          return
+        }
+        if (input.tool === "akm_proposal" && ["accept", "reject"].includes(String(args.action ?? "")) && !confirm) {
+          output.args = {
+            ...args,
+            __akmBlocked: `akm_proposal action='${String(args.action)}' requires confirm:true because it mutates the proposal queue.`,
           }
           return
         }
@@ -3652,20 +3709,16 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
     }),
     akm_vault: tool({
-      description: "Manage encrypted-at-rest vaults of KEY=VALUE pairs. Values never surface in any output channel — 'show'/'list' return key names only, 'set'/'unset' never echo the value. Use 'load' to get a shell-eval snippet that loads values into the process. action='show' and action='unset' require confirm:true.",
+      description: "Read encrypted-at-rest vault metadata without surfacing values. 'list' and 'show' return key names only. 'load' writes the shell snippet to a temporary file and returns the file path instead of echoing secret-bearing shell text. action='show' and action='load' require confirm:true.",
       args: {
-        action: tool.schema.enum(["list", "show", "create", "set", "unset", "load"]).describe("Vault subcommand. 'load' wraps `akm vault load` — treat its output as opaque shell text meant for eval."),
-        ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/set/unset/load; optional for list."),
-        name: tool.schema.string().optional().describe("Vault name when action is 'create' (e.g. 'prod' → vaults/prod.env)."),
-        key: tool.schema.string().optional().describe("Variable name for set/unset. The legacy KEY=VALUE one-field form was removed in akm 0.8.0; pass the value via the 'value' field (piped to akm stdin)."),
-        value: tool.schema.string().optional().describe("Value to store for action='set'. Sent to `akm vault set` via stdin in 0.8.0 (never via argv) and never echoed back."),
-        comment: tool.schema.string().optional().describe("Optional inline '# comment' written above the key for 'set'."),
-        confirm: tool.schema.boolean().optional().describe("Must be true for sensitive actions like show and unset."),
+        action: tool.schema.enum(["list", "show", "load"]).describe("Vault subcommand. 'load' writes the shell snippet to a temp file and returns the path without echoing the contents."),
+        ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/load; optional for list."),
+        confirm: tool.schema.boolean().optional().describe("Must be true for sensitive actions like show and load."),
       },
       async execute(input) {
         const blocked = blockedToolResponse(input as Record<string, unknown>)
         if (blocked) return blocked
-        const { action, ref, name, key, value, comment } = input
+        const { action, ref, confirm } = input
         const logMeta = { toolName: "akm_vault" }
         switch (action) {
           case "list": {
@@ -3674,68 +3727,27 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             return runCli(client as unknown as LogCapableClient, args, logMeta)
           }
           case "show": {
+            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_vault action='show' requires confirm:true because vault reads are sensitive." })
             if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='show'." })
             return runCli(client as unknown as LogCapableClient, ["vault", "show", ref], logMeta)
           }
-          case "create": {
-            if (!name) return JSON.stringify({ ok: false, error: "'name' is required for action='create'." })
-            return runCli(client as unknown as LogCapableClient, ["vault", "create", name], logMeta)
-          }
-          case "set": {
-            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='set'." })
-            if (!key) return JSON.stringify({ ok: false, error: "'key' is required for action='set'." })
-            if (value == null) return JSON.stringify({ ok: false, error: "'value' is required for action='set'." })
-            if (key.includes("=")) {
-              return JSON.stringify({
-                ok: false,
-                error: "'key' must not contain '='. The legacy KEY=VALUE form was removed in akm 0.8.0; pass the value via the 'value' field.",
-              })
-            }
-            // 0.8.0 removed positional VALUE / KEY=VALUE forms for security; the
-            // CLI now reads the value from stdin. Pipe it through execFileSync
-            // directly (runCli has no stdin path) so the value never appears in
-            // argv (/proc/cmdline, exec logs, etc.).
-            const command = resolveAkmCommand()
-            if (typeof command !== "string") return JSON.stringify(command)
-            const args = ["--format", "json", "-q", "vault", "set", ref, key]
-            if (comment) args.push("--comment", comment)
-            try {
-              const stdout = execFileSync(command, args, {
-                encoding: "utf8",
-                timeout: 30_000,
-                input: value,
-              })
-              return stdout || JSON.stringify({ ok: true, ref, key })
-            } catch (error: unknown) {
-              const message = formatCliError(error)
-              await writePluginLog(logClient, "error", "AKM vault set failed", {
-                subsystem: "vault",
-                toolName: "akm_vault",
-                action: "set",
-                ref,
-                key,
-                error: message,
-              })
-              return JSON.stringify({ ok: false, error: message })
-            }
-          }
-          case "unset": {
-            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='unset'." })
-            if (!key) return JSON.stringify({ ok: false, error: "'key' is required for action='unset'." })
-            return runCli(client as unknown as LogCapableClient, ["vault", "unset", ref, key], logMeta)
-          }
           case "load": {
+            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_vault action='load' requires confirm:true because vault reads are sensitive." })
             if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='load'." })
-            // `vault load` emits raw shell — not JSON. Return the snippet verbatim
-            // so the caller can hand it to a shell via eval. Never parse values.
             const command = resolveAkmCommand()
-            if (typeof command !== "string") return JSON.stringify(command)
+            if (typeof command === "object" && "ok" in command) return JSON.stringify(command)
             try {
-              const stdout = execFileSync(command, ["vault", "load", ref], {
+              const stdout = execResolvedAkm(command, ["vault", "load", ref], {
                 encoding: "utf8",
                 timeout: 30_000,
               })
-              return JSON.stringify({ ok: true, ref, shell: stdout.trim() })
+              const filePath = writeVaultLoadFile(ref, stdout)
+              return JSON.stringify({
+                ok: true,
+                ref,
+                filePath,
+                usage: "Shell contents were written to a temporary file to avoid surfacing secrets in tool output. Use the path from a trusted shell if needed.",
+              })
             } catch (error: unknown) {
               await writePluginLog(logClient, "error", "AKM vault load failed", {
                 subsystem: "vault",
@@ -3840,9 +3852,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             if (as_slug) args.push("--as", as_slug)
             if (source === "-" && content) {
               const command = resolveAkmCommand()
-              if (typeof command !== "string") return JSON.stringify(command)
+              if (typeof command === "object" && "ok" in command) return JSON.stringify(command)
               try {
-                const stdout = execFileSync(command, [...args, "--format", "json"], {
+                const stdout = execResolvedAkm(command, [...args, "--format", "json"], {
                   encoding: "utf8",
                   timeout: 60_000,
                   input: content,
@@ -3970,9 +3982,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           case "template": {
             // The workflow template is emitted as raw markdown, not JSON.
             const command = resolveAkmCommand()
-            if (typeof command !== "string") return JSON.stringify(command)
+            if (typeof command === "object" && "ok" in command) return JSON.stringify(command)
             try {
-              const stdout = execFileSync(command, ["workflow", "template"], {
+              const stdout = execResolvedAkm(command, ["workflow", "template"], {
                 encoding: "utf8",
                 timeout: 30_000,
               })
@@ -4003,8 +4015,12 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         id: tool.schema.string().optional().describe("Proposal id. Required for show/diff/accept/reject."),
         status: tool.schema.enum(["pending", "accepted", "rejected"]).optional().describe("Filter for action='list'."),
         reason: tool.schema.string().optional().describe("Required for action='reject'. Recorded with the archived proposal."),
+        confirm: tool.schema.boolean().optional().describe("Must be true for action='accept' and action='reject'."),
       },
-      async execute({ action, id, status, reason }) {
+      async execute(input) {
+        const blocked = blockedToolResponse(input as Record<string, unknown>)
+        if (blocked) return blocked
+        const { action, id, status, reason, confirm } = input
         const logMeta = { toolName: "akm_proposal" }
         switch (action) {
           case "list": {
@@ -4018,9 +4034,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
           case "diff": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='diff'." })
-            return runCli(client as unknown as LogCapableClient, ["diff", "proposal", id], logMeta)
+            return runCli(client as unknown as LogCapableClient, ["diff", id], logMeta)
           }
           case "accept": {
+            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_proposal action='accept' requires confirm:true because it mutates the proposal queue." })
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='accept'. Confirm with the user before accepting." })
             const acceptResult = await runCli(client as unknown as LogCapableClient, ["accept", id, "--yes"], logMeta)
             // Invalidate the proposal-count cache so the next getPendingProposalCount() call
@@ -4029,6 +4046,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             return acceptResult
           }
           case "reject": {
+            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_proposal action='reject' requires confirm:true because it mutates the proposal queue." })
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='reject'. Confirm with the user before rejecting." })
             if (!reason || !reason.trim()) return JSON.stringify({ ok: false, error: "'reason' is required for action='reject'. Ask the user why the proposal is being rejected." })
             const rejectResult = await runCli(client as unknown as LogCapableClient, ["reject", id, "--reason", reason, "--yes"], logMeta)
@@ -4102,13 +4120,13 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
       async execute({ topic, command }) {
         const cliCommand = resolveAkmCommand()
-        if (typeof cliCommand !== "string") return JSON.stringify(cliCommand)
+        if (typeof cliCommand === "object" && "ok" in cliCommand) return JSON.stringify(cliCommand)
         const helpArgs = command && command.trim()
           ? [command.trim(), "--help"]
           : ["--help"]
         let helpText = ""
         try {
-          helpText = execFileSync(cliCommand, helpArgs, {
+          helpText = execResolvedAkm(cliCommand, helpArgs, {
             encoding: "utf8",
             timeout: 30_000,
           }).toString().trim()

@@ -166,13 +166,22 @@ function uniq(values: string[]): string[] {
 
 function redactAssignments(text: string, categories: string[]): string {
   const envLineRe = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/gm
-  return text.replace(envLineRe, (match, rawKey: string) => {
+  let next = text.replace(envLineRe, (match, rawKey: string) => {
     const key = String(rawKey)
     if (!SENSITIVE_KEY_RE.test(key)) return match
     categories.push(key.toLowerCase().includes("password") || key.toLowerCase().includes("passwd") ? "password" : "env_secret")
     categories.push("vault_output")
-    return `${key}=[REDACTED:${key}]`
+    return `${key}: [REDACTED:${key}]`
   })
+  const inlineAssignmentRe = /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\s"'`,;]+)/g
+  next = next.replace(inlineAssignmentRe, (match, rawKey: string) => {
+    const key = String(rawKey)
+    if (!SENSITIVE_KEY_RE.test(key)) return match
+    categories.push(key.toLowerCase().includes("password") || key.toLowerCase().includes("passwd") ? "password" : "env_secret")
+    categories.push("vault_output")
+    return `${key}: [REDACTED:${key}]`
+  })
+  return next
 }
 
 function redactJsonLikePairs(text: string, categories: string[]): string {

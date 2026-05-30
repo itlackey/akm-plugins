@@ -1085,6 +1085,47 @@ exit 0
     expect(existsSync(bufferPath)).toBe(false)
   })
 
+  it("capture-memory scrubs sensitive assignment shapes from durable memories", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const rememberBody = path.join(tempDir, "remember.body")
+    mkdirSync(binDir, { recursive: true })
+    const sessionsDir = path.join(stateDir, "akm-claude/sessions")
+    mkdirSync(sessionsDir, { recursive: true })
+
+    writeFileSync(
+      path.join(sessionsDir, "sess-leak-1.md"),
+      "## 2026-04-22T12:00:00Z — user memory intent\nremember the staging deploy steps, including DATABASE_URL=postgres://staging-pw-DO-NOT-LEAK@db.example.com that I just typed by accident\n\n## 2026-04-22T12:02:00Z — tool ref\n- ref: skill:code-review\n",
+    )
+
+    const quotedBody = shellQuote(rememberBody)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+if printf '%s' "$*" | grep -q 'remember'; then
+  cat > ${quotedBody}
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["capture-memory", "session-end"], {
+      input: JSON.stringify({ session_id: "sess-leak-1" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const body = readFileSync(rememberBody, "utf8")
+    expect(body).toContain("DATABASE_URL: [REDACTED:DATABASE_URL]")
+    expect(body).not.toContain("DATABASE_URL=")
+    expect(body).not.toContain("DO-NOT-LEAK")
+  })
+
   it("capture-memory writes checkpoint memories for proposal prep without clearing the final buffer", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")

@@ -31,7 +31,7 @@ You have a Bash tool. Use it to:
 - \`akm feedback <ref> --positive --note "..."\` — record that an asset helped
 - \`akm feedback <ref> --negative --note "..."\` — record that an asset failed or was wrong
 
-Reference grammar: \`<type>:<name>\` where type ∈ {skill, command, agent, knowledge, memory, script, workflow, vault, wiki}.
+Reference grammar: \`<type>:<name>\` where type ∈ {skill, command, agent, knowledge, memory, lesson, script, workflow, task, vault, wiki}.
 
 Workflow when handling a request:
 1. If curated assets are in your context, decide which (if any) are relevant. Don't use them blindly — pick only assets that fit the request.
@@ -82,7 +82,7 @@ export type ClaudeAgentResult = {
   error?: string
 }
 
-const REF_RE = /\b(skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._\/-]+/g
+const REF_RE = /\b(skill|command|agent|knowledge|memory|lesson|script|workflow|task|vault|wiki):[A-Za-z0-9._\/-]+/g
 
 function extractRefs(text: string): string[] {
   const seen = new Set<string>()

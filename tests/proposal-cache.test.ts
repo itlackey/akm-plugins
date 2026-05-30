@@ -164,7 +164,7 @@ describe("proposal cache invalidation (WS-7a)", () => {
     mockExecFileSync.mockClear()
 
     // Accept a proposal — should invalidate cache
-    await hooks.tool!.akm_proposal.execute({ action: "accept", id: "p_111" } as any, {} as any)
+    await hooks.tool!.akm_proposal.execute({ action: "accept", id: "p_111", confirm: true } as any, {} as any)
 
     // Now change what the CLI returns (simulating the queue is now empty)
     mockExecFileSync.mockImplementation((cmd: string, args: string[]) => {
@@ -195,8 +195,8 @@ describe("proposal cache invalidation (WS-7a)", () => {
     await hooks.tool!.akm_proposal.execute({ action: "list" } as any, {} as any)
 
     // Reject — should clear the cache
-    await hooks.tool!.akm_proposal.execute(
-      { action: "reject", id: "p_222", reason: "not relevant" } as any,
+      await hooks.tool!.akm_proposal.execute(
+      { action: "reject", id: "p_222", reason: "not relevant", confirm: true } as any,
       {} as any,
     )
 

@@ -14,7 +14,7 @@ Add to your OpenCode config (`opencode.json`):
 
 ## Tools
 
-The plugin exposes **19 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, `tasks`, ad-hoc `run`, raw `agent`) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
+The plugin exposes **19 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, `tasks`, ad-hoc `run`, raw `agent`, vault writes) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
 
 | Tool | Description |
 |------|-------------|
@@ -29,7 +29,7 @@ The plugin exposes **19 high-value tools**. Long-tail verbs (`add`, `save`, `imp
 | `akm_evolve` | Dispatch the AKM curator subagent into a child session, capture the report as a memory, and seed the curator-context cache so it survives compaction |
 | `akm_parent_messages` | Summarize the parent OpenCode session so dispatched stash subagents can inherit upstream context |
 | `akm_session_messages` | Summarize a specific OpenCode session (arbitrary IDs restricted to `akm-curator`) |
-| `akm_vault` | Vault `list` / `show` (key names) / `create` / `set` / `unset` / `load` (opaque shell-eval text). **Values never surface** through `list`/`show`; `load` output is meant for `eval` and must not be displayed back |
+| `akm_vault` | Vault `list` / `show` (key names) / `load` (writes the shell snippet to a temp file path without surfacing values inline). **Values never surface** through tool output |
 | `akm_wiki` | Manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`) |
 | `akm_workflow` | Drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`) |
 | `akm_proposal` | Operate the v0.8.0 proposal queue (`list` / `show` / `diff` / `accept` / `reject`). Always confirm with the user before `accept`/`reject` — those operations require explicit approval |
@@ -49,7 +49,7 @@ fails silently when a compatible `akm` is not resolvable — the TUI is never af
 | **`session.created`** (event hook) | Sets the AKM default agent in `~/.config/akm/config.json` to `opencode` when missing, warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions start with relevant stash context. |
 | **`chat.message`** | Records user feedback/memory intent and appends a short reminder to use `akm_search` / `akm_curate` when more stash context is needed. It does not auto-run AKM CLI lookups on every message. |
 | **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, pending proposal summaries, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
-| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations on the plugin's own typed tools (`akm_vault show`, `akm_proposal accept`, etc.) until `confirm:true` is provided. This contract is per-tool, not a generic shell-command gate. |
+| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations on the plugin's own typed tools (`akm_vault show/load`, `akm_proposal accept`, etc.) until `confirm:true` is provided. This contract is per-tool, not a generic shell-command gate. |
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, checkpoints memories every `AKM_MEMORY_CHECKPOINT_EVERY` successful asset-touching tool calls, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
 | **`shell.env`** | Exposes `AKM_PROJECT`, `AKM_PLUGIN_VERSION`, and the resolved `AKM_STASH_DIR` to shell tools so raw shell checks and plain `akm` invocations see the same stash path as the plugin. |
@@ -96,9 +96,9 @@ down at the OS level instead:
   sandboxed environments.
 - **Vault writes still bypass the chat turn entirely.** Use the typed
   `akm_vault` tool only for read paths (`list`, `show` of key names,
-  `load` for shell-eval pipelines). To create vaults or set/unset values,
-  run `akm vault …` directly in the shell so secret values never pass
-  through the chat turn.
+  `load` when you need a temporary shell-file path without surfacing
+  values inline). To create vaults or set/unset values, run `akm vault …`
+  directly in the shell so secret values never pass through the chat turn.
 
 The plugin's typed `akm_*` tools (`akm_vault show`, `akm_proposal accept`,
 etc.) still apply their per-tool `confirm:true` contracts at
@@ -109,6 +109,7 @@ etc.) still apply their per-tool `confirm:true` contracts at
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic `akm curate` on user messages. Session start no longer auto-curates. |
+| `AKM_LOCAL_BUILD_CLI` | _(unset)_ | Optional absolute path to a locally built AKM CLI entrypoint such as `/abs/path/to/akm/dist/cli.js`. When set, the OpenCode plugin runs that build through Bun before falling back to bundled or PATH-based `akm` binaries. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip injecting `akm hints` at session start. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic session-summary memories. |

@@ -32,7 +32,7 @@ fixed rubric.
 cd evals
 
 # Run all scenarios across both plugins, no judge (free; validates harness)
-bun run tier3 -- --no-judge
+bun run tier3 -- --no-judge --agent stub
 
 # With judge — requires ANTHROPIC_API_KEY
 export ANTHROPIC_API_KEY=sk-ant-...

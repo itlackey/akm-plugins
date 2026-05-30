@@ -119,16 +119,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts\" pre-tool-agent",
-            "timeout": 20
-          }
-        ]
       }
     ],
     "PostToolUse": [

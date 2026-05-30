@@ -66,7 +66,7 @@ import path from "node:path";
 // (e.g. `vault:.env`-style names) by requiring the slug to be at least
 // one character and to *end* on `[A-Za-z0-9_-]`.
 const REF_PATTERN =
-  /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):(?:[A-Za-z0-9._/-]*[A-Za-z0-9_-]|[A-Za-z0-9_-])/g;
+  /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|vault|wiki):(?:[A-Za-z0-9._/-]*[A-Za-z0-9_-]|[A-Za-z0-9_-])/g;
 
 /**
  * Return every `<type>:<slug>` token in `text` regardless of context.
@@ -83,7 +83,7 @@ export function extractAllRefs(text: string): string[] {
 // transcript-style body). Kept for backward compatibility with existing
 // callers in `claude/hooks/akm-hook.ts` and the opencode plugin.
 const AKM_REF_STRICT =
-  /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/;
+  /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|task|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/;
 const EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"]);
 
 function normalizeToken(token: string): string {

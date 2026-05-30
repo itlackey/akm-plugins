@@ -7,6 +7,7 @@ import path from "node:path"
 import { writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { mkdtempSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 
 export type RunHookResult = {
   stdout: string
@@ -47,8 +48,25 @@ export function runClaudeHook(
 // Parse refs (e.g. `skill:code-review`, `knowledge:foo/bar`) out of the
 // `additionalContext` block the hook emits as JSON on stdout. Mirrors the
 // types listed in AGENTS.md: skill, command, agent, knowledge, memory,
-// script, workflow, vault, wiki.
-const REF_RE = /\b(skill|command|agent|knowledge|memory|script|workflow|vault|wiki):[A-Za-z0-9._\/-]+/g
+// lesson, script, workflow, task, vault, wiki.
+const REF_RE = /\b(skill|command|agent|knowledge|memory|lesson|script|workflow|task|vault|wiki):[A-Za-z0-9._\/-]+/g
+
+const CURATED_FILE_RE = /AKM stash curation written to `([^`]+)`/g
+
+function hydrateCuratedContext(context: string): string {
+  let expanded = context
+  for (const match of context.matchAll(CURATED_FILE_RE)) {
+    const filePath = match[1]
+    try {
+      if (filePath && existsSync(filePath)) {
+        expanded = `${expanded}\n${readFileSync(filePath, "utf8")}`
+      }
+    } catch {
+      // Best-effort only; the original context still reflects the hook output.
+    }
+  }
+  return expanded
+}
 
 export function parseInjectedRefs(stdout: string): { context: string; refs: string[] } {
   const trimmed = stdout.trim()
@@ -59,7 +77,7 @@ export function parseInjectedRefs(stdout: string): { context: string; refs: stri
   } catch {
     return { context: "", refs: [] }
   }
-  const ctx: string = payload?.hookSpecificOutput?.additionalContext ?? ""
+  const ctx = hydrateCuratedContext(payload?.hookSpecificOutput?.additionalContext ?? "")
   const seen = new Set<string>()
   const refs: string[] = []
   for (const m of ctx.matchAll(REF_RE)) {
