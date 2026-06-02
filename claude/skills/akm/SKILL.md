@@ -1,6 +1,6 @@
 ---
 name: akm
-description: Search, show, dispatch agents, execute commands, run workflows, manage wikis and vaults, route the proposal queue, improve assets, and curate stash assets via the akm CLI. Use when the user wants to find or use tools, skills, commands, agents, knowledge, lessons, wikis, vaults, or workflows.
+description: Search, show, dispatch agents, execute commands, run workflows, manage wikis, env configs, and whole-file secrets, route the proposal queue, improve assets, and curate stash assets via the akm CLI. Use when the user wants to find or use tools, skills, commands, agents, knowledge, lessons, tasks, wikis, env assets, secrets, or workflows.
 ---
 
 # AKM Stash
@@ -9,7 +9,7 @@ You have access to the `akm` CLI (AKM, v0.8.0+) to manage extension assets from 
 
 ## Tool surface vs. CLI
 
-The Claude AKM plugin exposes **21 first-class slash commands** for the high-value verbs:
+The Claude AKM plugin exposes **22 first-class slash commands** for the high-value verbs:
 
 - `/akm-search` — search the stash or registry
 - `/akm-show` — fetch the full payload for a ref
@@ -21,7 +21,8 @@ The Claude AKM plugin exposes **21 first-class slash commands** for the high-val
 - `/akm-evolve` — dispatch the `akm-curator` agent
 - `/akm-wiki` — wiki create/register/list/show/pages/search/stash/lint/ingest/remove
 - `/akm-workflow` — start/next/complete/status/list/create/resume/template
-- `/akm-vault` — vault `list` / `show` (key names) / `load` (shell-eval snippet)
+- `/akm-env` — env `list` / `path` (file path) / `run` (inject env into child command)
+- `/akm-secret` — secret `list` / `path` (absolute file path only; never the bytes)
 - `/akm-proposal` — operate the v0.8.0 proposal queue (list/show/diff/accept/reject)
 - `/akm-review-proposals` — list and diff every pending proposal in one pass
 - `/akm-improve` — generate improvement proposals for the stash, a type, or a specific ref
@@ -36,7 +37,7 @@ The Claude AKM plugin exposes **21 first-class slash commands** for the high-val
 For every other verb — `add` (install kits / register sources), `save`, `import`, `clone`,
 `update`, `remove` (uninstall a source), `list` (configured sources), `registry search`,
 `index` (reindex), `config`, `upgrade`, `tasks`, ad-hoc `run`, `agent` (raw agent-CLI shell-out),
-vault writes (`set` / `unset`), and any flag not exposed by the slash commands above —
+env writes (`create` / `remove`), secret writes / command injection (`set` / `run` / `remove`), and any flag not exposed by the slash commands above —
 **call `/akm-help` first** to discover the right `akm` CLI form, then run it via Bash.
 
 ### akm_help quick reference
@@ -47,13 +48,14 @@ This table is the curated long-tail reference, embedded verbatim from
 
 | Task | Command | Notes | Keywords |
 | --- | --- | --- | --- |
-| Review pending proposals and decide whether to accept, reject, or revise them | `akm proposals --status pending --format json` | Inspect individual entries with `akm show proposal <id>` and `akm diff <id>` (positional id; no `proposal` middle word in 0.8.0). Accept/reject requires explicit user approval. | proposal, review proposals, pending proposals, accept proposal, reject proposal |
+| Review pending proposals and decide whether to accept, reject, or revise them | `akm proposal list --status pending --format json` | Inspect individual entries with `akm proposal show <id>` and `akm proposal diff <id>` (positional id). Accept/reject requires explicit user approval. | proposal, review proposals, pending proposals, accept proposal, reject proposal |
 | Improve existing assets or distill repeated evidence into proposals | `akm improve [<type>|<ref>] [--task "..."]` | `improve` replaces the old reflect/distill flow in v0.8.0. Proposed assets are not curated until accepted. | improve, lesson, reflect, distill, drift, failure |
 | Manage scheduled task assets via the OS scheduler | `akm tasks <add|list|show|remove|enable|disable|run|history|sync|doctor> ...` | Tasks are first-class in v0.8.0 but remain a long-tail CLI surface in this plugin. | tasks, scheduled task, cron, launchd, schtasks |
 | Create a proposed asset for a coverage gap | `akm propose <type> <name> --task "..."` | Drafts a `quality:"proposed"` asset that lands in the proposal queue — never directly curated. | propose, coverage gap, proposed asset |
 | Search including proposed-quality assets | `akm search <query> --include-proposed` | Default search hides drafts; this flag merges them into hits. Do not treat proposed assets as curated until accepted. | include-proposed, proposed quality, lesson |
+| Manage whole-file secrets outside chat-safe read paths | `akm secret <set|run|remove> ...` | Use `/akm-secret` for `list` / `path`. Never paste secret values into chat; `set` reads from stdin/--from-file/--from-env and `run` injects into a child process only. | secret, docker secret, pem, token, _FILE |
 | Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--provider <p>] [--max-pages N] [--max-depth N] [--allow-insecure]` | Confirm with the user before registering a website crawler or passing `--allow-insecure`. | add, install, register, kit, source, github, npm |
-| Commit (and optionally push) pending stash changes | `akm save [<source-name>] [-m <msg>]` | For writable git-backed sources, save commits and pushes; review the diff first. | save, commit, push, publish, git |
+| Commit (and optionally push) pending stash changes | `akm sync [<source-name>] [-m <msg>]` | For writable git-backed sources, sync commits and pushes (`--no-push` to skip); review the diff first. | save, commit, push, publish, git, sync |
 | Import a file (or stdin) into the stash as a typed asset | `akm import <path|-> [--name <name>] [--force]` | Use `-` and pipe content via stdin to import a string. | import, ingest, upload, stdin |
 | Clone an asset from any source for editing | `akm clone <ref> [--name <new>] [--dest <dir>] [--force]` | Type subdirectory is appended automatically; ref may include origin (e.g. `npm:@scope/pkg//script:foo`). | clone, copy, fork, edit |
 | Update a managed source (or all of them) | `akm update [<package_ref>|--all] [--force]` |  | update, upgrade kit, refresh, pull |
@@ -81,12 +83,14 @@ The stash directory contains:
 - **agents/** — markdown agent definition files
 - **knowledge/** — markdown knowledge files
 - **memories/** — markdown memory files recorded with `akm remember`
-- **lessons/** — markdown lesson files (`lesson:<name>`) with required `description` and `when_to_use` frontmatter; normally produced through `akm improve <ref>` as a proposed-quality proposal and promoted via `akm accept`
+- **lessons/** — markdown lesson files (`lesson:<name>`) with required `description` and `when_to_use` frontmatter; normally produced through `akm improve <ref>` as a proposed-quality proposal and promoted via `akm proposal accept`
+- **tasks/** — scheduled task definitions (`task:<name>`) managed by `akm tasks ...`
 - **scripts/** — executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
 - **workflows/** — multi-step procedures (`workflow:<name>`) driven by `akm workflow`
-- **vaults/** — `.env` files (`vault:<name>`) whose values are managed by `akm vault` and **never** surface in JSON, logs, or search indexes
+- **env/** — `.env` files (`env:<name>`) whose values are managed by `akm env` and **never** surface in JSON, logs, or search indexes
+- **secrets/** — whole-file secrets (`secret:<name>`) whose contents never surface in JSON, logs, search indexes, or `akm show`
 - **wikis/** — per-wiki directories (`<stashDir>/wikis/<name>/`) containing `schema.md`, `index.md`, `log.md`, `raw/`, and agent-authored pages referenced as `wiki:<name>/<page>`
-- **.akm/proposals/** — v0.8.0 proposal queue (one directory per proposal). Drafts here never leak into search or commits; promote them with `akm accept <id>`.
+- **.akm/proposals/** — v0.8.0 proposal queue (one directory per proposal). Drafts here never leak into search or commits; promote them with `akm proposal accept <id>`.
 
 ### Multi-source resolution
 
@@ -103,7 +107,7 @@ Assets are classified using a multi-signal matcher system that considers file ex
 
 ### Refs
 
-Refs use the format `[origin//]type:name`. The known types are `skill`, `command`, `agent`, `knowledge`, `memory`, `lesson`, `script`, `workflow`, `vault`, and `wiki`. Simple refs like `script:deploy.sh` search all sources. Origin-qualified refs like `npm:@scope/pkg//script:deploy.sh` or `local//script:deploy.sh` target a specific source.
+Refs use the format `[origin//]type:name`. The known types are `skill`, `command`, `agent`, `knowledge`, `memory`, `lesson`, `script`, `task`, `workflow`, `env`, `secret`, and `wiki`. Simple refs like `script:deploy.sh` search all sources. Origin-qualified refs like `npm:@scope/pkg//script:deploy.sh` or `local//script:deploy.sh` target a specific source.
 
 ### Quality
 
@@ -131,7 +135,7 @@ Use `--full` to force a full reindex instead of incremental. Run this after addi
 Find assets using a hybrid search pipeline: semantic embeddings + TF-IDF ranking. Falls back to name substring matching when no index exists.
 
 ```bash
-akm search [query] [--type skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki|any] [--limit N] [--source stash|local|registry|both|<name>] [--include-proposed]
+akm search [query] [--type skill|command|agent|knowledge|memory|lesson|script|task|workflow|env|secret|wiki|any] [--limit N] [--source stash|local|registry|both|<name>] [--include-proposed]
 ```
 
 Square brackets denote optional arguments; pipe-separated values denote allowed choices for a single flag.
@@ -222,7 +226,7 @@ When the user wants to browse community kits:
 6. Search the registry when needed: `akm search "deploy" --source registry`
 7. Install kits: `akm add <package>` (optional)
 
-Default output format is JSON. When you need the most compact machine-readable output, prefer `--format json --detail agent`.
+Default output format is JSON. When you need the most compact machine-readable output, prefer `--format json --shape agent`.
 
 ## Memories and Feedback
 
@@ -243,7 +247,7 @@ akm feedback command:release --negative --note "Outdated for the current repo la
 ```
 
 Auto-feedback (recorded by the plugin hooks on Bash tool success/failure) skips
-`memory:*`, `vault:*`, `lesson:*`, and any ref the indexer reports as
+`memory:*`, `env:*`, `secret:*`, `lesson:*`, and any ref the indexer reports as
 `quality:"proposed"`. Lessons take feedback through the proposal queue, not via
 direct `akm feedback`. Override an automatic signal by running `akm feedback`
 explicitly.
@@ -256,12 +260,12 @@ acceptance runs full validation before routing through the same single write
 path used by `akm remember` and `akm import`.
 
 ```bash
-akm proposals                           # all pending drafts
-akm proposals --status pending --format json
-akm show proposal <id>                  # render the draft
-akm diff <id>                            # diff vs. the live ref (id = UUID / prefix / asset ref)
-akm accept <id>                         # validate, then promote
-akm reject <id> --reason "…"            # archive with reason
+akm proposal list                       # all pending drafts
+akm proposal list --status pending --format json
+akm proposal show <id>                  # render the draft
+akm proposal diff <id>                  # diff vs. the live ref (id = UUID / prefix / asset ref)
+akm proposal accept <id>                # validate, then promote
+akm proposal reject <id> --reason "…"   # archive with reason
 ```
 
 Use the slash commands rather than the raw CLI:
@@ -335,7 +339,7 @@ intent-bearing parts.
 | --- | --- | --- |
 | Session start | `akm` installed/refreshed; `defaults.agent` (+ a matching `profiles.agent.<name>` entry) initialized to the current platform when missing — the legacy `agent.default` slot is auto-migrated on load; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. If further interactive configuration is still needed, ask the user to run `akm setup` manually. |
 | Each user prompt | `akm curate "<prompt>"` runs and its top matches are injected into context as `additionalContext`. | Prefer the curated assets over writing new code; fetch full payloads with `akm show <ref>` before using. |
-| Each Bash tool call | Asset refs in the command/output are logged. Auto-feedback skips `memory:*` / `vault:*` / `lesson:*` / `quality:"proposed"` refs and records positive/negative feedback for everything else on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
+| Each Bash tool call | Asset refs in the command/output are logged. Auto-feedback skips `memory:*` / `env:*` / `secret:*` / `lesson:*` / `quality:"proposed"` refs and records positive/negative feedback for everything else on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
 | Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings — improve the session memory into a proposal via `/akm-improve memory:<name>`, review the resulting proposal, and accept it via `/akm-proposal accept <id>`. |
 
 When you discover a pattern worth keeping, **write it back to the stash**
@@ -369,29 +373,52 @@ akm wiki ingest <name> [--profile <p>] [--model <m>] [--timeout-ms <ms>]  # disp
 akm wiki remove <name> --force [--with-sources]       # preserves raw/ by default
 ```
 
-`register` accepts directory paths, git URLs (`github:owner/repo`, `git+https://…`), and website roots (`https://…`). `--writable` marks a git-backed source as push-writable for `akm save`.
+`register` accepts directory paths, git URLs (`github:owner/repo`, `git+https://…`), and website roots (`https://…`). `--writable` marks a git-backed source as push-writable for `akm sync`.
 
 Page frontmatter fields: `description`, `pageKind`, `xrefs: wiki:<name>/<page>[]` (bidirectional — lint enforces), `sources: raw/<slug>[]`. `wikiRole` is reserved for `index`/`raw`.
 
 `akm wiki lint` exits 1 when findings exist — still returns a JSON report.
 
-## Vaults
+## Env
 
-Vaults are `.env`-style key/value stores under `<stashDir>/vaults/<name>.env`, referenced as `vault:<name>` (or `vault:team/prod` for nested). **Values never surface in any structured channel** — not in the search index, not in `.stash.json`, not in `akm show`, not in any JSON output. Only the `vault load` command emits a shell snippet intended for `eval`.
+Env assets are whole `.env` files under `<stashDir>/env/<name>.env`, referenced as `env:<name>`. They hold a group of related configuration values (URLs, flags, credentials) for an app or service. **Values never surface in any structured channel** — not in the search index, not in `akm show`, not in any JSON output.
 
 ```bash
-akm vault create <name>                               # scaffold vaults/<name>.env (mode 0600)
-akm vault list [<ref>]                                # list vaults, or list keys + comments of one vault
-akm vault show <ref>                                  # key names + comments only (no values)
-akm vault set <ref> <key> --from-env <VAR> [--comment "..."]  # value read from env var; stdin form: printf '%s' "$SECRET" | akm vault set <ref> <key>  (the positional VALUE and KEY=VALUE forms were removed in 0.8.0)
-akm vault unset <ref> <key>
-akm vault load <ref>                                  # emits shell text: use with eval "$(akm vault load vault:<n>)"
+akm env list                                          # list all env refs
+akm env path env:<name>                               # print absolute file path (for --env-file consumers)
+akm env run env:<name> -- <cmd>                       # inject env into child process (agent-safe: no stdout)
+akm env run env:<name> -- $SHELL                      # interactive shell with env loaded
+akm env create --from-file <path>                     # ingest an existing .env (mode 0600, refuses to clobber)
+akm env export env:<name> --out <file>                # write re-serialized export lines to file (mode 0600, never stdout)
+akm env remove env:<name>                             # delete the env file
 ```
 
-**Hard rules when handling vaults:**
-- Never read or echo vault values. If the user needs to load them, run `eval "$(akm vault load vault:<name>)"` in their shell — do not pipe the output through the LLM.
-- Never write vault values back to chat, logs, or files. If a user shares a value to be stored, call `akm vault set …` directly and confirm by key name only.
-- Vault refs do not accept `akm feedback` (the hooks skip them automatically).
+**Hard rules when handling env assets:**
+- Never read or echo env values. Use `akm env run` to inject into a child process; use `akm env path` to hand the file path to a `--env-file`-style consumer.
+- Never write env values back to chat, logs, or files.
+- Env refs do not accept `akm feedback` (the hooks skip them automatically).
+
+## Secrets
+
+Secrets are whole-file single-value assets under `<stashDir>/secrets/<name>`, referenced as
+`secret:<name>`. The entire file is the value. **The contents never
+surface in structured output** — not in search, not in `akm show`, and not in the
+plugin's typed secret surfaces.
+
+```bash
+akm secret list                                         # refs only
+akm secret path secret:deploy-key                       # absolute file path only
+printf '%s' "$TOKEN" | akm secret set secret:deploy-token
+akm secret set secret:deploy-key --from-file ~/.ssh/id_ed25519
+akm secret run secret:deploy-token GITHUB_TOKEN -- gh release create v1.0.0
+akm secret remove secret:deploy-token --yes
+```
+
+**Hard rules when handling secrets:**
+- Prefer `/akm-secret list|path` for chat-safe discovery. Use raw `akm secret …` for `set`, `run`, and `remove` only after explicit user confirmation.
+- Never print or paste a secret value into chat, logs, or files.
+- Prefer `akm secret path` plus `_FILE`-style consumers when possible; `akm secret run` puts the value in a child process environment for that process lifetime.
+- Secret refs do not accept `akm feedback` (the hooks skip them automatically).
 
 ## Workflows
 
@@ -412,14 +439,14 @@ When the user asks you to run a workflow, prefer `akm workflow next <ref>` for t
 
 ## Saving and importing
 
-`akm save` and `akm import` are no longer first-class slash commands — they live in the
+`akm sync` and `akm import` are no longer first-class slash commands — they live in the
 curated long-tail table above. To persist stash edits at the end of a session, run
-`/akm-help` topic="save" to confirm the exact invocation, then run `akm save …` via Bash.
+`/akm-help` topic="sync" to confirm the exact invocation, then run `akm sync …` via Bash.
 To promote a drafted markdown file as a first-class asset, run `/akm-help` topic="import"
 and then `akm import …` via Bash.
 
 Other long-tail verbs covered the same way: `akm help migrate <version>` (release notes),
-`akm enable skills.sh` / `akm disable skills.sh` (toggle the skills.sh registry provider).
+`akm config enable skills.sh` / `akm config disable skills.sh` (toggle the skills.sh registry provider).
 
 ## Dispatching Stash Agents
 

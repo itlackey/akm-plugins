@@ -91,7 +91,7 @@ const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").spli
 const CURATED_PROMPT_HEADER = "# AKM stash - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM stash - assets relevant to this session"
 const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content, and record `akm feedback <ref> --positive|--negative` once you know whether the asset helped."
-const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, vault writes, agent, tasks, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. v0.8.0 adds the `/akm-proposal`, `/akm-improve`, `/akm-propose`, `/akm-review-proposals`, and `/akm-setup` slash commands for the proposal queue and agent-CLI integration."
+const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, env writes, secret writes/run, agent, tasks, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. v0.8.0 adds the `/akm-proposal`, `/akm-improve`, `/akm-propose`, `/akm-review-proposals`, and `/akm-setup` slash commands for the proposal queue and agent-CLI integration."
 const SESSION_START_HEADER = [
   "# AKM is available in this session",
   "",
@@ -106,7 +106,7 @@ const SESSION_START_HEADER = [
   "",
   'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
-const REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g
+const REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|env|secret|wiki):[A-Za-z0-9._/-]+/g
 const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() || ""
 const CURATED_DIR = path.join(STATE_DIR, "curated")
 const PROPOSAL_FLOW_RE = /\/akm-(improve|evolve|propose)\b/
@@ -1154,7 +1154,7 @@ function autoFeedback() {
   if (refs.length === 0) return
   const scopeArgs = buildRunScopeArgs(sid)
   for (const ref of refs) {
-    if (/^(?:.*\/\/)?(?:memory|vault|lesson):/.test(ref)) continue
+    if (/^(?:.*\/\/)?(?:memory|env|secret|lesson):/.test(ref)) continue
     if (refQuality(ref) === "proposed") {
       appendLog(FEEDBACK_LOG, "system", "skip_proposed", ref, statusText)
       continue
@@ -1259,7 +1259,7 @@ function curatePrompt(): string {
     })
     return ""
   }
-  const curated = akmRun(["--detail", "agent", "--format", "text", "-q", "curate", text, "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)])
+  const curated = akmRun(["--shape", "agent", "--format", "text", "-q", "curate", text, "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)])
   writeMemoryEvent({
     event: "prompt_recall",
     sessionId: sid || undefined,
@@ -1320,7 +1320,7 @@ async function sessionStart(): Promise<string> {
   const [hintsRaw, curatedRaw, pendingRaw] = await Promise.all([
     akmRunAsync(["--format", "text", "-q", "hints"]),
     akmRunAsync([
-      "--detail",
+      "--shape",
       "agent",
       "--format",
       "text",
@@ -1331,7 +1331,7 @@ async function sessionStart(): Promise<string> {
       String(CURATE_LIMIT),
       ...buildRunScopeArgs(sid),
     ]),
-    akmRunAsync(["--format", "json", "-q", "proposals", "--status", "pending"]),
+    akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
   ])
   const hints = hintsRaw.trim()
   const curatedTrimmed = curatedRaw.trim()

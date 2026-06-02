@@ -13,11 +13,11 @@
  *
  * We do this by:
  *  1. Triggering a chat.message event so the plugin populates the cache.
- *  2. Changing the mock return value for `akm proposals …` to return a DIFFERENT
+ *  2. Changing the mock return value for `akm proposal list …` to return a DIFFERENT
  *     count.
  *  3. Calling accept / reject / improve.
  *  4. Triggering another chat.message and asserting that execFileSync was called
- *     again for `proposals` (i.e., the stale value was not served from cache).
+ *     again for `proposal list` (i.e., the stale value was not served from cache).
  */
 
 import { describe, it, expect, mock, beforeEach } from "bun:test"
@@ -126,13 +126,14 @@ function createToolContext(sessionID = "session-cache-1") {
   } as any
 }
 
-/** Count how many times execFileSync was called with `proposals` as first arg (cache miss) */
+/** Count how many times execFileSync was called with the canonical `proposal list` (cache miss) */
 function countProposalListCalls(): number {
   return mockExecFileSync.mock.calls.filter(
     ([cmd, args]) =>
       (cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd as string)) &&
       Array.isArray(args) &&
-      args[0] === "proposals",
+      args[0] === "proposal" &&
+      args[1] === "list",
   ).length
 }
 
@@ -149,8 +150,8 @@ describe("proposal cache invalidation (WS-7a)", () => {
   it("cache is cleared after akm_proposal accept — next proposals call hits the CLI", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args: string[]) => {
       const isAkm = cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd)
-      if (isAkm && args[0] === "proposals") return JSON.stringify({ proposals: [{ id: "p_111" }] })
-      if (isAkm && args[0] === "accept") return JSON.stringify({ ok: true })
+      if (isAkm && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [{ id: "p_111" }] })
+      if (isAkm && args[0] === "proposal" && args[1] === "accept") return JSON.stringify({ ok: true })
       return "mock output"
     })
 
@@ -169,7 +170,7 @@ describe("proposal cache invalidation (WS-7a)", () => {
     // Now change what the CLI returns (simulating the queue is now empty)
     mockExecFileSync.mockImplementation((cmd: string, args: string[]) => {
       const isAkm = cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd)
-      if (isAkm && args[0] === "proposals") return JSON.stringify({ proposals: [] })
+      if (isAkm && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
       return "mock output"
     })
 
@@ -184,8 +185,8 @@ describe("proposal cache invalidation (WS-7a)", () => {
   it("cache is cleared after akm_proposal reject — next proposals call hits the CLI", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args: string[]) => {
       const isAkm = cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd)
-      if (isAkm && args[0] === "proposals") return JSON.stringify({ proposals: [{ id: "p_222" }] })
-      if (isAkm && args[0] === "reject") return JSON.stringify({ ok: true })
+      if (isAkm && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [{ id: "p_222" }] })
+      if (isAkm && args[0] === "proposal" && args[1] === "reject") return JSON.stringify({ ok: true })
       return "mock output"
     })
 
@@ -210,7 +211,7 @@ describe("proposal cache invalidation (WS-7a)", () => {
   it("cache is cleared after non-dry-run akm_improve", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args: string[]) => {
       const isAkm = cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd)
-      if (isAkm && args[0] === "proposals") return JSON.stringify({ proposals: [{ id: "p_333" }] })
+      if (isAkm && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [{ id: "p_333" }] })
       if (isAkm && args[0] === "improve") return JSON.stringify({ ok: true })
       return "mock output"
     })
@@ -237,7 +238,7 @@ describe("proposal cache invalidation (WS-7a)", () => {
     let proposalCallCount = 0
     mockExecFileSync.mockImplementation((cmd: string, args: string[]) => {
       const isAkm = cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd)
-      if (isAkm && args[0] === "proposals") {
+      if (isAkm && args[0] === "proposal" && args[1] === "list") {
         proposalCallCount++
         return JSON.stringify({ proposals: [{ id: "p_444" }] })
       }

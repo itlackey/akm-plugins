@@ -214,7 +214,8 @@ describe("akm-opencode plugin", () => {
         "akm_session_messages",
         "akm_agent",
         "akm_cmd",
-        "akm_vault",
+        "akm_env",
+        "akm_secret",
         "akm_wiki",
         "akm_workflow",
         "akm_proposal",
@@ -365,12 +366,12 @@ describe("akm-opencode plugin", () => {
       expect(help.args.command).toBeDefined()
     })
 
-    it("akm_vault has required args schema", async () => {
+    it("akm_env has required args schema", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const vault = hooks.tool!.akm_vault
-      expect(vault.args.action).toBeDefined()
-      expect(vault.args.ref).toBeDefined()
-      expect(vault.args.confirm).toBeDefined()
+      const env = hooks.tool!.akm_env
+      expect(env.args.action).toBeDefined()
+      expect(env.args.ref).toBeDefined()
+      expect(env.args.confirm).toBeDefined()
     })
 
     it("cross-session message tools expose the expected args", async () => {
@@ -544,6 +545,54 @@ describe("akm-opencode plugin", () => {
       expect(parsed.hits[0].quality).toBe("proposed")
       expect(parsed.warnings).toContain("existing warning")
       expect(parsed.warnings).toContain("Do not treat proposed assets as curated until accepted.")
+    })
+
+    it("akm_search supports task and secret type filters", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_search.execute(
+        { query: "deploy", type: "secret" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["search", "deploy", "--type", "secret", "--detail", "normal", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+
+      await hooks.tool!.akm_search.execute(
+        { query: "release", type: "task" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["search", "release", "--type", "task", "--detail", "normal", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_secret returns a path only after confirmation", async () => {
+      mockExecFileSync.mockImplementation((_cmd, args) => {
+        if (Array.isArray(args) && args[0] === "secret" && args[1] === "path") return "/tmp/akm/secrets/deploy-key\n"
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+
+      const blocked = await hooks.tool!.akm_secret.execute(
+        { action: "path", ref: "secret:deploy-key" } as any,
+        createToolContext(),
+      )
+      expect(JSON.parse(blocked).ok).toBe(false)
+
+      const allowed = await hooks.tool!.akm_secret.execute(
+        { action: "path", ref: "secret:deploy-key", confirm: true } as any,
+        createToolContext(),
+      )
+      expect(JSON.parse(allowed)).toEqual({
+        ok: true,
+        ref: "secret:deploy-key",
+        filePath: "/tmp/akm/secrets/deploy-key",
+        usage: expect.stringContaining("_FILE"),
+      })
     })
 
     it("akm_show calls CLI with ref", async () => {
@@ -1355,7 +1404,7 @@ describe("akm-opencode plugin", () => {
         if (args[0] === "--version") return "0.8.9"
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate")) return ""
-        if (Array.isArray(args) && args[0] === "proposals") return JSON.stringify({ proposals: [] })
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
         return "mock output"
       })
 
@@ -1397,7 +1446,7 @@ describe("akm-opencode plugin", () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate")) return ""
-        if (Array.isArray(args) && args[0] === "proposals") return JSON.stringify({ proposals: [] })
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
         return "mock output"
       })
 
@@ -1427,7 +1476,7 @@ describe("akm-opencode plugin", () => {
         if (Array.isArray(args) && args.includes("curate") && args.includes("--run")) {
           return "# skills\n- skill:deploy — ship the app\n"
         }
-        if (Array.isArray(args) && args[0] === "proposals") return JSON.stringify({ proposals: [] })
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
         return "mock output"
       })
 
@@ -1443,8 +1492,9 @@ describe("akm-opencode plugin", () => {
           )
           expect(curateCall).toBeDefined()
           expect(curateCall?.[1]).toContain("session-start-curate-1")
-          expect(curateCall?.[1]).toEqual(expect.arrayContaining(["--detail", "agent"]))
+          expect(curateCall?.[1]).toEqual(expect.arrayContaining(["--shape", "agent"]))
           expect(curateCall?.[1]).not.toContain("--for-agent")
+          expect(curateCall?.[1]).not.toContain("--detail")
 
           const config = JSON.parse(readFileSync(path.join(configHome, "akm", "config.json"), "utf8"))
           expect(config.defaults.agent).toBe("opencode")
@@ -1466,7 +1516,7 @@ describe("akm-opencode plugin", () => {
 
     it("injects a pending proposal summary when proposals exist", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "proposals") {
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
           return JSON.stringify({ proposals: [{ id: "p1" }, { id: "p2" }] })
         }
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
@@ -1484,7 +1534,7 @@ describe("akm-opencode plugin", () => {
 
     it("does not inject compaction context when compaction is disabled", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "proposals") {
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
           return JSON.stringify({ proposals: [{ id: "p1" }] })
         }
         return "mock output"
@@ -1495,7 +1545,7 @@ describe("akm-opencode plugin", () => {
 
     it("keeps compaction free of AKM tool-injection using the local fake model path", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "proposals") {
+        if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") {
           return JSON.stringify({ proposals: [{ id: "p1" }] })
         }
         return "mock output"
@@ -1672,12 +1722,12 @@ describe("akm-opencode plugin", () => {
       expect(curateCall).toBeUndefined()
     })
 
-    it("tool.execute.before blocks akm_vault show until confirm:true is provided", async () => {
+    it("tool.execute.before blocks akm_env path until confirm:true is provided", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const output = { args: { action: "show", ref: "vault:prod" } as any }
+      const output = { args: { action: "path", ref: "env:prod" } as any }
       await hooks["tool.execute.before"]!(
         {
-          tool: "akm_vault",
+          tool: "akm_env",
           sessionID: "session-block-1",
           callID: "call-1",
         } as any,
@@ -1687,12 +1737,12 @@ describe("akm-opencode plugin", () => {
       expect(output.args.__akmBlocked).toContain("confirm:true")
     })
 
-    it("tool.execute.before blocks akm_vault load until confirm:true is provided", async () => {
+    it("tool.execute.before blocks akm_env run until confirm:true is provided", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const output = { args: { action: "load", ref: "vault:prod" } as any }
+      const output = { args: { action: "run", ref: "env:prod", cmd: "npm start" } as any }
       await hooks["tool.execute.before"]!(
         {
-          tool: "akm_vault",
+          tool: "akm_env",
           sessionID: "session-block-2",
           callID: "call-2",
         } as any,
@@ -1998,7 +2048,7 @@ describe("akm-opencode plugin", () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockSpawn.mockClear()
 
-      for (const ref of ["skill:first", "memory:notes", "vault:prod", "skill:second", "skill:third"]) {
+      for (const ref of ["skill:first", "memory:notes", "env:prod", "skill:second", "skill:third"]) {
         await hooks["tool.execute.after"]!(
           {
             tool: "akm_show",
@@ -2854,7 +2904,7 @@ describe("akm-opencode plugin", () => {
       expect(parsed.usedSubtask).toBe(true)
     })
 
-    it("akm_proposal list shells out to `akm proposals`", async () => {
+    it("akm_proposal list shells out to `akm proposal list`", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockReturnValue("{\"proposals\":[]}")
       await hooks.tool!.akm_proposal.execute(
@@ -2863,7 +2913,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["proposals", "--format", "json"],
+        ["proposal", "list", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -2877,7 +2927,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["proposals", "--status", "pending", "--format", "json"],
+        ["proposal", "list", "--status", "pending", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -2913,7 +2963,7 @@ describe("akm-opencode plugin", () => {
       // WS-7a: accept now passes --yes (non-interactive mode); runCli auto-appends --format json.
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["accept", "p_123", "--yes", "--format", "json"],
+        ["proposal", "accept", "p_123", "--yes", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -2938,7 +2988,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["diff", "p_123", "--format", "json"],
+        ["proposal", "diff", "p_123", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -3079,7 +3129,7 @@ describe("akm-opencode plugin", () => {
       expect(proposeCalls).toBe(1)
     })
 
-    it("akm_proposal show routes through `akm show proposal`", async () => {
+    it("akm_proposal show routes through `akm proposal show`", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       mockExecFileSync.mockReturnValue("{\"ok\":true}")
       await hooks.tool!.akm_proposal.execute(
@@ -3088,7 +3138,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["show", "proposal", "p_123", "--format", "json"],
+        ["proposal", "show", "p_123", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -3234,7 +3284,7 @@ describe("akm-opencode plugin", () => {
       )
       const parsed = JSON.parse(result)
       expect(parsed.hints.length).toBeGreaterThan(0)
-      expect(parsed.hints.some((h: { command: string }) => h.command.startsWith("akm save"))).toBe(true)
+      expect(parsed.hints.some((h: { command: string }) => h.command.startsWith("akm sync"))).toBe(true)
     })
 
     it("inspects a specific subcommand via `akm <command> --help`", async () => {
@@ -3269,59 +3319,37 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("v0.5.0 tool execution", () => {
-    it("akm_vault load writes shell text to a temp file without surfacing contents", async () => {
-      // `resolveAkmCommand` probes the binary via --version before the actual
-      // command runs, so route shell output only for the vault-load invocation.
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "vault" && args[1] === "load") {
-          return ". '/tmp/vault.sh'; rm -f '/tmp/vault.sh'"
-        }
-        return "mock output"
-      })
+    it("akm_env run injects env into a child command without surfacing values", async () => {
+      mockExecFileSync.mockReturnValue("mock output")
       const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_vault.execute(
-        { action: "load", ref: "vault:prod", confirm: true } as any,
+      const result = await hooks.tool!.akm_env.execute(
+        { action: "run", ref: "env:prod", cmd: "npm start", confirm: true } as any,
         {} as any,
       )
-      const parsed = JSON.parse(result as string)
-      expect(parsed.ok).toBe(true)
-      expect(parsed.ref).toBe("vault:prod")
-      expect(parsed.filePath).toContain("vault_prod.sh")
-      expect(parsed.usage).toContain("temporary file")
-      expect(parsed.shell).toBeUndefined()
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining(["env", "run", "env:prod", "--", "npm", "start"]),
+        expect.anything(),
+      )
+      expect(result).toBeDefined()
     })
 
-    it("akm_vault load logs failures through OpenCode logging", async () => {
-      const client = createMockClient()
-      mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "vault" && args[1] === "load") {
-          throw new Error("vault load exploded")
-        }
-        return "mock output"
-      })
-      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
-
-      const result = await hooks.tool!.akm_vault.execute(
-        { action: "load", ref: "vault:prod", confirm: true } as any,
+    it("akm_env run requires confirm:true to be set", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_env.execute(
+        { action: "run", ref: "env:prod", cmd: "npm start" } as any,
         {} as any,
       )
-
-      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "vault load exploded" })
-      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
-        body: expect.objectContaining({
-          message: "AKM vault load failed",
-          extra: expect.objectContaining({ subsystem: "vault", action: "load", ref: "vault:prod" }),
-        }),
-      }))
+      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "akm_env action='run' requires confirm:true." })
     })
 
-    it("akm_vault rejects load without a ref", async () => {
+    it("akm_env run rejects missing ref", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_vault.execute(
-        { action: "load", confirm: true } as any,
+      const result = await hooks.tool!.akm_env.execute(
+        { action: "run", confirm: true } as any,
         {} as any,
       )
-      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "'ref' is required for action='load'." })
+      expect(JSON.parse(result as string)).toEqual({ ok: false, error: "'ref' is required for action='run'." })
     })
 
     it("akm_wiki register passes writable and crawler caps", async () => {

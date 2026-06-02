@@ -44,14 +44,14 @@ export type AkmMemoryCandidate = {
   reason?: string
 }
 
-const AKM_REF_RE = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._/-]+/g
+const AKM_REF_RE = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|env|secret|wiki|lesson):[A-Za-z0-9._/-]+/g
 
 function uniq(values: string[]): string[] {
   return [...new Set(values)]
 }
 
 function pickTargetRef(refs: string[]): string | undefined {
-  return refs.find((ref) => !ref.startsWith("memory:") && !ref.startsWith("vault:")) ?? refs[0]
+  return refs.find((ref) => !ref.startsWith("memory:") && !ref.startsWith("env:") && !ref.startsWith("secret:")) ?? refs[0]
 }
 
 function extractRefs(value: string): string[] {

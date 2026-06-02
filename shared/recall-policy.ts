@@ -20,7 +20,7 @@ export type RecallDecision = {
   scopeHints?: string[]
 }
 
-const REF_RE = /(?:skill|command|agent|knowledge|workflow|lesson|wiki|memory|vault):[A-Za-z0-9._/-]+/i
+const REF_RE = /(?:skill|command|agent|knowledge|workflow|lesson|wiki|memory|env|secret):[A-Za-z0-9._/-]+/i
 
 export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolean; recentAssetFailure?: boolean }): RecallDecision {
   const text = prompt.trim()

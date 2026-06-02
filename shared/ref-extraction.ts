@@ -63,10 +63,10 @@ import path from "node:path";
 // the captured ref string. Mirrors the consumer-side
 // `src/commands/lint/base-linter.ts` REF_RE, which terminates on a
 // punctuation set including `.` via lookahead. We allow `.` mid-slug
-// (e.g. `vault:.env`-style names) by requiring the slug to be at least
+// (e.g. `env:.env`-style names) by requiring the slug to be at least
 // one character and to *end* on `[A-Za-z0-9_-]`.
 const REF_PATTERN =
-  /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|vault|wiki):(?:[A-Za-z0-9._/-]*[A-Za-z0-9_-]|[A-Za-z0-9_-])/g;
+  /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|env|secret|wiki):(?:[A-Za-z0-9._/-]*[A-Za-z0-9_-]|[A-Za-z0-9_-])/g;
 
 /**
  * Return every `<type>:<slug>` token in `text` regardless of context.
@@ -83,7 +83,7 @@ export function extractAllRefs(text: string): string[] {
 // transcript-style body). Kept for backward compatibility with existing
 // callers in `claude/hooks/akm-hook.ts` and the opencode plugin.
 const AKM_REF_STRICT =
-  /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|task|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/;
+  /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|task|env|secret|wiki|lesson):[A-Za-z0-9._/\-]+$/;
 const EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"]);
 
 function normalizeToken(token: string): string {
@@ -130,9 +130,11 @@ function refToRelPath(refType: string, refName: string): string | null {
       return path.join("tasks", `${refName}.md`);
     case "wiki":
       return path.join("wikis", `${refName}.md`);
-    case "vault":
-      if (!refName || refName === "default") return path.join("vaults", ".env");
-      return path.join("vaults", `${refName}.env`);
+    case "env":
+      if (!refName || refName === "default") return path.join("env", ".env");
+      return path.join("env", `${refName}.env`);
+    case "secret":
+      return path.join("secrets", refName);
     default:
       return null;
   }

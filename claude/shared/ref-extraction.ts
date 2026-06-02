@@ -38,11 +38,12 @@
 // side MUST update both contract tests in lockstep, or one will fail.
 //
 // Cases the contract covers (see fixture in the contract test):
-//   - existing memory / knowledge / agent / workflow / skill / vault refs
+//   - existing memory / knowledge / agent / workflow / skill / env / secret refs
 //   - knowledge subdirectory layout (knowledge/<category>/<slug>.md)
 //   - skill multi-file layout (skills/<slug>/SKILL.md)
 //   - memory `.derived.md` sibling
-//   - vault default vs named (.env vs <name>.env)
+//   - env default vs named (env/.env vs env/<name>.env)
+//   - whole-file secrets under secrets/
 //   - namespaced slugs containing `/`
 //   - non-existent refs
 //   - script type (unresolvable by design — both must return false)
@@ -61,7 +62,7 @@ import path from "node:path";
  * `src/commands/lint/base-linter.ts`.
  */
 const REF_PATTERN =
-  /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|vault|wiki):[A-Za-z0-9._/-]+/g;
+  /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|env|secret|wiki):[A-Za-z0-9._/-]+/g;
 
 /**
  * Return every `<type>:<slug>` token in `text` regardless of context.
@@ -78,7 +79,7 @@ export function extractAllRefs(text: string): string[] {
 // transcript-style body). Kept for backward compatibility with existing
 // callers in `claude/hooks/akm-hook.ts` and the opencode plugin.
 const AKM_REF_STRICT =
-  /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|task|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/;
+  /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|task|env|secret|wiki|lesson):[A-Za-z0-9._/\-]+$/;
 const EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"]);
 
 function normalizeToken(token: string): string {
@@ -125,9 +126,11 @@ function refToRelPath(refType: string, refName: string): string | null {
       return path.join("tasks", `${refName}.md`);
     case "wiki":
       return path.join("wikis", `${refName}.md`);
-    case "vault":
-      if (!refName || refName === "default") return path.join("vaults", ".env");
-      return path.join("vaults", `${refName}.env`);
+    case "env":
+      if (!refName || refName === "default") return path.join("env", ".env");
+      return path.join("env", `${refName}.env`);
+    case "secret":
+      return path.join("secrets", refName);
     default:
       return null;
   }

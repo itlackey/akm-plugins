@@ -7,11 +7,11 @@ Parse `"$ARGUMENTS"`. The first token is the action (`list`, `show`, `diff`, `ac
 
 Routing:
 
-- **list** — `akm --format json -q proposals`. Forward `--status pending|accepted|rejected` if the user passed it. Render a table of `id`, `ref`, `status`, `kind`, `createdAt`.
-- **show** — `akm --format json -q show proposal <id>`. Render the proposal body and any validation warnings.
-- **diff** — `akm --format json -q diff <id>`. `akm diff` accepts the proposal id (full UUID, UUID prefix, or asset ref) positionally — no `proposal` middle word. Render the diff against the live ref so the user can see what would change on accept.
-- **accept** — **Confirm with the user before running.** Acceptance promotes a draft into curated content via the same `writeAssetToSource()` write path as `akm remember` and `akm import`. Then run `akm --format json -q accept <id>`. If validation fails the proposal stays `pending`; surface the `warnings` array verbatim.
-- **reject** — **Confirm with the user before running.** Rejection archives the proposal under `<stashRoot>/.akm/proposals/archive/<id>/`. Then run `akm --format json -q reject <id> --reason "<reason>"`. Always require a non-empty reason; ask the user if missing.
+- **list** — `akm --format json -q proposal list`. Forward `--status pending|accepted|rejected` if the user passed it. Render a table of `id`, `ref`, `status`, `kind`, `createdAt`.
+- **show** — `akm --format json -q proposal show <id>`. Render the proposal body and any validation warnings.
+- **diff** — `akm --format json -q proposal diff <id>`. The proposal id (full UUID, UUID prefix, or asset ref) is positional. Render the diff against the live ref so the user can see what would change on accept.
+- **accept** — **Confirm with the user before running.** Acceptance promotes a draft into curated content via the same `writeAssetToSource()` write path as `akm remember` and `akm import`. Then run `akm --format json -q proposal accept <id>`. If validation fails the proposal stays `pending`; surface the `warnings` array verbatim.
+- **reject** — **Confirm with the user before running.** Rejection archives the proposal under `<stashRoot>/.akm/proposals/archive/<id>/`. Then run `akm --format json -q proposal reject <id> --reason "<reason>"`. Always require a non-empty reason; ask the user if missing.
 
 If the user runs `/akm-proposal` with no arguments, default to `list --status pending`.
 

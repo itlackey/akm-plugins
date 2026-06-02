@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle vaults safely**, **operate the v0.8.0 proposal queue**, and **improve assets** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, and feed asset-usage feedback back into the stash so it improves with every session. `akm setup` remains human-facing and should be run manually when needed.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle env configs and whole-file secrets safely**, **operate the v0.8.0 proposal queue**, and **improve assets** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, and feed asset-usage feedback back into the stash so it improves with every session. `akm setup` remains human-facing and should be run manually when needed.
 
 ## Installation
 
@@ -24,8 +24,8 @@ claude plugin install akm@akm-plugins
 ## What's included
 
 - **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
-- **Agentic hooks** — lifecycle hooks that install `akm`, set `defaults.agent` to `claude` (and add a matching `profiles.agent.claude` entry) in `~/.config/akm/config.json` when no agent default is configured, auto-curate stash matches into every user prompt, auto-record feedback when assets are used (skipping proposed-quality drafts and `lesson:*` refs), surface pending-proposal counts in the SessionStart header, and harvest session memories at stop/compact time
-- **Slash commands** — 21 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault`, `/akm-proposal`, `/akm-review-proposals`, `/akm-improve`, `/akm-propose`, `/akm-setup`, `/akm-memory-audit`, `/akm-memory-candidates`, `/akm-memory-promote`, `/akm-memory-reject`, `/akm-help`) for explicit control of the compound-engineering loop
+- **Agentic hooks** — lifecycle hooks that install `akm`, set `defaults.agent` to `claude` (and add a matching `profiles.agent.claude` entry) in `~/.config/akm/config.json` when no agent default is configured, auto-curate stash matches into every user prompt, auto-record feedback when assets are used (skipping proposed-quality drafts plus `lesson:*` and `secret:*` refs), surface pending-proposal counts in the SessionStart header, and harvest session memories at stop/compact time
+- **Slash commands** — 22 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-env`, `/akm-secret`, `/akm-proposal`, `/akm-review-proposals`, `/akm-improve`, `/akm-propose`, `/akm-setup`, `/akm-memory-audit`, `/akm-memory-candidates`, `/akm-memory-promote`, `/akm-memory-reject`, `/akm-help`) for explicit control of the compound-engineering loop
 - **`akm-curator` agent** — a self-evolution subagent that reviews session logs and proposes stash improvements
 
 The skill teaches Claude to:
@@ -125,9 +125,11 @@ stash/
 ├── agents/     # markdown files
 ├── knowledge/  # markdown files
 ├── memories/   # markdown memory files (akm remember)
-├── lessons/    # first-class durable learnings (lesson:<name>) — often produced via akm improve, accepted via akm accept
+├── lessons/    # first-class durable learnings (lesson:<name>) — often produced via akm improve, accepted via akm proposal accept
+├── tasks/      # scheduled task definitions (task:<name>) managed via akm tasks ...
 ├── workflows/  # multi-step procedures (workflow:<name>)
-├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
+├── env/        # .env config/credential files (env:<name>) — values never surface through structured output
+├── secrets/    # whole-file secrets (secret:<name>) — contents never surface through structured output
 ├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
 └── .akm/proposals/  # v0.8.0 proposal queue — drafts that never leak into search or commits
 ```
@@ -147,7 +149,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 | **UserPromptExpansion** | Logs expanded `/akm-*` slash-command usage, injects a short reminder when a mutating memory/proposal command is expanded without explicit confirmation language, and takes a fresh proposal-prep checkpoint before `/akm-improve`, `/akm-evolve`, or `/akm-propose` when the local session buffer has unflushed evidence. |
 | **PreToolUse** (Agent) | Resolves invalid Claude Code subagent model aliases (e.g. `balanced`, `gpt-4o`) to the four valid aliases (`sonnet`, `opus`, `haiku`, `inherit`) so dispatch is never rejected upstream. |
 | **PreToolUse** (Read / Write / Edit / Glob / Grep) | Observes asset refs in tool input for memory-event capture. Never blocks. |
-| **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs (including `lesson:*`) from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. Skips `memory:*`, `vault:*`, `lesson:*`, and any ref the indexer reports as `quality:"proposed"`. |
+| **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs (including `lesson:*`) from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. Skips `memory:*`, `env:*`, `secret:*`, `lesson:*`, and any ref the indexer reports as `quality:"proposed"`. |
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
 | **PostToolBatch** | Records grouped tool-batch observations as structured events and appends a short batch summary to the local session buffer for later checkpoint extraction. |
 | **SubagentStart** | Injects concise AKM subagent context, including the detected role, task preview, and any active workflow summary. |
@@ -161,7 +163,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 Earlier versions of this plugin shipped a `PreToolUse` Bash hook that tokenized
 each shell invocation and **blocked** a hard-coded list of risky `akm`
-subcommands (vault writes, `save --push`, `accept` / `reject` / `revert`,
+subcommands (env writes, `save --push`, `accept` / `reject` / `revert`,
 `tasks add` / `tasks run`, `upgrade`, `update --all`, etc.) until the user
 re-approved them inline. That gate has been removed in 0.8.0. The tokenized
 matcher was brittle — it produced false positives on commit messages,
@@ -181,8 +183,14 @@ default permission rules, so this step is opt-in and manual:
       "Bash(akm accept:*)",
       "Bash(akm reject:*)",
       "Bash(akm revert:*)",
+      "Bash(akm proposal accept:*)",
+      "Bash(akm proposal diff:*)",
+      "Bash(akm proposal list:*)",
+      "Bash(akm proposal reject:*)",
+      "Bash(akm proposal revert:*)",
       "Bash(akm remove:*)",
       "Bash(akm save --push:*)",
+      "Bash(akm sync:*)",
       "Bash(akm upgrade:*)",
       "Bash(akm update --all:*)",
       "Bash(akm config set:*)",
@@ -191,10 +199,12 @@ default permission rules, so this step is opt-in and manual:
       "Bash(akm tasks enable:*)",
       "Bash(akm tasks disable:*)",
       "Bash(akm tasks run:*)",
-      "Bash(akm vault create:*)",
-      "Bash(akm vault set:*)",
-      "Bash(akm vault unset:*)",
-      "Bash(akm vault load:*)"
+      "Bash(akm env create:*)",
+      "Bash(akm env remove:*)",
+      "Bash(akm env run:*)",
+      "Bash(akm secret set:*)",
+      "Bash(akm secret run:*)",
+      "Bash(akm secret remove:*)"
     ],
     "deny": [
       "Bash(akm upgrade --force:*)"
@@ -215,10 +225,10 @@ Notes:
   inside argv (commit messages, heredoc bodies, README quotes, etc.), so it
   does not suffer the tokenizer's false-positive class.
 - Patterns that cannot be expressed as a simple prefix (for example "any
-  `akm vault` subcommand that includes a secret-looking value") aren't
+  `akm env` or `akm secret` subcommand that includes a sensitive value") aren't
   coverable by these rules. For those, prefer to type the command into the
-  shell directly rather than route it through the chat turn — vault writes
-  should bypass the agent entirely (see `claude/README.md` "Vault" notes).
+  shell directly rather than route it through the chat turn — env and secret
+  writes should bypass the agent entirely.
 - If you want a command to skip the permission dialog entirely, put it
   under `permissions.allow` instead of `permissions.ask` — but only do this
   for commands you genuinely want to auto-approve.
@@ -244,7 +254,7 @@ Notes:
 
 ### Slash commands
 
-The plugin ships 21 first-class verbs. `/akm-add` and `/akm-save` are not part of the slash-command surface — both `akm add` and `akm save` are reachable via `/akm-help` (see "When to use what" below).
+The plugin ships 22 first-class verbs. `/akm-add` and `/akm-sync` are not part of the slash-command surface — both `akm add` and `akm sync` are reachable via `/akm-help` (see "When to use what" below).
 
 - `/akm-search <query> [flags]` — run `akm search` directly from Claude.
 - `/akm-show <ref> [view args]` — inspect a stash asset by ref.
@@ -256,7 +266,8 @@ The plugin ships 21 first-class verbs. `/akm-add` and `/akm-save` are not part o
 - `/akm-evolve [focus]` — dispatch the `akm-curator` agent to review session logs and propose stash improvements.
 - `/akm-wiki <subcommand> [args]` — manage AKM wikis (create, register, list, show, pages, search, stash, lint, ingest, remove).
 - `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
-- `/akm-vault <list|show|load> [ref]` — vault read paths: enumerate vaults, show key names, or emit a shell-eval `load` snippet. `show`/`list` never echo values; `load` output is opaque shell text meant for `eval` and is never displayed back in chat.
+- `/akm-env <list|path|run> [ref] [-- cmd]` — env read paths: list env refs, get the file path, or inject env into a command. Values never reach chat; only key names are surfaced.
+- `/akm-secret <list|path> [ref]` — secret read paths: enumerate secret refs or return an absolute secret file path for `_FILE`-style consumers. Never reads or prints secret contents.
 - `/akm-proposal <list|show|diff|accept|reject> [id] [--reason "..."]` — operate the v0.8.0 proposal queue. Always confirms with the user before `accept`/`reject`.
 - `/akm-review-proposals [--limit N]` — list every pending proposal and diff each one in a single pass for review.
 - `/akm-improve [type|ref] [--task "..."] [--dry-run]` — generate improvement proposals for the stash, a type, or a specific ref.
@@ -271,8 +282,8 @@ The plugin ships 21 first-class verbs. `/akm-add` and `/akm-save` are not part o
 ### When to use what
 
 - **Prefer the 21 slash commands above** for the verbs they cover — they wire the AKM skill flow, hooks, and feedback loop together for you.
-- **For everything else** — `add` (install kits / register sources), `save`, `import`, `clone`, `update`, `remove`, `list` (sources), `registry-search`, `reindex`, `config`, `upgrade`, `run-script`, raw `agent` (one-shot agent shell-out), and vault writes (`create`, `set`, `unset`) — call `/akm-help <task>` first to discover the right `akm` CLI invocation, then run it via Bash.
-- **Vault writes still bypass the chat turn entirely.** `/akm-vault` is read-only for displayed output (`list` and `show` of key names; `load` produces shell-eval text that must be piped to `eval` rather than displayed); to create vaults or set/unset values, run `akm vault …` in the shell directly so secret values never pass through the chat turn.
+- **For everything else** — `add` (install kits / register sources), `save`, `import`, `clone`, `update`, `remove`, `list` (sources), `registry-search`, `reindex`, `config`, `upgrade`, `run-script`, raw `agent` (one-shot agent shell-out), env writes (`create`, `remove`), and secret writes / command injection (`set`, `run`, `remove`) — call `/akm-help <task>` first to discover the right `akm` CLI invocation, then run it via Bash.
+- **Env and secret writes bypass the chat turn entirely.** `/akm-env` is read-only for displayed output (`list` and `path`; `run` injects values into a child process only). `/akm-secret` is read-only for displayed output (`list` and `path` only). To create envs or set/run/remove whole-file secrets, use the raw `akm env …` / `akm secret …` CLI so secret material never passes through the chat turn.
 
 ## Docs
 

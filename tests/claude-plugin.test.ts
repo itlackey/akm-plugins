@@ -180,7 +180,8 @@ describe("Claude plugin metadata", () => {
       "akm-evolve",
       "akm-wiki",
       "akm-workflow",
-      "akm-vault",
+      "akm-env",
+      "akm-secret",
       "akm-proposal",
       "akm-review-proposals",
       "akm-improve",
@@ -218,14 +219,14 @@ describe("Claude plugin metadata", () => {
   it("v0.8.0 slash commands carry the canonical proposal-flow guard rails", () => {
     const commandsDir = path.join(repoRoot, "claude/commands")
     const proposal = readFileSync(path.join(commandsDir, "akm-proposal.md"), "utf8")
-    expect(proposal).toContain("akm --format json -q proposals")
-    expect(proposal).toContain("akm --format json -q accept <id>")
-    expect(proposal).toContain("akm --format json -q reject <id>")
+    expect(proposal).toContain("akm --format json -q proposal list")
+    expect(proposal).toContain("akm --format json -q proposal accept <id>")
+    expect(proposal).toContain("akm --format json -q proposal reject <id>")
     expect(proposal).toMatch(/[Cc]onfirm with the user/)
 
     const review = readFileSync(path.join(commandsDir, "akm-review-proposals.md"), "utf8")
-    expect(review).toContain("proposals --status pending")
-    expect(review).toMatch(/[Dd]o not call `?akm accept/)
+    expect(review).toContain("proposal list --status pending")
+    expect(review).toMatch(/[Dd]o not call `?akm proposal accept/)
 
     const improve = readFileSync(path.join(commandsDir, "akm-improve.md"), "utf8")
     expect(improve).toContain("improve")
@@ -716,8 +717,9 @@ exit 0
 
     const invocations = readFileSync(invokeLog, "utf8")
     expect(invocations).toContain("curate")
-    expect(invocations).toContain("--detail agent")
+    expect(invocations).toContain("--shape agent")
     expect(invocations).not.toContain("--for-agent")
+    expect(invocations).not.toContain("--detail agent")
     expect(invocations).toContain("--run sess-start-1")
   })
 
@@ -1743,7 +1745,7 @@ exit 0
       "akm accept p_123",
       "akm revert p_abc",
       "akm tasks add nightly --cron \"0 2 * * *\"",
-      "akm vault set vault:dev MYKEY",
+      "akm env create --from-file .env.dev",
       "akm remember OPENAI_API_KEY=sk-secret-value",
     ]) {
       const stdout = runHook(["pre-tool", "bash"], {

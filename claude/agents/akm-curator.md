@@ -20,7 +20,7 @@ Signals to act on:
 - Stale memories: session summaries that never get recalled. Propose removal (see `/akm-help` topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by `akm wiki list`, run `akm wiki lint <name>` and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
 - Stuck workflows: run `akm workflow list --active` and surface any runs in blocked or failed state with their step ids. Propose whether to resume or escalate.
-- Never touch vaults: do not call `akm vault show`, `akm vault load`, or otherwise enumerate vault keys unless the user explicitly asks. Vault values must never appear in reports.
+- Never touch env or secret values: do not call `akm env run`, `akm secret run`, or otherwise read env/secret file contents unless the user explicitly asks. Values must never appear in reports. Key names from `akm env list` are safe to surface.
 
 Rules of engagement:
 - Never apply destructive changes without explicit user approval.

@@ -19,7 +19,7 @@
 //       * no fire when label≠neither                           → FN
 //       * fire with the wrong sentiment                        → polarity flip
 //   - "neither"-labeled fixtures cover the documented skip list:
-//     memory:* and vault:* refs MUST NOT receive auto-feedback.
+//     memory:*, vault:*, and secret:* refs MUST NOT receive auto-feedback.
 
 import { readFileSync } from "node:fs"
 import path from "node:path"

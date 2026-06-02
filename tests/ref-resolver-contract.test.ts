@@ -59,9 +59,12 @@ function buildFixtureStash(root: string): void {
   // Knowledge subdirectory layout (knowledge/<category>/<slug>.md).
   touch(path.join(root, "knowledge", "projects", "akm-release.md"))
 
-  // Vault: default (.env) and named (<name>.env).
-  touch(path.join(root, "vaults", ".env"))
-  touch(path.join(root, "vaults", "scheduler.env"))
+  // Env: default (.env) and named (<name>.env) — replaces vault.
+  touch(path.join(root, "env", ".env"))
+  touch(path.join(root, "env", "myapp.env"))
+
+  // Whole-file secrets.
+  touch(path.join(root, "secrets", "deploy-key"))
 
   // Namespaced slug containing `/` — knowledge ref pointing at a file the
   // ref consumer has spelled with the full subpath.
@@ -114,8 +117,9 @@ const CONTRACT_CASES: ContractCase[] = [
     slug: "projects/akm/deep-dive",
     reachable: true,
   },
-  { description: "default vault (slug='default' -> .env)", type: "vault", slug: "default", reachable: true },
-  { description: "named vault (slug='scheduler' -> scheduler.env)", type: "vault", slug: "scheduler", reachable: true },
+  { description: "default env (slug='default' -> env/.env)", type: "env", slug: "default", reachable: true },
+  { description: "named env (slug='myapp' -> env/myapp.env)", type: "env", slug: "myapp", reachable: true },
+  { description: "whole-file secret", type: "secret", slug: "deploy-key", reachable: true },
 
   // ── not reachable ─────────────────────────────────────────────────────
   { description: "memory pointing at non-existent slug", type: "memory", slug: "no-such-memory", reachable: false },
@@ -138,9 +142,15 @@ const CONTRACT_CASES: ContractCase[] = [
     reachable: false,
   },
   {
-    description: "named vault pointing at non-existent slug",
-    type: "vault",
-    slug: "no-such-vault",
+    description: "env pointing at non-existent slug",
+    type: "env",
+    slug: "no-such-env",
+    reachable: false,
+  },
+  {
+    description: "secret pointing at non-existent slug",
+    type: "secret",
+    slug: "no-such-secret",
     reachable: false,
   },
   // `script` is intentionally unresolvable by the contract — the type is

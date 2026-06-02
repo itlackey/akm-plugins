@@ -88,7 +88,7 @@ let agentSetupPromise: Promise<boolean> | null = null
 // Asset-ref grammar matching the stash skill: [origin//]type:name.
 // We validate normalized tokens individually instead of running a global regex
 // over arbitrary tool output to keep extraction predictable and ReDoS-safe.
-const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._/\-]+$/
+const AKM_REF_PATTERN = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|task|env|secret|wiki|lesson):[A-Za-z0-9._/\-]+$/
 const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
 const AKM_WORKFLOW_INSTRUCTION = [
   "# AKM workflow (v0.8.0)",
@@ -103,7 +103,7 @@ const AKM_WORKFLOW_INSTRUCTION = [
   "5. Treat `lesson:*` as first-class durable learning assets — they are produced through `akm_improve` and accepted via `akm_proposal action=accept`.",
   "6. Use `akm_init` when you need to create the working stash or persist `stashDir`. Do not use `akm setup` from an agent; it is interactive and human-facing.",
   `7. ${PROPOSED_QUALITY_WARNING}`,
-  "8. Never accept or reject proposals, push saves, remove sources, or access vault values without explicit user approval.",
+  "8. Never accept or reject proposals, push saves, remove sources, or access env values / secret material without explicit user approval.",
 ].join("\n")
 
 function readPackageVersion(): string {
@@ -156,7 +156,7 @@ Signals to act on:
 - Stale memories: session summaries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
 - Stuck workflows: run akm_workflow list --active and surface any runs in blocked or failed state with their step ids. Propose whether to resume or escalate.
-- Never touch vaults: do not call akm_vault show or load unless the user explicitly asks. Vault values must never appear in reports.
+- Never touch env or secret values: do not call akm_env run or akm_secret path unless the user explicitly asks. Env values and secret material must never appear in reports.
 
 Rules of engagement:
 - Never apply destructive changes without explicit user approval.
@@ -453,9 +453,7 @@ function writeStructuredEvent(event: Omit<AkmMemoryEvent, "version" | "timestamp
 }
 
 const CURATED_DIR = path.join(os.tmpdir(), "akm-opencode", "curated")
-const VAULT_LOAD_DIR = path.join(os.tmpdir(), "akm-opencode", "vault-load")
 mkdirSync(CURATED_DIR, { recursive: true })
-mkdirSync(VAULT_LOAD_DIR, { recursive: true })
 
 function gatherCwdContext(directory: string): string {
   const parts: string[] = []
@@ -546,12 +544,6 @@ function writeCuratedFile(sessionID: string, content: string): string {
   return filePath
 }
 
-function writeVaultLoadFile(ref: string, shell: string): string {
-  const sanitized = ref.replace(/[^A-Za-z0-9._-]/g, "_")
-  const filePath = path.join(VAULT_LOAD_DIR, `${sanitized}.sh`)
-  writeFileSync(filePath, shell, { mode: 0o600 })
-  return filePath
-}
 
 function isAkmRef(value: string): boolean {
   return AKM_REF_PATTERN.test(value)
@@ -761,7 +753,7 @@ async function runCurateForPrompt(client: LogCapableClient, text: string, sessio
   return runCurateLogged(client,
     appendRunScopeArgs(
       [
-        "--detail",
+        "--shape",
         "agent",
         "--format",
         "text",
@@ -779,7 +771,7 @@ async function runCurateForPrompt(client: LogCapableClient, text: string, sessio
 
 async function runCurateForSession(client: LogCapableClient, sessionID: string, query?: string): Promise<string | null> {
   const args = [
-    "--detail",
+    "--shape",
     "agent",
     "--format",
     "text",
@@ -991,8 +983,8 @@ async function getPendingProposalCount(client: LogCapableClient, sessionID?: str
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) return { count: 0, unsupported: true }
   try {
-    // 0.8.0: the proposal-list subcommand is `akm proposals` (no "list" verb).
-    const stdout = execResolvedAkm(command, ["proposals", "--status", "pending", "--format", "json"], {
+    // 0.8.0 canonical: `akm proposal list` (the bare `akm proposals` alias is deprecated, removed in 0.9.0).
+    const stdout = execResolvedAkm(command, ["proposal", "list", "--status", "pending", "--format", "json"], {
       encoding: "utf8",
       timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
     })
@@ -1501,7 +1493,7 @@ type AkmHelpEntry = {
 const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Review pending proposals and decide whether to accept, reject, or revise them",
-    command: "akm proposals --status pending --format json; akm show proposal <id>; akm diff <id>",
+    command: "akm proposal list --status pending --format json; akm proposal show <id>; akm proposal diff <id>",
     notes: "Accept/reject requires explicit user approval.",
     keywords: ["proposal", "review proposals", "pending proposals", "accept proposal", "reject proposal"],
   },
@@ -1536,10 +1528,10 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
     keywords: ["add", "install", "register", "kit", "source", "github", "npm"],
   },
   {
-    task: "Commit (and optionally push) pending stash changes",
-    command: "akm save [<source-name>] [-m <msg>]",
-    notes: "For writable git-backed sources, save commits and pushes; review the diff first.",
-    keywords: ["save", "commit", "push", "publish", "git"],
+    task: "Commit and push pending stash changes",
+    command: "akm sync [<source-name>] [-m <msg>] [--no-push]",
+    notes: "For writable git-backed sources, sync commits and pushes by default (pass --no-push to skip); review the diff first.",
+    keywords: ["sync", "save", "commit", "push", "publish", "git"],
   },
   {
     task: "Import a file (or stdin) into the stash as a typed asset",
@@ -1580,6 +1572,12 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
     command: "akm index",
     notes: "Rarely needed — the index refreshes implicitly after writes.",
     keywords: ["index", "reindex", "rebuild"],
+  },
+  {
+    task: "Manage whole-file secrets outside the chat-safe read surface",
+    command: "akm secret <set|run|remove> ...",
+    notes: "Use the first-class akm_secret tool for list/path. Secret values must never be pasted back into chat; `set` reads from stdin/--from-file/--from-env and `run` injects into a child process only.",
+    keywords: ["secret", "docker secret", "pem", "token", "_FILE"],
   },
   {
     task: "View or update akm config (get/set/list/unset/path)",
@@ -2033,8 +2031,10 @@ type AssetType =
   | "memory"
   | "script"
   | "skill"
+  | "task"
   | "workflow"
-  | "vault"
+  | "env"
+  | "secret"
   | "wiki"
 
 const ASSET_TYPES = [
@@ -2045,8 +2045,10 @@ const ASSET_TYPES = [
   "memory",
   "script",
   "skill",
+  "task",
   "workflow",
-  "vault",
+  "env",
+  "secret",
   "wiki",
   "any",
 ] as const
@@ -2750,10 +2752,17 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (!input.tool.startsWith("akm_")) return
         const args = output.args && typeof output.args === "object" ? output.args as Record<string, unknown> : {}
         const confirm = args.confirm === true
-        if (input.tool === "akm_vault" && (args.action === "show" || args.action === "load") && !confirm) {
+        if (input.tool === "akm_env" && (args.action === "path" || args.action === "run") && !confirm) {
           output.args = {
             ...args,
-            __akmBlocked: `akm_vault action='${String(args.action)}' requires confirm:true because vault reads are sensitive.`,
+            __akmBlocked: `akm_env action='${String(args.action)}' requires confirm:true because env reads are sensitive.`,
+          }
+          return
+        }
+        if (input.tool === "akm_secret" && args.action === "path" && !confirm) {
+          output.args = {
+            ...args,
+            __akmBlocked: "akm_secret action='path' requires confirm:true because secret paths are sensitive.",
           }
           return
         }
@@ -2830,7 +2839,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             void (async () => {
               try {
                 const curated = await runCurateForPrompt(logClient, decision.query, sessionID)
-                const refs = [...new Set((curated ?? "").match(/(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|vault|wiki):[A-Za-z0-9._/-]+/g) ?? [])]
+                const refs = [...new Set((curated ?? "").match(/(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|env|secret|wiki):[A-Za-z0-9._/-]+/g) ?? [])]
                 const prior = sessionRecallAudit.get(sessionID)
                 if (prior) {
                   sessionRecallAudit.set(sessionID, {
@@ -2917,7 +2926,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           const recentRefs = (sessionBuffer.get(input.sessionID) ?? [])
             .filter((entry) => entry.kind === "tool-ref" && !!entry.ref)
             .map((entry) => entry.ref!)
-            .filter((ref, index, refs) => !ref.startsWith("memory:") && !ref.startsWith("vault:") && refs.indexOf(ref) === index)
+            .filter((ref, index, refs) => !ref.startsWith("memory:") && !ref.startsWith("env:") && !ref.startsWith("secret:") && refs.indexOf(ref) === index)
             .slice(-3)
           const dedupe = new Set<string>()
           for (const ref of recentRefs) {
@@ -3067,11 +3076,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             : `opencode auto: ${input.tool} failed`
           for (const ref of feedbackRefs) {
             // Skip refs that should never receive auto-feedback. Matches the
-            // claude-side hook (claude/hooks/akm-hook.ts:957): memory/vault/
-            // lesson are excluded, including origin-qualified forms like
-            // `local//lesson:foo`. Lessons take feedback through the proposal
-            // queue, not via direct akm feedback.
-            if (/^(?:.*\/\/)?(?:memory|vault|lesson):/.test(ref)) continue
+            // claude-side hook: memory/env/secret/lesson are excluded, including
+            // origin-qualified forms like `local//lesson:foo`. Lessons take
+            // feedback through the proposal queue, not via direct akm feedback.
+            if (/^(?:.*\/\/)?(?:memory|env|secret|lesson):/.test(ref)) continue
             const directInput = Object.values(input.args as Record<string, unknown>).some((value) => typeof value === "string" && value.includes(ref))
             const signal = classifyFeedbackSignal({
               ref,
@@ -3132,7 +3140,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
     }),
     akm_search: tool({
-      description: "Search your stash or the akm registry for scripts, skills, commands, agents, knowledge, memories, workflows, vaults, and wikis. Use source='registry' for installable community kits.",
+      description: "Search your stash or the akm registry for scripts, skills, commands, agents, knowledge, memories, lessons, tasks, workflows, env configs, secrets, and wikis. Use source='registry' for installable community kits.",
       args: {
         query: tool.schema.string().describe("Case-insensitive substring search."),
         type: tool.schema
@@ -3708,51 +3716,73 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         })
       },
     }),
-    akm_vault: tool({
-      description: "Read encrypted-at-rest vault metadata without surfacing values. 'list' and 'show' return key names only. 'load' writes the shell snippet to a temporary file and returns the file path instead of echoing secret-bearing shell text. action='show' and action='load' require confirm:true.",
+    akm_env: tool({
+      description: "Access AKM env assets (.env files) without surfacing values. 'list' returns env refs. 'path' returns the on-disk file path. 'run' injects the env into a child command without values reaching stdout — the preferred agent-safe path. action='path' and action='run' require confirm:true.",
       args: {
-        action: tool.schema.enum(["list", "show", "load"]).describe("Vault subcommand. 'load' writes the shell snippet to a temp file and returns the path without echoing the contents."),
-        ref: tool.schema.string().optional().describe("Vault ref such as vault:prod or vault:team/prod. Required for show/load; optional for list."),
-        confirm: tool.schema.boolean().optional().describe("Must be true for sensitive actions like show and load."),
+        action: tool.schema.enum(["list", "path", "run"]).describe("Env subcommand. 'list' returns refs; 'path' returns the file path; 'run' injects env into a child command."),
+        ref: tool.schema.string().optional().describe("Env ref such as env:prod or env:myapp. Required for path/run."),
+        cmd: tool.schema.string().optional().describe("Command to run with env injected. Required for action='run'. Example: 'npm start'."),
+        confirm: tool.schema.boolean().optional().describe("Must be true for path and run actions."),
+      },
+      async execute(input) {
+        const blocked = blockedToolResponse(input as Record<string, unknown>)
+        if (blocked) return blocked
+        const { action, ref, cmd, confirm } = input
+        const logMeta = { toolName: "akm_env" }
+        switch (action) {
+          case "list": {
+            return runCli(client as unknown as LogCapableClient, ["env", "list"], logMeta)
+          }
+          case "path": {
+            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_env action='path' requires confirm:true." })
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='path'." })
+            return runCli(client as unknown as LogCapableClient, ["env", "path", ref], logMeta)
+          }
+          case "run": {
+            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_env action='run' requires confirm:true." })
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='run'." })
+            if (!cmd) return JSON.stringify({ ok: false, error: "'cmd' is required for action='run'." })
+            return runCli(client as unknown as LogCapableClient, ["env", "run", ref, "--", ...cmd.split(/\s+/)], logMeta)
+          }
+        }
+      },
+    }),
+    akm_secret: tool({
+      description: "Inspect whole-file AKM secrets without surfacing contents. 'list' returns secret refs only. 'path' returns the on-disk file path for `_FILE`-style consumers. action='path' requires confirm:true.",
+      args: {
+        action: tool.schema.enum(["list", "path"]).describe("Secret subcommand. 'path' returns the absolute file path without reading or echoing the secret bytes."),
+        ref: tool.schema.string().optional().describe("Secret ref such as secret:deploy-key. Required for action='path'."),
+        confirm: tool.schema.boolean().optional().describe("Must be true for sensitive actions like path."),
       },
       async execute(input) {
         const blocked = blockedToolResponse(input as Record<string, unknown>)
         if (blocked) return blocked
         const { action, ref, confirm } = input
-        const logMeta = { toolName: "akm_vault" }
+        const logMeta = { toolName: "akm_secret" }
         switch (action) {
-          case "list": {
-            const args = ["vault", "list"]
-            if (ref) args.push(ref)
-            return runCli(client as unknown as LogCapableClient, args, logMeta)
-          }
-          case "show": {
-            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_vault action='show' requires confirm:true because vault reads are sensitive." })
-            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='show'." })
-            return runCli(client as unknown as LogCapableClient, ["vault", "show", ref], logMeta)
-          }
-          case "load": {
-            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_vault action='load' requires confirm:true because vault reads are sensitive." })
-            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='load'." })
+          case "list":
+            return runCli(client as unknown as LogCapableClient, ["secret", "list"], logMeta)
+          case "path": {
+            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_secret action='path' requires confirm:true because secret paths are sensitive." })
+            if (!ref) return JSON.stringify({ ok: false, error: "'ref' is required for action='path'." })
             const command = resolveAkmCommand()
             if (typeof command === "object" && "ok" in command) return JSON.stringify(command)
             try {
-              const stdout = execResolvedAkm(command, ["vault", "load", ref], {
+              const filePath = execResolvedAkm(command, ["secret", "path", ref], {
                 encoding: "utf8",
                 timeout: 30_000,
-              })
-              const filePath = writeVaultLoadFile(ref, stdout)
+              }).toString().trim()
               return JSON.stringify({
                 ok: true,
                 ref,
                 filePath,
-                usage: "Shell contents were written to a temporary file to avoid surfacing secrets in tool output. Use the path from a trusted shell if needed.",
+                usage: "Pass this file path to trusted `_FILE`-style consumers or shells. The plugin did not read or surface the secret contents.",
               })
             } catch (error: unknown) {
-              await writePluginLog(logClient, "error", "AKM vault load failed", {
-                subsystem: "vault",
-                toolName: "akm_vault",
-                action: "load",
+              await writePluginLog(logClient, "error", "AKM secret path failed", {
+                subsystem: "secret",
+                toolName: "akm_secret",
+                action: "path",
                 ref,
                 error: formatCliError(error),
               })
@@ -3779,7 +3809,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         ]).describe("Wiki subcommand."),
         name: tool.schema.string().optional().describe("Wiki name (required for every action except 'list')."),
         source_ref: tool.schema.string().optional().describe("Source ref to register (required for action='register'). Accepts directory paths, git URLs, github owner/repo, or https:// website roots."),
-        writable: tool.schema.boolean().optional().describe("When registering a git-backed source, mark it as push-writable (used by `akm save`; see akm_help topic='save')."),
+        writable: tool.schema.boolean().optional().describe("When registering a git-backed source, mark it as push-writable (used by `akm sync`; see akm_help topic='sync')."),
         max_pages: tool.schema.number().optional().describe("Crawler page cap when registering a website (default 50)."),
         max_depth: tool.schema.number().optional().describe("Crawler depth cap when registering a website (default 3)."),
         query: tool.schema.string().optional().describe("Query string for action='search'."),
@@ -4024,22 +4054,22 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const logMeta = { toolName: "akm_proposal" }
         switch (action) {
           case "list": {
-            const args = ["proposals"]
+            const args = ["proposal", "list"]
             if (status) args.push("--status", status)
             return runCli(client as unknown as LogCapableClient, args, logMeta)
           }
           case "show": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='show'." })
-            return runCli(client as unknown as LogCapableClient, ["show", "proposal", id], logMeta)
+            return runCli(client as unknown as LogCapableClient, ["proposal", "show", id], logMeta)
           }
           case "diff": {
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='diff'." })
-            return runCli(client as unknown as LogCapableClient, ["diff", id], logMeta)
+            return runCli(client as unknown as LogCapableClient, ["proposal", "diff", id], logMeta)
           }
           case "accept": {
             if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_proposal action='accept' requires confirm:true because it mutates the proposal queue." })
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='accept'. Confirm with the user before accepting." })
-            const acceptResult = await runCli(client as unknown as LogCapableClient, ["accept", id, "--yes"], logMeta)
+            const acceptResult = await runCli(client as unknown as LogCapableClient, ["proposal", "accept", id, "--yes"], logMeta)
             // Invalidate the proposal-count cache so the next getPendingProposalCount() call
             // reflects the updated queue immediately (WS-7a: no stale 60s TTL after mutations).
             pendingProposalSummaryCache.clear()
@@ -4049,7 +4079,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_proposal action='reject' requires confirm:true because it mutates the proposal queue." })
             if (!id) return JSON.stringify({ ok: false, error: "'id' is required for action='reject'. Confirm with the user before rejecting." })
             if (!reason || !reason.trim()) return JSON.stringify({ ok: false, error: "'reason' is required for action='reject'. Ask the user why the proposal is being rejected." })
-            const rejectResult = await runCli(client as unknown as LogCapableClient, ["reject", id, "--reason", reason, "--yes"], logMeta)
+            const rejectResult = await runCli(client as unknown as LogCapableClient, ["proposal", "reject", id, "--reason", reason, "--yes"], logMeta)
             // Invalidate the proposal-count cache (WS-7a).
             pendingProposalSummaryCache.clear()
             return rejectResult
@@ -4153,9 +4183,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             "propose",
             "lesson",
             "tasks",
+            "secret-safety",
             "include-proposed",
             "llm-features",
-            "vault-safety",
+            "env-safety",
           ],
         })
       },

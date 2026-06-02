@@ -1,14 +1,15 @@
 # AKM Plugins
 
-Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **access vaults**, **operate the v0.8.0 proposal queue**, and **improve assets** from a stash directory.
+Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **access env configs and whole-file secrets**, **operate the v0.8.0 proposal queue**, and **improve assets** from a stash directory.
 
 ## What's new in 0.8.0
 
 The v0.8.0 release of akm hard-breaks the old self-improvement CLI and introduces:
 
-- **Proposal queue rename** — `/akm-proposal` (Claude) / `akm_proposal` (OpenCode) now route `list / show / diff / accept / reject` to `akm proposals`, `akm show proposal`, `akm diff` (positional UUID/prefix/ref — no `proposal` middle word), `akm accept`, and `akm reject`.
+- **Proposal queue rename** — `/akm-proposal` (Claude) / `akm_proposal` (OpenCode) now route `list / show / diff / accept / reject` to `akm proposal list`, `akm proposal show`, `akm proposal diff` (positional UUID/prefix/ref), `akm proposal accept`, and `akm proposal reject`.
 - **`improve` replaces `reflect` and `distill`** — AKM 0.8.0 removes the old public self-improvement commands. This repo now exposes `akm_improve` / `/akm-improve` as the canonical improvement flow.
 - **Task assets** — `akm tasks ...` is now part of the AKM CLI long-tail surface and discoverable here through `akm_help` / `/akm-help`.
+- **Whole-file `secret` assets** — `akm secret ...` adds Docker-style one-secret-per-file storage under `secrets/`. The plugins expose only chat-safe read paths (`akm_secret` / `/akm-secret`) and keep secret writes or command injection on the raw CLI path.
 - **`lesson` asset type** — first-class type stored under `lessons/<name>.md` with required `description` and `when_to_use` frontmatter.
 - **`defaults.agent` config + `akm setup`** — `akm setup` is the human-facing interactive configuration wizard. It can detect installed agent CLIs (`opencode`, `claude`, `codex`, `gemini`, `aider`) and persist `defaults.agent` plus a matching `profiles.agent.<name>` entry, but agents should not invoke it directly. The legacy `agent.default` shape is auto-migrated on load.
 - **`quality:"proposed"`** — excluded from default search; surface drafts via `--include-proposed` or the proposal-review commands. The plugin's auto-feedback hook automatically skips proposed-quality refs.
@@ -27,15 +28,16 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides a surface of twenty tools. Verbs that are not first-class tools (`save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `reindex`, `config`, `upgrade`, `tasks`, `run`, raw `agent`, vault writes) are discoverable through the `akm_help` tool, which surfaces a curated quick-reference and falls back to live `akm --help` so agents can compose the right CLI invocation and run it via shell:
+Provides a surface of twenty-one tools. Verbs that are not first-class tools (`save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `reindex`, `config`, `upgrade`, `tasks`, `run`, raw `agent`, env writes, secret writes/run) are discoverable through the `akm_help` tool, which surfaces a curated quick-reference and falls back to live `akm --help` so agents can compose the right CLI invocation and run it via shell:
 - `akm_info` — show `akm info` output together with the installed `akm-opencode` plugin version and install location
-- `akm_search` — search the stash, the registry, or both (including `workflow`, `vault`, `wiki`, and `lesson` types). Pass `--include-proposed` to merge proposed-quality drafts.
+- `akm_search` — search the stash, the registry, or both (including `task`, `workflow`, `env`, `secret`, `wiki`, and `lesson` types). Pass `--include-proposed` to merge proposed-quality drafts.
 - `akm_show` — show a stash asset by ref
 - `akm_agent` — dispatch stash `agent:*` resources into OpenCode sessions
 - `akm_workflow` — drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`)
 - `akm_remember` — record a memory in the default stash
 - `akm_cmd` — execute stash `command:*` templates through OpenCode SDK sessions
-- `akm_vault` — vault `list`, `show` (key names), and `load` (writes the shell snippet to a temp file path instead of surfacing values inline). `show`/`list` never echo values; writes (`set`, `unset`, `create`) go through raw `akm vault …`
+- `akm_env` — env `list`, `path`, and `run` (injects env into child process only — values never reach stdout). Writes (`create`, `remove`) go through raw `akm env …`
+- `akm_secret` — secret `list` and `path` only. `list` returns refs; `path` returns the file path for `_FILE`-style consumers without reading contents. Writes / `run` stay on raw `akm secret …`
 - `akm_curate` — curate stash assets for a task or topic
 - `akm_evolve` — dispatch the AKM curator subagent (review session activity, propose stash improvements, persist the report as a memory)
 - `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
@@ -101,11 +103,11 @@ claude plugin install akm@akm-plugins
 
 Provides:
 - **AKM Skill** — Claude automatically uses the akm CLI when you ask about stash assets
-- **Slash-command surface (21 verbs)** — `/akm-search`, `/akm-show`, `/akm-memory-audit`, `/akm-memory-candidates`, `/akm-memory-promote`, `/akm-memory-reject`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-vault` (`list`/`show`/`load`), `/akm-proposal` (`list`/`show`/`diff`/`accept`/`reject`), `/akm-review-proposals`, `/akm-improve`, `/akm-propose`, `/akm-setup`, and `/akm-help`
-- **`/akm-help` discovery flow** — for verbs without a dedicated slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, raw `agent`, vault writes), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
+- **Slash-command surface (22 verbs)** — `/akm-search`, `/akm-show`, `/akm-memory-audit`, `/akm-memory-candidates`, `/akm-memory-promote`, `/akm-memory-reject`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-env` (`list`/`path`/`run`), `/akm-secret` (`list`/`path`), `/akm-proposal` (`list`/`show`/`diff`/`accept`/`reject`), `/akm-review-proposals`, `/akm-improve`, `/akm-propose`, `/akm-setup`, and `/akm-help`
+- **`/akm-help` discovery flow** — for verbs without a dedicated slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, raw `agent`, env writes, secret writes/run), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
-- **Claude hooks** — on session start the plugin verifies `akm-cli` satisfies `^0.8.0` (override via `AKM_PACKAGE_REF`) and prints a stderr banner pointing at `/akm-setup` when the CLI is missing or out of range (no silent install — installation requires explicit user consent via `/akm-setup`). The hook can also set `defaults.agent` to the current platform in the AKM config file when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces pending-proposal counts in the SessionStart header, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality and `lesson:*` refs. Destructive `akm` subcommands are no longer gated by the plugin — see [claude/README.md "Locking down destructive commands"](./claude/README.md#locking-down-destructive-commands) for the recommended `permissions.ask` / `permissions.deny` recipe. Human users can run `akm setup` manually when interactive setup is needed.
+- **Claude hooks** — on session start the plugin verifies `akm-cli` satisfies `^0.8.0` (override via `AKM_PACKAGE_REF`) and prints a stderr banner pointing at `/akm-setup` when the CLI is missing or out of range (no silent install — installation requires explicit user consent via `/akm-setup`). The hook can also set `defaults.agent` to the current platform in the AKM config file when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces pending-proposal counts in the SessionStart header, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality plus `lesson:*` and `secret:*` refs. Destructive `akm` subcommands are no longer gated by the plugin — see [claude/README.md "Locking down destructive commands"](./claude/README.md#locking-down-destructive-commands) for the recommended `permissions.ask` / `permissions.deny` recipe. Human users can run `akm setup` manually when interactive setup is needed.
 
 For local development against a sibling `akm` checkout, set `AKM_LOCAL_BUILD_CLI=/abs/path/to/akm/dist/cli.js`. Both plugins will run that built CLI through Bun before falling back to PATH or bundled installs.
 
@@ -132,8 +134,10 @@ stash/
 ├── knowledge/  # markdown files
 ├── memories/   # markdown memory files (akm remember)
 ├── lessons/    # first-class durable learnings (lesson:<name>) with description + when_to_use frontmatter
+├── tasks/      # scheduled task definitions (task:<name>) managed via akm tasks ...
 ├── workflows/  # multi-step procedures (workflow:<name>)
-├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
+├── env/        # .env config/credential files (env:<name>) — values never surface through structured output
+├── secrets/    # whole-file secrets (secret:<name>) — contents never surface through structured output
 ├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
 └── .akm/proposals/  # v0.8.0 proposal queue — drafts that never leak into search or commits
 ```

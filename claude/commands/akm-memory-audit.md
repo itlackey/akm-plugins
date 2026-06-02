@@ -31,7 +31,7 @@ Default to a short report with these sections when no flag is provided:
 - memory:... — checkpoint/session
 
 ## Recent safety blocks
-- akm accept ... — blocked: requires explicit approval
+- akm proposal accept ... — blocked: requires explicit approval
 ```
 
 Never print raw secrets. Respect the plugin's redacted event data as-is.
