@@ -6,7 +6,7 @@ Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0
 
 The v0.8.0 release of akm hard-breaks the old self-improvement CLI and introduces:
 
-- **Proposal queue rename** — `/akm-proposal` (Claude) / `akm_proposal` (OpenCode) now route `list / show / diff / accept / reject` to `akm proposal list`, `akm proposal show`, `akm proposal diff` (positional UUID/prefix/ref), `akm proposal accept`, and `akm proposal reject`.
+- **Proposal queue rename** — `/akm-proposal` (Claude) / `akm_proposal` (OpenCode) now route `list / show / diff / accept / reject` to `akm proposal list`, `akm proposal show`, `akm proposal diff` (positional UUID/prefix/ref), `akm proposal accept`, and `akm proposal reject`. `akm proposal drain` adds deterministic bulk triage of the standing backlog (`--policy <personal-stash|conservative|manual>`, `--dry-run`/`--promote`/`--yes`); it and the automatic improve `processes.triage` pre-pass supersede the old manual proposal-queue management agent session.
 - **`improve` replaces `reflect` and `distill`** — AKM 0.8.0 removes the old public self-improvement commands. This repo now exposes `akm_improve` / `/akm-improve` as the canonical improvement flow.
 - **Task assets** — `akm tasks ...` is now part of the AKM CLI long-tail surface and discoverable here through `akm_help` / `/akm-help`.
 - **Whole-file `secret` assets** — `akm secret ...` adds Docker-style one-secret-per-file storage under `secrets/`. The plugins expose only chat-safe read paths (`akm_secret` / `/akm-secret`) and keep secret writes or command injection on the raw CLI path.

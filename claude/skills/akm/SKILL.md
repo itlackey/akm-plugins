@@ -49,6 +49,7 @@ This table is the curated long-tail reference, embedded verbatim from
 | Task | Command | Notes | Keywords |
 | --- | --- | --- | --- |
 | Review pending proposals and decide whether to accept, reject, or revise them | `akm proposal list --status pending --format json` | Inspect individual entries with `akm proposal show <id>` and `akm proposal diff <id>` (positional id). Accept/reject requires explicit user approval. | proposal, review proposals, pending proposals, accept proposal, reject proposal |
+| Bulk-triage the standing pending proposal backlog by policy | `akm proposal drain --policy <personal-stash|conservative|manual> --dry-run` | Mutating: promotes/rejects in bulk and commits to git (no batch revert). Preview with `--dry-run`, then `--promote --yes` after explicit approval. Supersedes the old manual proposal-management agent session; also runs as the `processes.triage` improve pre-pass. | proposal, drain, triage, backlog, bulk accept, bulk reject |
 | Improve existing assets or distill repeated evidence into proposals | `akm improve [<type>|<ref>] [--task "..."]` | `improve` replaces the old reflect/distill flow in v0.8.0. Proposed assets are not curated until accepted. | improve, lesson, reflect, distill, drift, failure |
 | Manage scheduled task assets via the OS scheduler | `akm tasks <add|list|show|remove|enable|disable|run|history|sync|doctor> ...` | Tasks are first-class in v0.8.0 but remain a long-tail CLI surface in this plugin. | tasks, scheduled task, cron, launchd, schtasks |
 | Create a proposed asset for a coverage gap | `akm propose <type> <name> --task "..."` | Drafts a `quality:"proposed"` asset that lands in the proposal queue — never directly curated. | propose, coverage gap, proposed asset |
@@ -266,13 +267,18 @@ akm proposal show <id>                  # render the draft
 akm proposal diff <id>                  # diff vs. the live ref (id = UUID / prefix / asset ref)
 akm proposal accept <id>                # validate, then promote
 akm proposal reject <id> --reason "…"   # archive with reason
+akm proposal drain --policy <preset> --dry-run   # preview a deterministic bulk triage of the whole backlog
+akm proposal drain --policy <preset> --promote --yes  # bulk promote/reject + commit (mutating; no batch revert)
 ```
+
+`proposal drain` policies: `personal-stash`, `conservative`, `manual`, or a path to a policy file. Other flags: `--max-accepts <N>`, `--max-diff-lines <N>`, `--older-than <D>`, `--judgment` (opt into the llm/agent/sdk judgment tier), `--profile <p>` (read the triage block from an improve profile). `drain` is the underlying engine for the automatic `processes.triage` improve pre-pass.
 
 Use the slash commands rather than the raw CLI:
 
 - `/akm-review-proposals` — list every pending proposal and diff each one.
 - `/akm-proposal list|show|diff` — read-only operations.
 - `/akm-proposal accept|reject` — **always confirm with the user before running.** Acceptance promotes a draft into curated content; rejection archives it.
+- `/akm-proposal drain` — **mutating; always confirm.** Bulk-triages the standing backlog by policy and commits to git. Preview with `--dry-run` first. `drain` + the automatic `processes.triage` pre-pass is the built-in replacement for the old manual proposal-queue management agent session.
 
 Multiple proposals for the same `ref` coexist without filesystem collisions.
 The default `quality` for promoted proposals is set by the proposal itself (most
@@ -320,9 +326,22 @@ sites are gated in two new locations:
   `~/.config/akm/config.json`. These control indexer enrichment and the
   `akm curate` reranker.
 - **Improve-bound gates** live under
-  `profiles.improve.<name>.processes.{reflect,distill,consolidate,...}` —
+  `profiles.improve.<name>.processes.{reflect,distill,consolidate,triage,...}` —
   each process has its own enabled/mode/profile/timeoutMs/allowedTypes
   knobs that the `akm improve` runner consults.
+  - **`processes.triage`** is a triage PRE-pass that drains the standing
+    pending backlog before the main improve work, using the same engine as
+    `akm proposal drain`: `{ enabled, applyMode: queue|promote, policy,
+    maxAcceptsPerRun, maxDiffLines, rejectEmpty, judgment: { mode:
+    llm|agent|sdk, profile, timeoutMs } }`. It only fires on whole-stash /
+    type-scoped runs. This plus `akm proposal drain` supersedes the old
+    manual proposal-queue management agent session.
+- **End-of-run git auto-sync** lives at `profiles.improve.<name>.sync` =
+  `{ enabled, push, message }` — for a git-backed (`.git`) stash, `akm improve`
+  commits (and optionally pushes) when the run finishes. `message` supports
+  `{token}` templates (`{timestamp}{date}{time}{scope}{refs}{accepted}`). CLI
+  flags override the profile: `--sync`/`--no-sync`, `--push`/`--no-push`. A
+  sync/push failure is non-fatal (recorded on `result.sync`).
 
 Refer to the canonical configuration reference in akm-core for the full
 shape. Don't flip these without the user's explicit consent — they cost

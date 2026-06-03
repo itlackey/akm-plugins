@@ -12,3 +12,5 @@ Walk the proposal queue in one pass so the user can decide accept / reject / rev
    - List any `warnings` reported by the validator.
 3. After all entries are rendered, present a compact recommendation table per id with three columns: `id`, `ref`, `recommendation` (`accept` / `reject` / `revise`). Choose recommendations based on the diff and validation signal — flag conflicts with curated content as `revise`.
 4. **Do not call `akm proposal accept` or `akm proposal reject` from this command.** Always wait for the user to confirm and use `/akm-proposal accept <id>` or `/akm-proposal reject <id> --reason "..."`.
+
+For a large backlog, suggest the deterministic bulk path instead of one-by-one review: `/akm-proposal drain` (run `akm proposal drain --policy <personal-stash|conservative|manual> --dry-run` first to preview, then `--promote --yes` after the user approves). This — and the automatic `processes.triage` pre-pass inside `akm improve` — is the built-in replacement for the old manual proposal-management agent session.

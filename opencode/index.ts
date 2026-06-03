@@ -1498,9 +1498,15 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
     keywords: ["proposal", "review proposals", "pending proposals", "accept proposal", "reject proposal"],
   },
   {
+    task: "Bulk-triage the standing pending proposal backlog by policy",
+    command: "akm proposal drain --policy <personal-stash|conservative|manual> --dry-run",
+    notes: "Mutating: promotes/rejects in bulk and commits to git (no batch revert). Preview with --dry-run, then --promote --yes after explicit approval. Supersedes the old manual proposal-management agent session; also runs as the processes.triage improve pre-pass.",
+    keywords: ["proposal", "drain", "triage", "backlog", "bulk accept", "bulk reject"],
+  },
+  {
     task: "Improve existing assets or distill repeated evidence into proposals",
     command: "akm improve [<type>|<ref>] [--task \"...\"]",
-    notes: "Improve owns the former reflect/distill flow; proposed assets are not curated until accepted.",
+    notes: "Improve owns the former reflect/distill flow; proposed assets are not curated until accepted. Profiles add a processes.triage pre-pass and end-of-run sync.",
     keywords: ["improve", "lesson", "reflect", "distill", "drift", "failure"],
   },
   {
@@ -1973,8 +1979,8 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
         directory: meta.directory,
       })
     }
-    if (args[0] === "proposal" && ["accept", "reject"].includes(args[1] ?? "")) {
-      await emitWorkflowTelemetry(client, "info", args[1] === "accept" ? "akm.proposal.accept.requested" : "akm.proposal.reject.requested", {
+    if (args[0] === "proposal" && ["accept", "reject", "drain"].includes(args[1] ?? "")) {
+      await emitWorkflowTelemetry(client, "info", args[1] === "accept" ? "akm.proposal.accept.requested" : args[1] === "drain" ? "akm.proposal.drain.requested" : "akm.proposal.reject.requested", {
         sessionID: meta.sessionID,
         toolName: meta.toolName,
         proposalId,
@@ -4039,7 +4045,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
     }),
     akm_proposal: tool({
-      description: "Operate the AKM v0.8.0 proposal queue — list/show/diff/accept/reject pending drafts. All proposal-producing commands (improve, propose, plus plugin-emitted proposals) write through this queue. Acceptance runs full validation before promoting; rejection archives the draft. Always confirm with the user before action='accept' or 'reject'.",
+      description: "Operate the AKM v0.8.0 proposal queue — list/show/diff/accept/reject pending drafts. All proposal-producing commands (improve, propose, plus plugin-emitted proposals) write through this queue. Acceptance runs full validation before promoting; rejection archives the draft. Always confirm with the user before action='accept' or 'reject'. For deterministic BULK triage of the whole backlog, use the raw CLI `akm proposal drain --policy <personal-stash|conservative|manual> --dry-run` (then `--promote --yes` after explicit approval; mutating, commits to git, no batch revert) — this and the automatic improve `processes.triage` pre-pass supersede manual one-by-one queue management.",
       args: {
         action: tool.schema.enum(["list", "show", "diff", "accept", "reject"]).describe("Proposal subcommand."),
         id: tool.schema.string().optional().describe("Proposal id. Required for show/diff/accept/reject."),

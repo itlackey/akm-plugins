@@ -85,7 +85,7 @@ down at the OS level instead:
     "vault set "*|"vault unset "*|"vault load "*|"vault create "*|\
     "save --push"*|"sync "*|"sync"|"remove "*|\
     "accept "*|"reject "*|"revert "*|\
-    "proposal accept "*|"proposal reject "*|"proposal revert "*|\
+    "proposal accept "*|"proposal reject "*|"proposal revert "*|"proposal drain "*|\
     "tasks add "*|"tasks remove "*|"tasks enable "*|"tasks disable "*|\
     "tasks run "*|"upgrade"*|"update --all"*|"config set "*)
       read -rp "Run 'akm $*' ? [y/N] " ans

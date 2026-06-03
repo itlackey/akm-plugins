@@ -13,3 +13,8 @@ Parse `"$ARGUMENTS"` as an optional asset type or `[origin//]type:name` ref, fol
 Use `/akm-improve memory:<name>` or `/akm-improve lesson` when the goal is to distill repeated evidence or clean up memory-driven assets.
 
 Note: in v0.8.0 `--auto-accept` defaults to OFF — proposals stay in the queue for explicit `/akm-proposal accept` review. Pass `--auto-accept=safe` (alias for `=90`) or `--auto-accept=<N>` to enable whole-batch auto-promotion.
+
+Two improve-profile blocks (configured under `profiles.improve.<name>` in `~/.config/akm/config.json`) shape what a run does end to end — surface them when the user asks why `improve` accepted proposals or pushed git:
+
+- **`processes.triage`** — a triage PRE-pass that drains the standing pending backlog before the main improve work. Shape: `{ enabled, applyMode: queue|promote, policy, maxAcceptsPerRun, maxDiffLines, rejectEmpty, judgment: { mode: llm|agent|sdk, profile, timeoutMs } }`. It runs the same deterministic engine as `akm proposal drain` and only fires on whole-stash / type-scoped runs (not single-ref). This plus `akm proposal drain` is the built-in replacement for the old manual proposal-queue management agent session.
+- **`sync`** — end-of-run git auto-sync for a git-backed (`.git`) stash. Shape: `{ enabled, push, message }`; `message` supports `{token}` templates (`{timestamp}{date}{time}{scope}{refs}{accepted}`). CLI flags override the profile: `akm improve --sync`/`--no-sync` toggles the end-of-run commit, `--push`/`--no-push` controls whether it pushes. A sync/push failure is non-fatal (surfaced as a warning on `result.sync`). Most default profiles ship `sync` on for git-backed stashes; `quick` ships it off.

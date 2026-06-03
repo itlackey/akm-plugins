@@ -185,6 +185,7 @@ default permission rules, so this step is opt-in and manual:
       "Bash(akm revert:*)",
       "Bash(akm proposal accept:*)",
       "Bash(akm proposal diff:*)",
+      "Bash(akm proposal drain:*)",
       "Bash(akm proposal list:*)",
       "Bash(akm proposal reject:*)",
       "Bash(akm proposal revert:*)",

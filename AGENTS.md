@@ -68,7 +68,8 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 
 **New in v0.8.0:**
 - `akm proposal list` / `akm proposal show <id>` / `akm proposal diff <id>` / `akm proposal accept <id>` / `akm proposal reject <id> --reason "..."` — operate the durable proposal queue. `akm proposal diff` accepts UUID, UUID prefix, or asset ref positionally. Always confirm with the user before `accept`/`reject`.
-- `akm improve [ref|type] [--task "..."]` — generate improvement proposals via the configured agent CLI.
+- `akm proposal drain --policy <personal-stash|conservative|manual|path> [--dry-run] [--promote] [--yes] [--max-accepts N] [--max-diff-lines N] [--older-than D] [--judgment] [--profile <p>]` — **mutating.** Bulk-triage the standing pending backlog by a deterministic policy (promotes/rejects and commits to git; no batch revert). Always `--dry-run` first; only `--promote --yes` after explicit user approval. This and the automatic `processes.triage` improve pre-pass supersede the old manual proposal-queue management agent session.
+- `akm improve [ref|type] [--task "..."]` — generate improvement proposals via the configured agent CLI. Improve profiles (`profiles.improve.<name>`) add a `processes.triage` pre-pass (`{ enabled, applyMode: queue|promote, policy, maxAcceptsPerRun, maxDiffLines, rejectEmpty, judgment }`) and end-of-run git `sync` (`{ enabled, push, message }` with `{timestamp}{date}{time}{scope}{refs}{accepted}` tokens; override via `--sync/--no-sync`, `--push/--no-push`).
 - `akm propose <type> <name> (--task "..." | --file <path>)` — generate a new-asset proposal via the configured agent CLI.
 - `akm tasks <subcommand> ...` — manage scheduled task assets through the OS scheduler.
 - `akm setup` — interactive first-run configuration wizard for humans. Agents should not invoke it directly; use `akm init` for agent-safe stash initialization.
