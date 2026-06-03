@@ -99,7 +99,7 @@ const AKM_WORKFLOW_INSTRUCTION = [
   "1. Use `akm_curate` with a query that includes the current project name/domain (primary discovery). Fall back to `akm_search` only when you already know an asset exists and need its exact ref.",
   "2. Use `akm_show <ref>` before relying on an asset.",
   "3. Record `akm_feedback` after the result is known.",
-  "4. Use the dedicated v0.8.0 tools for the proposal flow: `akm_proposal` (list/show/diff/accept/reject), `akm_improve`, and `akm_propose`. Fall back to `akm_help` for any verb without a dedicated tool.",
+  "4. Use the dedicated v0.8.0 tools for the proposal flow: `akm_proposal` (list/show/diff/accept/reject/drain), `akm_improve`, and `akm_propose`. Fall back to `akm_help` for any verb without a dedicated tool.",
   "5. Treat `lesson:*` as first-class durable learning assets — they are produced through `akm_improve` and accepted via `akm_proposal action=accept`.",
   "6. Use `akm_init` when you need to create the working stash or persist `stashDir`. Do not use `akm setup` from an agent; it is interactive and human-facing.",
   `7. ${PROPOSED_QUALITY_WARNING}`,
@@ -983,7 +983,7 @@ async function getPendingProposalCount(client: LogCapableClient, sessionID?: str
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) return { count: 0, unsupported: true }
   try {
-    // 0.8.0 canonical: `akm proposal list` (the bare `akm proposals` alias is deprecated, removed in 0.9.0).
+    // 0.8.0 canonical proposal-queue listing path: `akm proposal list`.
     const stdout = execResolvedAkm(command, ["proposal", "list", "--status", "pending", "--format", "json"], {
       encoding: "utf8",
       timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
@@ -2779,7 +2779,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
           return
         }
-        if (input.tool === "akm_proposal" && ["accept", "reject"].includes(String(args.action ?? "")) && !confirm) {
+        if (input.tool === "akm_proposal" && ["accept", "reject", "drain"].includes(String(args.action ?? "")) && !confirm) {
           output.args = {
             ...args,
             __akmBlocked: `akm_proposal action='${String(args.action)}' requires confirm:true because it mutates the proposal queue.`,
@@ -4045,18 +4045,26 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
     }),
     akm_proposal: tool({
-      description: "Operate the AKM v0.8.0 proposal queue — list/show/diff/accept/reject pending drafts. All proposal-producing commands (improve, propose, plus plugin-emitted proposals) write through this queue. Acceptance runs full validation before promoting; rejection archives the draft. Always confirm with the user before action='accept' or 'reject'. For deterministic BULK triage of the whole backlog, use the raw CLI `akm proposal drain --policy <personal-stash|conservative|manual> --dry-run` (then `--promote --yes` after explicit approval; mutating, commits to git, no batch revert) — this and the automatic improve `processes.triage` pre-pass supersede manual one-by-one queue management.",
+      description: "Operate the AKM v0.8.0 proposal queue — list/show/diff/accept/reject pending drafts, or action='drain' for deterministic BULK triage of the whole backlog. All proposal-producing commands (improve, propose, plus plugin-emitted proposals) write through this queue. Acceptance runs full validation before promoting; rejection archives the draft. Always confirm with the user before action='accept', 'reject', or 'drain'. action='drain' clears the standing pending backlog by a deterministic policy (default queue/stage mode; pass promote:true to actually accept) — mutating, commits to git, no batch revert; always preview with dry_run:true first. This and the automatic improve `processes.triage` pre-pass supersede manual one-by-one queue management.",
       args: {
-        action: tool.schema.enum(["list", "show", "diff", "accept", "reject"]).describe("Proposal subcommand."),
+        action: tool.schema.enum(["list", "show", "diff", "accept", "reject", "drain"]).describe("Proposal subcommand."),
         id: tool.schema.string().optional().describe("Proposal id. Required for show/diff/accept/reject."),
         status: tool.schema.enum(["pending", "accepted", "rejected"]).optional().describe("Filter for action='list'."),
         reason: tool.schema.string().optional().describe("Required for action='reject'. Recorded with the archived proposal."),
-        confirm: tool.schema.boolean().optional().describe("Must be true for action='accept' and action='reject'."),
+        confirm: tool.schema.boolean().optional().describe("Must be true for action='accept', 'reject', and 'drain'."),
+        policy: tool.schema.string().optional().describe("action='drain' only: built-in preset (personal-stash|conservative|manual) or path to a policy file."),
+        promote: tool.schema.boolean().optional().describe("action='drain' only: promote (accept) matching proposals. Default is queue/stage mode (no writes to assets)."),
+        dry_run: tool.schema.boolean().optional().describe("action='drain' only: list the planned accept/reject/defer set without writing. Always preview first."),
+        max_accepts: tool.schema.number().optional().describe("action='drain' only: hard per-run accept ceiling."),
+        max_diff_lines: tool.schema.number().optional().describe("action='drain' only: defer accepts whose proposed content exceeds this many lines."),
+        older_than: tool.schema.number().optional().describe("action='drain' only: only consider proposals created more than this many days ago."),
+        judgment: tool.schema.boolean().optional().describe("action='drain' only: opt into the judgment tier for deferred items."),
+        profile: tool.schema.string().optional().describe("action='drain' only: read the triage block (policy, applyMode, ceilings, judgment) from this improve profile."),
       },
       async execute(input) {
         const blocked = blockedToolResponse(input as Record<string, unknown>)
         if (blocked) return blocked
-        const { action, id, status, reason, confirm } = input
+        const { action, id, status, reason, confirm, policy, promote, dry_run, max_accepts, max_diff_lines, older_than, judgment, profile } = input
         const logMeta = { toolName: "akm_proposal" }
         switch (action) {
           case "list": {
@@ -4089,6 +4097,23 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             // Invalidate the proposal-count cache (WS-7a).
             pendingProposalSummaryCache.clear()
             return rejectResult
+          }
+          case "drain": {
+            if (confirm !== true) return JSON.stringify({ ok: false, error: "akm_proposal action='drain' requires confirm:true because it bulk-mutates the proposal queue and commits to git." })
+            const args = ["proposal", "drain"]
+            if (policy) args.push("--policy", policy)
+            if (promote) args.push("--promote")
+            if (dry_run) args.push("--dry-run")
+            else args.push("--yes")
+            if (typeof max_accepts === "number") args.push("--max-accepts", String(max_accepts))
+            if (typeof max_diff_lines === "number") args.push("--max-diff-lines", String(max_diff_lines))
+            if (typeof older_than === "number") args.push("--older-than", String(older_than))
+            if (judgment) args.push("--judgment")
+            if (profile) args.push("--profile", profile)
+            const drainResult = await runCli(client as unknown as LogCapableClient, args, logMeta)
+            // A real drain (not a dry run) mutates the queue; invalidate the count cache (WS-7a).
+            if (!dry_run) pendingProposalSummaryCache.clear()
+            return drainResult
           }
         }
       },

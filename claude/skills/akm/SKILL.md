@@ -23,7 +23,7 @@ The Claude AKM plugin exposes **22 first-class slash commands** for the high-val
 - `/akm-workflow` — start/next/complete/status/list/create/resume/template
 - `/akm-env` — env `list` / `path` (file path) / `run` (inject env into child command)
 - `/akm-secret` — secret `list` / `path` (absolute file path only; never the bytes)
-- `/akm-proposal` — operate the v0.8.0 proposal queue (list/show/diff/accept/reject)
+- `/akm-proposal` — operate the v0.8.0 proposal queue (list/show/diff/accept/reject/drain)
 - `/akm-review-proposals` — list and diff every pending proposal in one pass
 - `/akm-improve` — generate improvement proposals for the stash, a type, or a specific ref
 - `/akm-propose` — generate a new-asset proposal via the configured agent CLI

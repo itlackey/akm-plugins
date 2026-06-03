@@ -18,4 +18,4 @@ If the user runs `/akm-proposal` with no arguments, default to `list --status pe
 
 After any state-changing call (`accept` / `reject` / `drain`), report the resulting status and the affected refs so the user can verify.
 
-Note: `proposal drain` (and the automatic `processes.triage` pre-pass folded into `akm improve`) is the built-in/automated path that supersedes the old manual proposal-queue management agent session (the `manage-akm-proposals` skill). Manual per-id `accept`/`reject` remains available for fine-grained review.
+Note: `akm proposal drain` (and the automatic `processes.triage` improve pre-pass folded into `akm improve`) is the built-in, automated path for clearing the proposal backlog by a deterministic policy. Manual per-id `accept`/`reject` remains available for fine-grained review.

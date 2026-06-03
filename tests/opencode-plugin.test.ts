@@ -415,7 +415,7 @@ describe("akm-opencode plugin", () => {
       expect(wf.args.active_only).toBeDefined()
     })
 
-    it("akm_proposal exposes the v0.8.0 list/show/diff/accept/reject discriminator", async () => {
+    it("akm_proposal exposes the v0.8.0 list/show/diff/accept/reject/drain discriminator", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const tool = hooks.tool!.akm_proposal
       expect(tool.args.action).toBeDefined()
@@ -423,6 +423,15 @@ describe("akm-opencode plugin", () => {
       expect(tool.args.status).toBeDefined()
       expect(tool.args.reason).toBeDefined()
       expect(tool.args.confirm).toBeDefined()
+      // drain bulk-triage args
+      expect(tool.args.policy).toBeDefined()
+      expect(tool.args.promote).toBeDefined()
+      expect(tool.args.dry_run).toBeDefined()
+      expect(tool.args.max_accepts).toBeDefined()
+      expect(tool.args.max_diff_lines).toBeDefined()
+      expect(tool.args.older_than).toBeDefined()
+      expect(tool.args.judgment).toBeDefined()
+      expect(tool.args.profile).toBeDefined()
     })
 
     it("akm_improve exposes scope + task args", async () => {
@@ -1767,6 +1776,21 @@ describe("akm-opencode plugin", () => {
       expect(output.args.__akmBlocked).toContain("confirm:true")
     })
 
+    it("tool.execute.before blocks akm_proposal drain until confirm:true is provided", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const output = { args: { action: "drain", policy: "conservative" } as any }
+      await hooks["tool.execute.before"]!(
+        {
+          tool: "akm_proposal",
+          sessionID: "session-block-drain",
+          callID: "call-drain",
+        } as any,
+        output as any,
+      )
+
+      expect(output.args.__akmBlocked).toContain("confirm:true")
+    })
+
     it("tool.execute.before leaves non-exact refs unchanged", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const output = { args: { ref: "unknown helper" } as any }
@@ -2977,6 +3001,44 @@ describe("akm-opencode plugin", () => {
       const parsed = JSON.parse(result)
       expect(parsed.ok).toBe(false)
       expect(parsed.error).toContain("'reason' is required")
+    })
+
+    it("akm_proposal drain requires confirm:true before bulk-mutating the queue", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_proposal.execute(
+        { action: "drain", policy: "conservative" } as any,
+        {} as any,
+      )
+      expect(JSON.parse(result).ok).toBe(false)
+      expect(JSON.parse(result).error).toContain("confirm:true")
+    })
+
+    it("akm_proposal drain dry-run forwards flags without --yes", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      mockExecFileSync.mockReturnValue("{\"ok\":true}")
+      await hooks.tool!.akm_proposal.execute(
+        { action: "drain", confirm: true, policy: "conservative", dry_run: true, max_accepts: 5 } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["proposal", "drain", "--policy", "conservative", "--dry-run", "--max-accepts", "5", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("akm_proposal drain promote forwards --promote and --yes", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      mockExecFileSync.mockReturnValue("{\"ok\":true}")
+      await hooks.tool!.akm_proposal.execute(
+        { action: "drain", confirm: true, policy: "personal-stash", promote: true, judgment: true, older_than: 7, max_diff_lines: 40, profile: "default" } as any,
+        {} as any,
+      )
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        "akm",
+        ["proposal", "drain", "--policy", "personal-stash", "--promote", "--yes", "--max-diff-lines", "40", "--older-than", "7", "--judgment", "--profile", "default", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
     })
 
     it("akm_proposal diff uses the positional v0.8.0 CLI shape", async () => {

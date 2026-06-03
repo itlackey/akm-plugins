@@ -269,7 +269,7 @@ The plugin ships 22 first-class verbs. `/akm-add` and `/akm-sync` are not part o
 - `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
 - `/akm-env <list|path|run> [ref] [-- cmd]` — env read paths: list env refs, get the file path, or inject env into a command. Values never reach chat; only key names are surfaced.
 - `/akm-secret <list|path> [ref]` — secret read paths: enumerate secret refs or return an absolute secret file path for `_FILE`-style consumers. Never reads or prints secret contents.
-- `/akm-proposal <list|show|diff|accept|reject> [id] [--reason "..."]` — operate the v0.8.0 proposal queue. Always confirms with the user before `accept`/`reject`.
+- `/akm-proposal <list|show|diff|accept|reject|drain> [id] [--reason "..."]` — operate the v0.8.0 proposal queue. Always confirms with the user before `accept`/`reject`/`drain`.
 - `/akm-review-proposals [--limit N]` — list every pending proposal and diff each one in a single pass for review.
 - `/akm-improve [type|ref] [--task "..."] [--dry-run]` — generate improvement proposals for the stash, a type, or a specific ref.
 - `/akm-propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.

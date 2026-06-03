@@ -269,4 +269,62 @@ describe("proposal cache invalidation (WS-7a)", () => {
       ),
     ).toBe(true)
   })
+
+  it("cache is cleared after a non-dry-run akm_proposal drain", async () => {
+    mockExecFileSync.mockImplementation((cmd: string, args: string[]) => {
+      const isAkm = cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd)
+      if (isAkm && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [{ id: "p_555" }] })
+      if (isAkm && args[0] === "proposal" && args[1] === "drain") return JSON.stringify({ ok: true })
+      return "mock output"
+    })
+
+    const hooks = await AkmPlugin(createPluginInput())
+
+    // Warm cache
+    await hooks.tool!.akm_proposal.execute({ action: "list" } as any, {} as any)
+
+    // Promote drain — should clear cache
+    await hooks.tool!.akm_proposal.execute(
+      { action: "drain", confirm: true, policy: "conservative", promote: true } as any,
+      {} as any,
+    )
+
+    mockExecFileSync.mockClear()
+
+    // Next list must re-fetch from CLI
+    await hooks.tool!.akm_proposal.execute({ action: "list" } as any, {} as any)
+    expect(countProposalListCalls()).toBeGreaterThanOrEqual(1)
+  })
+
+  it("dry-run akm_proposal drain does NOT clear the cache", async () => {
+    mockExecFileSync.mockImplementation((cmd: string, args: string[]) => {
+      const isAkm = cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd)
+      if (isAkm && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [{ id: "p_666" }] })
+      if (isAkm && args[0] === "proposal" && args[1] === "drain") return JSON.stringify({ ok: true, dryRun: true })
+      return "mock output"
+    })
+
+    const hooks = await AkmPlugin(createPluginInput())
+
+    // List populates cache
+    await hooks.tool!.akm_proposal.execute({ action: "list" } as any, {} as any)
+
+    // Dry-run drain — must NOT clear cache, and must not pass --yes
+    await hooks.tool!.akm_proposal.execute(
+      { action: "drain", confirm: true, policy: "conservative", dry_run: true } as any,
+      {} as any,
+    )
+
+    expect(
+      mockExecFileSync.mock.calls.some(
+        ([cmd, args]) =>
+          (cmd === "akm" || /(^|[\\/])akm(?:\.cmd|\.exe)?$/.test(cmd as string)) &&
+          Array.isArray(args) &&
+          args[0] === "proposal" &&
+          args[1] === "drain" &&
+          args.includes("--dry-run") &&
+          !args.includes("--yes"),
+      ),
+    ).toBe(true)
+  })
 })

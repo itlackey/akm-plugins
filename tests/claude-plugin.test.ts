@@ -1843,6 +1843,25 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
   })
 
+  it("user-prompt-expansion treats akm-proposal drain as mutating guidance", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    const stdout = runHook(["user-prompt-expansion"], {
+      input: JSON.stringify({ session_id: "sess-expand-drain", command: "/akm-proposal drain --policy conservative --promote --yes" }),
+      env: {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+  })
+
   it("user-prompt-expansion captures a fresh checkpoint before improve/propose flows", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
