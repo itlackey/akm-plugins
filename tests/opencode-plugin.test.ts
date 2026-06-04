@@ -3932,7 +3932,13 @@ describe("akm-opencode plugin", () => {
       try {
         await withEnvVar("AKM_OPENCODE_IGNORE_BUNDLED_CLI", "1", async () => {
           await withEnvVar("HOME", sandboxHome, async () => {
-            const configCommand = path.join(process.env.HOME!, ".config", "opencode", "node_modules", ".bin", "akm")
+          // Pin XDG_CONFIG_HOME to the sandbox so getConfigNodeModulesAkmCommand
+          // (which reads XDG_CONFIG_HOME || $HOME/.config) probes exactly where
+          // we write the config bin. On CI XDG_CONFIG_HOME is set to something
+          // else, so without this the resolver looks in the wrong dir and the
+          // config candidate is never found.
+          await withEnvVar("XDG_CONFIG_HOME", path.join(sandboxHome, ".config"), async () => {
+            const configCommand = path.join(process.env.XDG_CONFIG_HOME!, "opencode", "node_modules", ".bin", "akm")
             const fallbackCommand = path.join(process.env.HOME!, ".local", "bin", "akm")
             mkdirSync(path.dirname(configCommand), { recursive: true })
             writeFileSync(configCommand, "#!/bin/sh\n")
@@ -3967,6 +3973,7 @@ describe("akm-opencode plugin", () => {
                 && args[0] === "search",
               ),
             ).toBe(false)
+          })
           })
         })
       } finally {
