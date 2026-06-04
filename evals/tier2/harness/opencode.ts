@@ -304,16 +304,27 @@ export async function createOpenCodeHarness(env: Record<string, string>): Promis
       async curateAndExtract({ sessionID, prompt }) {
         const start = performance.now()
         // chat.message triggers per-prompt curation and stashes results in
-        // sessionCurated[sid]. The system.transform hook then drains those
-        // into the system prompt array.
+        // sessionCurated[sid]. As of akm 0.8.0 the plugin runs curate
+        // FIRE-AND-FORGET (it no longer blocks the model on the ~8s curate;
+        // the result is injected by system.transform once the async curate
+        // resolves). So we cannot read context synchronously right after
+        // chat.message — we must poll system.transform until the background
+        // curate populates sessionCurated (bounded), mirroring how OpenCode
+        // injects the cached context on a subsequent transform.
         await hooks["chat.message"](
           { sessionID, messageID: `msg-${sessionID}`, agent: "build" },
           { parts: [{ type: "text", text: prompt }] },
         )
-        const output: { system: string[] } = { system: [] }
-        await hooks["experimental.chat.system.transform"]({ sessionID }, output)
+        const deadline = Date.now() + 4000
+        let context = ""
+        while (Date.now() < deadline) {
+          const output: { system: string[] } = { system: [] }
+          await hooks["experimental.chat.system.transform"]({ sessionID }, output)
+          context = output.system.join("\n")
+          if (context.length > 0) break
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
         const durationMs = performance.now() - start
-        const context = output.system.join("\n")
         return { context, refs: parseRefs(context), durationMs }
       },
       async toolAfter({ sessionID, tool, toolArgs, output, title }) {
