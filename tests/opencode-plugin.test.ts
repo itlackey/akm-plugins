@@ -192,6 +192,9 @@ describe("akm-opencode plugin", () => {
     mockFetch.mockClear()
     mockFetch.mockImplementation(async () => new Response(JSON.stringify({ version: "0.5.0" }), { status: 200 }))
     globalThis.fetch = mockFetch as typeof fetch
+    // Reset the module-level resolved-CLI cache so each test resolves akm fresh
+    // under its own sandboxed env (prevents order-dependent resolution tests).
+    ;(pluginModule as { __resetResolvedAkmForTests?: () => void }).__resetResolvedAkmForTests?.()
   })
 
   describe("plugin loading", () => {

@@ -28,6 +28,16 @@ function splitArguments(raw: string): string[] {
 }
 
 let resolvedAkmCommand = "akm"
+
+// Test-only: reset the module-level resolved-CLI cache so each test resolves
+// the akm command fresh under its own sandboxed env (HOME / AKM_OPENCODE_*).
+// Without this, the first test to resolve pins `resolvedAkmCommand` for the
+// rest of the process (resolveAkmCommand short-circuits on a still-valid
+// cached command), making later resolution tests order-dependent.
+export function __resetResolvedAkmForTests(): void {
+  resolvedAkmCommand = "akm"
+}
+
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b/
 // Note: satisfiesAkmVersionRange() implements a custom matcher that accepts
@@ -1753,7 +1763,10 @@ function getPathAkmCandidates(): string[] {
   const configNodeModules = getConfigNodeModulesAkmCommand()
   if (configNodeModules) candidates.push(configNodeModules)
   candidates.push("akm")
-  const home = os.homedir()
+  // Honor an explicit $HOME override (standard POSIX, and matches
+  // getConfigNodeModulesAkmCommand). os.homedir() snapshots HOME at process
+  // start and ignores later changes, which made this path non-sandboxable.
+  const home = process.env.HOME || os.homedir()
   if (home) {
     candidates.push(path.join(home, ".local", "bin", process.platform === "win32" ? "akm.cmd" : "akm"))
   }
