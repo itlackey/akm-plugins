@@ -1175,7 +1175,10 @@ describe("akm-opencode plugin", () => {
           extra: expect.objectContaining({
             subsystem: "akm",
             toolName: "akm_show",
-            command: "akm",
+            // The error log records the *resolved* command (displayCommand),
+            // which is the bundled akm-cli path when bundled resolution wins —
+            // not the literal "akm". Match the resolved command robustly.
+            command: expect.stringContaining("akm-cli"),
             args: ["show", "knowledge:guide.md", "toc", "--format", "json"],
             exitCode: 1,
             stdout: "",

@@ -249,11 +249,13 @@ try {
 } catch {}
 
 // Strip global flags so we can find the verb. Mirrors the akm CLI surface
-// the hooks invoke: \`akm [--format X] [-q] [--detail Y] <verb> [args...]\`.
+// the hooks invoke: \`akm [--format X] [--shape S] [-q] [--detail Y] <verb> [args...]\`.
+// \`--shape\` is a v0.8.0 global flag (human|agent|summary); omitting it here made
+// the shim mis-detect the verb as "--shape" and emit nothing, collapsing curation.
 const args = []
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i]
-  if (a === "--format" || a === "--detail") {
+  if (a === "--format" || a === "--detail" || a === "--shape") {
     i++
     continue
   }

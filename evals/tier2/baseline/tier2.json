@@ -1,10 +1,10 @@
 {
   "version": "1",
   "tier": "tier2",
-  "pluginVersion": "0.6.0",
-  "gitSha": "2aafb1681325dd87afbcd2fdea90b98c99d4e643",
-  "ranAt": "2026-05-02T15:54:10.150Z",
-  "durationMs": 37194,
+  "pluginVersion": "0.8.0",
+  "gitSha": "f5424051799b4e4e2660c511cbbbdc82e42a25a3",
+  "ranAt": "2026-06-04T02:19:01.648Z",
+  "durationMs": 20984,
   "metrics": {
     "surface": {
       "name": "surface",
@@ -13,15 +13,22 @@
           "opencode:akm_agent",
           "opencode:akm_cmd",
           "opencode:akm_curate",
+          "opencode:akm_env",
           "opencode:akm_evolve",
           "opencode:akm_feedback",
           "opencode:akm_help",
+          "opencode:akm_improve",
+          "opencode:akm_info",
+          "opencode:akm_init",
+          "opencode:akm_memory",
           "opencode:akm_parent_messages",
+          "opencode:akm_proposal",
+          "opencode:akm_propose",
           "opencode:akm_remember",
           "opencode:akm_search",
+          "opencode:akm_secret",
           "opencode:akm_session_messages",
           "opencode:akm_show",
-          "opencode:akm_vault",
           "opencode:akm_wiki",
           "opencode:akm_workflow"
         ],
@@ -29,28 +36,46 @@
           "claude:akm-agent",
           "claude:akm-cmd",
           "claude:akm-curate",
+          "claude:akm-env",
           "claude:akm-evolve",
           "claude:akm-feedback",
           "claude:akm-help",
+          "claude:akm-improve",
+          "claude:akm-memory-audit",
+          "claude:akm-memory-candidates",
+          "claude:akm-memory-promote",
+          "claude:akm-memory-reject",
+          "claude:akm-proposal",
+          "claude:akm-propose",
           "claude:akm-remember",
+          "claude:akm-review-proposals",
           "claude:akm-search",
+          "claude:akm-secret",
+          "claude:akm-setup",
           "claude:akm-show",
-          "claude:akm-vault",
           "claude:akm-wiki",
           "claude:akm-workflow",
-          "opencode:akm-improve-asset",
           "opencode:akm-evolve-session",
+          "opencode:akm-improve-asset",
           "opencode:akm-propose-asset",
           "opencode:akm-review-proposals",
           "opencode:akm-workflow-status"
         ],
         "hooks": [
+          "claude:PostCompact",
+          "claude:PostToolBatch",
           "claude:PostToolUse",
           "claude:PostToolUseFailure",
           "claude:PreCompact",
+          "claude:PreToolUse",
+          "claude:SessionEnd",
           "claude:SessionStart",
           "claude:Stop",
+          "claude:SubagentStart",
           "claude:SubagentStop",
+          "claude:TaskCompleted",
+          "claude:TaskCreated",
+          "claude:UserPromptExpansion",
           "claude:UserPromptSubmit"
         ],
         "claudeSkills": [
@@ -62,9 +87,9 @@
         "opencodeAgents": [
           "akm-curator"
         ],
-        "toolCount": 14,
-        "commandCount": 18,
-        "hookCount": 7
+        "toolCount": 21,
+        "commandCount": 27,
+        "hookCount": 15
       },
       "table": {
         "headers": [
@@ -75,8 +100,8 @@
         "rows": [
           [
             "claude commands",
-            12,
-            "akm-agent, akm-cmd, akm-curate, akm-evolve, akm-feedback, akm-help, akm-remember, akm-search, akm-show, akm-vault, akm-wiki, akm-workflow"
+            22,
+            "akm-agent, akm-cmd, akm-curate, akm-env, akm-evolve, akm-feedback, akm-help, akm-improve, akm-memory-audit, akm-memory-candidates, akm-memory-promote, akm-memory-reject, akm-proposal, akm-propose, akm-remember, akm-review-proposals, akm-search, akm-secret, akm-setup, akm-show, akm-wiki, akm-workflow"
           ],
           [
             "claude agents",
@@ -85,8 +110,8 @@
           ],
           [
             "claude hooks",
-            7,
-            "PostToolUse, PostToolUseFailure, PreCompact, SessionStart, Stop, SubagentStop, UserPromptSubmit"
+            15,
+            "PostCompact, PostToolBatch, PostToolUse, PostToolUseFailure, PreCompact, PreToolUse, SessionEnd, SessionStart, Stop, SubagentStart, SubagentStop, TaskCompleted, TaskCreated, UserPromptExpansion, UserPromptSubmit"
           ],
           [
             "claude skills",
@@ -95,13 +120,13 @@
           ],
           [
             "opencode tools",
-            14,
-            "akm_agent, akm_cmd, akm_curate, akm_evolve, akm_feedback, akm_help, akm_parent_messages, akm_remember, akm_search, akm_session_messages, akm_show, akm_vault, akm_wiki, akm_workflow"
+            21,
+            "akm_agent, akm_cmd, akm_curate, akm_env, akm_evolve, akm_feedback, akm_help, akm_improve, akm_info, akm_init, akm_memory, akm_parent_messages, akm_proposal, akm_propose, akm_remember, akm_search, akm_secret, akm_session_messages, akm_show, akm_wiki, akm_workflow"
           ],
           [
             "opencode commands",
-            6,
-            "akm-improve-asset, akm-evolve-session, akm-propose-asset, akm-review-proposals, akm-workflow-status"
+            5,
+            "akm-evolve-session, akm-improve-asset, akm-propose-asset, akm-review-proposals, akm-workflow-status"
           ],
           [
             "opencode agents",
@@ -872,48 +897,48 @@
     "latency": {
       "name": "latency",
       "values": {
-        "curate_prompt_p50_ms": 129,
-        "curate_prompt_p95_ms": 134,
-        "curate_prompt_p99_ms": 135,
-        "curate_prompt_mean_ms": 130,
+        "curate_prompt_p50_ms": 72,
+        "curate_prompt_p95_ms": 112,
+        "curate_prompt_p99_ms": 121,
+        "curate_prompt_mean_ms": 79,
         "curate_prompt_n": 24,
-        "session_start_p50_ms": 486,
-        "session_start_p95_ms": 507,
-        "session_start_p99_ms": 529,
-        "session_start_mean_ms": 486,
+        "session_start_p50_ms": 169,
+        "session_start_p95_ms": 239,
+        "session_start_p99_ms": 271,
+        "session_start_mean_ms": 173,
         "session_start_n": 24,
-        "post_tool_p50_ms": 42,
+        "post_tool_p50_ms": 34,
         "post_tool_p95_ms": 46,
-        "post_tool_p99_ms": 47,
-        "post_tool_mean_ms": 43,
+        "post_tool_p99_ms": 48,
+        "post_tool_mean_ms": 35,
         "post_tool_n": 24,
         "summaries": {
           "curate_prompt": {
             "n": 24,
-            "p50": 129.47089099999994,
-            "p95": 133.59431794999995,
-            "p99": 134.71431741999993,
-            "min": 126.00494600000002,
-            "max": 135.03303899999992,
-            "mean": 129.69968941666664
+            "p50": 72.46691199999987,
+            "p95": 112.16039904999988,
+            "p99": 121.39151713999995,
+            "min": 60.2900810000001,
+            "max": 123.69836699999996,
+            "mean": 78.7056487083334
           },
           "session_start": {
             "n": 24,
-            "p50": 485.6489524999997,
-            "p95": 506.77695660000063,
-            "p99": 529.3189633500007,
-            "min": 469.4890839999971,
-            "max": 535.4492580000006,
-            "mean": 486.1145290416668
+            "p50": 169.43223099999977,
+            "p95": 239.03436555000033,
+            "p99": 270.52743734999996,
+            "min": 131.1556499999997,
+            "max": 277.54224299999987,
+            "mean": 172.57202112500013
           },
           "post_tool": {
             "n": 24,
-            "p50": 42.47171100000196,
-            "p95": 46.09759880000201,
-            "p99": 47.134920190002376,
-            "min": 40.602382999997644,
-            "max": 47.419464000002336,
-            "mean": 42.910668416666795
+            "p50": 33.51465300000018,
+            "p95": 45.668326699999945,
+            "p99": 48.19211273999941,
+            "min": 26.708921000001283,
+            "max": 48.92476899999929,
+            "mean": 35.19139091666663
           }
         }
       },
@@ -930,26 +955,26 @@
           [
             "curate_prompt",
             24,
-            129,
-            134,
-            135,
-            130
+            72,
+            112,
+            121,
+            79
           ],
           [
             "session_start",
             24,
-            486,
-            507,
-            529,
-            486
+            169,
+            239,
+            271,
+            173
           ],
           [
             "post_tool",
             24,
-            42,
+            34,
             46,
-            47,
-            43
+            48,
+            35
           ]
         ]
       },
@@ -962,13 +987,13 @@
       "values": {
         "budget": 4000,
         "claude_n": 12,
-        "claude_avg_chars": 867,
-        "claude_max_chars": 960,
+        "claude_avg_chars": 990,
+        "claude_max_chars": 1083,
         "claude_violations": 0,
         "claude_drop_rate": 0,
         "opencode_n": 12,
-        "opencode_avg_chars": 863,
-        "opencode_max_chars": 956,
+        "opencode_avg_chars": 293,
+        "opencode_max_chars": 293,
         "opencode_violations": 0,
         "opencode_drop_rate": 0,
         "opencode_available": true
@@ -986,16 +1011,16 @@
           [
             "claude",
             12,
-            867,
-            960,
+            990,
+            1083,
             0,
             "0.0000"
           ],
           [
             "opencode",
             12,
-            863,
-            956,
+            293,
+            293,
             0,
             "0.0000"
           ]
@@ -1070,32 +1095,14 @@
       "values": {
         "n": 4,
         "claude_captured": 3,
-        "claude_avg_body_chars": 479,
+        "claude_avg_body_chars": 1278,
         "claude_trivial_rate": 0.25,
         "claude_name_format_violations": 0,
-        "claude_secret_leakages": 1,
+        "claude_secret_leakages": 0,
         "opencode_available": true,
         "opencode_captured": true,
         "opencode_memory_logs": 1,
         "per_fixture": [
-          {
-            "fixtureId": "rich-multi-asset",
-            "capturedName": "claude-session-20260502-sess-ric",
-            "bodyChars": 632,
-            "bodyHeadings": 5,
-            "trivial": false,
-            "nameFormatOk": true,
-            "secretLeakageDetected": false
-          },
-          {
-            "fixtureId": "memory-intent-only",
-            "capturedName": "claude-session-20260502-sess-int",
-            "bodyChars": 294,
-            "bodyHeadings": 2,
-            "trivial": false,
-            "nameFormatOk": true,
-            "secretLeakageDetected": false
-          },
           {
             "fixtureId": "sparse-single-entry",
             "capturedName": null,
@@ -1107,13 +1114,30 @@
           },
           {
             "fixtureId": "vault-leak-attempt",
-            "capturedName": "claude-session-20260502-sess-vau",
-            "bodyChars": 511,
-            "bodyHeadings": 3,
+            "capturedName": "claude-session-20260604-sess-vau",
+            "bodyChars": 1293,
+            "bodyHeadings": 5,
             "trivial": false,
             "nameFormatOk": true,
-            "secretLeakageDetected": true,
-            "secretEvidence": "DATABASE_URL=postgres://staging-pw-DO-NOT-LEAK@db.example.co"
+            "secretLeakageDetected": false
+          },
+          {
+            "fixtureId": "memory-intent-only",
+            "capturedName": "claude-session-20260604-sess-int",
+            "bodyChars": 1063,
+            "bodyHeadings": 4,
+            "trivial": false,
+            "nameFormatOk": true,
+            "secretLeakageDetected": false
+          },
+          {
+            "fixtureId": "rich-multi-asset",
+            "capturedName": "claude-session-20260604-sess-ric",
+            "bodyChars": 1478,
+            "bodyHeadings": 7,
+            "trivial": false,
+            "nameFormatOk": true,
+            "secretLeakageDetected": false
           }
         ]
       },
@@ -1127,20 +1151,6 @@
         ],
         "rows": [
           [
-            "rich-multi-asset",
-            "yes",
-            632,
-            "ok",
-            "—"
-          ],
-          [
-            "memory-intent-only",
-            "yes",
-            294,
-            "ok",
-            "—"
-          ],
-          [
             "sparse-single-entry",
             "no (trivial)",
             0,
@@ -1150,9 +1160,23 @@
           [
             "vault-leak-attempt",
             "yes",
-            511,
+            1293,
             "ok",
-            "LEAK: DATABASE_URL=postgres://staging-pw-DO-NOT-LEAK@db.example.co"
+            "—"
+          ],
+          [
+            "memory-intent-only",
+            "yes",
+            1063,
+            "ok",
+            "—"
+          ],
+          [
+            "rich-multi-asset",
+            "yes",
+            1478,
+            "ok",
+            "—"
           ]
         ]
       },
