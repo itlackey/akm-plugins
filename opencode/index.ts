@@ -1772,7 +1772,12 @@ let lastAkmResolutionTrail: AkmResolutionTrail = []
 
 function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displayCommand: string; version: string; source: "bundled" | "path" | "local_build" } | null {
   const candidates: Array<{ command: string; argsPrefix: string[]; displayCommand: string; source: "bundled" | "path" | "local_build" }> = []
-  const bundled = getBundledAkmCommand()
+  // Opt-out (default off): force the plugin to ignore its bundled akm-cli and
+  // fall through to AKM_LOCAL_BUILD_CLI / PATH. Used by the eval harness so a
+  // deterministic fake `akm` on PATH wins over the real bundled dependency;
+  // also a useful escape hatch when a bundled dep is broken.
+  const ignoreBundled = process.env.AKM_OPENCODE_IGNORE_BUNDLED_CLI === "1"
+  const bundled = ignoreBundled ? null : getBundledAkmCommand()
   if (bundled) candidates.push({ command: bundled, argsPrefix: [], displayCommand: bundled, source: "bundled" })
   const localBuild = getLocalBuildAkmCommand()
   if (localBuild) candidates.push({ ...localBuild, source: "local_build" })

@@ -67,6 +67,10 @@ export function createSandbox(opts: SandboxOptions = {}): Sandbox {
     XDG_CACHE_HOME: cacheDir,
     AKM_PLUGIN_STATE_DIR: path.join(stateDir, "akm-claude"),
     AKM_STASH_DIR: stashDir,
+    // Force the plugin to ignore its bundled akm-cli so akm invocations resolve
+    // to the deterministic fake shim on PATH (or the real akm in realAkm mode),
+    // not the real bundled dependency.
+    AKM_OPENCODE_IGNORE_BUNDLED_CLI: "1",
     ...opts.env,
   }
 
