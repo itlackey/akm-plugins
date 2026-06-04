@@ -635,6 +635,19 @@ echo "[knowledge] should-not-appear"
     // Fake-akm helper: persist `akm config set <dottedKey> <jsonOrString>` calls
     // into $HOME/.config/akm/config.json so tests that assert against the file
     // still observe the plugin's writes after #463 moved them through the CLI.
+    //
+    // HERMETIC: the helper runs under the SAME interpreter that runs this test
+    // suite (`process.execPath`, i.e. the Bun that drives `bun test`), NOT a
+    // bare `node` resolved from the hook's PATH. The session-start hook builds
+    // its child-process PATH as `${binDir}:/usr/bin:/bin` — so a bare `node`
+    // only works on hosts that happen to ship `/usr/bin/node` (most dev boxes).
+    // Clean CI runs the suite under Bun with NO Node on PATH, so the bare-`node`
+    // form silently exited non-zero, `akm config set` failed, and the
+    // `config.defaults.agent` / `config.profiles.agent.claude` assertions below
+    // failed. Pinning to the suite's own interpreter makes the config write
+    // succeed regardless of whether Node is installed. (Bun runs `.cjs` CommonJS
+    // modules natively.)
+    const fakeAkmInterpreter = shellQuote(process.execPath)
     const fakeAkmConfigSet = path.join(binDir, "fake-akm-config-set.cjs")
     writeFileSync(
       fakeAkmConfigSet,
@@ -675,7 +688,7 @@ case "$1" in
           *) break ;;
         esac
       done
-      node ${shellQuote(fakeAkmConfigSet)} "$HOME/.config/akm/config.json" "$1" "$2"
+      ${fakeAkmInterpreter} ${shellQuote(fakeAkmConfigSet)} "$HOME/.config/akm/config.json" "$1" "$2"
       exit $?
     fi
     exit 0 ;;
