@@ -88,6 +88,23 @@ mock.module("node:child_process", () => ({
   spawn: mockSpawn,
 }))
 
+// Hermeticity: the plugin resolves its user-local akm fallback via
+// `os.homedir()` (opencode/index.ts getPathAkmCandidates). Node/Bun's
+// os.homedir() snapshots HOME at startup and does NOT reflect a later
+// process.env.HOME change, so a withEnvVar("HOME", tempDir) sandbox alone can't
+// redirect that candidate. We delegate every os function to the real module but
+// make homedir() honor the *current* process.env.HOME, so HOME-sandboxed tests
+// can place a fake akm under a temp dir and have the resolver actually probe it
+// (instead of the developer's real ~/.local/bin/akm, which would never exist on
+// clean CI). Data-safety: this only changes which directory is *read*; tests
+// never write outside their mkdtemp sandbox.
+const realOs = await import("node:os")
+const osShim = {
+  ...realOs,
+  homedir: () => process.env.HOME ?? realOs.homedir(),
+}
+mock.module("node:os", () => ({ ...osShim, default: osShim }))
+
 const pluginModule = await import("../opencode/index.ts")
 const { AkmPlugin, server, default: defaultPluginModule } = pluginModule
 
@@ -3857,66 +3874,101 @@ describe("akm-opencode plugin", () => {
     })
 
     it("falls back to ~/.local/bin/akm when PATH lookup fails", async () => {
-      const fallbackCommand = path.join(process.env.HOME ?? "/home/test", ".local", "bin", "akm")
-      mockExecFileSync.mockImplementation((cmd, args) => {
-        if (cmd === "akm" && args[0] === "--version") return "0.7.9"
-        if (cmd === fallbackCommand && args[0] === "--version") return "0.8.0-rc0"
-        if (cmd === fallbackCommand && args[0] === "search") return JSON.stringify({ hits: [] })
-        return "mock output"
-      })
+      // Hermetic: sandbox HOME so the resolver's user-local candidate
+      // (os.homedir()/.local/bin/akm, which honors $HOME on Linux) points at a
+      // temp dir, and create that file on disk so probeCommand's *real*
+      // existsSync() passes on a clean CI box where no akm is installed. Also
+      // opt out of bundled akm-cli resolution so the real bundled cli.js that
+      // ships on CI cannot preempt the candidate this test asserts on.
+      const sandboxHome = mkdtempSync(path.join(tmpdir(), "akm-opencode-home-"))
+      try {
+        await withEnvVar("AKM_OPENCODE_IGNORE_BUNDLED_CLI", "1", async () => {
+          await withEnvVar("HOME", sandboxHome, async () => {
+            const fallbackCommand = path.join(sandboxHome, ".local", "bin", "akm")
+            mkdirSync(path.dirname(fallbackCommand), { recursive: true })
+            writeFileSync(fallbackCommand, "#!/bin/sh\n")
+            expect(existsSync(fallbackCommand)).toBe(true)
 
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
+            mockExecFileSync.mockImplementation((cmd, args) => {
+              if (cmd === fallbackCommand && args[0] === "--version") return "0.8.0-rc0"
+              if (cmd === fallbackCommand && args[0] === "search") return JSON.stringify({ hits: [] })
+              // Any OTHER akm candidate (the literal "akm" on PATH, or a command
+              // left cached in resolvedAkmCommand by a previous test) probes as
+              // out-of-range so the resolver is forced to fall through to the
+              // user-local fallback this test asserts on. Returning a real
+              // out-of-range semver also defeats the execFileSync shim's
+              // "synthesize 0.8.9" behavior for non-semver output.
+              if (Array.isArray(args) && args[0] === "--version") return "0.7.9"
+              return "mock output"
+            })
 
-      expect(JSON.parse(result)).toEqual({ hits: [] })
-      expect(
-        mockExecFileSync.mock.calls.some(([cmd, args]) =>
-          cmd === fallbackCommand
-          && Array.isArray(args)
-          && args[0] === "search"
-          && args[1] === "anything",
-        ),
-      ).toBe(true)
+            const hooks = await AkmPlugin(createPluginInput())
+            const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
+
+            expect(JSON.parse(result)).toEqual({ hits: [] })
+            expect(
+              mockExecFileSync.mock.calls.some(([cmd, args]) =>
+                cmd === fallbackCommand
+                && Array.isArray(args)
+                && args[0] === "search"
+                && args[1] === "anything",
+              ),
+            ).toBe(true)
+          })
+        })
+      } finally {
+        rmSync(sandboxHome, { recursive: true, force: true })
+      }
     })
 
     it("prefers ~/.config/opencode/node_modules/.bin/akm before user-local fallbacks", async () => {
-      await withEnvVar("HOME", mkdtempSync(path.join(tmpdir(), "akm-opencode-home-")), async () => {
-        const configCommand = path.join(process.env.HOME!, ".config", "opencode", "node_modules", ".bin", "akm")
-        const fallbackCommand = path.join(process.env.HOME!, ".local", "bin", "akm")
-        mkdirSync(path.dirname(configCommand), { recursive: true })
-        writeFileSync(configCommand, "#!/bin/sh\n")
-        expect(existsSync(configCommand)).toBe(true)
+      // Opt out of bundled akm-cli resolution: on CI the real bundled
+      // opencode/node_modules/akm-cli/dist/cli.js exists and would be probed
+      // first, shadowing the config-node_modules candidate this test asserts on.
+      const sandboxHome = mkdtempSync(path.join(tmpdir(), "akm-opencode-home-"))
+      try {
+        await withEnvVar("AKM_OPENCODE_IGNORE_BUNDLED_CLI", "1", async () => {
+          await withEnvVar("HOME", sandboxHome, async () => {
+            const configCommand = path.join(process.env.HOME!, ".config", "opencode", "node_modules", ".bin", "akm")
+            const fallbackCommand = path.join(process.env.HOME!, ".local", "bin", "akm")
+            mkdirSync(path.dirname(configCommand), { recursive: true })
+            writeFileSync(configCommand, "#!/bin/sh\n")
+            expect(existsSync(configCommand)).toBe(true)
 
-        mockExecFileSync.mockImplementation((cmd, args) => {
-          if (Array.isArray(args) && args[0] === "search") {
-            return JSON.stringify({ hits: [], command: cmd })
-          }
-          if (Array.isArray(args) && args[0] === "--version") {
-            return cmd === configCommand ? "0.8.0-rc0" : "0.7.9"
-          }
-          return "mock output"
+            mockExecFileSync.mockImplementation((cmd, args) => {
+              if (Array.isArray(args) && args[0] === "search") {
+                return JSON.stringify({ hits: [], command: cmd })
+              }
+              if (Array.isArray(args) && args[0] === "--version") {
+                return cmd === configCommand ? "0.8.0-rc0" : "0.7.9"
+              }
+              return "mock output"
+            })
+
+            const hooks = await AkmPlugin(createPluginInput())
+            const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
+
+            expect(JSON.parse(result)).toEqual({ hits: [], command: configCommand })
+            expect(
+              mockExecFileSync.mock.calls.some(([cmd, args]) =>
+                cmd === configCommand
+                && Array.isArray(args)
+                && args[0] === "search"
+                && args[1] === "anything",
+              ),
+            ).toBe(true)
+            expect(
+              mockExecFileSync.mock.calls.some(([cmd, args]) =>
+                cmd === fallbackCommand
+                && Array.isArray(args)
+                && args[0] === "search",
+              ),
+            ).toBe(false)
+          })
         })
-
-        const hooks = await AkmPlugin(createPluginInput())
-        const result = await hooks.tool!.akm_search.execute({ query: "anything" } as any, {} as any)
-
-        expect(JSON.parse(result)).toEqual({ hits: [], command: configCommand })
-        expect(
-          mockExecFileSync.mock.calls.some(([cmd, args]) =>
-            cmd === configCommand
-            && Array.isArray(args)
-            && args[0] === "search"
-            && args[1] === "anything",
-          ),
-        ).toBe(true)
-        expect(
-          mockExecFileSync.mock.calls.some(([cmd, args]) =>
-            cmd === fallbackCommand
-            && Array.isArray(args)
-            && args[0] === "search",
-          ),
-        ).toBe(false)
-      })
+      } finally {
+        rmSync(sandboxHome, { recursive: true, force: true })
+      }
     })
 
     it("uses AKM_LOCAL_BUILD_CLI via Bun before PATH fallbacks", async () => {
