@@ -103,6 +103,7 @@ const SESSION_START_HEADER = [
   '  - Good: `akm curate "akm CLI improve command performance analysis"` (explicit framing, still ideal)',
   '  - Bad: `akm curate "improve performance analysis"` (too generic — the reranker has less to work with even with auto-boost)',
   '- **`akm search "<known name>"`** — use ONLY when you already know an asset exists (e.g. after `akm show` returned "not found") and need to locate its exact ref. Do not use as a discovery tool.',
+  '- **`akm show <stash>//meta`** — when working in or with an unfamiliar stash, read its optional `.meta/` orientation (purpose, key assets, conventions, maintainer) before diving in. `akm show meta` reads your working stash\'s `.meta/index.md`; `akm show meta:<name>` reads other `.meta/` docs (e.g. `meta:about`). These docs are direct-read and never appear in `akm search`.',
   "",
   'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
