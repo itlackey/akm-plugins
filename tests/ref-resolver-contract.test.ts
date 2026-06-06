@@ -30,7 +30,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
-import { validateRefCandidates as validateRefCandidatesTopLevel } from "../shared/ref-extraction"
+import { validateRefCandidates as validateRefCandidatesTopLevel} from "../claude/shared/ref-extraction"
 import { validateRefCandidates as validateRefCandidatesRuntime } from "../claude/shared/ref-extraction"
 
 // ── Fixture builder ──────────────────────────────────────────────────────────

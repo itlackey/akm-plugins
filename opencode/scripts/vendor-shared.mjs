@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * prepack: vendor shared/ from the repo root into opencode/shared/ and
- * rewrite the `../shared/` imports in index.ts to `./shared/` so that the
- * published tarball is self-contained.
+ * prepack: vendor shared modules from claude/shared/ into opencode/shared/ and
+ * rewrite the `../claude/shared/` imports in index.ts to `./shared/` so that
+ * the published tarball is self-contained.
  *
- * In a full repo clone shared/ lives at ../shared (one level up from
- * opencode/). The published tarball does not include the parent shared/ dir,
- * so we vendor a copy and rewrite imports at pack time. postpack reverts
- * index.ts and removes the vendored copy so the dev tree stays clean.
+ * claude/shared/ is the single canonical source for shared modules. The
+ * published tarball does not include the parent claude/ dir, so we vendor a
+ * copy and rewrite imports at pack time. postpack reverts index.ts and removes
+ * the vendored copy so the dev tree stays clean.
  *
  * If shared/ already exists in opencode/ when this runs (manual setup, or
  * a previously interrupted pack), we still re-copy so the snapshot is fresh.
@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url"
 const here = path.dirname(fileURLToPath(import.meta.url))
 const opencodeDir = path.resolve(here, "..")
 const repoRoot = path.resolve(opencodeDir, "..")
-const sourceDir = path.join(repoRoot, "shared")
+const sourceDir = path.join(repoRoot, "claude", "shared")
 const targetDir = path.join(opencodeDir, "shared")
 const indexPath = path.join(opencodeDir, "index.ts")
 const indexBackup = path.join(opencodeDir, "index.ts.prepack-bak")
@@ -46,7 +46,7 @@ const current = readFileSync(indexPath, "utf8")
 if (!existsSync(indexBackup)) {
   writeFileSync(indexBackup, current)
 }
-const rewritten = current.replace(/from "\.\.\/shared\//g, 'from "./shared/')
+const rewritten = current.replace(/from "\.\.\/claude\/shared\//g, 'from "./shared/')
 if (rewritten !== current) {
   writeFileSync(indexPath, rewritten)
 }

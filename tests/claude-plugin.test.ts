@@ -198,21 +198,20 @@ describe("Claude plugin metadata", () => {
     expect(existsSync(path.join(agentsDir, "akm-curator.md"))).toBe(true)
   })
 
-  it("re-exports shared helpers to prevent silent drift", async () => {
-    // Every duplicated file under claude/shared/ MUST be a one-line shim that
-    // re-exports the canonical version at shared/. ref-extraction.ts is the
-    // sole intentional exception — its drift is tracked in-file because the
-    // resolver contract test exercises both copies against the same fixture.
-    const shimmedFiles = [
+  it("claude/shared contains real implementations — no re-export shims", () => {
+    // claude/shared/ is the canonical source for shared modules. Files must
+    // never be re-export shims: the plugin cache only contains claude/, so
+    // paths like `export * from "../../shared/..."` break at runtime.
+    const sharedFiles = [
       "memory-candidates",
       "memory-events",
       "redaction",
       "feedback-signals",
       "recall-policy",
     ]
-    for (const name of shimmedFiles) {
+    for (const name of sharedFiles) {
       const contents = readFileSync(path.join(repoRoot, `claude/shared/${name}.ts`), "utf8")
-      expect(contents.trim()).toBe(`export * from "../../shared/${name}"`)
+      expect(contents.trim()).not.toMatch(/^export \* from/)
     }
   })
 

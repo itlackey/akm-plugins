@@ -1,5 +1,5 @@
 import { describe, expect, test, afterEach, beforeEach } from "bun:test"
-import { redactSecrets, redactObject } from "../shared/redaction"
+import { redactSecrets, redactObject } from "../claude/shared/redaction"
 
 // ── redactSecrets ────────────────────────────────────────────────────────────
 

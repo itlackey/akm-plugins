@@ -4,12 +4,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
-import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates, updateCandidateStatus } from "../shared/memory-candidates"
-import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
-import { shouldRecall } from "../shared/recall-policy"
-import { redactObject, redactSecrets } from "../shared/redaction"
-import { extractAkmRefsFromString } from "../shared/ref-extraction"
+import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../claude/shared/feedback-signals"
+import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates, updateCandidateStatus } from "../claude/shared/memory-candidates"
+import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../claude/shared/memory-events"
+import { shouldRecall } from "../claude/shared/recall-policy"
+import { redactObject, redactSecrets } from "../claude/shared/redaction"
+import { extractAkmRefsFromString } from "../claude/shared/ref-extraction"
 
 // Quote-aware shell tokenizer. Splits on whitespace but respects single,
 // double, and backtick quotes. Used by renderCommandTemplate() to fill

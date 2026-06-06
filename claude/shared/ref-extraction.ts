@@ -37,16 +37,12 @@
 // through the SAME inputs. Any change to the resolver behavior on either
 // side MUST update both contract tests in lockstep, or one will fail.
 //
-// Cases the contract covers (see fixture in the contract test):
-//   - existing memory / knowledge / agent / workflow / skill / env / secret refs
-//   - knowledge subdirectory layout (knowledge/<category>/<slug>.md)
-//   - skill multi-file layout (skills/<slug>/SKILL.md)
-//   - memory `.derived.md` sibling
-//   - env default vs named (env/.env vs env/<name>.env)
-//   - whole-file secrets under secrets/
-//   - namespaced slugs containing `/`
-//   - non-existent refs
-//   - script type (unresolvable by design — both must return false)
+// NOTE: this file is the SECOND copy of the resolver. The runtime-shipped
+// copy lives at `claude/shared/ref-extraction.ts` and is imported by the
+// post-tool hook. Both copies must agree with each other AND with the
+// akm-core resolver. The contract test runs against `../shared/ref-extraction`
+// (this file) — the divergence between this file and the runtime copy is
+// tracked separately (regex tightness only, see top-level repo notes).
 // ----------------------------------------------------------------------------
 
 import { existsSync, statSync, readdirSync } from "node:fs";
@@ -61,8 +57,16 @@ import path from "node:path";
  * Kept in sync with the lint walker pattern in
  * `src/commands/lint/base-linter.ts`.
  */
+// Slug body allows the same charset as the lint walker, but the closing
+// character must be alphanumeric, `_`, or `-` — so a trailing `.` or `/`
+// from natural prose (`see memory:rollout-notes.`) does not leak into
+// the captured ref string. Mirrors the consumer-side
+// `src/commands/lint/base-linter.ts` REF_RE, which terminates on a
+// punctuation set including `.` via lookahead. We allow `.` mid-slug
+// (e.g. `env:.env`-style names) by requiring the slug to be at least
+// one character and to *end* on `[A-Za-z0-9_-]`.
 const REF_PATTERN =
-  /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|env|secret|wiki):[A-Za-z0-9._/-]+/g;
+  /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|env|secret|wiki):(?:[A-Za-z0-9._/-]*[A-Za-z0-9_-]|[A-Za-z0-9_-])/g;
 
 /**
  * Return every `<type>:<slug>` token in `text` regardless of context.

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { extractAllRefs, validateLiveRefs, validateRefCandidates } from "../shared/ref-extraction"
+import { extractAllRefs, validateLiveRefs, validateRefCandidates } from "../claude/shared/ref-extraction"
 
 const tempDirs: string[] = []
 
