@@ -180,9 +180,6 @@ default permission rules, so this step is opt-in and manual:
 {
   "permissions": {
     "ask": [
-      "Bash(akm accept:*)",
-      "Bash(akm reject:*)",
-      "Bash(akm revert:*)",
       "Bash(akm proposal accept:*)",
       "Bash(akm proposal diff:*)",
       "Bash(akm proposal drain:*)",
@@ -190,7 +187,6 @@ default permission rules, so this step is opt-in and manual:
       "Bash(akm proposal reject:*)",
       "Bash(akm proposal revert:*)",
       "Bash(akm remove:*)",
-      "Bash(akm save --push:*)",
       "Bash(akm sync:*)",
       "Bash(akm upgrade:*)",
       "Bash(akm update --all:*)",

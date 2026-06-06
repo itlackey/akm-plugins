@@ -4,7 +4,7 @@
 
 | File | What it covers |
 | --- | --- |
-| `opencode-plugin.test.ts` | Full integration coverage for the OpenCode plugin (`opencode/index.ts`): all tools, lifecycle hooks, proposal queue, improve/propose, vault, wiki, workflow, akm CLI resolution |
+| `opencode-plugin.test.ts` | Full integration coverage for the OpenCode plugin (`opencode/index.ts`): all tools, lifecycle hooks, proposal queue, improve/propose, env, secret, wiki, workflow, akm CLI resolution |
 | `claude-plugin.test.ts` | Claude Code plugin (`claude/index.ts`): hook wiring, safety guard, feature parity assertions |
 | `ref-extraction.test.ts` | `extractAkmRefs()` pattern matching: all ref shapes, edge cases |
 | `ref-resolver-contract.test.ts` | Ref resolver contract: resolve + feedback integration |

@@ -9,7 +9,7 @@
 ## Extended Searching
 
 You have access to a searchable library of tools, skills, commands, agents,
-knowledge, lessons, workflows, vaults, and wikis via the `akm` CLI (v0.8.0+).
+knowledge, lessons, workflows, env configs, secrets, and wikis via the `akm` CLI (v0.8.0+).
 
 > For any AKM verb that isn't a first-class tool/slash-command, agents should call `akm_help` (OpenCode) or `/akm-help` (Claude Code) to discover the right `akm` CLI invocation before reaching for raw flags.
 
@@ -27,7 +27,7 @@ akm curate "<task>"   # PRIMARY: LLM-reranked, scored; auto-project-boost in v0.
 Fall back to `akm search` only for known-ref lookups:
 ```sh
 akm search "<known name>"              # Only when akm show returned "not found" and you need the exact ref
-akm search "<query>" --type script     # Filter by type (script, skill, command, agent, knowledge, memory, lesson, workflow, vault, wiki)
+akm search "<query>" --type script     # Filter by type (script, skill, command, agent, knowledge, memory, lesson, workflow, env, secret, wiki)
 akm search "<query>" --source <source> # Filter by source (e.g., "stash", "registry", "both"; "local" is a legacy alias for "stash")
 akm search "<query>" --source <name>   # 0.8.0: scope to a single named stash (e.g., --source itlackey/akm-stash)
 akm search "<query>" --include-proposed  # Merge proposed-quality drafts into hits (default search hides them)
@@ -105,8 +105,8 @@ The replacement is documented in the platform-specific READMEs:
   controls. See
   [opencode/README.md "Locking down destructive commands"](./opencode/README.md#locking-down-destructive-commands).
 
-Agents should still treat destructive verbs (`accept`, `reject`,
-`revert`, `save --push`, `remove`, vault writes, `tasks add` / `tasks
+Agents should still treat destructive verbs (`proposal accept`, `proposal reject`,
+`proposal revert`, `sync --push`, `remove`, env/secret writes, `tasks add` / `tasks
 run`, `upgrade`, `update --all`, `config set`) as requiring explicit
 user approval before invocation — that contract is independent of the
 platform's permission machinery.

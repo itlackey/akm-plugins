@@ -697,7 +697,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["feedback", "skill:code-review", "--positive", "--note", "Worked perfectly", "--format", "json"],
+        ["feedback", "skill:code-review", "--positive", "--reason", "Worked perfectly", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -711,7 +711,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["feedback", "lesson:review-first", "--positive", "--note", "helped", "--user", "u1", "--agent", "build", "--run", "parent-session-1", "--channel", "review", "--format", "json"],
+        ["feedback", "lesson:review-first", "--positive", "--reason", "helped", "--user", "u1", "--agent", "build", "--run", "parent-session-1", "--channel", "review", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
       expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
@@ -1303,7 +1303,7 @@ describe("akm-opencode plugin", () => {
       )
       expect(mockExecFileSync).toHaveBeenCalledWith(
         "akm",
-        ["feedback", "lesson:bad-guidance", "--negative", "--note", "This was wrong", "--run", "session-neg-1", "--format", "json"],
+        ["feedback", "lesson:bad-guidance", "--negative", "--reason", "This was wrong", "--run", "session-neg-1", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
     })
@@ -3624,13 +3624,13 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("v0.5.0 ref pattern", () => {
-    it("extracts workflow, vault, and wiki refs from tool output", async () => {
+    it("extracts workflow, env, and wiki refs from tool output", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const output = JSON.stringify({
         ok: true,
         hits: [
           { ref: "workflow:release" },
-          { ref: "vault:prod" },
+          { ref: "env:prod" },
           { ref: "wiki:team/intro" },
           { ref: "skill:review" },
         ],
@@ -3655,7 +3655,7 @@ describe("akm-opencode plugin", () => {
       const memoryLog = logCalls.find((c) => c.body?.extra?.subsystem === "feedback")
       expect(memoryLog).toBeDefined()
       // Verify the ref extraction picked up the v0.5.0 asset types by checking
-      // that feedback was recorded for the non-memory, non-vault refs.
+      // that feedback was recorded for the non-memory, non-env refs.
       // Auto-feedback wraps its call as: [..., "-q", "feedback", <ref>, ...]
       const feedbackRefs = mockSpawn.mock.calls
         .filter((call: any[]) => Array.isArray(call[1]) && call[1].includes("feedback"))
@@ -3664,8 +3664,8 @@ describe("akm-opencode plugin", () => {
           return args[args.indexOf("feedback") + 1]
         })
       expect(feedbackRefs).toEqual([])
-      // Vault refs MUST NOT receive automatic feedback.
-      expect(feedbackRefs).not.toContain("vault:prod")
+      // Env refs MUST NOT receive automatic feedback.
+      expect(feedbackRefs).not.toContain("env:prod")
     })
 
     it("extracts lesson refs from tool output and records feedback", async () => {

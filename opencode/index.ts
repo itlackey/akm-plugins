@@ -157,8 +157,8 @@ Inputs you should inspect:
 4. Parent-session context via akm_parent_messages when this session was dispatched as a child.
 
 Signals to act on:
-- Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --note "curator: consistently useful" to reinforce.
-- Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --note "<excerpt>" and open the asset for review.
+- Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --reason "curator: consistently useful" to reinforce.
+- Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --reason "<excerpt>" and open the asset for review.
 - Lesson candidates: repeated memories or failures that should become a proposed lesson. Use akm_improve or akm_help topic="improve" before raw CLI improvement commands.
 - Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see akm_help topic="reindex").
 - Pending proposals: list or diff them via akm_help topic="proposal" and recommend accept, reject, or revise. Never accept or reject without explicit user approval.
@@ -1031,7 +1031,7 @@ async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: 
   }
 
   const targetRef = recentRefs[recentRefs.length - 1]
-  const raw = await runCli(client, ["feedback", targetRef, "--negative", "--note", text.slice(0, 280), ...buildScopedArgs({ sessionID })], {
+  const raw = await runCli(client, ["feedback", targetRef, "--negative", "--reason", text.slice(0, 280), ...buildScopedArgs({ sessionID })], {
     toolName: "akm_feedback",
     sessionID,
   })
@@ -1085,7 +1085,7 @@ function queueFeedback(
         "feedback",
         ref,
         sentiment === "positive" ? "--positive" : "--negative",
-        "--note",
+        "--reason",
         note,
         ...buildScopedArgs({
           sessionID: meta.sessionID,
@@ -2672,7 +2672,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             })
             await maybeIndexSessionMemory(logClient, sid, type, captured)
             // Auto-signal so improve picks up this session memory on the next run.
-            runCliSyncRaw(["feedback", captured, "--positive", "--note", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
+            runCliSyncRaw(["feedback", captured, "--positive", "--reason", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
           }
           if (type === "session.compacted") {
             writeStructuredEvent({
@@ -2722,7 +2722,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           })
           await maybeIndexSessionMemory(logClient, sid, "stop", captured)
           // Auto-signal so improve picks up this session memory on the next run.
-          runCliSyncRaw(["feedback", captured, "--positive", "--note", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
+          runCliSyncRaw(["feedback", captured, "--positive", "--reason", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
         }
       } catch (error: unknown) {
         await logHookFailure(logClient, "stop", error)
@@ -3240,7 +3240,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
       async execute({ ref, sentiment, note }, context) {
         const args = ["feedback", ref, sentiment === "positive" ? "--positive" : "--negative"]
-        if (note) args.push("--note", note)
+        if (note) args.push("--reason", note)
         args.push(...buildScopedArgs(context as unknown as Record<string, unknown>))
         const raw = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_feedback", sessionID: context.sessionID, directory: context.directory })
         const parsed = safeJsonParse<{ ok?: boolean; error?: string }>(raw)
@@ -3354,7 +3354,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           if (candidate.recommendedAction === "remember") {
             rawResult = await runCli(client as unknown as LogCapableClient, ["remember", candidate.content, "--name", `candidate-${candidate.id}`, "--force", ...buildScopedArgs(context as unknown as Record<string, unknown>)], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
           } else if (candidate.recommendedAction === "feedback" && candidate.targetRef) {
-            rawResult = await runCli(client as unknown as LogCapableClient, ["feedback", candidate.targetRef, "--positive", "--note", candidate.content, ...buildScopedArgs(context as unknown as Record<string, unknown>)], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
+            rawResult = await runCli(client as unknown as LogCapableClient, ["feedback", candidate.targetRef, "--positive", "--reason", candidate.content, ...buildScopedArgs(context as unknown as Record<string, unknown>)], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
           } else if (candidate.recommendedAction === "distill" && candidate.targetRef) {
             rawResult = await runCli(client as unknown as LogCapableClient, ["improve", candidate.targetRef], { toolName: "akm_memory", sessionID: context.sessionID, directory: context.directory })
           } else if (candidate.recommendedAction === "propose") {
@@ -3398,7 +3398,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
       async execute({ query, limit, detail }, context) {
         const args = ["curate", query, "--limit", String(limit ?? 6)]
-        if (detail) args.push("--detail", detail)
+        // `summary` is a shape (projection) in 0.9.0; `normal`/`full` are
+        // verbosity (`--detail`). `--detail summary` is a hard error post-0.9.
+        if (detail === "summary") args.push("--shape", "summary")
+        else if (detail) args.push("--detail", detail)
         args.push(...buildScopedArgs(context as unknown as Record<string, unknown>))
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_curate", sessionID: context.sessionID, directory: context.directory })
       },

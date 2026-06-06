@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Registers tools that let your AI agent **search**, **show**, and **manage** stash assets — skills, commands, agents, knowledge, memories, lessons, tasks, scripts, workflows, vaults, secrets, and wikis — **operate the v0.8.0 proposal queue** and **improve assets** through dedicated tools, plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used (skipping proposed-quality drafts), and harvest session memories so the stash improves with every session.
+OpenCode plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Registers tools that let your AI agent **search**, **show**, and **manage** stash assets — skills, commands, agents, knowledge, memories, lessons, tasks, scripts, workflows, env configs, secrets, and wikis — **operate the v0.8.0 proposal queue** and **improve assets** through dedicated tools, plus **agentic hooks** that auto-load relevant assets into each turn, record feedback when assets are used (skipping proposed-quality drafts), and harvest session memories so the stash improves with every session.
 
 ## Installation
 
@@ -14,22 +14,22 @@ Add to your OpenCode config (`opencode.json`):
 
 ## Tools
 
-The plugin exposes **21 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, `tasks`, ad-hoc `run`, raw `agent`, vault writes, secret writes/run) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
+The plugin exposes **21 high-value tools**. Long-tail verbs (`add`, `save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `index`-reindex, `config`, `upgrade`, `tasks`, ad-hoc `run`, raw `agent`, env writes, secret writes/run) are reachable via `akm_help` plus the raw `akm` CLI through the `bash` tool.
 
 | Tool | Description |
 |------|-------------|
 | `akm_info` | Show `akm info` output together with the installed `akm-opencode` plugin version and install location |
-| `akm_search` | Search the local stash, the registry, or both. Type filter accepts `skill`, `command`, `agent`, `knowledge`, `lesson`, `memory`, `script`, `task`, `workflow`, `vault`, `secret`, `wiki`, `any`; proposed hits can be included explicitly |
+| `akm_search` | Search the local stash, the registry, or both. Type filter accepts `skill`, `command`, `agent`, `knowledge`, `lesson`, `memory`, `script`, `task`, `workflow`, `env`, `secret`, `wiki`, `any`; proposed hits can be included explicitly |
 | `akm_show` | Show a stash asset by its ref |
 | `akm_agent` | Dispatch a stash `agent:*` into OpenCode using the stash prompt and metadata |
 | `akm_cmd` | Execute a stash `command:*` template in OpenCode via SDK session prompting |
 | `akm_remember` | Record a memory in the default stash |
-| `akm_feedback` | Record positive or negative feedback for a stash asset (skipped automatically for `memory:`, `vault:`, `secret:`, `lesson:`, and proposed-quality refs) |
+| `akm_feedback` | Record positive or negative feedback for a stash asset (skipped automatically for `memory:`, `env:`, `secret:`, `lesson:`, and proposed-quality refs) |
 | `akm_curate` | Curate the stash for a task or topic and return ranked matches the agent can use |
 | `akm_evolve` | Dispatch the AKM curator subagent into a child session, capture the report as a memory, and seed the curator-context cache so it survives compaction |
 | `akm_parent_messages` | Summarize the parent OpenCode session so dispatched stash subagents can inherit upstream context |
 | `akm_session_messages` | Summarize a specific OpenCode session (arbitrary IDs restricted to `akm-curator`) |
-| `akm_vault` | Vault `list` / `show` (key names) / `load` (writes the shell snippet to a temp file path without surfacing values inline). **Values never surface** through tool output |
+| `akm_env` | Env `list` / `path` (raw `.env` file path, gated on `confirm:true`) / `run` (inject the whole `.env` into a child command, gated on `confirm:true`). **Values never surface** through tool output |
 | `akm_secret` | Secret `list` / `path` only. Returns refs or the absolute file path for `_FILE`-style consumers without reading contents |
 | `akm_wiki` | Manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`) |
 | `akm_workflow` | Drive workflow runs (`start`, `next`, `complete`, `status`, `list`, `create`, `template`, `resume`) |
@@ -50,7 +50,7 @@ fails silently when a compatible `akm` is not resolvable — the TUI is never af
 | **`session.created`** (event hook) | Sets the AKM default agent in `~/.config/akm/config.json` to `opencode` when missing, warms the stash index in the background, caches `akm hints` plus active workflow status, and runs a scoped `akm curate --run <sessionID>` so fresh sessions start with relevant stash context. |
 | **`chat.message`** | Records user feedback/memory intent and appends a short reminder to use `akm_search` / `akm_curate` when more stash context is needed. It does not auto-run AKM CLI lookups on every message. |
 | **`experimental.chat.system.transform`** | Appends cached hints, active workflow state, pending proposal summaries, the last curator report, and the current prompt's curated context to the model's system prompt. Hints and workflow state are re-injected after transcript compaction. |
-| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations on the plugin's own typed tools (`akm_vault show/load`, `akm_secret path`, `akm_proposal accept`, etc.) until `confirm:true` is provided. This contract is per-tool, not a generic shell-command gate. |
+| **`tool.execute.before`** (`akm_*` tools) | Blocks destructive or sensitive operations on the plugin's own typed tools (`akm_env path/run`, `akm_secret path`, `akm_proposal accept`, etc.) until `confirm:true` is provided. This contract is per-tool, not a generic shell-command gate. |
 | **`tool.execute.after`** (`akm_*` tools) | Logs asset usage, accumulates refs into the session buffer, records `akm feedback <ref> --positive` / `--negative` asynchronously with per-call dedupe, checkpoints memories every `AKM_MEMORY_CHECKPOINT_EVERY` successful asset-touching tool calls, and scans child-agent free text for additional refs. |
 | **`experimental.session.compacting`** | Pushes hints, curated context, active workflows, and the last curator report into the compaction prompt so they survive transcript shrinking. |
 | **`shell.env`** | Exposes `AKM_PROJECT`, `AKM_PLUGIN_VERSION`, and the resolved `AKM_STASH_DIR` to shell tools so raw shell checks and plain `akm` invocations see the same stash path as the plugin. |
@@ -60,8 +60,8 @@ fails silently when a compatible `akm` is not resolvable — the TUI is never af
 
 Earlier versions of this plugin shipped `permission.ask` and
 `command.execute.before` hooks that tokenized each raw `akm` CLI invocation
-and **denied** a hard-coded list of risky subcommands (vault writes,
-`save --push`, `accept` / `reject` / `revert`, `tasks add` / `tasks run`,
+and **denied** a hard-coded list of risky subcommands (env/secret writes,
+`sync --push`, `proposal accept` / `reject` / `revert`, `tasks add` / `tasks run`,
 `upgrade`, `update --all`, etc.) until the user re-approved them inline.
 That gate has been removed in 0.8.0. The tokenized matcher was brittle — it
 produced false positives on commit messages, heredoc bodies, and other
@@ -82,9 +82,8 @@ down at the OS level instead:
   #!/usr/bin/env bash
   # ~/bin/akm — wraps the real akm to confirm destructive verbs
   case "$1 $2 $3" in
-    "vault set "*|"vault unset "*|"vault load "*|"vault create "*|\
-    "save --push"*|"sync "*|"sync"|"remove "*|\
-    "accept "*|"reject "*|"revert "*|\
+    "secret set "*|"secret run "*|"secret remove "*|"env create "*|"env run "*|"env remove "*|\
+    "sync --push"*|"sync "*|"sync"|"remove "*|\
     "proposal accept "*|"proposal reject "*|"proposal revert "*|"proposal drain "*|\
     "tasks add "*|"tasks remove "*|"tasks enable "*|"tasks disable "*|\
     "tasks run "*|"upgrade"*|"update --all"*|"config set "*)
@@ -97,15 +96,15 @@ down at the OS level instead:
 - **Use OS-level access controls** (`sudo`, `chmod`, mount restrictions,
   AppArmor / SELinux profiles) when running OpenCode in shared or
   sandboxed environments.
-- **Vault and secret writes still bypass the chat turn entirely.** Use the typed
-  `akm_vault` tool only for read paths (`list`, `show` of key names,
-  `load` when you need a temporary shell-file path without surfacing
-  values inline), and the typed `akm_secret` tool only for `list` / `path`.
-  To create vaults or set/unset values, or to set/run/remove whole-file
-  secrets, run `akm env …` / `akm secret …` directly in the shell so
+- **Env and secret writes still bypass the chat turn entirely.** Use the typed
+  `akm_env` tool only for read paths (`list`, `path` and `run` when you need a
+  temporary file path or to inject the env into a child command without
+  surfacing values inline), and the typed `akm_secret` tool only for
+  `list` / `path`. To create env configs or set values, or to set/run/remove
+  whole-file secrets, run `akm env …` / `akm secret …` directly in the shell so
   secret material never passes through the chat turn.
 
-The plugin's typed `akm_*` tools (`akm_vault show`, `akm_proposal accept`,
+The plugin's typed `akm_*` tools (`akm_env run`, `akm_proposal accept`,
 etc.) still apply their per-tool `confirm:true` contracts at
 `tool.execute.before`. Only the raw-shell tokenized gate has been removed.
 
@@ -149,7 +148,7 @@ The plugin injects a concise AKM workflow instruction pack into context so agent
 - treat `lesson:*` as first-class durable assets;
 - treat proposed-quality assets as uncurated until accepted;
 - use `akm_help` to route `proposal`, `improve`, `propose`, and `tasks` CLI workflows;
-- require explicit user approval before proposal acceptance/rejection, push saves, source removal, CLI upgrades, update-all, vault value access, or secret-path access.
+- require explicit user approval before proposal acceptance/rejection, push syncs, source removal, CLI upgrades, update-all, env value access, or secret-path access.
 
 The package also ships OpenCode command docs for common workflows:
 
@@ -231,26 +230,26 @@ stash/
 ├── lessons/    # first-class durable learnings (lesson:<name>) — often produced by akm improve, accepted via akm proposal accept
 ├── tasks/      # scheduled task definitions (task:<name>) managed via akm tasks ...
 ├── workflows/  # multi-step procedures (workflow:<name>)
-├── vaults/     # .env secret stores (vault:<name>) — values never surface through structured output
+├── env/        # .env config stores (env:<name>) — values never surface through structured output
 ├── secrets/    # whole-file secrets (secret:<name>) — contents never surface through structured output
 ├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
 └── .akm/proposals/  # v0.8.0 proposal queue — drafts that never leak into search or commits
 ```
 
-## Vaults And Secrets
+## Env And Secrets
 
-`akm_vault` is the one tool in this plugin with a hard contract on output. The
-AKM CLI itself guarantees vault values never appear in JSON, the search index,
+`akm_env` is the one tool in this plugin with a hard contract on output. The
+AKM CLI itself guarantees env values never appear in JSON, the search index,
 `.stash.json`, or any structured output channel. This plugin mirrors that:
 
-- `action: "list"` / `"show"` return key names and comments only.
-- `action: "set"` / `"unset"` never echo the value.
-- `action: "load"` wraps `akm vault load` and returns the raw shell text
-  as-is. Treat it as opaque and hand it straight to a shell via
-  `eval "$(…)"` — do not log it, do not pass it through another tool, and do
-  not let the agent inspect it.
+- `action: "list"` returns env refs only; no values.
+- `action: "path"` (gated on `confirm:true`) returns the raw `.env` file path
+  for `_FILE`-style consumers — never the contents.
+- `action: "run"` (gated on `confirm:true`) wraps `akm env run env:<name> -- <cmd>`,
+  injecting the whole `.env` into a child process. Values go straight into the
+  child and never reach stdout — do not capture or inspect them.
 
-Automatic feedback recording (`tool.execute.after`) skips `vault:*` and `secret:*`
+Automatic feedback recording (`tool.execute.after`) skips `env:*` and `secret:*`
 refs so usage signals can't leak which sensitive asset was touched.
 
 `akm_secret` mirrors the same safety boundary for whole-file secrets:

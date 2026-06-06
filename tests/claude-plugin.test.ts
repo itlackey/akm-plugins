@@ -392,7 +392,7 @@ exit 0
     runHook(["post-tool", "failure"], {
       input: JSON.stringify({
         tool: "Bash",
-        input: { command: "akm feedback skill:release --negative --note stale" },
+        input: { command: "akm feedback skill:release --negative --reason stale" },
         output: "{\"ok\":false,\"error\":\"network unavailable\"}",
       }),
       env: {
@@ -402,7 +402,7 @@ exit 0
       },
     })
 
-    expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skill:release --negative --note stale")
+    expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skill:release --negative --reason stale")
   })
 
   describe("pre-tool-agent model alias resolution", () => {
@@ -820,7 +820,7 @@ exit 0
 
     const recorded = readFileSync(feedbackLog, "utf8")
     expect(recorded).toContain("feedback skill:code-review --positive")
-    expect(recorded).toContain("--note")
+    expect(recorded).toContain("--reason")
   })
 
   it("auto-feedback records negative feedback and skips memory refs", () => {
@@ -1754,8 +1754,8 @@ exit 0
     mkdirSync(stateDir, { recursive: true })
 
     for (const command of [
-      "akm accept p_123",
-      "akm revert p_abc",
+      "akm proposal accept p_123",
+      "akm proposal revert p_abc",
       "akm tasks add nightly --cron \"0 2 * * *\"",
       "akm env create --from-file .env.dev",
       "akm remember OPENAI_API_KEY=sk-secret-value",

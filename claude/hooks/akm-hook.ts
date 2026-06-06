@@ -1179,7 +1179,7 @@ function autoFeedback() {
       })
       continue
     }
-    const result = akmRun(["--format", "json", "-q", "feedback", ref, signal.polarity === "negative" ? "--negative" : "--positive", "--note", redactSecrets(signal.note).text, ...scopeArgs])
+    const result = akmRun(["--format", "json", "-q", "feedback", ref, signal.polarity === "negative" ? "--negative" : "--positive", "--reason", redactSecrets(signal.note).text, ...scopeArgs])
     if (!result.trim()) appendLog(FEEDBACK_LOG, "system", "feedback_failed", ref, statusText, "empty stdout from akm feedback")
     else {
       writeMemoryEvent({
@@ -1490,7 +1490,7 @@ function captureMemory(options?: { rawInput?: string; reason?: string; checkpoin
     runIndexOnSessionEnd(reason, sid, `memory:${name}`)
     // Auto-signal so improve picks up this session memory on the next run.
     // Without a positive feedback event the signal gate would exclude it (minRetrievalCount=1).
-    akmRun(["--format", "json", "-q", "feedback", `memory:${name}`, "--positive", "--note", "session checkpoint: auto-signal for improve eligibility"])
+    akmRun(["--format", "json", "-q", "feedback", `memory:${name}`, "--positive", "--reason", "session checkpoint: auto-signal for improve eligibility"])
   } else {
     appendLog(MEMORY_LOG, "system", "capture_failed", `memory:${name}`, reason, "empty stdout from akm remember")
     writeMemoryEvent({
