@@ -1794,7 +1794,7 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory flows")
   })
 
   it("user-prompt-expansion treats akm-memory-reject as mutating guidance", () => {
@@ -1813,7 +1813,7 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory flows")
   })
 
   it("user-prompt-expansion treats akm-proposal list as non-mutating guidance", () => {
@@ -1833,10 +1833,13 @@ exit 0
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
     expect(payload.hookSpecificOutput.additionalContext).toContain("slash-command expansion should keep mutating actions explicit")
-    expect(payload.hookSpecificOutput.additionalContext).not.toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("mutating memory flows")
   })
 
-  it("user-prompt-expansion treats akm-proposal reject as mutating guidance", () => {
+  // proposal accept/reject/drain are no longer singled out by the hook (the
+  // proposal-specific approval guard was removed); they get the generic
+  // slash-command note like any other /akm- command.
+  it("user-prompt-expansion treats akm-proposal reject as generic slash guidance", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
     mkdirSync(stateDir, { recursive: true })
@@ -1852,10 +1855,11 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("slash-command expansion should keep mutating actions explicit")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("mutating memory flows")
   })
 
-  it("user-prompt-expansion treats akm-proposal drain as mutating guidance", () => {
+  it("user-prompt-expansion treats akm-proposal drain as generic slash guidance", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
     mkdirSync(stateDir, { recursive: true })
@@ -1871,7 +1875,8 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("slash-command expansion should keep mutating actions explicit")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("mutating memory flows")
   })
 
   it("user-prompt-expansion captures a fresh checkpoint before improve/propose flows", () => {
