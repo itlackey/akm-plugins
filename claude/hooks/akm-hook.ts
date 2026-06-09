@@ -762,8 +762,8 @@ function userPromptExpansion(): string {
     refs,
     outcome: { status: "ok" },
   })
-  if ((/\/akm-memory-(promote|reject)\b/.test(expanded) || /\/akm-proposal\s+(accept|reject|drain)\b/.test(expanded) || /\bproposal\s+drain\b/.test(expanded)) && !/\b(confirm|approved|approval)\b/i.test(expanded)) {
-    return emitHookContext("UserPromptExpansion", "AKM note: mutating memory/proposal flows should be explicit. Confirm promotion/rejection or proposal acceptance before changing durable state.")
+  if (/\/akm-memory-(promote|reject)\b/.test(expanded) && !/\b(confirm|approved|approval)\b/i.test(expanded)) {
+    return emitHookContext("UserPromptExpansion", "AKM note: mutating memory flows should be explicit. Confirm promotion/rejection before changing durable state.")
   }
   if (PROPOSAL_FLOW_RE.test(expanded)) ensureFreshProposalCheckpoint(rawInput)
   if (/\/akm-/.test(expanded)) {
