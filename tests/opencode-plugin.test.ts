@@ -4018,10 +4018,10 @@ describe("akm-opencode plugin", () => {
 
       expect(JSON.parse(result)).toEqual({
         ok: false,
-        // The constant string was widened to honestly reflect the custom matcher
-        // (which accepts 0.8.x prereleases). Strict `^0.8.0` would NOT match
-        // 0.8.0-rc.5; the disjunction documents what the matcher really does.
-        error: "AKM CLI ^0.8.0 || ^0.8.0-rc0 is required, but no compatible bundled or PATH 'akm' executable was found. Reinstall or update the akm-opencode plugin so OpenCode/Bun installs the dependency.",
+        // Range comes from the shared akm-version module (single source of truth,
+        // also used by the Claude hook). 0.7.9 is below the floor, so the probe
+        // reports the full supported range in the diagnostic.
+        error: "AKM CLI ^0.8.0-rc.0 || ^0.8.0 || ^0.9.0-beta.0 || ^0.9.0 is required, but no compatible bundled or PATH 'akm' executable was found. Reinstall or update the akm-opencode plugin so OpenCode/Bun installs the dependency.",
       })
       expect(
         mockExecFileSync.mock.calls.some(

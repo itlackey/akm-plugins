@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../claude/shared/feedback-signals"
 import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates, updateCandidateStatus } from "../claude/shared/memory-candidates"
 import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../claude/shared/memory-events"
+import { AKM_VERSION_RANGE, satisfiesAkmVersionRange } from "../claude/shared/akm-version"
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject, redactSecrets } from "../claude/shared/redaction"
 import { extractAkmRefsFromString } from "../claude/shared/ref-extraction"
@@ -40,11 +41,11 @@ export function __resetResolvedAkmForTests(): void {
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b/
-// Note: satisfiesAkmVersionRange() implements a custom matcher that accepts
-// any 0.8.x release including prereleases (0.8.0-rc.5, 0.8.0-beta.2, etc.).
-// Strict semver `^0.8.0` would NOT match prereleases, so the constant string
-// is widened to honestly reflect what the matcher accepts.
-const AKM_REQUIRED_VERSION_RANGE = "^0.8.0 || ^0.8.0-rc0"
+// The version contract lives in the shared module (also used by the Claude
+// hook). satisfiesAkmVersionRange() routes through the same vendored semver
+// matcher; AKM_REQUIRED_VERSION_RANGE is just the display alias used in the
+// diagnostics below.
+const AKM_REQUIRED_VERSION_RANGE = AKM_VERSION_RANGE
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
@@ -1723,13 +1724,6 @@ function probeCommand(command: ResolvedAkmCommand): CommandProbe {
     }
     return { ...command, exists: true, version: null, failureReason: code ?? "version_check_failed" }
   }
-}
-
-function satisfiesAkmVersionRange(version: string | null): boolean {
-  if (typeof version !== "string") return false
-  const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/)
-  if (!match) return false
-  return Number(match[1]) === 0 && Number(match[2]) === 8
 }
 
 function getBundledAkmCommand(): string | null {

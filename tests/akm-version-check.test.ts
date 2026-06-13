@@ -128,6 +128,15 @@ describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
     expect(result.installLog).toBe("")
   })
 
+  it("returns ok and is silent for 0.9.x including prereleases (0.9.0-beta.6)", () => {
+    for (const v of ["0.9.0", "0.9.5", "0.9.0-beta.6"]) {
+      const result = runHookSandboxed(["ensure-akm"], { akmVersion: v })
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).not.toContain("akm-plugin:")
+      expect(result.installLog).toBe("")
+    }
+  })
+
   it("accepts AKM_LOCAL_BUILD_CLI when pointed at a local dist build executed via Bun", () => {
     const tempDir = makeTempDir()
     const localCli = path.join(tempDir, "dist", "cli.js")

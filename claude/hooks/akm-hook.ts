@@ -3,7 +3,8 @@
 import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
-import { satisfies, valid } from "./vendor-semver"
+import { AKM_VERSION_RANGE as AKM_REQUIRED_RANGE } from "../shared/akm-version"
+import { satisfies, valid } from "../shared/vendor-semver"
 import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
 import { appendCandidates, extractCandidatesFromText, getCandidateLogPath, readCandidates } from "../shared/memory-candidates"
 import { appendMemoryEvent, getEventLogPath, readJsonl, type AkmMemoryEvent } from "../shared/memory-events"
@@ -51,21 +52,13 @@ function resolveModel(raw: string | null | undefined): string | null {
   if (mapped) return mapped
   return "sonnet" // unknown alias → safe fallback
 }
-// Two separate constants for two separate concerns:
-//   AKM_REQUIRED_RANGE — used with semver.satisfies() to validate the
-//     installed version. The disjunction is fine here because semver-node
-//     parses `^0.8.0-rc0 || ^0.8.0` as a real range.
-//   AKM_PACKAGE_REF    — used as the install ref. Bun/npm install spec does
-//     NOT parse `akm-cli@^0.8.0-rc0 || ^0.8.0` as a disjunction; it would
-//     splat into three argv tokens and refuse the install. Keep a single
-//     clean range here. `^0.8.0` includes 0.8.0 and all 0.8.x patches; rc
-//     prereleases are still accepted by the validator above when the user
-//     pins a specific rc via AKM_PACKAGE_REF.
-// Use the dotted prerelease form (`rc.0`) so the lower bound accepts both
-// `0.8.0-rc.N` (npm-style) AND `0.8.0-rcN` (mono-style) identifiers. Strict
-// semver makes `0.8.0-rc.5` < `0.8.0-rc0`, so a mono-form lower bound would
-// silently reject every published RC of akm-cli (#70).
-const AKM_REQUIRED_RANGE = "^0.8.0-rc.0 || ^0.8.0"
+// AKM_REQUIRED_RANGE is the single shared version contract imported from
+// ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
+// is a SEPARATE concern: the install ref. Bun/npm install spec does NOT parse
+// `akm-cli@^0.8.0-rc0 || ^0.8.0` as a disjunction — it would splat into argv
+// tokens and refuse the install — so the package ref keeps a single clean
+// range. The validator above (satisfies) accepts the full disjunction; a user
+// can still pin a specific prerelease via AKM_PACKAGE_REF.
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.8.0"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
