@@ -42,10 +42,15 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
     stdin = Bun.file(inputPath)
   }
 
+  // Strip inherited AKM_* vars so the sandbox is hermetic — the hook must depend
+  // only on what each test sets, not the ambient/CI env (CI sets
+  // AKM_PLUGIN_NO_AUTO_DEFAULT=1, which otherwise leaks in and flips first-run
+  // auto-default behaviour: green locally, red in CI).
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("AKM_")))
   const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
     cwd: repoRoot,
     env: {
-      ...process.env,
+      ...baseEnv,
       ...options?.env,
     },
     stdio: [stdin, "pipe", "pipe"],

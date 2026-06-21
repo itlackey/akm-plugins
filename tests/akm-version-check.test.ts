@@ -97,9 +97,15 @@ exit 0
     ...opts.env,
   }
 
+  // Strip inherited AKM_* vars so the sandbox is truly hermetic: the hook's
+  // behaviour (e.g. the AKM_PLUGIN_NO_AUTO_DEFAULT opt-out) must depend ONLY on
+  // what this sandbox sets, not on the ambient/CI environment. (CI runners set
+  // AKM_PLUGIN_NO_AUTO_DEFAULT=1, which previously leaked in and flipped the
+  // first-run auto-default off — green locally, red in CI.)
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("AKM_")))
   const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: { ...baseEnv, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   })
 
