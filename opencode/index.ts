@@ -95,7 +95,8 @@ const sessionFinalMemoryCaptured = new Set<string>()
 // session is actively worked, we min-interval-gate per session — at most one
 // extract per AKM_EXTRACT_MIN_INTERVAL_MS. The akm content-hash ledger
 // (akm-cli #602 / ≥0.9.0-beta.33) further no-ops unchanged content for free.
-// The */30 extract cron remains the backstop for the final delta after the last turn.
+// The hourly `akm improve` extract pass (the periodic backstop) catches the
+// final delta after the last turn.
 const sessionLastExtractAt = new Map<string, number>()
 const AKM_EXTRACT_MIN_INTERVAL_MS = (() => {
   const raw = Number(process.env.AKM_EXTRACT_MIN_INTERVAL_MS)
@@ -1664,7 +1665,7 @@ function extractSessionIdFromEvent(payload: unknown): string | undefined {
  * burst of turns collapses to a single periodic checkpoint instead of flooding.
  * `extract --session-id` respects the content-hash ledger, so an extract landing
  * on unchanged content is a free no-op. Fire-and-forget (detached + unref'd) so
- * it never stalls the turn; the periodic extract cron remains the backstop for the final delta.
+ * it never stalls the turn; the hourly `akm improve` extract pass remains the backstop for the final delta.
  */
 function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, directory: string | undefined): void {
   const now = Date.now()

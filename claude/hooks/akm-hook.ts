@@ -1551,13 +1551,14 @@ function preToolAgent(): string {
 /**
  * SessionEnd → event-driven extraction. Fires `akm extract --type claude-code
  * --session-id <id>` for the just-ended session so its durable insights reach
- * the proposal queue in seconds instead of waiting for the periodic extract cron.
+ * the proposal queue in seconds instead of waiting for the periodic `akm improve` extract pass.
  *
  * Safe + idempotent: `--session-id` respects the content-hash ledger (akm
- * #602 / the beta.33 fix), so a re-fire or the cron later is a cheap skip with
- * zero LLM calls — no `--force`. Detached + unref'd so it never blocks session
- * close. Skipped on transient terminations (`clear`/`resume`) where the session
- * isn't really done; the cron remains the backstop for crashes that fire no hook.
+ * #602 / the beta.33 fix), so a re-fire or a later backstop run is a cheap skip
+ * with zero LLM calls — no `--force`. Detached + unref'd so it never blocks
+ * session close. Skipped on transient terminations (`clear`/`resume`) where the
+ * session isn't really done; the hourly `akm improve` extract pass remains the
+ * backstop for crashes that fire no hook.
  */
 function extractSession(): string {
   const raw = readStdin()
