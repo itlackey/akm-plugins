@@ -46,9 +46,15 @@ function runHookSandboxed(args: string[], opts: {
   const tempDir = makeTempDir()
   const binDir = path.join(tempDir, "bin")
   const stateDir = path.join(tempDir, "state")
+  const configDir = path.join(tempDir, "config")
+  const dataDir = path.join(tempDir, "data")
+  const cacheDir = path.join(tempDir, "cache")
   const installLog = path.join(tempDir, "install.log")
   mkdirSync(binDir, { recursive: true })
   mkdirSync(stateDir, { recursive: true })
+  mkdirSync(configDir, { recursive: true })
+  mkdirSync(dataDir, { recursive: true })
+  mkdirSync(cacheDir, { recursive: true })
 
   if (opts.akmVersion) {
     const fakeAkm = path.join(binDir, "akm")
@@ -90,16 +96,30 @@ exit 0
   // and akm cannot leak into the test. `/usr/bin:/bin` is appended because
   // bun (the runtime that executes the hook script) needs basic shell utils,
   // but bun/npm/akm are NOT on `/usr/bin` on any reasonable dev box.
+  // Pin EVERY XDG base dir into the sandbox. getAkmConfigPath() reads
+  // XDG_CONFIG_HOME — if the CI runner sets it to a config that already has
+  // defaults.agent, the first-run auto-default never fires (green locally where
+  // XDG_CONFIG_HOME is unset, red in CI). Pinning all of them makes config/data
+  // reads hermetic regardless of the ambient environment.
   const env = {
     HOME: tempDir,
     PATH: `${binDir}:/usr/bin:/bin`,
     XDG_STATE_HOME: stateDir,
+    XDG_CONFIG_HOME: configDir,
+    XDG_DATA_HOME: dataDir,
+    XDG_CACHE_HOME: cacheDir,
     ...opts.env,
   }
 
+  // Strip inherited AKM_* vars so the sandbox is truly hermetic: the hook's
+  // behaviour (e.g. the AKM_PLUGIN_NO_AUTO_DEFAULT opt-out) must depend ONLY on
+  // what this sandbox sets, not on the ambient/CI environment. (CI runners set
+  // AKM_PLUGIN_NO_AUTO_DEFAULT=1, which previously leaked in and flipped the
+  // first-run auto-default off — green locally, red in CI.)
+  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("AKM_")))
   const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: { ...baseEnv, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   })
 

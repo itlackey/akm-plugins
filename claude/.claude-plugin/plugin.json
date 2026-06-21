@@ -350,6 +350,11 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-end",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" extract-session",
+            "timeout": 10
           }
         ]
       }

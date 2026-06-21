@@ -4030,4 +4030,30 @@ describe("akm-opencode plugin", () => {
       ).toBe(false)
     })
   })
+
+  describe("event-driven extraction (session.idle, min-interval gate)", () => {
+    const extractSpawnCalls = () =>
+      mockSpawn.mock.calls.filter(
+        (c: unknown[]) =>
+          Array.isArray(c[1]) && (c[1] as string[]).includes("extract") && (c[1] as string[]).includes("--session-id"),
+      )
+
+    it("extracts on session.idle once, then min-interval-gates a rapid second idle", async () => {
+      mockSpawn.mockClear()
+      const hooks = await AkmPlugin(createPluginInput())
+      const idle = (sid: string) =>
+        hooks.event!({ event: { type: "session.idle", properties: { sessionID: sid } } } as any)
+
+      await idle("sess-extract-1")
+      // First idle → exactly one `extract --type opencode --session-id` spawn.
+      expect(extractSpawnCalls().length).toBe(1)
+      const args = extractSpawnCalls()[0][1] as string[]
+      expect(args).toContain("opencode")
+      expect(args[args.indexOf("--session-id") + 1]).toBe("sess-extract-1")
+
+      // A rapid second idle within the min-interval must NOT spawn another extract.
+      await idle("sess-extract-1")
+      expect(extractSpawnCalls().length).toBe(1)
+    })
+  })
 })

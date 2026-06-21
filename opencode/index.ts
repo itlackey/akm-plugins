@@ -90,6 +90,17 @@ type SessionBufferEntry = {
 }
 const sessionBuffer = new Map<string, SessionBufferEntry[]>()
 const sessionFinalMemoryCaptured = new Set<string>()
+// Event-driven extraction (opencode): opencode has no true "session end" event
+// and `session.idle` fires after EVERY turn. To avoid flooding extract while a
+// session is actively worked, we min-interval-gate per session — at most one
+// extract per AKM_EXTRACT_MIN_INTERVAL_MS. The akm content-hash ledger
+// (akm-cli #602 / ≥0.9.0-beta.33) further no-ops unchanged content for free.
+// The */30 extract cron remains the backstop for the final delta after the last turn.
+const sessionLastExtractAt = new Map<string, number>()
+const AKM_EXTRACT_MIN_INTERVAL_MS = (() => {
+  const raw = Number(process.env.AKM_EXTRACT_MIN_INTERVAL_MS)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 10 * 60 * 1000 // default 10 min
+})()
 const sessionSuccessfulAssetTouchCount = new Map<string, number>()
 const pendingProposalSummaryCache = new Map<string, { count: number; expiresAt: number; unsupported?: boolean }>()
 const retrospectiveState = new Map<string, { recentRefs: string[]; lastNegativeSignalAt?: number }>()
@@ -1646,6 +1657,56 @@ function extractSessionIdFromEvent(payload: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * Event-driven extraction trigger for opencode (Option #3: min-interval gate).
+ * Called on `session.idle` (which fires after every turn). Extracts the session
+ * into the proposal queue at most once per AKM_EXTRACT_MIN_INTERVAL_MS, so a
+ * burst of turns collapses to a single periodic checkpoint instead of flooding.
+ * `extract --session-id` respects the content-hash ledger, so an extract landing
+ * on unchanged content is a free no-op. Fire-and-forget (detached + unref'd) so
+ * it never stalls the turn; the periodic extract cron remains the backstop for the final delta.
+ */
+function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, directory: string | undefined): void {
+  const now = Date.now()
+  const last = sessionLastExtractAt.get(sid) ?? 0
+  if (now - last < AKM_EXTRACT_MIN_INTERVAL_MS) return
+  const command = resolveAkmCommand()
+  if (typeof command === "object" && "ok" in command) return // akm unavailable — cron backstop covers it
+  sessionLastExtractAt.set(sid, now)
+  try {
+    const child = spawn(command.command, [...command.argsPrefix, "extract", "--type", "opencode", "--session-id", sid], {
+      detached: true,
+      stdio: "ignore",
+    })
+    child.on("exit", (code, signal) => {
+      if ((typeof code === "number" && code !== 0) || signal) {
+        void writePluginLog(client, "warn", "AKM extract failed", {
+          subsystem: "extract",
+          sessionID: sid,
+          directory,
+          error: signal ? `akm extract exited via signal ${signal}` : `akm extract exited with code ${code}`,
+        })
+      }
+    })
+    child.on("error", (error) => {
+      void writePluginLog(client, "warn", "AKM extract failed", {
+        subsystem: "extract",
+        sessionID: sid,
+        directory,
+        error: formatCliError(error),
+      })
+    })
+    child.unref()
+  } catch (error: unknown) {
+    void writePluginLog(client, "warn", "AKM extract failed", {
+      subsystem: "extract",
+      sessionID: sid,
+      directory,
+      error: formatCliError(error),
+    })
+  }
+}
+
 function extractFirstSemverMatch(value: string): string | null {
   return value.match(SEMVER_PATTERN)?.[0] ?? null
 }
@@ -2668,6 +2729,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             // Auto-signal so improve picks up this session memory on the next run.
             runCliSyncRaw(["feedback", captured, "--positive", "--reason", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
           }
+          // Event-driven extraction: only on session.idle (per-turn quiescence),
+          // min-interval-gated so it doesn't flood. Not on compacted/deleted.
+          if (type === "session.idle") {
+            maybeExtractSessionOnIdle(logClient, sid, directory)
+          }
           if (type === "session.compacted") {
             writeStructuredEvent({
               event: "post_compact_summary",
@@ -2692,6 +2758,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             sessionFinalMemoryCaptured.delete(sid)
             sessionSuccessfulAssetTouchCount.delete(sid)
             sessionBuffer.delete(sid)
+            sessionLastExtractAt.delete(sid)
           }
         }
       } catch (error: unknown) {
