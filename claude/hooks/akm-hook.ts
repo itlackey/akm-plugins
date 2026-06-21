@@ -1548,6 +1548,38 @@ function preToolAgent(): string {
   })
 }
 
+/**
+ * SessionEnd → event-driven extraction. Fires `akm extract --type claude-code
+ * --session-id <id>` for the just-ended session so its durable insights reach
+ * the proposal queue in seconds instead of waiting for the periodic extract cron.
+ *
+ * Safe + idempotent: `--session-id` respects the content-hash ledger (akm
+ * #602 / the beta.33 fix), so a re-fire or the cron later is a cheap skip with
+ * zero LLM calls — no `--force`. Detached + unref'd so it never blocks session
+ * close. Skipped on transient terminations (`clear`/`resume`) where the session
+ * isn't really done; the cron remains the backstop for crashes that fire no hook.
+ */
+function extractSession(): string {
+  const raw = readStdin()
+  const sid = extractSessionId(raw)
+  if (!sid) return ""
+  const reason = safeJsonParse<Record<string, unknown>>(raw)?.reason
+  if (reason === "clear" || reason === "resume") return ""
+  const akm = resolveAkmCommandSpec()
+  if (!akm) return ""
+  try {
+    const child = spawn(
+      akm.command,
+      [...akm.argsPrefix, "extract", "--type", "claude-code", "--session-id", sid],
+      { detached: true, stdio: "ignore" },
+    )
+    child.unref()
+  } catch {
+    // Best-effort: a failed spawn must never block session close; the cron backstop covers it.
+  }
+  return ""
+}
+
 async function main(): Promise<string> {
   switch (COMMAND) {
     case "ensure-akm":
@@ -1591,6 +1623,8 @@ async function main(): Promise<string> {
       return postCompact()
     case "session-end":
       return sessionEnd()
+    case "extract-session":
+      return extractSession()
     case "post-tool":
       recordPostTool()
       return ""

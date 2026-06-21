@@ -154,6 +154,8 @@ describe("Claude plugin metadata", () => {
     expect(plugin.hooks.PostCompact[0].hooks[0].command as string).toContain("post-compact")
     expect(plugin.hooks.PostToolBatch[0].hooks[0].command as string).toContain("post-tool-batch")
     expect(plugin.hooks.SessionEnd[0].hooks[0].command as string).toContain("session-end")
+    // SessionEnd also fires event-driven extraction for the just-ended session.
+    expect(plugin.hooks.SessionEnd[0].hooks[1].command as string).toContain("extract-session")
 
     expect(hookSource).toContain('from "../shared/feedback-signals"')
     expect(hookSource).toContain('from "../shared/memory-candidates"')
@@ -340,6 +342,23 @@ exit 0
 
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.8.3")
+  })
+
+  it("extract-session dispatches cleanly and returns no output (fire-and-forget)", () => {
+    const tempDir = makeTempDir()
+    // No `akm` on PATH → resolveAkmCommandSpec() is null → handler is a clean no-op.
+    const env = { HOME: tempDir, PATH: "/usr/bin:/bin", XDG_STATE_HOME: path.join(tempDir, "state") }
+    // Normal termination: dispatch must succeed and emit nothing on stdout.
+    expect(
+      runHook(["extract-session"], {
+        input: JSON.stringify({ session_id: "abc-123", reason: "other", transcript_path: "/dev/null" }),
+        env,
+      }),
+    ).toBe("")
+    // Transient terminations (clear/resume) are skipped — also clean + empty.
+    expect(runHook(["extract-session"], { input: JSON.stringify({ session_id: "abc-123", reason: "clear" }), env })).toBe(
+      "",
+    )
   })
 
   it("records user feedback and memory intent from prompt submissions", () => {
