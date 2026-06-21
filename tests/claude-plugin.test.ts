@@ -42,11 +42,15 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
     stdin = Bun.file(inputPath)
   }
 
-  // Strip inherited AKM_* vars so the sandbox is hermetic — the hook must depend
-  // only on what each test sets, not the ambient/CI env (CI sets
-  // AKM_PLUGIN_NO_AUTO_DEFAULT=1, which otherwise leaks in and flips first-run
-  // auto-default behaviour: green locally, red in CI).
-  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("AKM_")))
+  // Strip inherited AKM_* and XDG_* vars so the sandbox is hermetic — the hook
+  // must depend only on what each test sets, not the ambient/CI env. CI sets
+  // AKM_PLUGIN_NO_AUTO_DEFAULT=1 (flips first-run auto-default) and may set
+  // XDG_CONFIG_HOME to a config that already has defaults.agent (getAkmConfigPath
+  // reads it, suppressing the first-run write): both are green locally, red in CI.
+  // With XDG_* stripped, unset-by-test XDG dirs fall back to the sandbox HOME.
+  const baseEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith("AKM_") && !key.startsWith("XDG_")),
+  )
   const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
     cwd: repoRoot,
     env: {
