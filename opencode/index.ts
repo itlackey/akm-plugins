@@ -3480,9 +3480,12 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       },
       async execute({ query, limit, detail }, context) {
         const args = ["curate", query, "--limit", String(limit ?? 6)]
-        // `summary` is a shape (projection) in 0.9.0; `normal`/`full` are
-        // verbosity (`--detail`). `--detail summary` is a hard error post-0.9.
-        if (detail === "summary") args.push("--shape", "summary")
+        // 0.9.0 detail values are brief|normal|full; the `summary` shape is
+        // valid ONLY on `akm show` (curate rejects `--shape summary` with
+        // INVALID_SHAPE_VALUE, and `--detail summary` with INVALID_DETAIL_VALUE).
+        // Map this tool's friendly "summary" level to the most concise valid
+        // curate detail, `brief`.
+        if (detail === "summary") args.push("--detail", "brief")
         else if (detail) args.push("--detail", detail)
         args.push(...buildScopedArgs(context as unknown as Record<string, unknown>))
         return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_curate", sessionID: context.sessionID, directory: context.directory })

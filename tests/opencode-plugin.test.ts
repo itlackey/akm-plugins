@@ -807,6 +807,23 @@ describe("akm-opencode plugin", () => {
       expect(args.filter((value) => value === "--format")).toHaveLength(1)
     })
 
+    it("akm_curate maps detail 'summary' to '--detail brief', never '--shape summary'", async () => {
+      // 0.9.0: `--shape summary` is valid ONLY on `akm show` (curate rejects it
+      // with INVALID_SHAPE_VALUE), and `--detail summary` is INVALID_DETAIL_VALUE.
+      // This tool's friendly "summary" level must map to the concise valid
+      // curate detail, `brief`. Regression guard for that hard-error.
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_curate.execute(
+        { query: "deploy the app", detail: "summary" } as any,
+        {} as any,
+      )
+
+      const [, args] = mockExecFileSync.mock.calls.at(-1) as [string, string[]]
+      expect(args).toEqual(expect.arrayContaining(["--detail", "brief"]))
+      expect(args).not.toContain("--shape")
+      expect(args.filter((value, i) => value === "summary" && args[i - 1] !== "deploy the app")).toHaveLength(0)
+    })
+
     it("akm_evolve dispatches the curator prompt through a child session", async () => {
       const client = createMockClient()
       const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
