@@ -1852,18 +1852,28 @@ let lastAkmResolutionTrail: AkmResolutionTrail = []
 
 function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displayCommand: string; version: string; source: "bundled" | "path" | "local_build" } | null {
   const candidates: Array<{ command: string; argsPrefix: string[]; displayCommand: string; source: "bundled" | "path" | "local_build" }> = []
-  // Opt-out (default off): force the plugin to ignore its bundled akm-cli and
-  // fall through to AKM_LOCAL_BUILD_CLI / PATH. Used by the eval harness so a
-  // deterministic fake `akm` on PATH wins over the real bundled dependency;
-  // also a useful escape hatch when a bundled dep is broken.
-  const ignoreBundled = process.env.AKM_OPENCODE_IGNORE_BUNDLED_CLI === "1"
-  const bundled = ignoreBundled ? null : getBundledAkmCommand()
-  if (bundled) candidates.push({ command: bundled, argsPrefix: [], displayCommand: bundled, source: "bundled" })
+  // Resolution precedence — first compatible candidate wins:
+  //   1. AKM_LOCAL_BUILD_CLI  — explicit dev override
+  //   2. PATH / user installs — the akm the user actually installed, which wrote
+  //      their config and has its native deps (e.g. embeddings) built
+  //   3. bundled akm-cli      — last-resort fallback for users with no akm
+  // The bundled CLI is deliberately LAST: preferring it over the user's own
+  // install would ignore a newer user akm that understands a newer config and
+  // route through a bundled copy whose native postinstalls may be unbuilt. A
+  // config-INCOMPATIBLE candidate fails its `--version` probe — older akm builds
+  // validate config on every invocation and exit non-zero — so it is skipped
+  // silently and the version probe doubles as a config-compatibility gate.
   const localBuild = getLocalBuildAkmCommand()
   if (localBuild) candidates.push({ ...localBuild, source: "local_build" })
   for (const command of getPathAkmCandidates()) {
     candidates.push({ command, argsPrefix: [], displayCommand: command, source: "path" })
   }
+  // Opt-out (default off): drop the bundled fallback entirely. Used by the eval
+  // harness so a deterministic fake `akm` on PATH is the only candidate; also a
+  // useful escape hatch when the bundled dep is broken.
+  const ignoreBundled = process.env.AKM_OPENCODE_IGNORE_BUNDLED_CLI === "1"
+  const bundled = ignoreBundled ? null : getBundledAkmCommand()
+  if (bundled) candidates.push({ command: bundled, argsPrefix: [], displayCommand: bundled, source: "bundled" })
 
   const trail: AkmResolutionTrail = []
   const seen = new Set<string>()
