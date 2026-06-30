@@ -1770,9 +1770,19 @@ function probeCommand(command: ResolvedAkmCommand): CommandProbe {
     return { ...command, exists: false, version: null, failureReason: "command_not_on_disk" }
   }
   try {
+    // Pipe (don't inherit) the child's stderr. Some akm builds validate the
+    // user's config on EVERY invocation — including `--version` — and a version
+    // skew (e.g. a bundled akm-cli@0.8.x against a config written by 0.9.x, whose
+    // improve process keys 0.8 rejects) makes `--version` exit non-zero and print
+    // an INVALID_CONFIG_FILE blob to stderr. With the default inherited stderr
+    // that blob leaks to OpenCode's console on every plugin load, reading as a
+    // plugin failure even though resolution correctly falls through to a
+    // compatible akm. Capturing it keeps the probe silent; the structured
+    // resolution trail / consent banner still surfaces a genuine no-akm case.
     const version = execResolvedAkm(command, ["--version"], {
       encoding: "utf8",
       timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
     })
     const parsed = extractFirstSemverMatch(version)
     if (!parsed) {
