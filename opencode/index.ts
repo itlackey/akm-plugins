@@ -1071,6 +1071,47 @@ async function maybeIndexSessionMemory(
   })
 }
 
+// 03-R1/06-M1 kept half: the session_checkpoint `remember --force` write is
+// gone, but the memory-candidate pipeline (candidates -> /akm-memory-promote,
+// an owner-gated reference rung) still harvests explicit "remember ..." intents
+// from the session buffer at session end. No stash write — candidates land in
+// the candidate log for review only. Deleting the buffer after extraction is
+// the de-dup: a re-fired terminal event finds an empty buffer and no-ops.
+function maybeExtractSessionCandidates(sessionID: string, reason: string): void {
+  if (!AKM_AUTO_MEMORY) return
+  if (!sessionID) return
+  const entries = sessionBuffer.get(sessionID) ?? []
+  // Require at least two observations before persisting — single events are noise.
+  if (entries.length < 2) {
+    sessionBuffer.delete(sessionID)
+    return
+  }
+  const targetRefHints = entries.flatMap((entry) => (entry.ref ? [entry.ref] : []))
+  const text = entries
+    .filter((entry) => entry.kind === "memory-intent" && entry.note)
+    .map((entry) => entry.note as string)
+    .join("\n")
+  const candidates = extractCandidatesFromText({
+    harness: "opencode",
+    sessionId: sessionID,
+    text,
+    evidence: [reason, ...targetRefHints],
+    sourcePaths: [OPENCODE_EVENT_LOG, OPENCODE_CANDIDATE_LOG],
+    targetRefHints,
+  })
+  if (candidates.length > 0) {
+    appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
+    void writeStructuredEvent({
+      event: "candidate_extracted",
+      sessionId: sessionID,
+      scope: buildEventScope(sessionID),
+      memory: { count: candidates.length },
+      outcome: { status: "ok" },
+    })
+  }
+  sessionBuffer.delete(sessionID)
+}
+
 const AKM_REF_EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"])
 
 function normalizeExtractedRef(ref: string): string {
@@ -2458,6 +2499,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           // Drop per-session state so a re-created session does not inherit
           // stale hints/curation.
           if (type === "session.deleted") {
+            // Salvage explicit memory-candidate intents before the buffer is
+            // discarded (03-R1/06-M1: candidate harvest, no session_checkpoint write).
+            maybeExtractSessionCandidates(sid, type)
             sessionHints.delete(sid)
             sessionCurated.delete(sid)
             sessionCuratedFile.delete(sid)
@@ -2482,7 +2526,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       try {
         const sid = extractSessionIdFromEvent(input)
         if (!sid) return
-        // 03-R1/06-M1: session_checkpoint write removed; keep the reindex.
+        // 03-R1/06-M1: session_checkpoint write removed; keep the reindex and
+        // the owner-gated memory-candidate harvest (no stash write).
+        maybeExtractSessionCandidates(sid, "stop")
         await maybeIndexSessionMemory(logClient, sid, "stop", "")
       } catch (error: unknown) {
         await logHookFailure(logClient, "stop", error)
