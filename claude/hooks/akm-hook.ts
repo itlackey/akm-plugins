@@ -21,7 +21,7 @@ const MODE = process.argv[3] ?? ""
 // `gpt-4o`, or full-ID prefixes like `anthropic/...` and `lab/...`) gets
 // remapped via MODEL_ALIAS_MAP or falls back to `sonnet` so the Agent tool
 // dispatch is never rejected upstream.
-const CC_VALID_MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "inherit"])
+const CC_VALID_MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "fable", "inherit"])
 const MODEL_ALIAS_MAP: Record<string, string> = {
   balanced: "sonnet",
   fast: "haiku",
@@ -1311,7 +1311,7 @@ function preToolAgent(): string {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
-      updatedInput: { model: resolved },
+      updatedInput: { ...toolInput, model: resolved },
     },
   })
 }

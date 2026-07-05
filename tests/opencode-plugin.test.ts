@@ -2183,34 +2183,7 @@ describe("akm-opencode plugin", () => {
       expect(positiveRetroCalls).toEqual([])
     })
 
-    it("captures a session memory on stop when the buffer has enough entries", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-
-      // Seed the session buffer with two tool refs.
-      await hooks["tool.execute.after"]!(
-        { tool: "akm_show", sessionID: "session-capture-1", callID: "c1", args: { ref: "skill:alpha" } } as any,
-        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:alpha" }), metadata: {} } as any,
-      )
-      await hooks["tool.execute.after"]!(
-        { tool: "akm_show", sessionID: "session-capture-1", callID: "c2", args: { ref: "skill:beta" } } as any,
-        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:beta" }), metadata: {} } as any,
-      )
-
-      mockExecFileSync.mockClear()
-      await hooks.stop!({ sessionID: "session-capture-1" } as any)
-
-      const rememberCall = (mockExecFileSync.mock.calls as any[]).find(
-        ([, args]) => Array.isArray(args) && args.includes("remember"),
-      )
-      expect(rememberCall).toBeDefined()
-      const rememberArgs = rememberCall![1] as string[]
-      const nameFlag = rememberArgs.indexOf("--name")
-      expect(nameFlag).toBeGreaterThan(-1)
-      expect(rememberArgs[nameFlag + 1]).toMatch(/^opencode-session-/)
-      expect(rememberArgs).toContain("--force")
-    })
-
-    it("runs akm index after capturing a session memory when enabled", async () => {
+    it("runs akm index on stop WITHOUT a session_checkpoint write (03-R1/06-M1)", async () => {
       await withEnvVar("AKM_INDEX_ON_SESSION_END", "1", async () => {
         const hooks = await AkmPlugin(createPluginInput())
 
@@ -2227,12 +2200,13 @@ describe("akm-opencode plugin", () => {
         await hooks.stop!({ sessionID: "session-index-1" } as any)
 
         const calls = mockExecFileSync.mock.calls as Array<[string, string[]]>
-        const rememberIndex = calls.findIndex(([, args]) => Array.isArray(args) && args.includes("remember"))
+        const rememberCalls = calls.filter(([, args]) => Array.isArray(args) && args.includes("remember"))
         const indexCalls = calls.filter(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")
 
-        expect(rememberIndex).toBeGreaterThan(-1)
+        // The session_checkpoint `remember --force` write is deleted...
+        expect(rememberCalls).toHaveLength(0)
+        // ...but the freshness reindex on session-end survives.
         expect(indexCalls).toHaveLength(1)
-        expect(calls.findIndex(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")).toBeGreaterThan(rememberIndex)
       })
     })
 
@@ -2267,94 +2241,6 @@ describe("akm-opencode plugin", () => {
         expect(failureLog?.[0].body.level).toBe("warn")
         expect(failureLog?.[0].body.extra?.sessionID).toBe("session-index-2")
       })
-    })
-
-    it("captures checkpoint memories mid-session without losing the final session summary", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      mockExecFileSync.mockClear()
-
-      for (let index = 0; index < 8; index += 1) {
-        await hooks["tool.execute.after"]!(
-          {
-            tool: "akm_show",
-            sessionID: "session-checkpoint-1",
-            callID: `c${index}`,
-            args: { ref: `skill:asset-${index}` },
-          } as any,
-          {
-            title: "show",
-            output: JSON.stringify({ type: "skill", ref: `skill:asset-${index}` }),
-            metadata: {},
-          } as any,
-        )
-      }
-
-      const checkpointCall = (mockExecFileSync.mock.calls as any[]).find(
-        ([, args]) => Array.isArray(args) && args.includes("remember") && args.some((arg: string) => arg.startsWith("opencode-checkpoint-")),
-      )
-      expect(checkpointCall).toBeDefined()
-      expect(checkpointCall?.[1]).toContain("--run")
-      expect(checkpointCall?.[1]).toContain("session-checkpoint-1")
-
-      await hooks.stop!({ sessionID: "session-checkpoint-1" } as any)
-
-      const finalCall = (mockExecFileSync.mock.calls as any[]).find(
-        ([, args]) => Array.isArray(args) && args.includes("remember") && args.some((arg: string) => arg.startsWith("opencode-session-")),
-      )
-      expect(finalCall).toBeDefined()
-      const stopRememberInput = ((finalCall?.[2] as { input?: string } | undefined)?.input) ?? ""
-      expect(stopRememberInput).toContain("## Full-detail evidence files")
-      expect(stopRememberInput).toContain("events.jsonl")
-      expect(stopRememberInput).toContain("memory-candidates.jsonl")
-      expect(stopRememberInput).toContain("opencode/log")
-      expect(stopRememberInput).toContain("## Evidence aggregates")
-    })
-
-    it("does not re-capture already checkpointed entries until new successful refs arrive", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      mockExecFileSync.mockClear()
-
-      for (let index = 0; index < 8; index += 1) {
-        await hooks["tool.execute.after"]!(
-          {
-            tool: "akm_show",
-            sessionID: "session-checkpoint-2",
-            callID: `c${index}`,
-            args: { ref: `skill:asset-${index}` },
-          } as any,
-          {
-            title: "show",
-            output: JSON.stringify({ type: "skill", ref: `skill:asset-${index}` }),
-            metadata: {},
-          } as any,
-        )
-      }
-
-      const checkpointCallsAfterFirstBatch = (mockExecFileSync.mock.calls as any[]).filter(
-        ([, args]) => Array.isArray(args) && args.includes("remember") && args.some((arg: string) => arg.startsWith("opencode-checkpoint-")),
-      )
-      expect(checkpointCallsAfterFirstBatch).toHaveLength(1)
-
-      for (let index = 8; index < 15; index += 1) {
-        await hooks["tool.execute.after"]!(
-          {
-            tool: "akm_show",
-            sessionID: "session-checkpoint-2",
-            callID: `c${index}`,
-            args: { ref: `skill:asset-${index}` },
-          } as any,
-          {
-            title: "show",
-            output: JSON.stringify({ type: "skill", ref: `skill:asset-${index}` }),
-            metadata: {},
-          } as any,
-        )
-      }
-
-      const checkpointCallsAfterSecondBatch = (mockExecFileSync.mock.calls as any[]).filter(
-        ([, args]) => Array.isArray(args) && args.includes("remember") && args.some((arg: string) => arg.startsWith("opencode-checkpoint-")),
-      )
-      expect(checkpointCallsAfterSecondBatch).toHaveLength(1)
     })
 
     it("injects AKM shell environment variables for bash tools", async () => {
@@ -3149,62 +3035,6 @@ describe("akm-opencode plugin", () => {
         ["propose", "workflow", "release-checks", "--file", "./prompt.md", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
-    })
-
-    it("captures a fresh checkpoint before improve when there is uncheckpointed session evidence", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      mockExecFileSync.mockReturnValue("{\"ok\":true}")
-
-      await hooks["tool.execute.after"]!(
-        { tool: "akm_show", sessionID: "session-improve-prep", callID: "c1", args: { ref: "skill:deploy" } } as any,
-        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:deploy" }), metadata: {} } as any,
-      )
-      await hooks["tool.execute.after"]!(
-        { tool: "akm_show", sessionID: "session-improve-prep", callID: "c2", args: { ref: "skill:test" } } as any,
-        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
-      )
-
-      mockExecFileSync.mockClear()
-      await hooks.tool!.akm_improve.execute(
-        { scope: "skill:deploy" } as any,
-        createToolContext({ sessionID: "session-improve-prep" }),
-      )
-
-      const calls = mockExecFileSync.mock.calls as Array<[string, string[]]>
-      const rememberIndex = calls.findIndex(([, args]) => Array.isArray(args) && args.includes("remember") && args.some((arg) => arg.startsWith("opencode-checkpoint-")))
-      const indexIndex = calls.findIndex(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")
-      const improveIndex = calls.findIndex(([, args]) => Array.isArray(args) && args[0] === "improve")
-      expect(rememberIndex).toBeGreaterThan(-1)
-      expect(indexIndex).toBeGreaterThan(rememberIndex)
-      expect(improveIndex).toBeGreaterThan(indexIndex)
-    })
-
-    it("captures a fresh checkpoint before propose when there is uncheckpointed session evidence", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      mockExecFileSync.mockReturnValue("{\"ok\":true}")
-
-      await hooks["tool.execute.after"]!(
-        { tool: "akm_show", sessionID: "session-propose-prep", callID: "c1", args: { ref: "skill:deploy" } } as any,
-        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:deploy" }), metadata: {} } as any,
-      )
-      await hooks["tool.execute.after"]!(
-        { tool: "akm_show", sessionID: "session-propose-prep", callID: "c2", args: { ref: "skill:test" } } as any,
-        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
-      )
-
-      mockExecFileSync.mockClear()
-      await hooks.tool!.akm_propose.execute(
-        { type: "lesson", name: "release-checks", task: "capture release drift" } as any,
-        createToolContext({ sessionID: "session-propose-prep" }),
-      )
-
-      const calls = mockExecFileSync.mock.calls as Array<[string, string[]]>
-      const rememberIndex = calls.findIndex(([, args]) => Array.isArray(args) && args.includes("remember") && args.some((arg) => arg.startsWith("opencode-checkpoint-")))
-      const indexIndex = calls.findIndex(([, args]) => Array.isArray(args) && args.length === 1 && args[0] === "index")
-      const proposeIndex = calls.findIndex(([, args]) => Array.isArray(args) && args[0] === "propose")
-      expect(rememberIndex).toBeGreaterThan(-1)
-      expect(indexIndex).toBeGreaterThan(rememberIndex)
-      expect(proposeIndex).toBeGreaterThan(indexIndex)
     })
 
     it("akm_propose returns init/setup guidance when agent config is missing", async () => {
