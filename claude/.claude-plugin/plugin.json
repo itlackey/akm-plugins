@@ -266,28 +266,6 @@
         ]
       }
     ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory session-end",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory subagent-end",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
     "SubagentStart": [
       {
         "hooks": [
@@ -317,17 +295,6 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" task-completed",
             "timeout": 15
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" capture-memory pre-compact",
-            "timeout": 30
           }
         ]
       }
