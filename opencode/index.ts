@@ -55,7 +55,6 @@ const AKM_PENDING_PROPOSAL_TIMEOUT_MS = Math.max(500, (Number(process.env.AKM_PE
 const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
-const AKM_MEMORY_CHECKPOINT_EVERY = Math.max(1, Number(process.env.AKM_MEMORY_CHECKPOINT_EVERY ?? "8") || 8)
 const AKM_CURATOR_CONTEXT_MAX_CHARS = Math.max(500, Number(process.env.AKM_CURATOR_CONTEXT_MAX_CHARS ?? "4000") || 4000)
 const SESSION_DATE_TAG_LENGTH = 8
 const CHECKPOINT_DATE_TAG_LENGTH = 15
@@ -89,7 +88,6 @@ type SessionBufferEntry = {
   checkpointed?: boolean
 }
 const sessionBuffer = new Map<string, SessionBufferEntry[]>()
-const sessionFinalMemoryCaptured = new Set<string>()
 // Event-driven extraction (opencode): opencode has no true "session end" event
 // and `session.idle` fires after EVERY turn. To avoid flooding extract while a
 // session is actively worked, we min-interval-gate per session — at most one
@@ -102,7 +100,6 @@ const AKM_EXTRACT_MIN_INTERVAL_MS = (() => {
   const raw = Number(process.env.AKM_EXTRACT_MIN_INTERVAL_MS)
   return Number.isFinite(raw) && raw >= 0 ? raw : 10 * 60 * 1000 // default 10 min
 })()
-const sessionSuccessfulAssetTouchCount = new Map<string, number>()
 const pendingProposalSummaryCache = new Map<string, { count: number; expiresAt: number; unsupported?: boolean }>()
 const retrospectiveState = new Map<string, { recentRefs: string[]; lastNegativeSignalAt?: number }>()
 let cachedAkmStashDir: string | undefined
@@ -634,123 +631,8 @@ function buildScopedArgs(context: Record<string, unknown> | undefined): string[]
   return args
 }
 
-function getHarnessStatePaths(): { stateDir: string; eventLog: string; candidateLog: string; opencodeLogDir: string } {
-  const stateDir = path.dirname(OPENCODE_EVENT_LOG)
-  return {
-    stateDir,
-    eventLog: OPENCODE_EVENT_LOG,
-    candidateLog: OPENCODE_CANDIDATE_LOG,
-    opencodeLogDir: path.join(process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? ".", ".local", "share"), "opencode", "log"),
-  }
-}
-
-function formatPathBullet(label: string, filePath: string): string {
-  return `- ${label}: ${filePath}`
-}
-
-function countByValue(values: string[]): Array<[string, number]> {
-  const counts = new Map<string, number>()
-  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
-  return [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-}
-
-function uniqueRecent<T>(values: T[], key: (value: T) => string, limit: number): T[] {
-  const selected: T[] = []
-  const seen = new Set<string>()
-  for (let index = values.length - 1; index >= 0 && selected.length < limit; index -= 1) {
-    const value = values[index]
-    const id = key(value)
-    if (!id || seen.has(id)) continue
-    seen.add(id)
-    selected.push(value)
-  }
-  return selected.reverse()
-}
-
-function sessionHasPendingCheckpointEvidence(sessionID: string | undefined): boolean {
-  if (!sessionID) return false
-  return (sessionBuffer.get(sessionID) ?? []).some((entry) => !entry.checkpointed)
-}
-
-async function ensureFreshProposalCheckpoint(
-  client: LogCapableClient,
-  context: { sessionID?: string; directory?: string; agent?: string },
-  reason: string,
-): Promise<string | null> {
-  if (!context.sessionID || !sessionHasPendingCheckpointEvidence(context.sessionID)) return null
-  const ref = captureSessionMemory(context.sessionID, reason, { checkpoint: true })
-  if (!ref) return null
-  await writePluginLog(client, "info", "AKM proposal checkpoint captured", {
-    subsystem: "memory",
-    actor: "system",
-    sessionID: context.sessionID,
-    directory: context.directory,
-    agent: context.agent,
-    reason,
-    ref,
-  })
-  const indexResult = runCliSyncRaw(["index"], AKM_CURATE_TIMEOUT_MS)
-  if (!indexResult.ok) {
-    await writePluginLog(client, "warn", "AKM proposal checkpoint indexing failed", {
-      subsystem: "memory",
-      actor: "system",
-      sessionID: context.sessionID,
-      directory: context.directory,
-      agent: context.agent,
-      reason,
-      ref,
-      error: indexResult.error,
-    })
-  }
-  return ref
-}
-
 function truncateLine(value: string, maxChars = 220): string {
   return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}...`
-}
-
-function formatEvidenceSummary(events: AkmMemoryEvent[], candidates: ReturnType<typeof readCandidates>, entries: SessionBufferEntry[]): string[] {
-  const lines: string[] = []
-  const toolRefs = entries.filter((entry) => entry.kind === "tool-ref" && entry.ref)
-  const touchedRefs = countByValue(toolRefs.map((entry) => entry.ref!))
-  const toolNames = countByValue(toolRefs.map((entry) => entry.toolName ?? "tool"))
-  const statuses = countByValue(toolRefs.map((entry) => entry.status ?? "unknown"))
-  const eventTypes = countByValue(events.map((event) => event.event))
-  const candidateTypes = countByValue(candidates.map((candidate) => candidate.type))
-
-  lines.push("## Evidence aggregates")
-  lines.push(`- buffered observations: ${entries.length}`)
-  if (toolRefs.length > 0) lines.push(`- asset-touch observations: ${toolRefs.length}`)
-  if (touchedRefs.length > 0) lines.push(`- top refs: ${touchedRefs.slice(0, 5).map(([ref, count]) => `${ref} (${count})`).join(", ")}`)
-  if (toolNames.length > 0) lines.push(`- tools involved: ${toolNames.slice(0, 5).map(([name, count]) => `${name} (${count})`).join(", ")}`)
-  if (statuses.length > 0) lines.push(`- statuses: ${statuses.map(([status, count]) => `${status} (${count})`).join(", ")}`)
-  if (eventTypes.length > 0) lines.push(`- event types: ${eventTypes.slice(0, 6).map(([event, count]) => `${event} (${count})`).join(", ")}`)
-  if (candidateTypes.length > 0) lines.push(`- candidate types: ${candidateTypes.map(([type, count]) => `${type} (${count})`).join(", ")}`)
-  lines.push("")
-
-  const notableEvents = uniqueRecent(events, (event) => `${event.timestamp}:${event.event}:${(event.refs ?? []).join(",")}`, 5)
-  if (notableEvents.length > 0) {
-    lines.push("## Notable recent events")
-    for (const event of notableEvents) {
-      const status = event.outcome?.status ?? "unknown"
-      const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` refs=${event.refs.join(", ")}` : ""
-      const warning = event.outcome?.warnings?.[0] ? ` warning=${truncateLine(event.outcome.warnings[0], 120)}` : ""
-      lines.push(`- ${event.timestamp} ${event.event} (${status})${refs}${warning}`)
-    }
-    lines.push("")
-  }
-
-  const notableCandidates = uniqueRecent(candidates, (candidate) => candidate.id, 5)
-  if (notableCandidates.length > 0) {
-    lines.push("## Candidate highlights")
-    for (const candidate of notableCandidates) {
-      const target = candidate.targetRef ? ` target=${candidate.targetRef}` : ""
-      lines.push(`- [${candidate.status}] ${candidate.type}/${candidate.scope}${target} :: ${truncateLine(candidate.content, 180)}`)
-    }
-    lines.push("")
-  }
-
-  return lines
 }
 
 function runCurate(args: string[]): string | null {
@@ -1168,188 +1050,6 @@ function rememberTextAsMemory(name: string, body: string, context?: Record<strin
   } catch {
     return null
   }
-}
-
-function captureSessionMemory(
-  sessionID: string,
-  reason: string,
-  options?: { checkpoint?: boolean; directory?: string; agent?: string; channel?: string; userID?: string; user?: string },
-): string | null {
-  if (!AKM_AUTO_MEMORY) return null
-  if (!sessionID) return null
-  const isCheckpoint = options?.checkpoint === true
-  if (!isCheckpoint && sessionFinalMemoryCaptured.has(sessionID)) return null
-  const entries = sessionBuffer.get(sessionID) ?? []
-  const pendingEntries = isCheckpoint ? entries.filter((entry) => !entry.checkpointed) : entries
-  // Require at least two observations before persisting — single events are noise.
-  if (pendingEntries.length < 2) {
-    if (!isCheckpoint) sessionBuffer.delete(sessionID)
-    return null
-  }
-
-  const relatedEvents = readJsonl<AkmMemoryEvent>(OPENCODE_EVENT_LOG)
-    .filter((event) => event.sessionId === sessionID)
-    .slice(-12)
-  const relatedCandidates = readCandidates(OPENCODE_CANDIDATE_LOG)
-    .filter((candidate) => candidate.sessionId === sessionID)
-    .slice(-8)
-  const harnessPaths = getHarnessStatePaths()
-
-  const lines: string[] = []
-  lines.push("---")
-  lines.push("akm_memory_kind: session_checkpoint")
-  lines.push("harness: opencode")
-  lines.push(`session_id: ${sessionID}`)
-  lines.push(`reason: ${reason}`)
-  lines.push("---")
-  lines.push("")
-  lines.push(`# Session summary (${nowIso()})`)
-  lines.push(`Reason: ${reason}`)
-  lines.push(`Session: ${sessionID}`)
-  lines.push("")
-  lines.push("## Full-detail evidence files")
-  lines.push(formatPathBullet("OpenCode state dir", harnessPaths.stateDir))
-  lines.push(formatPathBullet("Structured event log", harnessPaths.eventLog))
-  lines.push(formatPathBullet("Memory candidate log", harnessPaths.candidateLog))
-  lines.push(formatPathBullet("OpenCode host log dir", harnessPaths.opencodeLogDir))
-  const harnessLog = process.env.AKM_EVAL_HARNESS_LOG?.trim()
-  if (harnessLog) lines.push(formatPathBullet("Harness log", harnessLog))
-  lines.push("")
-  lines.push(...formatEvidenceSummary(relatedEvents, relatedCandidates, pendingEntries))
-  for (const entry of pendingEntries) {
-    if (entry.kind === "memory-intent") {
-      lines.push(`## ${entry.timestamp} — user memory intent`)
-      if (entry.note) lines.push(entry.note)
-      lines.push("")
-    } else {
-      lines.push(`## ${entry.timestamp} — ${entry.toolName ?? "tool"} ${entry.status ?? "unknown"}`)
-      if (entry.ref) lines.push(`- ref: ${entry.ref}`)
-      if (entry.note) lines.push(`- note: ${entry.note}`)
-      lines.push("")
-    }
-  }
-  if (relatedEvents.length > 0) {
-    lines.push("## Plugin event summary")
-    for (const event of relatedEvents) {
-      const status = event.outcome?.status ?? "unknown"
-      const refs = Array.isArray(event.refs) && event.refs.length > 0 ? ` — refs: ${event.refs.join(", ")}` : ""
-      lines.push(`- ${event.timestamp} — ${event.event} (${status})${refs}`)
-    }
-    lines.push("")
-  }
-  if (relatedCandidates.length > 0) {
-    lines.push("## Memory candidates observed")
-    for (const candidate of relatedCandidates) {
-      lines.push(`- [${candidate.status}] ${candidate.type}/${candidate.scope}: ${candidate.content}`)
-    }
-    lines.push("")
-  }
-  const body = lines.join("\n")
-
-  const dateTag = buildDateTag({ includeTime: isCheckpoint })
-  const shortSid = sessionID.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 8) || "session"
-  const name = isCheckpoint
-    ? `opencode-checkpoint-${dateTag}-${shortSid}`
-    : `opencode-session-${dateTag}-${shortSid}`
-
-  const ref = rememberTextAsMemory(name, body, {
-    sessionID,
-    run: sessionID,
-    directory: options?.directory,
-    agent: options?.agent,
-    channel: options?.channel,
-    userID: options?.userID,
-    user: options?.user,
-  })
-  if (!ref) {
-    if (!isCheckpoint) {
-      sessionFinalMemoryCaptured.add(sessionID)
-      sessionBuffer.delete(sessionID)
-    }
-    return null
-  }
-
-  if (isCheckpoint) {
-    void writeStructuredEvent({
-      event: "pre_compact_checkpoint",
-      sessionId: sessionID,
-      scope: buildEventScope(sessionID),
-      memory: { ref, reason, kind: "session_checkpoint" },
-      refs: [ref],
-      outcome: { status: "ok" },
-    })
-    const targetRefHints = pendingEntries.flatMap((entry) => entry.ref ? [entry.ref] : [])
-    const candidates = extractCandidatesFromText({
-      harness: "opencode",
-      sessionId: sessionID,
-      text: body,
-      evidence: [ref, reason, ...targetRefHints],
-      sourcePaths: [harnessPaths.eventLog, harnessPaths.candidateLog],
-      targetRefHints,
-    })
-    if (candidates.length > 0) {
-      appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
-      void writeStructuredEvent({
-        event: "candidate_extracted",
-        sessionId: sessionID,
-        scope: buildEventScope(sessionID),
-        memory: { sourceRef: ref, count: candidates.length },
-        refs: [ref],
-        outcome: { status: "ok" },
-      })
-    }
-    for (const entry of entries) {
-      if (!entry.checkpointed) entry.checkpointed = true
-    }
-    sessionSuccessfulAssetTouchCount.set(sessionID, 0)
-    sessionBuffer.set(sessionID, entries)
-    return ref
-  }
-
-  sessionFinalMemoryCaptured.add(sessionID)
-  sessionBuffer.delete(sessionID)
-  void writeStructuredEvent({
-    event: "session_ended",
-    sessionId: sessionID,
-    scope: buildEventScope(sessionID),
-    memory: { ref, reason, kind: "session_checkpoint" },
-    refs: [ref],
-    outcome: { status: "ok" },
-  })
-  const targetRefHints = entries.flatMap((entry) => entry.ref ? [entry.ref] : [])
-  const candidates = extractCandidatesFromText({
-    harness: "opencode",
-    sessionId: sessionID,
-    text: body,
-    evidence: [ref, reason, ...targetRefHints],
-    sourcePaths: [harnessPaths.eventLog, harnessPaths.candidateLog],
-    targetRefHints,
-  })
-  if (candidates.length > 0) {
-    appendCandidates(OPENCODE_CANDIDATE_LOG, candidates)
-    void writeStructuredEvent({
-      event: "candidate_extracted",
-      sessionId: sessionID,
-      scope: buildEventScope(sessionID),
-      memory: { sourceRef: ref, count: candidates.length },
-      refs: [ref],
-      outcome: { status: "ok" },
-    })
-  }
-  return ref
-}
-
-function maybeCheckpointSessionMemory(
-  sessionID: string,
-  options?: { directory?: string; agent?: string; channel?: string; userID?: string; user?: string },
-): string | null {
-  const count = sessionSuccessfulAssetTouchCount.get(sessionID) ?? 0
-  if (count < AKM_MEMORY_CHECKPOINT_EVERY) return null
-  const captured = captureSessionMemory(sessionID, "checkpoint", { checkpoint: true, ...options })
-  if (!captured) {
-    sessionSuccessfulAssetTouchCount.set(sessionID, 0)
-  }
-  return captured
 }
 
 async function maybeIndexSessionMemory(
@@ -2737,19 +2437,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
         } else if (type === "session.compacted" || type === "session.idle" || type === "session.deleted") {
           if (!sid) return
-          const captured = captureSessionMemory(sid, type, { directory })
-          if (captured) {
-            await writePluginLog(logClient, "info", "AKM session memory captured", {
-              subsystem: "memory",
-              actor: "system",
-              sessionID: sid,
-              reason: type,
-              ref: captured,
-            })
-            await maybeIndexSessionMemory(logClient, sid, type, captured)
-            // Auto-signal so improve picks up this session memory on the next run.
-            runCliSyncRaw(["feedback", captured, "--positive", "--reason", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
-          }
+          // 03-R1/06-M1: the session_checkpoint `remember --force` write is
+          // removed. Keep the freshness reindex on session-end events so
+          // upstream inference/graph passes still run.
+          await maybeIndexSessionMemory(logClient, sid, type, "")
           // Event-driven extraction: only on session.idle (per-turn quiescence),
           // min-interval-gated so it doesn't flood. Not on compacted/deleted.
           if (type === "session.idle") {
@@ -2776,8 +2467,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             sessionContextInjectedEpoch.delete(sid)
             sessionCuratedVersion.delete(sid)
             sessionCuratedInjectedVersion.delete(sid)
-            sessionFinalMemoryCaptured.delete(sid)
-            sessionSuccessfulAssetTouchCount.delete(sid)
             sessionBuffer.delete(sid)
             sessionLastExtractAt.delete(sid)
           }
@@ -2793,19 +2482,8 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
       try {
         const sid = extractSessionIdFromEvent(input)
         if (!sid) return
-        const captured = captureSessionMemory(sid, "stop", { directory })
-        if (captured) {
-          await writePluginLog(logClient, "info", "AKM session memory captured", {
-            subsystem: "memory",
-            actor: "system",
-            sessionID: sid,
-            reason: "stop",
-            ref: captured,
-          })
-          await maybeIndexSessionMemory(logClient, sid, "stop", captured)
-          // Auto-signal so improve picks up this session memory on the next run.
-          runCliSyncRaw(["feedback", captured, "--positive", "--reason", "session checkpoint: auto-signal for improve eligibility"], AKM_CURATE_TIMEOUT_MS)
-        }
+        // 03-R1/06-M1: session_checkpoint write removed; keep the reindex.
+        await maybeIndexSessionMemory(logClient, sid, "stop", "")
       } catch (error: unknown) {
         await logHookFailure(logClient, "stop", error)
       }
@@ -3147,25 +2825,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               status: feedback ?? "unknown",
             })
           }
-          if (feedback === "positive") {
-            sessionSuccessfulAssetTouchCount.set(
-              input.sessionID,
-              (sessionSuccessfulAssetTouchCount.get(input.sessionID) ?? 0) + 1,
-            )
-            const checkpointRef = maybeCheckpointSessionMemory(input.sessionID, {
-              directory,
-              agent: input.tool,
-            })
-            if (checkpointRef) {
-              await writePluginLog(logClient, "info", "AKM checkpoint memory captured", {
-                subsystem: "memory",
-                actor: "system",
-                sessionID: input.sessionID,
-                reason: "checkpoint",
-                ref: checkpointRef,
-              })
-            }
-          }
         }
 
         if (
@@ -3365,7 +3024,7 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
     akm_memory: tool({
       description: "Audit AKM memory behavior, inspect pending candidates, and promote or reject candidates. Mutating actions require confirm:true.",
       args: {
-        action: tool.schema.enum(["audit", "candidates", "promote", "reject", "checkpoint", "sync"]).describe("Memory action."),
+        action: tool.schema.enum(["audit", "candidates", "promote", "reject", "sync"]).describe("Memory action."),
         candidate_id: tool.schema.string().optional().describe("Candidate id for promote/reject."),
         reason: tool.schema.string().optional().describe("Reason for rejection."),
         scope: tool.schema.enum(["last-prompt", "session", "refs", "safety"]).optional().describe("Audit scope."),
@@ -3401,17 +3060,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
             .filter((candidate) => !input.status || candidate.status === input.status)
             .filter((candidate) => !context.sessionID || candidate.sessionId === context.sessionID)
           return JSON.stringify({ ok: true, candidates })
-        }
-        if (input.action === "checkpoint") {
-          const ref = captureSessionMemory(context.sessionID, "manual-checkpoint", {
-            checkpoint: true,
-            directory: context.directory,
-            agent: context.agent,
-            channel: (context as Record<string, unknown>).channel as string | undefined,
-            userID: (context as Record<string, unknown>).userID as string | undefined,
-            user: (context as Record<string, unknown>).user as string | undefined,
-          })
-          return JSON.stringify({ ok: true, ref })
         }
         if (input.action === "sync") {
           return JSON.stringify({ ok: true, synced: true, events: readJsonl<AkmMemoryEvent>(OPENCODE_EVENT_LOG).length, candidates: readCandidates(OPENCODE_CANDIDATE_LOG).length })
@@ -3499,11 +3147,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         as_subtask: tool.schema.boolean().optional().describe("Run in a child session with parent context. Defaults to true."),
       },
       async execute({ focus, dispatch_agent, as_subtask }, context) {
-        await ensureFreshProposalCheckpoint(logClient, {
-          sessionID: context.sessionID,
-          directory: context.directory,
-          agent: context.agent,
-        }, "pre-evolve")
         const useSubtask = as_subtask ?? true
         const requestedAgent = dispatch_agent ?? "akm-curator"
         const targetAgent = await resolveDispatchAgent(sdkClient, requestedAgent, context.directory)
@@ -4233,13 +3876,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         dry_run: tool.schema.boolean().optional().describe("Show planned actions without generating proposals."),
       },
       async execute({ scope, task, dry_run }, context) {
-        if (!dry_run) {
-          await ensureFreshProposalCheckpoint(logClient, {
-            sessionID: context.sessionID,
-            directory: context.directory,
-            agent: context.agent,
-          }, "pre-improve")
-        }
         const args = ["improve"]
         if (scope) args.push(scope)
         if (task) args.push("--task", task)
@@ -4262,11 +3898,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const hasTask = !!task?.trim()
         const hasFile = !!file?.trim()
         if (hasTask === hasFile) return JSON.stringify({ ok: false, error: "Exactly one of 'task' or 'file' is required for akm_propose." })
-        await ensureFreshProposalCheckpoint(logClient, {
-          sessionID: context.sessionID,
-          directory: context.directory,
-          agent: context.agent,
-        }, "pre-propose")
         const args = ["propose", type, name]
         if (hasTask) args.push("--task", task!.trim())
         if (hasFile) args.push("--file", file!.trim())
