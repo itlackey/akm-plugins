@@ -5,6 +5,8 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import opencodePackage from "../opencode/package.json"
+import { AKM_VERSION_RANGE } from "../claude/shared/akm-version"
+import { getEventLogPath, readJsonl, type AkmMemoryEvent } from "../claude/shared/memory-events"
 
 // Mock execFileSync and execSync before importing the plugin
 const mockExecFileSync = mock(() => "mock output")
@@ -64,9 +66,12 @@ const execFileSyncShim = (...args: any[]) => {
     try {
       const result = (mockExecFileSync as any)(...args)
       if (typeof result === "string" && /\b\d+\.\d+\.\d+\b/.test(result)) return result
-      return "akm 0.8.9\n"
+      // Default fake-akm version must satisfy the current AKM_VERSION_RANGE
+      // (claude/shared/akm-version.ts) so tests that don't override
+      // `--version` still resolve a supported CLI.
+      return "akm 0.9.0\n"
     } catch {
-      return "akm 0.8.9\n"
+      return "akm 0.9.0\n"
     }
   }
   // #463: route `akm config set` through the fake shim so the on-disk shape
@@ -106,7 +111,7 @@ const osShim = {
 mock.module("node:os", () => ({ ...osShim, default: osShim }))
 
 const pluginModule = await import("../opencode/index.ts")
-const { AkmPlugin, server, default: defaultPluginModule } = pluginModule
+const { AkmPlugin } = pluginModule
 
 function createMockClient() {
   return {
@@ -182,6 +187,13 @@ function createToolContext(overrides?: Record<string, unknown>) {
   } as any
 }
 
+// Builds the `event` hook payload shape OpenCode actually sends for session
+// lifecycle events (real Hooks contract — `stop` is not one of them; see
+// tests/opencode-plugin.test.ts "does not export a `stop` hook").
+function sessionLifecycleEvent(type: "session.idle" | "session.compacted" | "session.deleted", sessionID: string) {
+  return { event: { type, properties: { sessionID } } } as any
+}
+
 describe("akm-opencode plugin", () => {
   beforeEach(() => {
     mockExecFileSync.mockClear()
@@ -202,9 +214,16 @@ describe("akm-opencode plugin", () => {
       expect(typeof AkmPlugin).toBe("function")
     })
 
-    it("exports the OpenCode plugin module shape", () => {
-      expect(server).toBe(AkmPlugin)
-      expect(defaultPluginModule).toEqual({ server: AkmPlugin, id: "akm-opencode" })
+    it("exports exactly one plugin function and no default export", () => {
+      // The @opencode-ai/plugin loader initializes every exported function it
+      // finds as a plugin. A second named export (`server`) or a default
+      // export wrapping the same function risks the host registering — and
+      // running — the plugin's hooks twice (double auto-feedback, double
+      // session-start curates). `AkmPlugin` must be the sole plugin export;
+      // `server` and a default export must not exist.
+      expect(typeof AkmPlugin).toBe("function")
+      expect((pluginModule as Record<string, unknown>).server).toBeUndefined()
+      expect((pluginModule as Record<string, unknown>).default).toBeUndefined()
     })
 
     it("returns hooks object when invoked", async () => {
@@ -272,8 +291,19 @@ describe("akm-opencode plugin", () => {
     it("returns lifecycle hooks for the compound-engineering loop", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       expect(hooks.event).toBeDefined()
-      expect(hooks.stop).toBeDefined()
       expect(hooks["experimental.chat.system.transform"]).toBeDefined()
+    })
+
+    it("does not export a `stop` hook — it is not part of the @opencode-ai/plugin Hooks contract", async () => {
+      // `stop` is not a key on the SDK's `Hooks` interface
+      // (node_modules/@opencode-ai/plugin/dist/index.d.ts) — the host never
+      // calls it, so registering it is dead code that silently guts the
+      // memory-candidate harvest. Coverage now rides real lifecycle events
+      // (session.idle / session.compacted / session.deleted) via the `event`
+      // hook instead — see "memory-candidate harvest fires on real lifecycle
+      // events" below.
+      const hooks = await AkmPlugin(createPluginInput())
+      expect((hooks as Record<string, unknown>).stop).toBeUndefined()
     })
 
     it("logs shell.env hook failures through OpenCode logging", async () => {
@@ -482,7 +512,7 @@ describe("akm-opencode plugin", () => {
   describe("tool execution", () => {
     it("akm_info returns akm info output plus plugin metadata", async () => {
       mockExecFileSync.mockImplementation((_cmd, args) => {
-        if (Array.isArray(args) && args[0] === "--version") return "0.8.9"
+        if (Array.isArray(args) && args[0] === "--version") return "0.9.0"
         if (Array.isArray(args) && args[0] === "info") {
           return JSON.stringify({ version: "0.7.0", stashDir: "/tmp/akm-stash" })
         }
@@ -1180,7 +1210,7 @@ describe("akm-opencode plugin", () => {
 
     it("writes failed AKM tool invocations to OpenCode app logs", async () => {
       mockExecFileSync.mockImplementation((cmd, args) => {
-        if (Array.isArray(args) && args[0] === "--version") return "0.8.9"
+        if (Array.isArray(args) && args[0] === "--version") return "0.9.0"
         const error = new Error("Legacy show flags are no longer supported.") as Error & {
           status?: number
           stdout?: string
@@ -1452,7 +1482,7 @@ describe("akm-opencode plugin", () => {
       mkdirSync(path.join(configHome, "akm"), { recursive: true })
       writeFileSync(path.join(configHome, "akm", "config.json"), `${JSON.stringify({ agent: { default: "opencode" } })}\n`)
       mockExecFileSync.mockImplementation((cmd, args) => {
-        if (args[0] === "--version") return "0.8.9"
+        if (args[0] === "--version") return "0.9.0"
         if (Array.isArray(args) && args.includes("hints")) return "Use `akm curate` first.\n"
         if (Array.isArray(args) && args.includes("curate")) return ""
         if (Array.isArray(args) && args[0] === "proposal" && args[1] === "list") return JSON.stringify({ proposals: [] })
@@ -2183,7 +2213,7 @@ describe("akm-opencode plugin", () => {
       expect(positiveRetroCalls).toEqual([])
     })
 
-    it("runs akm index on stop WITHOUT a session_checkpoint write (03-R1/06-M1)", async () => {
+    it("runs akm index on session.deleted WITHOUT a session_checkpoint write (03-R1/06-M1)", async () => {
       await withEnvVar("AKM_INDEX_ON_SESSION_END", "1", async () => {
         const hooks = await AkmPlugin(createPluginInput())
 
@@ -2197,7 +2227,7 @@ describe("akm-opencode plugin", () => {
         )
 
         mockExecFileSync.mockClear()
-        await hooks.stop!({ sessionID: "session-index-1" } as any)
+        await hooks.event!(sessionLifecycleEvent("session.deleted", "session-index-1"))
 
         const calls = mockExecFileSync.mock.calls as Array<[string, string[]]>
         const rememberCalls = calls.filter(([, args]) => Array.isArray(args) && args.includes("remember"))
@@ -2231,7 +2261,7 @@ describe("akm-opencode plugin", () => {
           { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:beta" }), metadata: {} } as any,
         )
 
-        await hooks.stop!({ sessionID: "session-index-2" } as any)
+        await hooks.event!(sessionLifecycleEvent("session.deleted", "session-index-2"))
 
         const logCalls = (client.app.log as any).mock.calls as Array<
           [{ body: { level: string; message: string; extra?: Record<string, unknown> } }]
@@ -3598,7 +3628,7 @@ describe("akm-opencode plugin", () => {
         { tool: "akm_show", sessionID: "session-memory-candidate", callID: "c2", args: { ref: "skill:test" } } as any,
         { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
       )
-      await hooks.stop!({ sessionID: "session-memory-candidate" } as any)
+      await hooks.event!(sessionLifecycleEvent("session.deleted", "session-memory-candidate"))
 
       const listed = JSON.parse(await hooks.tool!.akm_memory.execute(
         { action: "candidates" } as any,
@@ -3641,7 +3671,7 @@ describe("akm-opencode plugin", () => {
         { tool: "akm_show", sessionID: "session-memory-promote", callID: "c2", args: { ref: "skill:test" } } as any,
         { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
       )
-      await hooks.stop!({ sessionID: "session-memory-promote" } as any)
+      await hooks.event!(sessionLifecycleEvent("session.deleted", "session-memory-promote"))
 
       const listed = JSON.parse(await hooks.tool!.akm_memory.execute(
         { action: "candidates" } as any,
@@ -3678,7 +3708,7 @@ describe("akm-opencode plugin", () => {
         { tool: "akm_show", sessionID: "session-candidate-target", callID: "c2", args: { ref: "skill:test" } } as any,
         { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
       )
-      await hooks.stop!({ sessionID: "session-candidate-target" } as any)
+      await hooks.event!(sessionLifecycleEvent("session.deleted", "session-candidate-target"))
 
       const listed = JSON.parse(await hooks.tool!.akm_memory.execute(
         { action: "candidates" } as any,
@@ -3692,6 +3722,139 @@ describe("akm-opencode plugin", () => {
     })
   })
 
+  describe("session lifecycle events (session.compacted / session.idle / session.deleted)", () => {
+    it("writes a post_compact_summary structured event on session.compacted without crashing", async () => {
+      // Regression for the `captured` ReferenceError: opencode/index.ts used to
+      // reference an undeclared `captured` variable here (a leftover from the
+      // deleted session-checkpoint write), so every session.compacted event
+      // threw and was swallowed by the event hook's catch block — the
+      // post_compact_summary event was never written.
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput({ client: client as any }))
+      const sid = "session-compacted-captured-regression"
+
+      await hooks.event!(sessionLifecycleEvent("session.compacted", sid))
+
+      // The event hook's catch-all failure logger must not have fired.
+      const failureLogs = (client.app.log as any).mock.calls.filter(
+        ([entry]: [{ body: { message: string } }]) => entry.body.message === "AKM event hook failed",
+      )
+      expect(failureLogs).toEqual([])
+
+      const written = readJsonl<AkmMemoryEvent>(getEventLogPath("opencode")).filter(
+        (event) => event.event === "post_compact_summary" && event.sessionId === sid,
+      )
+      expect(written.length).toBeGreaterThan(0)
+      const last = written[written.length - 1]
+      // No checkpoint capture exists anymore (03-R1/06-M1), so the event
+      // records an explicit no-op rather than crashing or leaving the ref
+      // dangling.
+      expect(last.memory).toEqual({ ref: null, reason: "session.compacted" })
+      expect(last.outcome).toEqual({ status: "skipped" })
+    })
+
+    it("harvests memory candidates on session.idle, not just session.deleted", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const sid = "session-idle-harvest"
+      await hooks["chat.message"]!(
+        { sessionID: sid, messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Remember: always run integration tests before release" }] as any },
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: sid, callID: "c1", args: { ref: "skill:deploy" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:deploy" }), metadata: {} } as any,
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: sid, callID: "c2", args: { ref: "skill:test" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
+      )
+
+      // `stop` is not a real hook (see "plugin loading" above); session.idle
+      // is one of the real lifecycle events the harvest now rides.
+      await hooks.event!(sessionLifecycleEvent("session.idle", sid))
+
+      const listed = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "candidates" } as any,
+        createToolContext({ sessionID: sid }),
+      ))
+      expect(listed.ok).toBe(true)
+      expect(listed.candidates.length).toBeGreaterThan(0)
+    })
+
+    it("harvests memory candidates on session.compacted", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const sid = "session-compacted-harvest"
+      await hooks["chat.message"]!(
+        { sessionID: sid, messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Remember: always run integration tests before release" }] as any },
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: sid, callID: "c1", args: { ref: "skill:deploy" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:deploy" }), metadata: {} } as any,
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: sid, callID: "c2", args: { ref: "skill:test" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
+      )
+
+      await hooks.event!(sessionLifecycleEvent("session.compacted", sid))
+
+      const listed = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "candidates" } as any,
+        createToolContext({ sessionID: sid }),
+      ))
+      expect(listed.ok).toBe(true)
+      expect(listed.candidates.length).toBeGreaterThan(0)
+    })
+
+    it("does not double-harvest when idle then deleted both fire for the same session", async () => {
+      // maybeExtractSessionCandidates always empties the session buffer
+      // before returning, so a second terminal event finds nothing left to
+      // harvest and no-ops instead of emitting duplicate candidates.
+      const hooks = await AkmPlugin(createPluginInput())
+      const sid = "session-idle-then-deleted"
+      await hooks["chat.message"]!(
+        { sessionID: sid, messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Remember: always run integration tests before release" }] as any },
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: sid, callID: "c1", args: { ref: "skill:deploy" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:deploy" }), metadata: {} } as any,
+      )
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: sid, callID: "c2", args: { ref: "skill:test" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:test" }), metadata: {} } as any,
+      )
+
+      await hooks.event!(sessionLifecycleEvent("session.idle", sid))
+
+      // akm_memory candidates is scoped to context.sessionID by the plugin.
+      // The candidate log is a real append-only file shared across the whole
+      // test run (not per-test-sandboxed — same convention as the other
+      // akm_memory tests in this file, which assert `toBeGreaterThan(0)`
+      // rather than an exact count for the same reason), so assert on the
+      // delta rather than an absolute count to stay robust across repeated
+      // runs.
+      const afterIdle = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "candidates" } as any,
+        createToolContext({ sessionID: sid }),
+      ))
+      expect(afterIdle.ok).toBe(true)
+      expect(afterIdle.candidates.length).toBeGreaterThan(0)
+
+      // The buffer is already empty after the idle harvest, so this second,
+      // terminal event must find nothing left and add zero new candidates.
+      await hooks.event!(sessionLifecycleEvent("session.deleted", sid))
+
+      const afterDeleted = JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "candidates" } as any,
+        createToolContext({ sessionID: sid }),
+      ))
+      expect(afterDeleted.ok).toBe(true)
+      expect(afterDeleted.candidates.length).toBe(afterIdle.candidates.length)
+    })
+  })
+
   describe("packaging", () => {
     it("ships workflow command docs in the package", () => {
       expect(opencodePackage.files).toContain("commands/")
@@ -3701,7 +3864,7 @@ describe("akm-opencode plugin", () => {
   describe("akm CLI availability", () => {
     it("uses a compatible AKM executable without attempting Bun auto-install", async () => {
       mockExecFileSync.mockImplementation((cmd, args) => {
-        if (cmd === "akm" && args[0] === "--version") return "0.8.9"
+        if (cmd === "akm" && args[0] === "--version") return "0.9.0"
         if (cmd === "akm" && args[0] === "search") return JSON.stringify({ hits: [] })
         return "mock output"
       })
@@ -3742,14 +3905,14 @@ describe("akm-opencode plugin", () => {
             expect(existsSync(fallbackCommand)).toBe(true)
 
             mockExecFileSync.mockImplementation((cmd, args) => {
-              if (cmd === fallbackCommand && args[0] === "--version") return "0.8.0-rc0"
+              if (cmd === fallbackCommand && args[0] === "--version") return "0.9.0"
               if (cmd === fallbackCommand && args[0] === "search") return JSON.stringify({ hits: [] })
               // Any OTHER akm candidate (the literal "akm" on PATH, or a command
               // left cached in resolvedAkmCommand by a previous test) probes as
               // out-of-range so the resolver is forced to fall through to the
               // user-local fallback this test asserts on. Returning a real
               // out-of-range semver also defeats the execFileSync shim's
-              // "synthesize 0.8.9" behavior for non-semver output.
+              // "synthesize 0.9.0" behavior for non-semver output.
               if (Array.isArray(args) && args[0] === "--version") return "0.7.9"
               return "mock output"
             })
@@ -3798,7 +3961,7 @@ describe("akm-opencode plugin", () => {
                 return JSON.stringify({ hits: [], command: cmd })
               }
               if (Array.isArray(args) && args[0] === "--version") {
-                return cmd === configCommand ? "0.8.0-rc0" : "0.7.9"
+                return cmd === configCommand ? "0.9.0" : "0.7.9"
               }
               return "mock output"
             })
@@ -3838,7 +4001,7 @@ describe("akm-opencode plugin", () => {
 
       await withEnvVar("AKM_LOCAL_BUILD_CLI", localCli, async () => {
         mockExecFileSync.mockImplementation((cmd, args) => {
-          if (cmd === "bun" && Array.isArray(args) && args[0] === localCli && args[1] === "--version") return "0.8.0-rc.8"
+          if (cmd === "bun" && Array.isArray(args) && args[0] === localCli && args[1] === "--version") return "0.9.0"
           if (cmd === "bun" && Array.isArray(args) && args[0] === localCli && args[1] === "search") {
             return JSON.stringify({ hits: [], command: cmd, cli: args[0] })
           }
@@ -3868,9 +4031,11 @@ describe("akm-opencode plugin", () => {
       expect(JSON.parse(result)).toEqual({
         ok: false,
         // Range comes from the shared akm-version module (single source of truth,
-        // also used by the Claude hook). 0.7.9 is below the floor, so the probe
+        // also used by the Claude hook) — read the live constant rather than a
+        // hardcoded copy so this test doesn't drift the next time the
+        // supported range changes. 0.7.9 is below the floor, so the probe
         // reports the full supported range in the diagnostic.
-        error: "AKM CLI ^0.8.0-rc.0 || ^0.8.0 || ^0.9.0-beta.0 || ^0.9.0 is required, but no compatible bundled or PATH 'akm' executable was found. Reinstall or update the akm-opencode plugin so OpenCode/Bun installs the dependency.",
+        error: `AKM CLI ${AKM_VERSION_RANGE} is required, but no compatible bundled or PATH 'akm' executable was found. Reinstall or update the akm-opencode plugin so OpenCode/Bun installs the dependency.`,
       })
       expect(
         mockExecFileSync.mock.calls.some(

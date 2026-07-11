@@ -46,6 +46,11 @@ const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?
 // matcher; AKM_REQUIRED_VERSION_RANGE is just the display alias used in the
 // diagnostics below.
 const AKM_REQUIRED_VERSION_RANGE = AKM_VERSION_RANGE
+// The consent banner's "install this" recommendation is deliberately a single
+// version floor rather than the full AKM_VERSION_RANGE (which is an
+// OR-list of accepted ranges, not a valid single npm install specifier).
+// Keep it in sync with the lowest currently-recommended 0.9.x prerelease.
+const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.0-beta.0"
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
@@ -1646,10 +1651,11 @@ function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displ
 // The OpenCode plugin has never silently auto-installed akm-cli — it relies on
 // the bundled binary that ships with the plugin, falling back to PATH. When
 // neither path produces a compatible akm we log a warn-level event to the host
-// AND write a stderr banner so the human running OpenCode actually sees the
-// problem. The banner mirrors the Claude plugin's wording: install must be
-// user-driven, never automatic. The recommended consent point is `akm setup`
-// (or the host-specific akm setup slash command if one exists).
+// AND emit a consent banner through the host's structured logging channel so
+// the human running OpenCode actually sees the problem. The banner mirrors
+// the Claude plugin's wording: install must be user-driven, never automatic.
+// The recommended consent point is `akm setup` (or the host-specific akm
+// setup slash command if one exists).
 async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<void> {
   const installedAkm = getResolvedAkmDetails()
   if (!installedAkm) {
@@ -1661,7 +1667,7 @@ async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<voi
       reason: "no_supported_command",
       trail: lastAkmResolutionTrail,
     })
-    writeAkmConsentBanner({
+    await writeAkmConsentBanner(client, {
       detected: getCommandVersion("akm") ?? undefined,
       bundled: getBundledAkmCommand(),
       trail: lastAkmResolutionTrail,
@@ -1679,7 +1685,7 @@ async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<voi
   })
 }
 
-function writeAkmConsentBanner(info: { detected?: string; bundled?: string | null; trail?: AkmResolutionTrail }) {
+async function writeAkmConsentBanner(client: LogCapableClient, info: { detected?: string; bundled?: string | null; trail?: AkmResolutionTrail }) {
   const detectedLabel = info.detected ?? "(not found on PATH)"
   const bundledLabel = info.bundled ?? "(none)"
   const trailLines: string[] = []
@@ -1701,16 +1707,23 @@ function writeAkmConsentBanner(info: { detected?: string; bundled?: string | nul
     "",
     "Reinstall or update the akm-opencode plugin so OpenCode/Bun",
     "installs the dependency, or install akm-cli manually:",
-    "  bun install -g akm-cli@^0.8.0",
-    "  npm install -g akm-cli@^0.8.0",
+    `  bun install -g ${AKM_RECOMMENDED_INSTALL_REF}`,
+    `  npm install -g ${AKM_RECOMMENDED_INSTALL_REF}`,
     "Then run `akm setup` interactively to configure the stash.",
     "─".repeat(60),
   ].join("\n")
-  try {
-    process.stderr.write(banner + "\n")
-  } catch {
-    // best-effort; never crash the plugin over a banner
-  }
+  // AGENTS.md forbids plugin runtime code from writing to
+  // console.*/stdout/stderr; route the banner through the host's structured
+  // logging channel (client.app.log) instead of process.stderr.write so it
+  // still reaches the user without violating that rule.
+  await writePluginLog(client, "warn", "akm CLI not installed or wrong version", {
+    subsystem: "akm",
+    detected: detectedLabel,
+    bundled: bundledLabel,
+    required: AKM_REQUIRED_VERSION_RANGE,
+    installRef: AKM_RECOMMENDED_INSTALL_REF,
+    banner,
+  })
 }
 
 function resolveAkmCommand(): ResolvedAkmCommand | CliError {
@@ -2482,26 +2495,36 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           // removed. Keep the freshness reindex on session-end events so
           // upstream inference/graph passes still run.
           await maybeIndexSessionMemory(logClient, sid, type, "")
+          // `stop` is not a real OpenCode hook (not in the Hooks contract), so
+          // the memory-candidate harvest has to ride real lifecycle events
+          // instead: idle (per-turn quiescence), compacted, and deleted. This
+          // is safe to fire on all three — maybeExtractSessionCandidates always
+          // empties the session buffer before returning (extract-then-clear,
+          // or clear-only when under the 2-entry noise floor), so a later
+          // event finds an empty buffer and no-ops rather than double-harvesting.
+          maybeExtractSessionCandidates(sid, type)
           // Event-driven extraction: only on session.idle (per-turn quiescence),
           // min-interval-gated so it doesn't flood. Not on compacted/deleted.
           if (type === "session.idle") {
             maybeExtractSessionOnIdle(logClient, sid, directory)
           }
           if (type === "session.compacted") {
+            // 03-R1/06-M1: the session_checkpoint capture that used to feed
+            // `memory.ref` here was removed along with the `remember --force`
+            // write. Record the event as an explicit no-capture so
+            // post_compact_summary consumers see a skipped outcome instead of
+            // a dangling/undefined ref.
             writeStructuredEvent({
               event: "post_compact_summary",
               sessionId: sid,
               scope: buildEventScope(sid, directory),
-              memory: { ref: captured ?? null, reason: type },
-              outcome: { status: captured ? "ok" : "skipped" },
+              memory: { ref: null, reason: type },
+              outcome: { status: "skipped" },
             })
           }
           // Drop per-session state so a re-created session does not inherit
           // stale hints/curation.
           if (type === "session.deleted") {
-            // Salvage explicit memory-candidate intents before the buffer is
-            // discarded (03-R1/06-M1: candidate harvest, no session_checkpoint write).
-            maybeExtractSessionCandidates(sid, type)
             sessionHints.delete(sid)
             sessionCurated.delete(sid)
             sessionCuratedFile.delete(sid)
@@ -2517,21 +2540,6 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
         }
       } catch (error: unknown) {
         await logHookFailure(logClient, "event", error)
-      }
-    },
-    // Stop is the closest analogue to Claude's Stop/SubagentStop — the user or
-    // agent halted the active run. Flush the session buffer so learnings are
-    // preserved even if the session.idle event does not fire.
-    stop: async (input: unknown) => {
-      try {
-        const sid = extractSessionIdFromEvent(input)
-        if (!sid) return
-        // 03-R1/06-M1: session_checkpoint write removed; keep the reindex and
-        // the owner-gated memory-candidate harvest (no stash write).
-        maybeExtractSessionCandidates(sid, "stop")
-        await maybeIndexSessionMemory(logClient, sid, "stop", "")
-      } catch (error: unknown) {
-        await logHookFailure(logClient, "stop", error)
       }
     },
     // experimental.chat.system.transform is how OpenCode exposes the
@@ -4010,5 +4018,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
   }
 }
  
-export const server = AkmPlugin
-export default { server, id: "akm-opencode" }
+// A single named export only. The @opencode-ai/plugin loader initializes
+// every exported plugin function it finds in this module, so exporting the
+// same function again under a second name (`server`) or bundled into a
+// default export risks the host registering — and running — the plugin's
+// hooks twice (double auto-feedback, double session-start curates, etc.).
+// The SDK's own example plugin (dist/example.js) exports exactly one named
+// const with no default export; that is the blessed shape.
