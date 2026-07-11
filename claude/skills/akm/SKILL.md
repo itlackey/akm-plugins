@@ -299,8 +299,8 @@ when_to_use: When this insight applies (problem context, signals, etc.).
 Body in markdown.
 ```
 
-The canonical improvement path is **`/akm-improve <ref>`** — run it on a memory,
-knowledge doc, or session summary that contains repeated evidence. `improve`
+The canonical improvement path is **`/akm-improve <ref>`** — run it on a memory
+or knowledge doc that contains repeated evidence. `improve`
 can emit lesson-oriented proposals at `quality:"proposed"`, which the user then reviews
 via `/akm-proposal accept`. Direct authoring via `akm import` and `akm
 remember`-style flows is also supported.

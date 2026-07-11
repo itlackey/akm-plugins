@@ -41,7 +41,7 @@ CLI through Bash. This command helps you pick the right invocation.
 
 ## How to use this command
 
-1. **If `"$ARGUMENTS"` looks like a single subcommand token** (e.g. `save`, `clone`, `config`,
+1. **If `"$ARGUMENTS"` looks like a single subcommand token** (e.g. `sync`, `clone`, `config`,
    `env`), treat it as a CLI verb and surface the live help by running:
 
    ```sh

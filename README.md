@@ -28,7 +28,7 @@ Add to your OpenCode config (`opencode.json`):
 }
 ```
 
-Provides a surface of twenty-one tools. Verbs that are not first-class tools (`save`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `reindex`, `config`, `upgrade`, `tasks`, `run`, raw `agent`, env writes, secret writes/run) are discoverable through the `akm_help` tool, which surfaces a curated quick-reference and falls back to live `akm --help` so agents can compose the right CLI invocation and run it via shell:
+Provides a surface of twenty-one tools. Verbs that are not first-class tools (`sync`, `import`, `clone`, `update`, `remove`, `list`-sources, `registry-search`, `reindex`, `config`, `upgrade`, `tasks`, `run`, raw `agent`, env writes, secret writes/run) are discoverable through the `akm_help` tool, which surfaces a curated quick-reference and falls back to live `akm --help` so agents can compose the right CLI invocation and run it via shell:
 - `akm_info` — show `akm info` output together with the installed `akm-opencode` plugin version and install location
 - `akm_search` — search the stash, the registry, or both (including `task`, `workflow`, `env`, `secret`, `wiki`, and `lesson` types). Pass `--include-proposed` to merge proposed-quality drafts.
 - `akm_show` — show a stash asset by ref
