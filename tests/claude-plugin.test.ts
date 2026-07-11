@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -1660,4 +1660,101 @@ exit 0
     expect(readFileSync(bufferPath, "utf8")).toContain("post compact")
   })
 
+  describe("state-file rotation and quality-cache freshness", () => {
+    it("rotates append-only logs once they exceed AKM_PLUGIN_MAX_LOG_BYTES, keeping the newest entries", () => {
+      const tempDir = makeTempDir()
+      const stateDir = path.join(tempDir, "state")
+      mkdirSync(stateDir, { recursive: true })
+      const env = {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+        AKM_PLUGIN_MAX_LOG_BYTES: "300",
+      }
+
+      const totalEntries = 40
+      for (let i = 0; i < totalEntries; i++) {
+        runHook(["user-feedback"], {
+          input: JSON.stringify({ prompt: `remember entry-${i} padding-padding-padding-padding` }),
+          env,
+        })
+      }
+
+      const feedbackLogPath = path.join(stateDir, "akm-claude/feedback.log")
+      const feedbackSize = readFileSync(feedbackLogPath).length
+      // Unbounded growth would be roughly 40 * ~90 bytes ≈ 3600 bytes; rotation
+      // must keep the file close to the configured cap instead.
+      expect(feedbackSize).toBeLessThan(1000)
+
+      const feedbackLines = readLogLines(feedbackLogPath)
+      expect(feedbackLines.some((line) => line.includes(`entry-${totalEntries - 1} `))).toBe(true)
+      expect(feedbackLines.some((line) => line.includes("entry-0 "))).toBe(false)
+
+      // The rewrite must be atomic — no temp-file residue left behind.
+      const stateEntries = readdirSync(path.join(stateDir, "akm-claude"))
+      expect(stateEntries.some((name) => name.endsWith(".tmp"))).toBe(false)
+    })
+
+    it("expires stale quality-cache entries on rotation so a re-classified ref resolves to its newest classification", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+
+      const callLog = path.join(tempDir, "akm-calls.log")
+      const quotedLog = shellQuote(callLog)
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+case "$*" in
+  *show*skill:draft-rollback*)
+    echo '{"type":"skill","ref":"skill:draft-rollback","quality":"curated"}'
+    exit 0
+    ;;
+  *feedback*skill:draft-rollback*)
+    echo '{"ok":true}'
+    exit 0
+    ;;
+esac
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+
+      // Pre-seed a stale cache: an old "proposed" classification for the ref
+      // under test (at the head of the file, i.e. the oldest entry), padded
+      // with filler entries so the file exceeds the tiny rotation cap below.
+      const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
+      const fillerLines: string[] = ["2020-01-01T00:00:00Z\tskill:draft-rollback\tproposed"]
+      for (let i = 0; i < 20; i++) fillerLines.push(`2020-01-01T00:00:0${i % 10}Z\tskill:filler-${i}\tcurated`)
+      writeFileSync(qualityCachePath, `${fillerLines.join("\n")}\n`)
+
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          tool: "Bash",
+          input: { command: "akm show skill:draft-rollback" },
+          output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"curated\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          AKM_PLUGIN_MAX_LOG_BYTES: "200",
+        },
+      })
+
+      const calls = readFileSync(callLog, "utf8")
+      // The stale cached "proposed" entry must not shadow a fresh probe.
+      expect(calls).toContain("show skill:draft-rollback")
+      // Quality is no longer "proposed", so auto-feedback must proceed.
+      expect(calls).toContain("feedback skill:draft-rollback")
+
+      const cacheAfter = readFileSync(qualityCachePath, "utf8")
+      expect(cacheAfter).not.toContain("\tproposed")
+      expect(cacheAfter).toContain("skill:draft-rollback\tcurated")
+    })
+  })
 })

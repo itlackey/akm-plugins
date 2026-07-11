@@ -1,6 +1,6 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test"
+import { describe, it, expect, mock, spyOn, beforeEach } from "bun:test"
 import type { PluginInput } from "@opencode-ai/plugin"
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -3899,6 +3899,106 @@ describe("akm-opencode plugin", () => {
     })
   })
 
+  // 13: "Memory leaks" (release-0.9.0 review §3 [med]). session.deleted
+  // cleanup previously only cleared 10 of the 13 session-keyed Maps (missed
+  // retrospectiveState, sessionRecallAudit, and the per-session
+  // pendingProposalSummaryCache entry) and never deleted the session's
+  // curated tmp file under os.tmpdir()/akm-opencode/curated.
+  describe("session-scoped state cleanup and caps", () => {
+    it("clears every session-keyed map and deletes the curated tmp file on session.deleted", async () => {
+      const { __sessionStateSnapshotForTests, __curatedDirForTests } = pluginModule as unknown as {
+        __sessionStateSnapshotForTests: (sid: string) => Record<string, unknown>
+        __curatedDirForTests: () => string
+      }
+      const hooks = await AkmPlugin(createPluginInput())
+      const sid = "session-leak-cleanup-1"
+
+      // session.idle FIRST, while the buffer is still empty, so it populates
+      // sessionLastExtractAt via the min-interval-gated extract dispatch
+      // without triggering a harvest (0 entries < the 2-entry noise floor).
+      // Firing idle again later (after the buffer has entries) would
+      // auto-harvest and clear the buffer before this test gets to assert
+      // on it — that harvest-then-clear behavior is real and correct
+      // (covered by the "session lifecycle events" describe above), just
+      // not what this leak-cleanup test wants to exercise.
+      await hooks.event!(sessionLifecycleEvent("session.idle", sid))
+
+      // session.created populates sessionHints, sessionCurated +
+      // sessionCuratedFile (+ the physical tmp file), sessionWorkflow,
+      // sessionContextEpoch, and pendingProposalSummaryCache.
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: sid } } } as any)
+
+      // chat.message populates sessionRecallAudit (both the recall and
+      // no-recall branches set it synchronously before any background await).
+      await hooks["chat.message"]!(
+        { sessionID: sid, messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "fix the failing build" }] as any },
+      )
+
+      // tool.execute.after with an akm tool ref populates retrospectiveState
+      // (via noteRecentRefs) and adds sessionBuffer entries. No further
+      // lifecycle event fires after this, so nothing auto-harvests the
+      // buffer before the "before" snapshot below.
+      await hooks["tool.execute.after"]!(
+        { tool: "akm_show", sessionID: sid, callID: "c1", args: { ref: "skill:leak-check" } } as any,
+        { title: "show", output: JSON.stringify({ type: "skill", ref: "skill:leak-check" }), metadata: {} } as any,
+      )
+
+      const before = __sessionStateSnapshotForTests(sid)
+      expect(before.sessionHints).toBe(true)
+      expect(before.sessionCurated).toBe(true)
+      expect(before.sessionCuratedFile).toBe(true)
+      expect(before.sessionWorkflow).toBe(true)
+      expect(before.sessionContextEpoch).toBe(true)
+      expect(before.pendingProposalSummaryCache).toBe(true)
+      expect(before.sessionRecallAudit).toBe(true)
+      expect(before.retrospectiveState).toBe(true)
+      expect(before.sessionBuffer).toBe(true)
+      expect(before.sessionLastExtractAt).toBe(true)
+
+      const curatedFiles = readdirSync(__curatedDirForTests()).filter((name) => name.includes(sid))
+      expect(curatedFiles.length).toBeGreaterThan(0)
+
+      await hooks.event!(sessionLifecycleEvent("session.deleted", sid))
+
+      const after = __sessionStateSnapshotForTests(sid)
+      for (const [key, value] of Object.entries(after)) {
+        if (key === "sessionBufferLength") {
+          expect(value).toBe(0)
+        } else if (key === "sessionBufferRefs") {
+          expect(value).toEqual([])
+        } else {
+          expect(value).toBe(false)
+        }
+      }
+
+      const curatedFilesAfter = readdirSync(__curatedDirForTests()).filter((name) => name.includes(sid))
+      expect(curatedFilesAfter.length).toBe(0)
+    })
+
+    it("caps sessionBuffer at the drop-oldest limit, retaining the newest entries", async () => {
+      const { __sessionStateSnapshotForTests } = pluginModule as unknown as {
+        __sessionStateSnapshotForTests: (sid: string) => { sessionBufferLength: number; sessionBufferRefs: string[] }
+      }
+      const hooks = await AkmPlugin(createPluginInput())
+      const sid = "session-buffer-cap-1"
+
+      const totalRefs = 220 // > the 200-entry default cap
+      for (let i = 0; i < totalRefs; i++) {
+        const ref = `skill:cap-ref-${i}`
+        await hooks["tool.execute.after"]!(
+          { tool: "akm_show", sessionID: sid, callID: `c${i}`, args: { ref } } as any,
+          { title: "show", output: JSON.stringify({ type: "skill", ref }), metadata: {} } as any,
+        )
+      }
+
+      const snapshot = __sessionStateSnapshotForTests(sid)
+      expect(snapshot.sessionBufferLength).toBeLessThanOrEqual(200)
+      expect(snapshot.sessionBufferRefs).toContain(`skill:cap-ref-${totalRefs - 1}`)
+      expect(snapshot.sessionBufferRefs).not.toContain("skill:cap-ref-0")
+    })
+  })
+
   describe("packaging", () => {
     it("ships workflow command docs in the package", () => {
       expect(opencodePackage.files).toContain("commands/")
@@ -4112,6 +4212,118 @@ describe("akm-opencode plugin", () => {
       // A rapid second idle within the min-interval must NOT spawn another extract.
       await idle("sess-extract-1")
       expect(extractSpawnCalls().length).toBe(1)
+    })
+  })
+
+  // 13: "Non-atomic candidate updates" (release-0.9.0 review §2 [med]).
+  // updateCandidateStatus() is opencode-only today (the akm_memory tool's
+  // promote/reject actions, opencode/index.ts:3133/3170) — the Claude hook
+  // only appends candidates, never updates their status — so this direct
+  // unit test against the shared module lives here per the file-scope note
+  // in the task brief.
+  describe("memory-candidates atomic updates (shared module)", () => {
+    it("updateCandidateStatus rewrites the candidate file via write-temp-then-rename (atomic swap)", async () => {
+      const fs = await import("node:fs")
+      const { appendCandidates, updateCandidateStatus } = await import("../claude/shared/memory-candidates")
+      const dir = mkdtempSync(path.join(tmpdir(), "akm-candidates-atomic-"))
+      const candidateLog = path.join(dir, "memory-candidates.jsonl")
+      const renameSpy = spyOn(fs, "renameSync")
+      try {
+        appendCandidates(candidateLog, [{
+          id: "cand-atomic-3",
+          createdAt: new Date().toISOString(),
+          harness: "opencode" as const,
+          sessionId: "sess-atomic-3",
+          type: "lesson" as const,
+          scope: "project" as const,
+          content: "Roll forward, never roll back the schema migration.",
+          evidence: ["Roll forward, never roll back the schema migration."],
+          confidence: 0.7,
+          recommendedAction: "distill" as const,
+          status: "pending" as const,
+        }])
+        renameSpy.mockClear()
+
+        // The read-modify-write rewrite triggered by a status update must go
+        // through temp-file-then-rename, not a direct writeFileSync onto the
+        // target — a direct write is not atomic: a crash or a concurrent
+        // appendCandidates() write landing mid-rewrite can truncate/drop
+        // candidates (13: "Non-atomic candidate updates").
+        const updated = updateCandidateStatus(candidateLog, "cand-atomic-3", "promoted")
+        expect(updated?.status).toBe("promoted")
+
+        expect(renameSpy).toHaveBeenCalledTimes(1)
+        const [tmpPath, destPath] = renameSpy.mock.calls[0] as unknown as [string, string]
+        expect(tmpPath).toContain(".tmp")
+        expect(destPath).toBe(candidateLog)
+      } finally {
+        renameSpy.mockRestore()
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    it("updateCandidateStatus lands the update and leaves no .tmp residue", async () => {
+      const { appendCandidates, updateCandidateStatus, readCandidates } = await import("../claude/shared/memory-candidates")
+      const dir = mkdtempSync(path.join(tmpdir(), "akm-candidates-atomic-"))
+      const candidateLog = path.join(dir, "memory-candidates.jsonl")
+      try {
+        const base = {
+          id: "cand-atomic-1",
+          createdAt: new Date().toISOString(),
+          harness: "opencode" as const,
+          sessionId: "sess-atomic-1",
+          type: "lesson" as const,
+          scope: "project" as const,
+          content: "Always run the migration dry-run first.",
+          evidence: ["Always run the migration dry-run first."],
+          confidence: 0.7,
+          recommendedAction: "distill" as const,
+          status: "pending" as const,
+        }
+        appendCandidates(candidateLog, [base])
+
+        const updated = updateCandidateStatus(candidateLog, "cand-atomic-1", "promoted")
+        expect(updated?.status).toBe("promoted")
+
+        const onDisk = readCandidates(candidateLog)
+        expect(onDisk).toHaveLength(1)
+        expect(onDisk[0].status).toBe("promoted")
+
+        // Atomic rewrite: temp file gets renamed over the target, so nothing
+        // named `*.tmp` should remain in the directory afterward.
+        const entries = readdirSync(dir)
+        expect(entries.some((name) => name.endsWith(".tmp"))).toBe(false)
+        expect(entries).toEqual(["memory-candidates.jsonl"])
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    it("updateCandidateStatus on an unknown id is a no-op and does not touch the file", async () => {
+      const { appendCandidates, updateCandidateStatus, readCandidates } = await import("../claude/shared/memory-candidates")
+      const dir = mkdtempSync(path.join(tmpdir(), "akm-candidates-atomic-"))
+      const candidateLog = path.join(dir, "memory-candidates.jsonl")
+      try {
+        appendCandidates(candidateLog, [{
+          id: "cand-atomic-2",
+          createdAt: new Date().toISOString(),
+          harness: "opencode" as const,
+          sessionId: "sess-atomic-2",
+          type: "lesson" as const,
+          scope: "project" as const,
+          content: "Cache invalidation needs a version bump.",
+          evidence: ["Cache invalidation needs a version bump."],
+          confidence: 0.7,
+          recommendedAction: "distill" as const,
+          status: "pending" as const,
+        }])
+
+        const updated = updateCandidateStatus(candidateLog, "does-not-exist", "rejected")
+        expect(updated).toBeUndefined()
+        expect(readCandidates(candidateLog)[0].status).toBe("pending")
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
     })
   })
 })

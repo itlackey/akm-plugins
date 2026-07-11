@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { AKM_VERSION_RANGE as AKM_REQUIRED_RANGE } from "../shared/akm-version"
@@ -143,8 +143,40 @@ function sanitize(value: string): string {
   return value.replace(/[\t\r\n]+/g, " ").replace(/ {2,}/g, " ").trim()
 }
 
+// 13: state-file rotation/caps. Seven append-only files live under STATE_DIR
+// (session.log, feedback.log, memory.log, quality-cache.tsv via appendLog();
+// sessions/<sid>.md via writeSessionBuffer(); events.jsonl and
+// memory-candidates.jsonl via the shared modules, which carry their own copy
+// of this same mechanism). None had a size cap, so they grew without bound
+// for the lifetime of the machine. rotateLogIfOversized() is the single
+// mechanism used at every append site in this file: before an append, if the
+// file already exceeds AKM_PLUGIN_MAX_LOG_BYTES (default 1 MiB), rewrite it
+// down to its newest half (by line count) via write-temp-then-rename so a
+// concurrent reader/writer never observes a truncated/partial file.
+const MAX_LOG_BYTES = (() => {
+  const raw = Number(process.env.AKM_PLUGIN_MAX_LOG_BYTES)
+  return Number.isFinite(raw) && raw > 0 ? raw : 1024 * 1024
+})()
+
+function rotateLogIfOversized(filePath: string): void {
+  try {
+    const stat = statSync(filePath)
+    if (stat.size <= MAX_LOG_BYTES) return
+    const lines = readFileSync(filePath, "utf8").split("\n")
+    if (lines[lines.length - 1] === "") lines.pop()
+    const keep = lines.slice(Math.ceil(lines.length / 2))
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+    writeFileSync(tmpPath, keep.length > 0 ? `${keep.join("\n")}\n` : "")
+    renameSync(tmpPath, filePath)
+  } catch {
+    // Rotation is best-effort and must never throw: a failed attempt just
+    // means the file keeps growing until the next successful append/rotate.
+  }
+}
+
 function appendLog(filePath: string, ...fields: string[]) {
   try {
+    rotateLogIfOversized(filePath)
     const redacted = fields.map((field) => redactSecrets(field).text)
     appendFileSync(filePath, `${timestamp()}${redacted.map((field) => `\t${field}`).join("")}\n`)
   } catch {
@@ -176,8 +208,10 @@ function writeMemoryEvent(event: Omit<import("../shared/memory-events").AkmMemor
 
 function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
   if (!sid) return
+  const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
+  rotateLogIfOversized(bufferPath)
   const redacted = redactSecrets(body).text.replace(/\b([A-Z][A-Z0-9_]{2,})\s*=\s*(?:\[[^\]]+\]|[^\s"'`,;]+)/g, "[REDACTED_ASSIGNMENT:$1]")
-  appendFileSync(path.join(SESSIONS_DIR, `${sid}.md`), `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
+  appendFileSync(bufferPath, `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
 }
 
 /**
@@ -831,6 +865,14 @@ function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; pa
 
 function refQuality(ref: string): string {
   if (!ref) return "unknown"
+  // Rotate BEFORE reading, not just before appending: quality-cache.tsv is a
+  // read-through cache with no TTL, so once a ref gets an entry the lookup
+  // below returns it forever (a `proposed` asset later promoted to `curated`
+  // stayed misclassified for the life of the file). Rotation is what makes a
+  // stale entry eventually expire — once it ages out of the newest-half
+  // window, the next lookup for that ref is a genuine cache miss and re-probes
+  // `akm show` for the current classification.
+  rotateLogIfOversized(QUALITY_CACHE)
   if (existsSync(QUALITY_CACHE)) {
     const lines = readFileSync(QUALITY_CACHE, "utf8").split("\n").filter(Boolean).reverse()
     for (const line of lines) {

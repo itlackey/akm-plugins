@@ -1,6 +1,6 @@
 import { type Plugin, tool } from "@opencode-ai/plugin"
 import { execFileSync, execSync, spawn } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -61,6 +61,15 @@ const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5")
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
 const AKM_CURATOR_CONTEXT_MAX_CHARS = Math.max(500, Number(process.env.AKM_CURATOR_CONTEXT_MAX_CHARS ?? "4000") || 4000)
+// 13: "Memory leaks" — sessionBuffer previously grew without bound for the
+// life of a session (a long-running session accumulates one entry per
+// observed tool ref / memory intent). Cap it drop-oldest, matching the
+// `.slice(-8)` cap style already used by retrospectiveState.recentRefs.
+const AKM_SESSION_BUFFER_MAX_ENTRIES = Math.max(1, Number(process.env.AKM_SESSION_BUFFER_MAX_ENTRIES ?? "200") || 200)
+// Best-effort sweep age for orphaned curated tmp files (os.tmpdir()/akm-opencode/curated).
+// A session that ends without ever firing session.deleted (host crash, forced
+// kill) would otherwise leak its curated file on disk forever.
+const CURATED_FILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const SESSION_DATE_TAG_LENGTH = 8
 const CHECKPOINT_DATE_TAG_LENGTH = 15
 const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
@@ -178,7 +187,7 @@ Signals to act on:
 - Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see akm_help topic="reindex").
 - Pending proposals: list or diff them via akm_help topic="proposal" and recommend accept, reject, or revise. Never accept or reject without explicit user approval.
 - Duplicates / drift: near-identical descriptions or overlapping responsibilities. Propose a consolidation.
-- Stale memories: session summaries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
+- Stale memories: memory entries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
 - Stuck workflows: run akm_workflow list --active and surface any runs in blocked or failed state with their step ids. Propose whether to resume or escalate.
 - Never touch env or secret values: do not call akm_env run or akm_secret path unless the user explicitly asks. Env values and secret material must never appear in reports.
@@ -548,6 +557,8 @@ function addBufferEntry(sessionID: string | undefined, entry: Omit<SessionBuffer
   if (!sessionID) return
   const buf = sessionBuffer.get(sessionID) ?? []
   buf.push({ timestamp: nowIso(), ...entry })
+  // Drop-oldest cap (13: "Memory leaks" — sessionBuffer was uncapped).
+  if (buf.length > AKM_SESSION_BUFFER_MAX_ENTRIES) buf.splice(0, buf.length - AKM_SESSION_BUFFER_MAX_ENTRIES)
   sessionBuffer.set(sessionID, buf)
 }
 
@@ -569,6 +580,111 @@ function writeCuratedFile(sessionID: string, content: string): string {
   return filePath
 }
 
+// 13: "Memory leaks" — session.deleted cleanup only cleared sessionHints,
+// sessionCurated, sessionWorkflow, sessionCuratorReport, the epoch/version
+// tracking pairs, and sessionBuffer. It missed retrospectiveState,
+// sessionRecallAudit, and the per-session pendingProposalSummaryCache entry
+// (cacheKey is the sessionID — see getPendingProposalCount), and never
+// deleted the session's curated tmp file. clearSessionState() is the single
+// place every session-keyed Map/tmp-file is torn down, so a future new map
+// would only need one line added here instead of another hand-maintained list
+// at the session.deleted call site.
+function clearSessionState(sessionID: string): void {
+  sessionHints.delete(sessionID)
+  sessionCurated.delete(sessionID)
+  const curatedFile = sessionCuratedFile.get(sessionID)
+  if (curatedFile) {
+    try {
+      rmSync(curatedFile, { force: true })
+    } catch {
+      // Best-effort: a failed tmp-file cleanup must not block session teardown.
+    }
+  }
+  sessionCuratedFile.delete(sessionID)
+  sessionWorkflow.delete(sessionID)
+  sessionCuratorReport.delete(sessionID)
+  sessionContextEpoch.delete(sessionID)
+  sessionContextInjectedEpoch.delete(sessionID)
+  sessionCuratedVersion.delete(sessionID)
+  sessionCuratedInjectedVersion.delete(sessionID)
+  sessionBuffer.delete(sessionID)
+  sessionLastExtractAt.delete(sessionID)
+  sessionRecallAudit.delete(sessionID)
+  pendingProposalSummaryCache.delete(sessionID)
+  retrospectiveState.delete(sessionID)
+}
+
+// Test-only: snapshot which session-keyed Maps still hold an entry for `sid`,
+// plus the current sessionBuffer contents. Lets tests assert clearSessionState()
+// actually emptied every map (13: "Memory leaks") without exporting the maps
+// themselves. Mirrors the __resetResolvedAkmForTests test-only export above.
+export function __sessionStateSnapshotForTests(sessionID: string): {
+  sessionHints: boolean
+  sessionCurated: boolean
+  sessionCuratedFile: boolean
+  sessionWorkflow: boolean
+  sessionCuratorReport: boolean
+  sessionContextEpoch: boolean
+  sessionContextInjectedEpoch: boolean
+  sessionCuratedVersion: boolean
+  sessionCuratedInjectedVersion: boolean
+  sessionBuffer: boolean
+  sessionBufferLength: number
+  sessionBufferRefs: string[]
+  sessionLastExtractAt: boolean
+  sessionRecallAudit: boolean
+  pendingProposalSummaryCache: boolean
+  retrospectiveState: boolean
+} {
+  return {
+    sessionHints: sessionHints.has(sessionID),
+    sessionCurated: sessionCurated.has(sessionID),
+    sessionCuratedFile: sessionCuratedFile.has(sessionID),
+    sessionWorkflow: sessionWorkflow.has(sessionID),
+    sessionCuratorReport: sessionCuratorReport.has(sessionID),
+    sessionContextEpoch: sessionContextEpoch.has(sessionID),
+    sessionContextInjectedEpoch: sessionContextInjectedEpoch.has(sessionID),
+    sessionCuratedVersion: sessionCuratedVersion.has(sessionID),
+    sessionCuratedInjectedVersion: sessionCuratedInjectedVersion.has(sessionID),
+    sessionBuffer: sessionBuffer.has(sessionID),
+    sessionBufferLength: sessionBuffer.get(sessionID)?.length ?? 0,
+    sessionBufferRefs: (sessionBuffer.get(sessionID) ?? []).flatMap((entry) => (entry.ref ? [entry.ref] : [])),
+    sessionLastExtractAt: sessionLastExtractAt.has(sessionID),
+    sessionRecallAudit: sessionRecallAudit.has(sessionID),
+    pendingProposalSummaryCache: pendingProposalSummaryCache.has(sessionID),
+    retrospectiveState: retrospectiveState.has(sessionID),
+  }
+}
+
+// Test-only: expose the curated tmp-file directory so tests can assert file
+// existence/absence without hardcoding os.tmpdir() path construction twice.
+export function __curatedDirForTests(): string {
+  return CURATED_DIR
+}
+
+// Best-effort sweep of orphaned curated tmp files (13: "tmp-file cleanup").
+// clearSessionState() handles the normal session.deleted path; this covers
+// sessions that never fire it (host crash, forced kill). Async and fully
+// error-trapped internally so a failed sweep never surfaces as an unhandled
+// rejection or blocks the session.created path that triggers it.
+async function pruneStaleCuratedFiles(): Promise<void> {
+  let entries: string[]
+  try {
+    entries = readdirSync(CURATED_DIR)
+  } catch {
+    return
+  }
+  const now = Date.now()
+  for (const name of entries) {
+    try {
+      const filePath = path.join(CURATED_DIR, name)
+      const info = statSync(filePath)
+      if (now - info.mtimeMs > CURATED_FILE_MAX_AGE_MS) rmSync(filePath, { force: true })
+    } catch {
+      // Best-effort per-file: a single stat/rm failure must not abort the sweep.
+    }
+  }
+}
 
 function isAkmRef(value: string): boolean {
   return AKM_REF_PATTERN.test(value)
@@ -2467,6 +2583,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           })
           if (!sessionContextEpoch.has(sid)) sessionContextEpoch.set(sid, 0)
           if (type === "session.created") {
+            // Best-effort, fire-and-forget, fully error-trapped internally —
+            // must never block or fail session.created (13: "tmp-file cleanup").
+            void pruneStaleCuratedFiles()
             await ensureAgentSetup(logClient, {
               directory,
               sessionID: sid,
@@ -2529,20 +2648,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
               outcome: { status: "skipped" },
             })
           }
-          // Drop per-session state so a re-created session does not inherit
-          // stale hints/curation.
+          // Drop per-session state (every session-keyed Map, plus the curated
+          // tmp file) so a re-created session does not inherit stale
+          // hints/curation and the tmp file does not leak (13: "Memory leaks").
           if (type === "session.deleted") {
-            sessionHints.delete(sid)
-            sessionCurated.delete(sid)
-            sessionCuratedFile.delete(sid)
-            sessionWorkflow.delete(sid)
-            sessionCuratorReport.delete(sid)
-            sessionContextEpoch.delete(sid)
-            sessionContextInjectedEpoch.delete(sid)
-            sessionCuratedVersion.delete(sid)
-            sessionCuratedInjectedVersion.delete(sid)
-            sessionBuffer.delete(sid)
-            sessionLastExtractAt.delete(sid)
+            clearSessionState(sid)
           }
         }
       } catch (error: unknown) {
