@@ -1382,24 +1382,25 @@ type AkmHelpEntry = {
   keywords: string[]
 }
 
+// BEGIN GENERATED: akm-help-table (source: docs/akm-help-registry.md; run `node scripts/generate-help-tables.mjs` to refresh)
 const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Review pending proposals and decide whether to accept, reject, or revise them",
-    command: "akm proposal list --status pending --format json; akm proposal show <id>; akm proposal diff <id>",
-    notes: "Accept/reject requires explicit user approval.",
+    command: "akm proposal list --status pending --format json",
+    notes: "Inspect individual entries with `akm proposal show <id>` and `akm proposal diff <id>` (positional id). Accept/reject requires explicit user approval.",
     keywords: ["proposal", "review proposals", "pending proposals", "accept proposal", "reject proposal"],
   },
   {
     task: "Bulk-triage the standing pending proposal backlog by policy",
     command: "akm proposal drain --policy <personal-stash|conservative|manual> --dry-run",
-    notes: "Mutating: promotes/rejects in bulk and commits to git (no batch revert). Preview with --dry-run, then --promote --yes after explicit approval. Supersedes the old manual proposal-management agent session; also runs as the processes.triage improve pre-pass.",
+    notes: "Mutating: promotes/rejects in bulk and commits to git (no batch revert). Preview with `--dry-run`, then `--promote --yes` after explicit approval. Flags: `--max-accepts`, `--max-diff-lines`, `--older-than`, `--judgment`, `--profile`. Supersedes the old manual proposal-management agent session; also runs automatically as the `processes.triage` improve pre-pass.",
     keywords: ["proposal", "drain", "triage", "backlog", "bulk accept", "bulk reject"],
   },
   {
     task: "Improve existing assets or distill repeated evidence into proposals",
     command: "akm improve [<type>|<ref>] [--task \"...\"]",
-    notes: "Improve owns the former reflect/distill flow; proposed assets are not curated until accepted. Profiles add a processes.triage pre-pass and end-of-run sync.",
-    keywords: ["improve", "lesson", "reflect", "distill", "drift", "failure"],
+    notes: "`improve` replaces the old reflect/distill flow in v0.8.0. Proposed assets are not curated until accepted. Profiles add a `processes.triage` pre-pass and end-of-run `sync` (commit/push).",
+    keywords: ["improve", "lesson", "reflect", "distill", "drift", "failure", "triage", "sync"],
   },
   {
     task: "Manage scheduled task assets via the OS scheduler",
@@ -1410,26 +1411,38 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Create a proposed asset for a coverage gap",
     command: "akm propose <type> <name> --task \"...\"",
-    notes: PROPOSED_QUALITY_WARNING,
+    notes: "Drafts a `quality:\"proposed\"` asset that lands in the proposal queue — never directly curated.",
     keywords: ["propose", "coverage gap", "proposed asset"],
   },
   {
     task: "Search including proposed-quality assets",
     command: "akm search <query> --include-proposed",
-    notes: PROPOSED_QUALITY_WARNING,
+    notes: "Default search hides drafts; this flag merges them into hits. Do not treat proposed assets as curated until accepted.",
     keywords: ["include-proposed", "proposed quality", "lesson"],
+  },
+  {
+    task: "Manage whole-file secrets outside chat-safe read paths",
+    command: "akm secret <set|run|remove> ...",
+    notes: "Use `/akm-secret` or `akm_secret` for `list` / `path`. Never paste secret values into chat; `set` reads from stdin/--from-file/--from-env and `run` injects into a child process only.",
+    keywords: ["secret", "docker secret", "pem", "token", "_FILE"],
+  },
+  {
+    task: "Read or use `.env`-style config assets without values reaching chat",
+    command: "akm env <list|path|run> ...",
+    notes: "Chat-safe reads: `list` (key names only), `path <ref>` (file path for `--env-file` consumers), `run <ref> -- <cmd>` (inject into a child process — values never touch stdout). `create`/`set`/`unset`/`remove`/`export` are writes and stay on the raw CLI path; confirm with the user before running them. Use `/akm-env` (Claude) or `akm_env` (OpenCode) for the first-class chat-safe actions.",
+    keywords: ["env", "dotenv", "environment variables", "env file", "secrets group"],
   },
   {
     task: "Install a kit or register an external source (npm, GitHub, git, URL, local dir)",
     command: "akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--provider <p>] [--max-pages N] [--max-depth N] [--allow-insecure]",
-    notes: "Confirm with the user before registering a website crawler or passing --allow-insecure.",
+    notes: "Confirm with the user before registering a website crawler or passing `--allow-insecure`.",
     keywords: ["add", "install", "register", "kit", "source", "github", "npm"],
   },
   {
-    task: "Commit and push pending stash changes",
-    command: "akm sync [<source-name>] [-m <msg>] [--no-push]",
-    notes: "For writable git-backed sources, sync commits and pushes by default (pass --no-push to skip); review the diff first.",
-    keywords: ["sync", "save", "commit", "push", "publish", "git"],
+    task: "Commit (and optionally push) pending stash changes",
+    command: "akm sync [<source-name>] [-m <msg>]",
+    notes: "For writable git-backed sources, sync commits and pushes (`--no-push` to skip); review the diff first.",
+    keywords: ["save", "commit", "push", "publish", "git", "sync"],
   },
   {
     task: "Import a file (or stdin) into the stash as a typed asset",
@@ -1440,7 +1453,7 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Clone an asset from any source for editing",
     command: "akm clone <ref> [--name <new>] [--dest <dir>] [--force]",
-    notes: "Type subdirectory is appended automatically; ref may include origin (e.g. npm:@scope/pkg//script:foo).",
+    notes: "Type subdirectory is appended automatically; ref may include origin (e.g. `npm:@scope/pkg//script:foo`).",
     keywords: ["clone", "copy", "fork", "edit"],
   },
   {
@@ -1462,7 +1475,7 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Search the registry only (skip local stash)",
     command: "akm registry search <query> [--limit N] [--assets]",
-    notes: "akm_search with source='registry' covers most cases; this is the explicit form.",
+    notes: "`akm_search` with `source='registry'` covers most cases; this is the explicit form.",
     keywords: ["registry", "search registry", "installable", "discover kit"],
   },
   {
@@ -1470,12 +1483,6 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
     command: "akm index",
     notes: "Rarely needed — the index refreshes implicitly after writes.",
     keywords: ["index", "reindex", "rebuild"],
-  },
-  {
-    task: "Manage whole-file secrets outside the chat-safe read surface",
-    command: "akm secret <set|run|remove> ...",
-    notes: "Use the first-class akm_secret tool for list/path. Secret values must never be pasted back into chat; `set` reads from stdin/--from-file/--from-env and `run` injects into a child process only.",
-    keywords: ["secret", "docker secret", "pem", "token", "_FILE"],
   },
   {
     task: "View or update akm config (get/set/list/unset/path)",
@@ -1494,7 +1501,26 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
     notes: "Or `akm --format json -q show <ref>` and pipe `.run` into your shell.",
     keywords: ["run", "execute", "script", "exec"],
   },
+  {
+    task: "Extract durable insights from a native agent session file into the proposal queue",
+    command: "akm extract --type <claude-code|opencode> --session-id <sid>",
+    notes: "Both plugins fire this automatically and asynchronously at session end (event-driven, content-hash deduped — safe to re-run); the hourly `akm improve` extract pass is the backstop for sessions that never fire the hook. `--auto` sweeps every available harness; `--dry-run` previews without queuing.",
+    keywords: ["extract", "session insights", "distill session", "harvest session", "extraction"],
+  },
+  {
+    task: "Print the current agent-facing usage guide for the akm CLI",
+    command: "akm hints [--detail brief|normal|full]",
+    notes: "Both plugins inject this at session start as context; `/akm-help` and `akm_help` fall back to it for unmatched topics. `--detail full` prints the complete guide.",
+    keywords: ["hints", "guide", "cheat sheet", "how to use akm", "reference"],
+  },
+  {
+    task: "Read release notes and migration guidance for an akm CLI version",
+    command: "akm help migrate <version>",
+    notes: "Bundled per-release notes; an unrecognized version lists what's available.",
+    keywords: ["migrate", "migration", "release notes", "upgrade notes", "changelog"],
+  },
 ]
+// END GENERATED: akm-help-table
 
 function lookupAkmHelpHint(topic: string): AkmHelpEntry[] {
   const needle = topic.toLowerCase().trim()
@@ -1622,8 +1648,19 @@ function getLocalBuildAkmCommand(): ResolvedAkmCommand | null {
   }
 }
 
-function execResolvedAkm(command: ResolvedAkmCommand, args: string[], options?: Parameters<typeof execFileSync>[2]) {
-  return execFileSync(command.command, [...command.argsPrefix, ...args], options)
+// Every call site passes `encoding: "utf8"`, so the real runtime return value
+// is always a string — but `execFileSync`'s overloads resolve on the exact
+// shape of the options argument, and forwarding a loosely-typed `options`
+// parameter defeats that resolution, leaving the inferred return type
+// `string | Buffer`. Pin the options type to require `encoding: "utf8"` and
+// assert the (already-guaranteed) string return so callers get real string
+// typing without changing behavior.
+type ExecResolvedAkmOptions = Omit<NonNullable<Parameters<typeof execFileSync>[2]>, "encoding"> & {
+  encoding: "utf8"
+}
+
+function execResolvedAkm(command: ResolvedAkmCommand, args: string[], options: ExecResolvedAkmOptions): string {
+  return execFileSync(command.command, [...command.argsPrefix, ...args], options) as string
 }
 
 function probeCommand(command: ResolvedAkmCommand): CommandProbe {

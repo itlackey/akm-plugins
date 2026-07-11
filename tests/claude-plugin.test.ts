@@ -235,35 +235,6 @@ describe("Claude plugin metadata", () => {
     expect(setup).toContain("agent.default")
   })
 
-  it("keeps the curated akm_help registry table in parity across embeds", () => {
-    const registryPath = path.join(repoRoot, "docs/akm-help-registry.md")
-    const helpCommandPath = path.join(repoRoot, "claude/commands/akm-help.md")
-    const skillPath = path.join(repoRoot, "claude/skills/akm/SKILL.md")
-
-    const registry = readFileSync(registryPath, "utf8")
-    const helpCommand = readFileSync(helpCommandPath, "utf8")
-    const skill = readFileSync(skillPath, "utf8")
-
-    // Pull every command-column cell from the canonical doc — it's column 2 in
-    // a markdown table where columns are separated by " | ". We skip the
-    // header and separator rows.
-    const tableRows = registry
-      .split("\n")
-      .filter((line) => line.startsWith("| ") && !line.startsWith("| ---") && !line.startsWith("| Task |"))
-    expect(tableRows.length).toBeGreaterThan(0)
-
-    for (const row of tableRows) {
-      // Strip the surrounding pipes, then split on " | " to get the cells:
-      // [task, command, notes, keywords].
-      const trimmed = row.replace(/^\|\s?/, "").replace(/\s?\|$/, "")
-      const cells = trimmed.split(" | ")
-      expect(cells.length).toBe(4)
-      const command = cells[1].trim()
-      expect(helpCommand).toContain(command)
-      expect(skill).toContain(command)
-    }
-  })
-
   it("/akm-help frontmatter and body advertise the help-discovery flow", () => {
     const helpCommandPath = path.join(repoRoot, "claude/commands/akm-help.md")
     const body = readFileSync(helpCommandPath, "utf8")

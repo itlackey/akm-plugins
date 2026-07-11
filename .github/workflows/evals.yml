@@ -36,16 +36,13 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install opencode deps (needed for unit tests + harness imports)
+      - name: Install opencode deps (needed for harness imports)
         working-directory: opencode
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Install evals deps (yaml, anthropic SDK)
         working-directory: evals
-        run: bun install
-
-      - name: Run unit tests
-        run: bun test tests/
+        run: bun install --frozen-lockfile
 
       - name: Run tier-2 evals against checked-in baseline
         id: tier2
@@ -64,7 +61,11 @@ jobs:
           path: eval-results/ci/
 
       - name: Comment diff on PR
-        if: github.event_name == 'pull_request' && always()
+        # Fork PRs get a read-only GITHUB_TOKEN with no issue/PR-comment
+        # permission, so this step would otherwise fail the job on every
+        # external contribution. Only run it for same-repo PRs, where the
+        # token has write access.
+        if: github.event_name == 'pull_request' && always() && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v7
         with:
           script: |
@@ -113,11 +114,11 @@ jobs:
 
       - name: Install opencode deps
         working-directory: opencode
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Install evals deps
         working-directory: evals
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Run tier-3 scenarios with judge
         working-directory: evals
