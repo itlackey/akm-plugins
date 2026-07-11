@@ -1081,14 +1081,20 @@ async function maybeIndexSessionMemory(
 // an owner-gated reference rung) still harvests explicit "remember ..." intents
 // from the session buffer at session end. No stash write — candidates land in
 // the candidate log for review only. Deleting the buffer after extraction is
-// the de-dup: a re-fired terminal event finds an empty buffer and no-ops.
+// the de-dup: a re-fired lifecycle event finds an empty buffer and no-ops.
 function maybeExtractSessionCandidates(sessionID: string, reason: string): void {
   if (!AKM_AUTO_MEMORY) return
   if (!sessionID) return
   const entries = sessionBuffer.get(sessionID) ?? []
   // Require at least two observations before persisting — single events are noise.
   if (entries.length < 2) {
-    sessionBuffer.delete(sessionID)
+    // Below the noise floor, only the terminal session.deleted event may
+    // discard the buffer (the old discard-noise-at-session-end behavior).
+    // Non-terminal events (session.idle fires at every turn's quiescence,
+    // session.compacted mid-session) must KEEP a below-floor buffer so a
+    // lone "remember ..." intent from one turn survives to pair with an
+    // observation from a later turn instead of being wiped at each idle.
+    if (reason === "session.deleted") sessionBuffer.delete(sessionID)
     return
   }
   const targetRefHints = entries.flatMap((entry) => (entry.ref ? [entry.ref] : []))
@@ -2498,10 +2504,11 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           // `stop` is not a real OpenCode hook (not in the Hooks contract), so
           // the memory-candidate harvest has to ride real lifecycle events
           // instead: idle (per-turn quiescence), compacted, and deleted. This
-          // is safe to fire on all three — maybeExtractSessionCandidates always
-          // empties the session buffer before returning (extract-then-clear,
-          // or clear-only when under the 2-entry noise floor), so a later
-          // event finds an empty buffer and no-ops rather than double-harvesting.
+          // is safe to fire on all three — a harvest always clears the buffer,
+          // so a later event finds it empty and no-ops rather than
+          // double-harvesting. A below-noise-floor buffer is kept across
+          // non-terminal events (so intents accumulate across turns) and only
+          // discarded on the terminal session.deleted.
           maybeExtractSessionCandidates(sid, type)
           // Event-driven extraction: only on session.idle (per-turn quiescence),
           // min-interval-gated so it doesn't flood. Not on compacted/deleted.

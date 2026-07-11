@@ -3808,9 +3808,9 @@ describe("akm-opencode plugin", () => {
     })
 
     it("does not double-harvest when idle then deleted both fire for the same session", async () => {
-      // maybeExtractSessionCandidates always empties the session buffer
-      // before returning, so a second terminal event finds nothing left to
-      // harvest and no-ops instead of emitting duplicate candidates.
+      // A harvest at or above the noise floor empties the session buffer, so
+      // a second lifecycle event finds nothing left to harvest and no-ops
+      // instead of emitting duplicate candidates.
       const hooks = await AkmPlugin(createPluginInput())
       const sid = "session-idle-then-deleted"
       await hooks["chat.message"]!(
@@ -3852,6 +3852,50 @@ describe("akm-opencode plugin", () => {
       ))
       expect(afterDeleted.ok).toBe(true)
       expect(afterDeleted.candidates.length).toBe(afterIdle.candidates.length)
+    })
+
+    it("retains a below-floor buffer across session.idle so cross-turn intents survive to session end", async () => {
+      // session.idle fires at every turn's quiescence. A turn that produces
+      // only ONE buffer entry (a lone "remember ..." chat message with no akm
+      // tool refs) is below the 2-entry noise floor — a non-terminal event
+      // must KEEP that entry so it can pair with an observation from a later
+      // turn. Only the terminal session.deleted path may discard a
+      // below-floor buffer (the old discard-noise-at-session-end behavior).
+      const hooks = await AkmPlugin(createPluginInput())
+      const sid = "session-cross-turn-accumulation"
+
+      const listCandidates = async () => JSON.parse(await hooks.tool!.akm_memory.execute(
+        { action: "candidates" } as any,
+        createToolContext({ sessionID: sid }),
+      ))
+      // Delta-based baseline: the candidate log is a real append-only file
+      // shared across the whole test run (same convention as the tests above).
+      const baseline = await listCandidates()
+      expect(baseline.ok).toBe(true)
+
+      // Turn 1: one memory-intent message → exactly one buffer entry.
+      await hooks["chat.message"]!(
+        { sessionID: sid, messageID: "m1", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Remember: always run integration tests before release" }] as any },
+      )
+      // Turn quiescence: idle must neither harvest nor wipe the lone entry.
+      await hooks.event!(sessionLifecycleEvent("session.idle", sid))
+      const afterIdle = await listCandidates()
+      expect(afterIdle.candidates.length).toBe(baseline.candidates.length)
+
+      // Turn 2: a second memory-intent accumulates across the idle boundary.
+      await hooks["chat.message"]!(
+        { sessionID: sid, messageID: "m2", agent: "build" } as any,
+        { message: {} as any, parts: [{ type: "text", text: "Remember: never deploy on Fridays without a rollback plan" }] as any },
+      )
+      // Terminal event: BOTH cross-turn entries must be harvested together.
+      await hooks.event!(sessionLifecycleEvent("session.deleted", sid))
+      const afterDeleted = await listCandidates()
+      const fresh = afterDeleted.candidates.slice(afterIdle.candidates.length)
+      expect(fresh.length).toBeGreaterThan(0)
+      const contents = fresh.map((candidate: { content: string }) => candidate.content).join("\n")
+      expect(contents).toContain("always run integration tests before release")
+      expect(contents).toContain("never deploy on Fridays without a rollback plan")
     })
   })
 
