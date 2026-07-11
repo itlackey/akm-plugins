@@ -46,7 +46,7 @@ Reports are JSON + markdown so two runs can be cleanly diffed.
 
 Tier 2 ships five metrics: `surface`, `curation`, `latency`,
 `context_budget`, and `feedback`. Tier 3 ships a YAML
-scenario format, an Anthropic SDK judge with prompt caching, and
+scenario format, an Anthropic SDK judge, and
 pairwise A/B between two git refs. See `tier3/README.md` for details.
 
 ## Quick start
@@ -156,10 +156,11 @@ a new prompt usually means tweaking those fields too.
 - The akm CLI's actual retrieval quality. The shim is held constant; if
   you want to evaluate a new akm-cli ranking algorithm, evaluate it in
   the akm-cli repo.
-- A real Claude API agent driving the plugin end-to-end. Tier-3 uses a
-  deterministic stub agent (the harness simulates the agent's reaction
-  to curated context). A real-loop variant is a future enhancement —
-  the transcript shape would stay the same.
+- Free/offline tier-3 runs. Tier-3 runs a real Claude agent loop by
+  default when `ANTHROPIC_API_KEY` is set (`--agent stub` forces the
+  deterministic stub agent for free harness validation, but judge
+  scores from stub runs are smoke-test signal only, not effectiveness
+  measurements).
 - The `akm-curator` sub-agent's own performance. That would need a
   separate scenario class with longer multi-turn fixtures and a
   different rubric. Listed as future work in the design doc.

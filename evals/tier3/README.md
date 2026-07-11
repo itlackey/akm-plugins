@@ -16,10 +16,10 @@ fixed rubric.
 - **`judge/rubric.ts`** — 5-dimension rubric (asset_use, on_task,
   feedback_loop, hallucination, conciseness) + JSON schema enforced via
   tool-use forcing.
-- **`judge/client.ts`** — Anthropic SDK wrapper with prompt caching on
-  the rubric system prompt, structured outputs via tool-use forcing,
-  per-run dollar cap, and verdict cache keyed on
-  `sha256(scenario.id + transcript)`.
+- **`judge/client.ts`** — Anthropic SDK wrapper with structured outputs
+  via tool-use forcing, per-run dollar cap, and verdict cache keyed on
+  `sha256(scenario.id + transcript)`. (Prompt caching was removed: the
+  ~600-token rubric is below the model's minimum cacheable prefix.)
 - **`runner.ts`** — Loads scenarios, runs them, judges them, writes
   `eval-results/tier3-<ts>/tier3.{json,md}`.
 - **`ab.ts`** — Pairwise A/B between two git refs via `git worktree`.
@@ -110,8 +110,6 @@ consumers can't accidentally treat smoke runs as effectiveness data.
 - Verdict cache (`tier3/.verdict-cache/`) — keyed on
   `(scenario.id, plugin, sha256(transcript))`. Re-running the same
   candidate is free.
-- Prompt caching — the rubric system prompt is cached; routine runs hit
-  ~90% read price on system tokens.
 
 ## Pairwise A/B
 

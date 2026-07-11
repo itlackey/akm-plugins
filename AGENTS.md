@@ -9,7 +9,7 @@
 ## Extended Searching
 
 You have access to a searchable library of tools, skills, commands, agents,
-knowledge, lessons, workflows, env configs, secrets, and wikis via the `akm` CLI (v0.8.0+).
+knowledge, lessons, workflows, env configs, secrets, and wikis via the `akm` CLI (v0.9.0+).
 
 > For any AKM verb that isn't a first-class tool/slash-command, agents should call `akm_help` (OpenCode) or `/akm-help` (Claude Code) to discover the right `akm` CLI invocation before reaching for raw flags.
 
@@ -17,9 +17,9 @@ knowledge, lessons, workflows, env configs, secrets, and wikis via the `akm` CLI
 
 Use `akm curate` (primary) for task-oriented discovery — it applies LLM reranking, returns relevance scores, and filters cross-domain noise. Use `akm search` only when you already know an asset exists and need its exact ref.
 
-In v0.8.0 the curator automatically boosts assets that match the current cwd's project anchor, so an explicit project name in the query is no longer required for ranking. Including it still helps the reranker frame intent — keep concrete task descriptions over abstract ones:
+The curator automatically boosts assets that match the current cwd's project anchor, so an explicit project name in the query is no longer required for ranking. Including it still helps the reranker frame intent — keep concrete task descriptions over abstract ones:
 ```sh
-akm curate "<task>"   # PRIMARY: LLM-reranked, scored; auto-project-boost in v0.8.0
+akm curate "<task>"   # PRIMARY: LLM-reranked, scored; auto-project-boost enabled by default
 # Good: akm curate "akm CLI improve command performance analysis" (explicit framing)
 # Bad:  akm curate "improve performance analysis"  # too generic — less for the reranker to bite into
 ```
@@ -29,11 +29,11 @@ Fall back to `akm search` only for known-ref lookups:
 akm search "<known name>"              # Only when akm show returned "not found" and you need the exact ref
 akm search "<query>" --type script     # Filter by type (script, skill, command, agent, knowledge, memory, lesson, workflow, env, secret, wiki)
 akm search "<query>" --source <source> # Filter by source (e.g., "stash", "registry", "both"; "local" is a legacy alias for "stash")
-akm search "<query>" --source <name>   # 0.8.0: scope to a single named stash (e.g., --source itlackey/akm-stash)
+akm search "<query>" --source <name>   # scope to a single named stash (e.g., --source itlackey/akm-stash)
 akm search "<query>" --include-proposed  # Merge proposed-quality drafts into hits (default search hides them)
 ```
 
-Project-context ranking is automatic in v0.8.0 — assets matching the current cwd get a small ranking boost, and usage signals are scoped per-project (no cross-project pollution). Set `AKM_DISABLE_PROJECT_CONTEXT=1` or `AKM_DISABLE_SCOPED_UTILITY=1` to opt out (registry searches, tests, etc.).
+Project-context ranking is automatic — assets matching the current cwd get a small ranking boost, and usage signals are scoped per-project (no cross-project pollution). Set `AKM_DISABLE_PROJECT_CONTEXT=1` or `AKM_DISABLE_SCOPED_UTILITY=1` to opt out (registry searches, tests, etc.).
 Each hit includes a `ref` you use to retrieve the full asset, plus optional `quality?` (`curated`/`generated`/`proposed`/unknown) and `warnings?` fields.
 
 **Using assets:**
@@ -66,7 +66,7 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 - Tests should assert logged failures and structured error results instead of normalizing direct console output from plugin paths.
 - Narrow exception: dedicated CLI entrypoints or fake CLI shims used only to emulate a terminal contract may write to stdout/stderr when that stream output is the behavior under test. Keep those cases isolated from plugin runtime code and document them clearly.
 
-**New in v0.8.0:**
+**Proposal queue, improve, and task verbs:**
 - `akm proposal list` / `akm proposal show <id>` / `akm proposal diff <id>` / `akm proposal accept <id>` / `akm proposal reject <id> --reason "..."` — operate the durable proposal queue. `akm proposal diff` accepts UUID, UUID prefix, or asset ref positionally. Always confirm with the user before `accept`/`reject`.
 - `akm proposal drain --policy <personal-stash|conservative|manual|path> [--dry-run] [--promote] [--yes] [--max-accepts N] [--max-diff-lines N] [--older-than D] [--judgment] [--profile <p>]` — **mutating.** Bulk-triage the standing pending backlog by a deterministic policy (promotes/rejects and commits to git; no batch revert). Always `--dry-run` first; only `--promote --yes` after explicit user approval. This and the automatic `processes.triage` improve pre-pass supersede the old manual proposal-queue management agent session.
 - `akm improve [ref|type] [--task "..."]` — generate improvement proposals via the configured agent CLI. Improve profiles (`profiles.improve.<name>`) add a `processes.triage` pre-pass (`{ enabled, applyMode: queue|promote, policy, maxAcceptsPerRun, maxDiffLines, rejectEmpty, judgment }`) and end-of-run git `sync` (`{ enabled, push, message }` with `{timestamp}{date}{time}{scope}{refs}{accepted}` tokens; override via `--sync/--no-sync`, `--push/--no-push`).
@@ -75,9 +75,9 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 - `akm setup` — interactive first-run configuration wizard for humans. Agents should not invoke it directly; use `akm init` for agent-safe stash initialization.
 - `akm search ... --include-proposed` — merge `quality:"proposed"` drafts into hits.
 
-**New in v0.5.0:**
+**Wiki, workflow, and sync verbs:**
 - `akm wiki create|register|list|show|pages|search|stash|lint|ingest|remove` — manage multi-wiki knowledge bases
-- `akm env create|list|show|run` / `akm secret set` — manage configuration/secret stores (values never echoed)
+- `akm env create|list|run` / `akm secret set` — manage configuration/secret stores (values never echoed)
 - `akm workflow start|next|complete|status|list|create|resume|template` — drive stateful runs
 - `akm sync [-m "msg"]` — commit (and push, when writable; `--no-push` to skip) a git-backed stash
 - `akm import <file|-> [--name <slug>]` — promote a file into the indexed stash

@@ -62,7 +62,7 @@ const RECALLED_CONTENT_PROVENANCE =
 function tagRecalledContent(content: string): string {
   return `${RECALLED_CONTENT_PROVENANCE}${content}`
 }
-const SESSION_START_FOOTER = "For verbs not covered by a slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, env writes, secret writes/run, agent, tasks, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. v0.8.0 adds the `/akm-proposal`, `/akm-improve`, `/akm-propose`, `/akm-review-proposals`, and `/akm-setup` slash commands for the proposal queue and agent-CLI integration."
+const SESSION_START_FOOTER = "For verbs not covered by a slash command (sync, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, env writes, secret writes/run, agent, tasks, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. `/akm-proposal`, `/akm-improve`, `/akm-propose`, `/akm-review-proposals`, and `/akm-setup` cover the proposal queue and agent-CLI integration."
 const SESSION_START_HEADER = [
   "# AKM is available in this session",
   "",
@@ -70,7 +70,7 @@ const SESSION_START_HEADER = [
   "",
   "**Choosing the right lookup command:**",
   "",
-  '- **`akm curate "<task>"`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. v0.8.0 automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is no longer required for ranking — but it still helps the reranker frame intent.',
+  '- **`akm curate "<task>"`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. It automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is no longer required for ranking — but it still helps the reranker frame intent.',
   '  - Good: `akm curate "akm CLI improve command performance analysis"` (explicit framing, still ideal)',
   '  - Bad: `akm curate "improve performance analysis"` (too generic — the reranker has less to work with even with auto-boost)',
   '- **`akm search "<known name>"`** — use ONLY when you already know an asset exists (e.g. after `akm show` returned "not found") and need to locate its exact ref. Do not use as a discovery tool.',

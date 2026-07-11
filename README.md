@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **access env configs and whole-file secrets**, **operate the v0.8.0 proposal queue**, and **improve assets** from a stash directory.
+Platform-specific plugins for the [AKM](https://github.com/itlackey/akm) CLI (v0.9.0+). Both packages wrap the `akm` CLI to **search**, **show**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **access env configs and whole-file secrets**, **operate the AKM proposal queue**, and **improve assets** from a stash directory.
 
 ## What's new in 0.8.0
 
@@ -43,7 +43,7 @@ Provides a surface of twenty-one tools. Verbs that are not first-class tools (`s
 - `akm_wiki` — manage wikis (`create`, `register`, `list`, `show`, `pages`, `search`, `stash`, `lint`, `ingest`, `remove`)
 - `akm_feedback` — record positive or negative feedback for a stash asset
 - `akm_memory` — audit recall/write/safety behavior, review memory candidates, and promote/reject them with confirmation
-- `akm_proposal` — operate the v0.8.0 proposal queue (`list`, `show`, `diff`, `accept`, `reject`). Always confirm with the user before `accept`/`reject`.
+- `akm_proposal` — operate the AKM proposal queue (`list`, `show`, `diff`, `accept`, `reject`, `drain`). Always confirm with the user before `accept`/`reject`/`drain`.
 - `akm_improve` — generate improvement proposals for an asset ref, an asset type, or the broader stash.
 - `akm_propose` — generate a new-asset proposal via the configured agent CLI.
 - `akm_init` — initialize the working stash and persist `stashDir` in an agent-safe way.
@@ -59,12 +59,12 @@ The OpenCode plugin also hooks `event`, `chat.message`, `tool.execute.before`, `
 | --- | --- | --- |
 | Session-start retrieval | #27 | Shipped in both plugins |
 | Auto-attach scope | #28 | Shipped in both plugins |
-| Conversation-derived feedback | #29 | Deferred to 0.9.0 — structured recall/candidate pipeline ships in 0.8.0; per-conversation fine-grained feedback extraction requires conversation transcript access not yet exposed by harnesses |
+| Conversation-derived feedback | #29 | Not yet implemented — the structured recall/candidate pipeline ships, but per-conversation fine-grained feedback extraction requires conversation transcript access not yet exposed by harnesses |
 | Session-end `akm index` | #30 | Shipped in both plugins |
-| Harness-provided LLM fallback | #31 | Deferred to 0.9.0 — agents currently use their own configured model; harness-level model injection requires SDK support not yet available |
+| Harness-provided LLM fallback | #31 | Not yet implemented — agents currently use their own configured model; harness-level model injection requires SDK support not yet available |
 | Shared secret redaction | #64 | Shipped in both plugins |
 | Structured memory events | #55 | Shipped in both plugins |
-| Claude PreToolUse safety guard | #56 | Shipped in Claude |
+| Claude PreToolUse safety guard | #56 | Removed in 0.8.0 — tokenized Bash gating was replaced by host-platform `permissions.ask`/`permissions.deny` (see "Locking down destructive commands") |
 | Checkpoint + candidates | #57 | Shipped in both plugins |
 | Memory audit and candidate review | #58 | Shipped in both plugins |
 | Shared recall policy | #59 | Shipped in both plugins |
@@ -73,11 +73,11 @@ The OpenCode plugin also hooks `event`, `chat.message`, `tool.execute.before`, `
 | Subagent context/result capture | #62 | Shipped in both plugins |
 | Workflow compliance telemetry | #63 | Shipped in both plugins |
 
-#### Coming in 0.9.0
+#### Not yet implemented
 
-Two features in the tracker above are planned for 0.9.0 and explicitly deferred from 0.8.0:
+Two features in the tracker above remain unimplemented:
 
-- **[#29 Conversation-derived feedback](https://github.com/itlackey/akm-plugins/issues/29)** — Extracting per-message asset feedback signals from the full conversation transcript. The structured recall/candidate pipeline already ships in 0.8.0; this feature requires per-conversation transcript access that harnesses do not yet expose.
+- **[#29 Conversation-derived feedback](https://github.com/itlackey/akm-plugins/issues/29)** — Extracting per-message asset feedback signals from the full conversation transcript. The structured recall/candidate pipeline already ships; this feature requires per-conversation transcript access that harnesses do not yet expose.
 - **[#31 Harness-provided LLM fallback](https://github.com/itlackey/akm-plugins/issues/31)** — Injecting an alternate model at the harness level for tool calls. Requires SDK support for model-override injection that is not yet available in either harness SDK.
 
 ### Claude Code
@@ -104,10 +104,10 @@ claude plugin install akm@akm-plugins
 Provides:
 - **AKM Skill** — Claude automatically uses the akm CLI when you ask about stash assets
 - **Slash-command surface (22 verbs)** — `/akm-search`, `/akm-show`, `/akm-memory-audit`, `/akm-memory-candidates`, `/akm-memory-promote`, `/akm-memory-reject`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-env` (`list`/`path`/`run`), `/akm-secret` (`list`/`path`), `/akm-proposal` (`list`/`show`/`diff`/`accept`/`reject`), `/akm-review-proposals`, `/akm-improve`, `/akm-propose`, `/akm-setup`, and `/akm-help`
-- **`/akm-help` discovery flow** — for verbs without a dedicated slash command (save, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, raw `agent`, env writes, secret writes/run), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
+- **`/akm-help` discovery flow** — for verbs without a dedicated slash command (sync, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, raw `agent`, env writes, secret writes/run), `/akm-help <task>` surfaces a curated quick-reference and falls back to live `akm --help` so Claude can compose the right `akm` invocation and run it via Bash
 - **Dynamic agent dispatch** — Claude fetches agent definitions from the stash and spawns subagents on the fly with the agent's prompt, tool constraints, and task
 - **Command execution** — Claude resolves command templates, renders argument placeholders (`$ARGUMENTS`, `$1`, `$2`), and executes the result
-- **Claude hooks** — on session start the plugin verifies `akm-cli` satisfies `^0.8.0` (override via `AKM_PACKAGE_REF`) and prints a stderr banner pointing at `/akm-setup` when the CLI is missing or out of range (no silent install — installation requires explicit user consent via `/akm-setup`). The hook can also set `defaults.agent` to the current platform in the AKM config file when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces pending-proposal counts in the SessionStart header, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality plus `lesson:*` and `secret:*` refs. Destructive `akm` subcommands are no longer gated by the plugin — see [claude/README.md "Locking down destructive commands"](./claude/README.md#locking-down-destructive-commands) for the recommended `permissions.ask` / `permissions.deny` recipe. Human users can run `akm setup` manually when interactive setup is needed.
+- **Claude hooks** — on session start the plugin verifies `akm-cli` satisfies `^0.9.0-beta.0 || ^0.9.0` (override via `AKM_PACKAGE_REF`) and surfaces a SessionStart context banner pointing at `/akm-setup` when the CLI is missing or out of range (no silent install — installation requires explicit user consent via `/akm-setup`). The hook can also set `defaults.agent` to the current platform in the AKM config file when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces pending-proposal counts in the SessionStart header, and records redacted event/feedback/memory/candidate data in local state files. Auto-feedback skips proposed-quality plus `lesson:*` and `secret:*` refs. Destructive `akm` subcommands are no longer gated by the plugin — see [claude/README.md "Locking down destructive commands"](./claude/README.md#locking-down-destructive-commands) for the recommended `permissions.ask` / `permissions.deny` recipe. Human users can run `akm setup` manually when interactive setup is needed.
 
 For local development against a sibling `akm` checkout, set `AKM_LOCAL_BUILD_CLI=/abs/path/to/akm/dist/cli.js`. Both plugins will run that built CLI through Bun before falling back to PATH or bundled installs.
 
@@ -139,7 +139,7 @@ stash/
 ├── env/        # .env config/credential files (env:<name>) — values never surface through structured output
 ├── secrets/    # whole-file secrets (secret:<name>) — contents never surface through structured output
 ├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
-└── .akm/proposals/  # v0.8.0 proposal queue — drafts that never leak into search or commits
+└── .akm/proposals/  # AKM proposal queue — drafts that never leak into search or commits
 ```
 
 Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
@@ -150,9 +150,9 @@ Config is stored at `~/.config/akm/config.json` (XDG standard). Use `akm config 
 
 ## Prerequisites
 
-For OpenCode, the plugin ships a bundled `akm-cli` dependency that OpenCode/Bun installs alongside the plugin itself, and falls back to an existing `akm` on PATH when needed. It does **not** install `akm-cli` globally on its own — if neither the bundled binary nor the PATH binary satisfies `^0.8.0`, the plugin writes a stderr banner pointing at manual install and `akm setup` instead.
+For OpenCode, the plugin resolves `akm` in this order: a locally built CLI pointed at via `AKM_LOCAL_BUILD_CLI` (development only), then an existing `akm` on PATH, then the bundled `akm-cli` dependency that OpenCode/Bun installs alongside the plugin as a last resort. It does **not** install `akm-cli` globally on its own — if none of those candidates satisfies `^0.9.0-beta.0 || ^0.9.0`, the plugin surfaces a structured error/log entry pointing at manual install and `akm setup` instead.
 
-For Claude Code, the plugin uses `SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `SubagentStart`, `SubagentStop`, `TaskCreated`, `TaskCompleted`, `PreCompact`, `PostCompact`, and `SessionEnd` hooks to gate risky raw AKM Bash, inject scoped AKM context, and record redacted memory/event/candidate activity across prompt, tool, task, compaction, and session lifecycle events. On session start the plugin checks that `akm-cli@^0.8.0` is on PATH (no silent install): when it is missing or out of range the hook writes a clear stderr banner and the SessionStart context tells the agent that `akm` is unavailable until the user runs `/akm-setup` to confirm an install.
+For Claude Code, the plugin uses `SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `SubagentStart`, `TaskCreated`, `TaskCompleted`, `PostCompact`, and `SessionEnd` hooks to inject scoped AKM context and record redacted memory/event/candidate activity across prompt, tool, task, compaction, and session lifecycle events. Destructive `akm` subcommands are not gated by the plugin — see "Locking down destructive commands" below for the recommended host-platform permission recipe. On session start the plugin checks that `akm-cli@^0.9.0-beta.0 || ^0.9.0` is on PATH (no silent install): when it is missing or out of range the hook does not install anything, and the SessionStart context tells the agent that `akm` is unavailable until the user runs `/akm-setup` to confirm an install.
 
 ```sh
 # macOS / Linux
@@ -161,14 +161,14 @@ curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
 irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
 
 # Or via Bun
-bun install -g akm-cli@^0.8.0
+bun install -g akm-cli@^0.9.0-beta.0
 ```
 
 ## Ecosystem
 
 | Repo | What it is |
 | --- | --- |
-| [itlackey/akm](https://github.com/itlackey/akm) | Core Agent Knowledge Management CLI (v0.8.0+) |
+| [itlackey/akm](https://github.com/itlackey/akm) | Core Agent Knowledge Management CLI (v0.9.0+) |
 | [itlackey/akm-stash](https://github.com/itlackey/akm-stash) | Official stash — ready-made skills, workflows, commands, and knowledge |
 | [itlackey/akm-registry](https://github.com/itlackey/akm-registry) | Official registry index — pre-configured in every akm install |
 | [itlackey/akm-bench](https://github.com/itlackey/akm-bench) | Benchmark harness for measuring agent performance with akm |

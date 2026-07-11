@@ -7,9 +7,10 @@ The Claude AKM plugin ships **first-class slash commands** for the high-value ve
 `/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`,
 `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-env` (`list`/`path`/`run`),
 `/akm-secret` (`list`/`path`), `/akm-proposal`, `/akm-review-proposals`, `/akm-improve`, `/akm-propose`,
-`/akm-setup`, and `/akm-help` (this command).
+`/akm-setup`, `/akm-memory-audit`, `/akm-memory-candidates`, `/akm-memory-promote`,
+`/akm-memory-reject`, and `/akm-help` (this command).
 
-Everything else — `add` (install kits / register sources), `save`, `import`, `clone`,
+Everything else — `add` (install kits / register sources), `sync`, `import`, `clone`,
 `update`, `remove`, `list` (configured sources), `registry search`, `index` (reindex),
 `config`, `upgrade`, `tasks`, ad-hoc `run`, env writes, and secret writes / command injection — is reached by invoking the raw `akm`
 CLI through Bash. This command helps you pick the right invocation.

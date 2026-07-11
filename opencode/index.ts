@@ -167,7 +167,7 @@ const CURATOR_AGENT_PROMPT_FALLBACK = `You are the AKM curator — a compound-en
 
 Inputs you should inspect:
 1. OpenCode app logs that include the "akm-opencode" service (feedback, memory, tool invocations).
-2. Session-summary memories named memory:opencode-session-*.
+2. Memory candidates awaiting triage (akm_memory candidates / akm_memory audit) and any prior curator reports persisted as memory:akm-curator-*.
 3. The live stash: call akm_search "" --limit 50 (and akm_show <ref>) to enumerate assets; reach for akm_help topic="list sources" if you need the configured-sources view.
 4. Parent-session context via akm_parent_messages when this session was dispatched as a child.
 
