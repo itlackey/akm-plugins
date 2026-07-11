@@ -1727,5 +1727,171 @@ exit 0
       expect(cacheAfter).not.toContain("\tproposed")
       expect(cacheAfter).toContain("skill:draft-rollback\tcurated")
     })
+
+    // F2-1: rotation alone is a size cap, not a freshness guarantee — on a
+    // low-traffic install (~50 B/entry, 1 MiB cap ≈ 20k entries) a stale
+    // entry survives essentially forever. Freshness needs a real per-entry
+    // TTL at lookup time, independent of file size.
+    function writeQualityProbeAkm(binDir: string, callLog: string) {
+      const quotedLog = shellQuote(callLog)
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+case "$*" in
+  *show*skill:draft-rollback*)
+    echo '{"type":"skill","ref":"skill:draft-rollback","quality":"curated"}'
+    exit 0
+    ;;
+  *feedback*skill:draft-rollback*)
+    echo '{"ok":true}'
+    exit 0
+    ;;
+esac
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+    }
+
+    it("treats a quality-cache entry older than the TTL as a miss and re-probes, even when the file is far below the rotation cap", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+      const callLog = path.join(tempDir, "akm-calls.log")
+      writeQualityProbeAkm(binDir, callLog)
+
+      // A single stale entry in a tiny file: rotation (1 MiB default cap)
+      // never fires, so only a lookup-time TTL can expire this.
+      const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
+      writeFileSync(qualityCachePath, "2020-01-01T00:00:00Z\tskill:draft-rollback\tproposed\n")
+
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          tool: "Bash",
+          input: { command: "akm show skill:draft-rollback" },
+          output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"curated\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          // No AKM_PLUGIN_MAX_LOG_BYTES override: rotation must not be what
+          // rescues this lookup.
+        },
+      })
+
+      const calls = readFileSync(callLog, "utf8")
+      // The expired entry is a miss → probe re-runs and sees "curated".
+      expect(calls).toContain("show skill:draft-rollback")
+      // "curated" is not skipped, so auto-feedback proceeds.
+      expect(calls).toContain("feedback skill:draft-rollback")
+      // The probe result is appended as a fresh entry (newest wins on the
+      // next lookup).
+      const cacheAfter = readFileSync(qualityCachePath, "utf8")
+      expect(cacheAfter).toContain("skill:draft-rollback\tcurated")
+    })
+
+    it("honors a fresh quality-cache entry within the TTL without re-probing", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+      const callLog = path.join(tempDir, "akm-calls.log")
+      writeQualityProbeAkm(binDir, callLog)
+
+      const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
+      writeFileSync(qualityCachePath, `${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}\tskill:draft-rollback\tproposed\n`)
+
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          tool: "Bash",
+          input: { command: "akm show skill:draft-rollback" },
+          output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"curated\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      // Fresh cache hit: no show probe, and the "proposed" classification
+      // short-circuits the feedback submission.
+      const calls = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+      expect(calls).not.toContain("show skill:draft-rollback")
+      expect(calls).not.toContain("feedback skill:draft-rollback")
+      const skipLog = readLogLines(path.join(claudeStateDir, "feedback.log"))
+      expect(skipLog.some((line) => line.includes("skip_proposed\tskill:draft-rollback"))).toBe(true)
+    })
+
+    it("re-probes on a legacy quality-cache line without a timestamp column instead of crashing", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+      const callLog = path.join(tempDir, "akm-calls.log")
+      writeQualityProbeAkm(binDir, callLog)
+
+      // Legacy 2-field format: `ref<TAB>quality`, no timestamp column. Must
+      // be treated as expired (re-probe), never crash the hook.
+      const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
+      writeFileSync(qualityCachePath, "skill:draft-rollback\tproposed\n")
+
+      // runHook throws on a non-zero exit, so it doubles as the no-crash assertion.
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          tool: "Bash",
+          input: { command: "akm show skill:draft-rollback" },
+          output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"curated\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      const calls = readFileSync(callLog, "utf8")
+      expect(calls).toContain("show skill:draft-rollback")
+      expect(calls).toContain("feedback skill:draft-rollback")
+    })
+
+    // F2-2: the retained-half computation `lines.slice(ceil(len/2))` yields
+    // ZERO lines when the file holds a single line larger than the cap —
+    // rotation would empty the file instead of capping it.
+    it("keeps the newest line when a single oversized line exceeds the rotation cap instead of emptying the file", () => {
+      const tempDir = makeTempDir()
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(claudeStateDir, { recursive: true })
+
+      const feedbackLogPath = path.join(claudeStateDir, "feedback.log")
+      const oversizedLine = `2026-01-01T00:00:00Z\tuser\tprompt\tSINGLE-OVERSIZED-ENTRY ${"x".repeat(150)}`
+      writeFileSync(feedbackLogPath, `${oversizedLine}\n`)
+
+      runHook(["user-feedback"], {
+        input: JSON.stringify({ prompt: "a fresh short entry" }),
+        env: {
+          HOME: tempDir,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          XDG_STATE_HOME: stateDir,
+          AKM_PLUGIN_MAX_LOG_BYTES: "50",
+        },
+      })
+
+      const body = readFileSync(feedbackLogPath, "utf8")
+      // The single line over the cap must survive as the newest retained line...
+      expect(body).toContain("SINGLE-OVERSIZED-ENTRY")
+      // ...and the new append lands after it as usual.
+      expect(body).toContain("a fresh short entry")
+    })
   })
 })

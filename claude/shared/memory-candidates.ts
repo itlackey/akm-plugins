@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { redactObject } from "./redaction"
 
@@ -30,7 +30,18 @@ function atomicWriteFileSync(filePath: string, content: string, mode?: number): 
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
   writeFileSync(tmpPath, content)
   if (mode !== undefined) chmodSafe(tmpPath, mode)
-  renameSync(tmpPath, filePath)
+  try {
+    renameSync(tmpPath, filePath)
+  } catch (error) {
+    // Don't orphan the temp file when the swap fails (EXDEV, permissions, a
+    // concurrent unlink of the target dir, ...) — nothing ever prunes them.
+    // The error still propagates per each caller's semantics: swallowed by
+    // rotateIfOversized's best-effort catch, surfaced by replaceCandidates.
+    try {
+      rmSync(tmpPath, { force: true })
+    } catch {}
+    throw error
+  }
 }
 
 // State-file rotation/caps (release-0.9.0 review §2 "Unbounded state
@@ -50,7 +61,10 @@ function rotateIfOversized(filePath: string): void {
     if (stat.size <= MAX_LOG_BYTES) return
     const lines = readFileSync(filePath, "utf8").split("\n")
     if (lines[lines.length - 1] === "") lines.pop()
-    const keep = lines.slice(Math.ceil(lines.length / 2))
+    // Keep-at-least-one-line guard: a single line larger than the cap would
+    // make slice(ceil(len/2)) empty and rotation would erase the file instead
+    // of capping it. Always retain the newest line.
+    const keep = lines.length <= 1 ? lines : lines.slice(Math.ceil(lines.length / 2))
     atomicWriteFileSync(filePath, keep.length > 0 ? `${keep.join("\n")}\n` : "", 0o600)
   } catch {
     // Rotation is best-effort and must never throw: a failed attempt just

@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { redactObject } from "./redaction"
 
@@ -31,11 +31,22 @@ function rotateIfOversized(filePath: string): void {
     if (stat.size <= MAX_LOG_BYTES) return
     const lines = readFileSync(filePath, "utf8").split("\n")
     if (lines[lines.length - 1] === "") lines.pop()
-    const keep = lines.slice(Math.ceil(lines.length / 2))
+    // Keep-at-least-one-line guard: a single line larger than the cap would
+    // make slice(ceil(len/2)) empty and rotation would erase the file instead
+    // of capping it. Always retain the newest line.
+    const keep = lines.length <= 1 ? lines : lines.slice(Math.ceil(lines.length / 2))
     const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
     writeFileSync(tmpPath, keep.length > 0 ? `${keep.join("\n")}\n` : "")
     chmodSafe(tmpPath, 0o600)
-    renameSync(tmpPath, filePath)
+    try {
+      renameSync(tmpPath, filePath)
+    } catch (error) {
+      // Don't orphan the temp file when the swap fails — nothing prunes them.
+      try {
+        rmSync(tmpPath, { force: true })
+      } catch {}
+      throw error
+    }
   } catch {
     // Rotation is best-effort and must never throw: a failed attempt just
     // means the file keeps growing until the next successful append/rotate.

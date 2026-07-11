@@ -78,6 +78,16 @@ function stripCodeSpan(cell) {
   return t
 }
 
+/**
+ * Registry cells escape interior pipes as `\|` so GitHub renders the markdown
+ * tables correctly (GFM splits cells on unescaped `|` even inside code spans).
+ * The markdown consumers reuse the raw escaped row; runtime TS strings must
+ * carry the real character.
+ */
+function unescapePipes(value) {
+  return value.replaceAll("\\|", "|")
+}
+
 function renderMarkdownTable(rows) {
   const header = "| Task | Command | Notes | Keywords |"
   const separator = "| --- | --- | --- | --- |"
@@ -93,10 +103,10 @@ function renderTsTable(rows) {
   lines.push("const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [")
   for (const row of rows) {
     lines.push("  {")
-    lines.push(`    task: ${jsString(row.task)},`)
-    lines.push(`    command: ${jsString(stripCodeSpan(row.command))},`)
-    if (row.notes) lines.push(`    notes: ${jsString(row.notes)},`)
-    lines.push(`    keywords: [${row.keywords.map(jsString).join(", ")}],`)
+    lines.push(`    task: ${jsString(unescapePipes(row.task))},`)
+    lines.push(`    command: ${jsString(unescapePipes(stripCodeSpan(row.command)))},`)
+    if (row.notes) lines.push(`    notes: ${jsString(unescapePipes(row.notes))},`)
+    lines.push(`    keywords: [${row.keywords.map((k) => jsString(unescapePipes(k))).join(", ")}],`)
     lines.push("  },")
   }
   lines.push("]")

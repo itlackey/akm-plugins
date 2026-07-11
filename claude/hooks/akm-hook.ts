@@ -164,10 +164,22 @@ function rotateLogIfOversized(filePath: string): void {
     if (stat.size <= MAX_LOG_BYTES) return
     const lines = readFileSync(filePath, "utf8").split("\n")
     if (lines[lines.length - 1] === "") lines.pop()
-    const keep = lines.slice(Math.ceil(lines.length / 2))
+    // Keep-at-least-one-line guard: a single line larger than the cap would
+    // make slice(ceil(len/2)) empty and rotation would erase the file instead
+    // of capping it. Always retain the newest line.
+    const keep = lines.length <= 1 ? lines : lines.slice(Math.ceil(lines.length / 2))
     const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
     writeFileSync(tmpPath, keep.length > 0 ? `${keep.join("\n")}\n` : "")
-    renameSync(tmpPath, filePath)
+    try {
+      renameSync(tmpPath, filePath)
+    } catch (error) {
+      // Don't orphan the temp file when the swap fails (EXDEV, permissions,
+      // a concurrent unlink of the target dir, ...) — nothing ever prunes it.
+      try {
+        rmSync(tmpPath, { force: true })
+      } catch {}
+      throw error
+    }
   } catch {
     // Rotation is best-effort and must never throw: a failed attempt just
     // means the file keeps growing until the next successful append/rotate.
@@ -863,21 +875,36 @@ function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; pa
   return { ok: false, reason: "not-installed" }
 }
 
+// Per-entry freshness for quality-cache.tsv (F2-1). Rotation is only a SIZE
+// cap: on a low-traffic install (~50 B/entry, 1 MiB cap ≈ 20k entries) an
+// entry survives essentially forever, so a `proposed` asset later promoted
+// to `curated` stayed misclassified indefinitely. Entries older than this
+// TTL are treated as cache misses at lookup so the `akm show` probe re-runs
+// and appends a fresh (newest-wins) classification.
+const QUALITY_TTL_MS = (() => {
+  const raw = Number(process.env.AKM_PLUGIN_QUALITY_TTL_MS)
+  return Number.isFinite(raw) && raw > 0 ? raw : 24 * 60 * 60 * 1000
+})()
+
 function refQuality(ref: string): string {
   if (!ref) return "unknown"
-  // Rotate BEFORE reading, not just before appending: quality-cache.tsv is a
-  // read-through cache with no TTL, so once a ref gets an entry the lookup
-  // below returns it forever (a `proposed` asset later promoted to `curated`
-  // stayed misclassified for the life of the file). Rotation is what makes a
-  // stale entry eventually expire — once it ages out of the newest-half
-  // window, the next lookup for that ref is a genuine cache miss and re-probes
-  // `akm show` for the current classification.
+  // Rotate BEFORE reading, not just before appending: expired entries keep
+  // being superseded by fresh appends, so without rotation-on-read the cache
+  // would only be size-capped when auto-feedback happens to append.
   rotateLogIfOversized(QUALITY_CACHE)
   if (existsSync(QUALITY_CACHE)) {
+    // Newest-first scan: appendLog writes `timestamp<TAB>ref<TAB>quality`, so
+    // the first matching line after reverse() is the latest classification.
     const lines = readFileSync(QUALITY_CACHE, "utf8").split("\n").filter(Boolean).reverse()
     for (const line of lines) {
-      const [, cachedRef, quality] = line.split("\t")
-      if (cachedRef === ref && quality) return quality
+      const [cachedAt, cachedRef, quality] = line.split("\t")
+      if (cachedRef !== ref || !quality) continue
+      const cachedAtMs = Date.parse(cachedAt)
+      if (Number.isFinite(cachedAtMs) && Date.now() - cachedAtMs <= QUALITY_TTL_MS) return quality
+      // The newest entry for this ref is expired — or predates the timestamp
+      // column entirely (legacy line, unparseable first field). Any older
+      // match is staler still, so stop scanning and fall through to the probe.
+      break
     }
   }
   const raw = akmRun(["--format", "json", "-q", "show", ref])

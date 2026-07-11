@@ -4262,6 +4262,55 @@ describe("akm-opencode plugin", () => {
       }
     })
 
+    // F2-2: when renameSync throws AFTER a successful temp-file write, the
+    // temp file used to be orphaned (nothing ever prunes *.tmp files). The
+    // helper must remove it before letting the error propagate.
+    it("removes the temp file when the atomic-swap rename fails, leaving the original intact", async () => {
+      const fs = await import("node:fs")
+      const { appendCandidates, updateCandidateStatus, readCandidates } = await import("../claude/shared/memory-candidates")
+      const dir = mkdtempSync(path.join(tmpdir(), "akm-candidates-atomic-"))
+      const candidateLog = path.join(dir, "memory-candidates.jsonl")
+      const renameSpy = spyOn(fs, "renameSync")
+      try {
+        appendCandidates(candidateLog, [{
+          id: "cand-rename-fail-1",
+          createdAt: new Date().toISOString(),
+          harness: "opencode" as const,
+          sessionId: "sess-rename-fail-1",
+          type: "lesson" as const,
+          scope: "project" as const,
+          content: "Rename failures must not orphan temp files.",
+          evidence: ["Rename failures must not orphan temp files."],
+          confidence: 0.7,
+          recommendedAction: "distill" as const,
+          status: "pending" as const,
+        }])
+
+        renameSpy.mockImplementation(() => {
+          throw new Error("EXDEV: simulated cross-device rename failure")
+        })
+
+        // replaceCandidates propagates write errors (it always has), so the
+        // status update surfaces the failure to its caller...
+        expect(() => updateCandidateStatus(candidateLog, "cand-rename-fail-1", "promoted")).toThrow(
+          "simulated cross-device rename failure",
+        )
+      } finally {
+        renameSpy.mockRestore()
+      }
+      try {
+        // ...but the temp file must have been cleaned up, not orphaned...
+        const entries = readdirSync(dir)
+        expect(entries.some((name) => name.endsWith(".tmp"))).toBe(false)
+        // ...and the original file is untouched (old content, old status).
+        const onDisk = readCandidates(candidateLog)
+        expect(onDisk).toHaveLength(1)
+        expect(onDisk[0].status).toBe("pending")
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
     it("updateCandidateStatus lands the update and leaves no .tmp residue", async () => {
       const { appendCandidates, updateCandidateStatus, readCandidates } = await import("../claude/shared/memory-candidates")
       const dir = mkdtempSync(path.join(tmpdir(), "akm-candidates-atomic-"))
