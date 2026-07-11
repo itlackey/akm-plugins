@@ -128,15 +128,16 @@ describe("Claude plugin metadata", () => {
 
     // PreToolUse no longer registers a Bash matcher — risky-command gating
     // was removed in 0.8.0 in favor of platform permission rules (see
-    // claude/README.md "Locking down destructive commands"). The PreToolUse
-    // array still exists for Agent / Read / Write / Edit / Glob / Grep
-    // matchers used by model-alias resolution and ref observation.
+    // claude/README.md "Locking down destructive commands"). The Agent-tool
+    // model remap was deleted as a release blocker (release/0.9.0 review §2);
+    // the PreToolUse array now exists only for Read / Write / Edit / Glob /
+    // Grep matchers used for ref observation.
     expect(plugin.hooks.PreToolUse).toBeDefined()
     const preToolMatchers = plugin.hooks.PreToolUse.map(
       (entry: { matcher?: string }) => entry.matcher,
     )
     expect(preToolMatchers).not.toContain("Bash")
-    expect(preToolMatchers).toContain("Agent")
+    expect(preToolMatchers).not.toContain("Agent")
 
     // PostToolUse runs both post-tool and auto-feedback
     const postToolCommands = plugin.hooks.PostToolUse[0].hooks.map(
@@ -321,7 +322,7 @@ describe("Claude hook scripts", () => {
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 if [ "$1" = "--version" ]; then
-  echo "akm 0.8.3"
+  echo "akm 0.9.0"
   exit 0
 fi
 exit 0
@@ -338,7 +339,7 @@ exit 0
     })
 
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.8.3")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.9.0")
   })
 
   it("extract-session dispatches cleanly and returns no output (fire-and-forget)", () => {
@@ -421,7 +422,15 @@ exit 0
     expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skill:release --negative --reason stale")
   })
 
-  describe("pre-tool-agent model alias resolution", () => {
+  describe("Agent-tool model remap was deleted (release blocker #5)", () => {
+    // The Agent-tool PreToolUse handler used to rewrite `tool_input.model`
+    // (floors unknown aliases to `sonnet`, coupled with `permissionDecision:
+    // "allow"` which silently bypassed user-configured `ask` rules). It was
+    // deleted outright rather than fixed — see release-0.9.0-plugin-review.md
+    // §2 and §8 item 5. These tests pin the deletion: the hook must never
+    // touch Agent tool_input or emit a permissionDecision for it, and the
+    // `pre-tool-agent` subcommand (its only entry point) must no longer
+    // exist as a live dispatch case.
     function runPreToolAgent(model: string | null, options?: { env?: Record<string, string> }) {
       const payload: Record<string, unknown> = { tool_input: model === null ? {} : { model } }
       return runHook(["pre-tool-agent"], {
@@ -434,40 +443,52 @@ exit 0
       })
     }
 
-    it("passes full Claude model IDs through unchanged (no silent downgrade to sonnet)", () => {
-      const fullIds = [
+    it("never modifies the Agent tool's model input, for any input shape", () => {
+      const inputs = [
         "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251001",
-        "claude-3-5-sonnet-20241022",
+        "sonnet",
+        "opus",
+        "haiku",
+        "inherit",
+        "balanced",
+        "gpt-4o",
+        "totally-made-up-alias",
+        null,
       ]
-      for (const id of fullIds) {
-        const stdout = runPreToolAgent(id)
-        // Empty stdout means resolveModel returned the input unchanged — no
-        // rewrite was emitted. The Agent tool keeps the full ID intact.
+      for (const model of inputs) {
+        const stdout = runPreToolAgent(model)
+        // No dispatch case handles `pre-tool-agent` anymore — the hook falls
+        // through to the unknown-command default, which always emits empty
+        // stdout. Never a rewrite, never a permissionDecision.
         expect(stdout.trim()).toBe("")
       }
     })
 
-    it("keeps the four short aliases (sonnet/opus/haiku/inherit) as-is", () => {
-      for (const alias of ["sonnet", "opus", "haiku", "inherit"]) {
-        const stdout = runPreToolAgent(alias)
-        expect(stdout.trim()).toBe("")
-      }
+    it("logs the unrecognized pre-tool-agent invocation to the state dir rather than emitting a rewrite", () => {
+      const tempDir = makeTempDir()
+      const stateDir = path.join(tempDir, "state")
+      mkdirSync(stateDir, { recursive: true })
+
+      const stdout = runHook(["pre-tool-agent"], {
+        input: JSON.stringify({ tool_input: { model: "balanced" } }),
+        env: {
+          HOME: tempDir,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      expect(stdout.trim()).toBe("")
+      const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+      expect(sessionLog.some((line) => line.includes("runtime_error\tunknown_command\tpre-tool-agent"))).toBe(true)
     })
 
-    it("remaps known cross-provider aliases to the configured Claude short alias", () => {
-      const stdout = runPreToolAgent("balanced")
-      const payload = JSON.parse(stdout)
-      expect(payload.hookSpecificOutput.hookEventName).toBe("PreToolUse")
-      expect(payload.hookSpecificOutput.permissionDecision).toBe("allow")
-      expect(payload.hookSpecificOutput.updatedInput.model).toBe("sonnet")
-    })
-
-    it("falls back unknown aliases to sonnet so dispatch is never rejected upstream", () => {
-      const stdout = runPreToolAgent("totally-made-up-alias")
-      const payload = JSON.parse(stdout)
-      expect(payload.hookSpecificOutput.updatedInput.model).toBe("sonnet")
+    it("no longer ships the deleted alias-remap machinery in the hook source", () => {
+      const hookSource = readFileSync(hookScript, "utf8")
+      expect(hookSource).not.toContain("MODEL_ALIAS_MAP")
+      expect(hookSource).not.toContain("resolveModel")
+      expect(hookSource).not.toContain("CC_VALID_MODEL_ALIASES")
+      expect(hookSource).not.toContain("FULL_CLAUDE_MODEL_ID_RE")
     })
   })
 
@@ -696,7 +717,7 @@ fs.writeFileSync(configPath, JSON.stringify(cur, null, 2) + "\\n");
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 0.8.3"; exit 0 ;;
+  --version) echo "akm 0.9.0"; exit 0 ;;
   config)
     if [ "$2" = "set" ]; then
       # Strip the akm-cli 0.8.0+ hook-driven flags before passing positional args.

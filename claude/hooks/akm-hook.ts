@@ -15,51 +15,14 @@ import { extractAkmRefsFromString, extractAllRefs } from "../shared/ref-extracti
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
 
-// ── Agent model alias resolution ─────────────────────────────────────────────
-// The only valid Claude Code subagent model identifiers are the four Anthropic
-// aliases below. Everything else (cross-provider aliases like `balanced`,
-// `gpt-4o`, or full-ID prefixes like `anthropic/...` and `lab/...`) gets
-// remapped via MODEL_ALIAS_MAP or falls back to `sonnet` so the Agent tool
-// dispatch is never rejected upstream.
-const CC_VALID_MODEL_ALIASES = new Set(["sonnet", "opus", "haiku", "fable", "inherit"])
-const MODEL_ALIAS_MAP: Record<string, string> = {
-  balanced: "sonnet",
-  fast: "haiku",
-  capable: "opus",
-  smart: "opus",
-  cheap: "haiku",
-  "gpt-4o": "sonnet",
-  "gpt-4o-mini": "haiku",
-  "gpt-4": "sonnet",
-  "gpt-5": "opus",
-  "gpt-5.4": "opus",
-}
-
-// Full Anthropic model IDs (e.g. `claude-opus-4-7`, `claude-sonnet-4-6`,
-// `claude-haiku-4-5-20251001`, `claude-3-5-sonnet-20241022`) are valid model
-// selectors in Claude Code's Agent tool — the four short aliases are NOT the
-// only accepted values. Pass full IDs straight through; only short aliases
-// (`balanced`, `gpt-4o`, etc.) need remapping or the safe-fallback floor.
-// The family token (opus/sonnet/haiku) can appear after an optional
-// version-prefix block such as `3-5-` (claude-3-5-sonnet-20241022).
-const FULL_CLAUDE_MODEL_ID_RE = /^claude-(?:[0-9]+(?:[.-][0-9]+)*-)?(?:opus|sonnet|haiku)\b/i
-
-function resolveModel(raw: string | null | undefined): string | null {
-  if (!raw) return null
-  if (CC_VALID_MODEL_ALIASES.has(raw)) return raw
-  if (FULL_CLAUDE_MODEL_ID_RE.test(raw)) return raw
-  const mapped = MODEL_ALIAS_MAP[raw.toLowerCase()]
-  if (mapped) return mapped
-  return "sonnet" // unknown alias → safe fallback
-}
 // AKM_REQUIRED_RANGE is the single shared version contract imported from
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
 // is a SEPARATE concern: the install ref. Bun/npm install spec does NOT parse
-// `akm-cli@^0.8.0-rc0 || ^0.8.0` as a disjunction — it would splat into argv
+// `akm-cli@^0.9.0-beta.0 || ^0.9.0` as a disjunction — it would splat into argv
 // tokens and refuse the install — so the package ref keeps a single clean
 // range. The validator above (satisfies) accepts the full disjunction; a user
 // can still pin a specific prerelease via AKM_PACKAGE_REF.
-const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.8.0"
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.0-beta.0"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
@@ -846,9 +809,11 @@ function sessionEnd(): string {
 // SessionStart whenever akm was missing or out of range. Installing global
 // packages without explicit user consent is too aggressive for a public
 // release. Starting with 0.8.0 we detect-and-warn instead: if akm is missing
-// or out of range, we write a clear stderr banner pointing at `/akm-setup` —
-// which IS the explicit consent point — and return a structured verdict.
-// Callers decide how to degrade. We never spawn an install from this path.
+// or out of range, we log the mismatch to the plugin state dir and return a
+// structured verdict; callers surface the user-facing consent prompt through
+// their own output channel (see sessionStart()'s degraded additionalContext)
+// rather than raw diagnostics on stderr. We never spawn an install from this
+// path.
 function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; path?: string } {
   const existing = resolveAkmCommandSpec()
   if (existing) {
@@ -858,35 +823,10 @@ function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; pa
       return { ok: true, version: current.version, path: existing.displayPath }
     }
     appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing.displayPath, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
-    writeAkmConsentBanner({ detected: current.version, detectedPath: existing.displayPath })
     return { ok: false, reason: "version-mismatch", version: current.version, path: existing.displayPath }
   }
   appendLog(SESSION_LOG, "akm_missing", "path", AKM_PACKAGE_REF, AKM_REQUIRED_RANGE)
-  writeAkmConsentBanner({ detected: undefined, detectedPath: undefined })
   return { ok: false, reason: "not-installed" }
-}
-
-function writeAkmConsentBanner(info: { detected?: string; detectedPath?: string }) {
-  const detectedLabel = info.detected
-    ? `${info.detected}${info.detectedPath ? ` (${info.detectedPath})` : ""}`
-    : "(not found on PATH)"
-  const banner = [
-    "─".repeat(60),
-    "akm-plugin: akm CLI not installed or wrong version",
-    `  detected: ${detectedLabel}`,
-    `  required: ${AKM_REQUIRED_RANGE}`,
-    "",
-    "Run `/akm-setup` in this Claude Code session to install/upgrade",
-    "with your explicit confirmation, or install manually:",
-    `  bun install -g ${AKM_PACKAGE_REF}`,
-    `  npm install -g ${AKM_PACKAGE_REF}`,
-    "─".repeat(60),
-  ].join("\n")
-  try {
-    process.stderr.write(banner + "\n")
-  } catch {
-    // best-effort; never crash the hook over a banner
-  }
 }
 
 function refQuality(ref: string): string {
@@ -923,8 +863,8 @@ type AgentDefaultResult = {
  *
  * Post-#72 behavior: we still write (the plugin needs the default to dispatch
  * improve/propose), but we ALSO surface a SessionStart additionalContext line
- * AND a stderr banner on the first write — see gatherSessionStartWarnings.
- * Users can opt OUT of the write entirely with `AKM_PLUGIN_NO_AUTO_DEFAULT=1`
+ * on the first write — see gatherSessionStartWarnings. Users can opt OUT of
+ * the write entirely with `AKM_PLUGIN_NO_AUTO_DEFAULT=1`
  * (in which case the agent stays unset and improve/propose will refuse until
  * the user runs `/akm-setup`).
  */
@@ -951,30 +891,6 @@ function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
 }
 
-function writeStashMissingBanner(stashDir: string | undefined) {
-  // additionalContext alone is often ignored by Claude in long-running
-  // sessions, so we mirror the akm-missing path and write a clearly-marked
-  // banner to stderr where the user can see it in their terminal. Hooks
-  // never crash over a banner — wrap in try/catch.
-  const banner = [
-    "─".repeat(60),
-    "akm-plugin: AKM stash directory missing",
-    stashDir
-      ? `  configured: ${stashDir} (path does not exist)`
-      : "  configured: (none — neither AKM_STASH_DIR nor stashDir in config)",
-    "",
-    "AKM curation, search, and show will return empty until you run",
-    "`/akm-setup` to initialize the stash, or set `AKM_STASH_DIR` to an",
-    "existing directory. All other Claude features keep working.",
-    "─".repeat(60),
-  ].join("\n")
-  try {
-    process.stderr.write(banner + "\n")
-  } catch {
-    // best-effort; never crash the hook over a banner
-  }
-}
-
 function gatherSessionStartWarnings(
   versionCheck: { ok: boolean; version?: string },
   agentDefault: AgentDefaultResult,
@@ -982,10 +898,10 @@ function gatherSessionStartWarnings(
   const warnings: string[] = []
 
   // H1: stash directory does not exist — curation will return empty context
-  // and most akm verbs (search/show/curate) will be no-ops. Surface this on
-  // BOTH channels: additionalContext (so the agent sees the cue) AND stderr
-  // (so the user sees it in their terminal, which is the more reliable
-  // signal — additionalContext often gets compacted away).
+  // and most akm verbs (search/show/curate) will be no-ops. Surface this via
+  // additionalContext (the hook's supported output channel) and mirror it to
+  // the plugin state-dir log; runtime code must never write raw diagnostics
+  // to stderr/stdout outside the hook protocol envelope.
   const stashRoots = resolveStashRoots()
   const stashDir = stashRoots[0]
   if (!stashDir || !existsSync(stashDir)) {
@@ -994,7 +910,6 @@ function gatherSessionStartWarnings(
         ? `⚠ AKM stash directory \`${stashDir}\` does not exist. Run \`/akm-setup\` to initialize the stash, or set \`AKM_STASH_DIR\` to point at an existing one. AKM curation will be empty until then.`
         : `⚠ No AKM stash directory is configured. Run \`/akm-setup\` to choose one, or set \`AKM_STASH_DIR\`. AKM curation will be empty until then.`,
     )
-    writeStashMissingBanner(stashDir)
     appendLog(SESSION_LOG, "stash_missing", stashDir ?? "(unconfigured)")
   }
 
@@ -1011,35 +926,20 @@ function gatherSessionStartWarnings(
   // Surface the write so OpenCode users (who installed the Claude plugin to
   // experiment) see that their config was modified. Suppresses subsequent
   // SessionStart firings — only the initial write generates this notice.
+  // detectAgentDefault() already logged the write to the state dir.
   if (agentDefault.initialized) {
     warnings.push(
       `ℹ The Claude plugin set \`defaults.agent=claude\` in \`${getAkmConfigPath()}\` so \`/akm-improve\` and \`/akm-propose\` can dispatch tasks. ` +
         `To use a different default, run \`/akm-setup\`. To suppress this auto-write on future installs, set \`AKM_PLUGIN_NO_AUTO_DEFAULT=1\` before SessionStart.`,
     )
-    try {
-      process.stderr.write(
-        [
-          "─".repeat(60),
-          "akm-plugin: defaults.agent initialized → claude",
-          `  config: ${getAkmConfigPath()}`,
-          "",
-          "  Run /akm-setup to change defaults, or set",
-          "  AKM_PLUGIN_NO_AUTO_DEFAULT=1 to opt out of this auto-write.",
-          "─".repeat(60),
-          "",
-        ].join("\n"),
-      )
-    } catch {
-      // best-effort; never crash the hook over a banner
-    }
   }
 
-  // L5: detected version is a pre-release. Banner range accepts ^0.8.0-rc0
-  // but stable banner text says ^0.8.0 — make the rc status explicit so users
-  // know to track stable when it lands.
+  // L5: detected version is a pre-release. AKM_REQUIRED_RANGE accepts the
+  // 0.9.0-beta line explicitly — make the pre-release status visible so
+  // users know to track a stable 0.9.x release once published.
   if (versionCheck.ok && versionCheck.version && /-/.test(versionCheck.version)) {
     warnings.push(
-      `ℹ Detected pre-release \`akm-cli@${versionCheck.version}\`. Tracking is fine; upgrade to a stable 0.8.x once published for production use.`,
+      `ℹ Detected pre-release \`akm-cli@${versionCheck.version}\`. Tracking is fine; upgrade to a stable 0.9.x once published for production use.`,
     )
   }
 
@@ -1164,7 +1064,7 @@ function curatePrompt(): string {
     outcome: { status: curated.trim() ? "ok" : "skipped" },
   })
   if (!curated.trim()) return ""
-  const curatedFile = path.join(CURATED_DIR, `prompt-${sid ?? "unknown"}.md`)
+  const curatedFile = path.join(CURATED_DIR, `prompt-${sid || "unknown"}.md`)
   try {
     writeFileSync(curatedFile, tagRecalledContent(curated.trim()))
   } catch {}
@@ -1176,11 +1076,13 @@ async function sessionStart(): Promise<string> {
   const sid = extractSessionId(rawInput)
   const versionCheck = checkAkmVersion()
   if (!versionCheck.ok) {
-    // checkAkmVersion already wrote a stderr banner pointing the user at
-    // `/akm-setup` for explicit-consent install. Emit a degraded SessionStart
-    // context so the agent knows akm CLI tooling is unavailable this session
-    // and won't keep trying to call it. We intentionally do NOT crash the
-    // hook — the rest of Claude Code stays fully functional.
+    // checkAkmVersion() already logged the mismatch to the plugin state dir
+    // (no raw diagnostics on stderr — see AGENTS.md). The user-facing consent
+    // prompt travels through this SessionStart additionalContext instead, so
+    // the agent both knows akm CLI tooling is unavailable this session (and
+    // won't keep trying to call it) and can relay the install hint to the
+    // user. We intentionally do NOT crash the hook — the rest of Claude Code
+    // stays fully functional.
     return emitHookContext(
       "SessionStart",
       [
@@ -1188,7 +1090,10 @@ async function sessionStart(): Promise<string> {
         "",
         `The akm CLI is missing or does not satisfy \`${AKM_REQUIRED_RANGE}\` (reason: ${versionCheck.reason ?? "unknown"}).`,
         "Do not call any `akm` Bash command. Tell the user to run `/akm-setup`",
-        "in this session to install/upgrade akm-cli with their confirmation.",
+        "in this session to install/upgrade akm-cli with their explicit confirmation,",
+        "or install manually:",
+        `  bun install -g ${AKM_PACKAGE_REF}`,
+        `  npm install -g ${AKM_PACKAGE_REF}`,
       ].join("\n"),
     )
   }
@@ -1232,7 +1137,7 @@ async function sessionStart(): Promise<string> {
   const curatedTrimmed = curatedRaw.trim()
   let curatedFile = ""
   if (curatedTrimmed) {
-    curatedFile = path.join(CURATED_DIR, `session-${sid ?? "unknown"}.md`)
+    curatedFile = path.join(CURATED_DIR, `session-${sid || "unknown"}.md`)
     try {
       writeFileSync(curatedFile, tagRecalledContent(curatedTrimmed))
     } catch {}
@@ -1267,53 +1172,6 @@ async function sessionStart(): Promise<string> {
   if (curatedFile) body = `${body}\n\nAKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${CURATED_CONTEXT_TAIL}`
   body = `${body}\n\n${SESSION_START_FOOTER}`
   return emitHookContext("SessionStart", body)
-}
-
-function preToolAgent(): string {
-  const rawInput = readStdin()
-  let payload: Record<string, unknown>
-  try {
-    payload = JSON.parse(rawInput)
-  } catch {
-    return "" // malformed — pass through
-  }
-
-  const toolInput = (payload.tool_input ?? {}) as Record<string, unknown>
-  const subagentType = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : null
-  const rawModel = typeof toolInput.model === "string" ? toolInput.model : null
-
-  // Read model from agent frontmatter if not set on the tool call directly.
-  // Note: we deliberately do NOT special-case `akm:` prefixed subagent_type
-  // values — the Agent tool's subagent_type is always a known
-  // ~/.claude/agents/<name>.md file reference, not a runtime-resolved stash
-  // ref. Stash agents are surfaced via the `/akm-agent` slash command
-  // (which materializes them at user request), not via on-the-fly dispatch.
-  let frontmatterModel: string | null = null
-  if (subagentType) {
-    const agentFilePath = path.join(process.env.HOME ?? ".", ".claude", "agents", `${subagentType}.md`)
-    try {
-      const content = readFileSync(agentFilePath, "utf8")
-      const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
-      if (fmMatch) {
-        const modelMatch = fmMatch[1].match(/^model:\s*(.+)$/m)
-        if (modelMatch) frontmatterModel = modelMatch[1].trim()
-      }
-    } catch {
-      // agent file not found — no frontmatter model
-    }
-  }
-
-  const effectiveRaw = rawModel ?? frontmatterModel
-  const resolved = resolveModel(effectiveRaw)
-  if (!resolved || resolved === effectiveRaw) return ""
-
-  return JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      updatedInput: { ...toolInput, model: resolved },
-    },
-  })
 }
 
 /**
@@ -1373,8 +1231,6 @@ async function main(): Promise<string> {
       // commands"). Non-bash matchers still flow through pre-tool-nonbash
       // for ref observation.
       return ""
-    case "pre-tool-agent":
-      return preToolAgent()
     case "pre-tool-nonbash":
       return pretoolNonBash()
     case "post-tool-nonbash":
