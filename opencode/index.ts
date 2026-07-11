@@ -1,6 +1,6 @@
 import { type Plugin, tool } from "@opencode-ai/plugin"
 import { execFileSync, execSync, spawn } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -46,6 +46,11 @@ const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?
 // matcher; AKM_REQUIRED_VERSION_RANGE is just the display alias used in the
 // diagnostics below.
 const AKM_REQUIRED_VERSION_RANGE = AKM_VERSION_RANGE
+// The consent banner's "install this" recommendation is deliberately a single
+// version floor rather than the full AKM_VERSION_RANGE (which is an
+// OR-list of accepted ranges, not a valid single npm install specifier).
+// Keep it in sync with the lowest currently-recommended 0.9.x prerelease.
+const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.0-beta.0"
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
@@ -56,6 +61,15 @@ const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5")
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
 const AKM_CURATOR_CONTEXT_MAX_CHARS = Math.max(500, Number(process.env.AKM_CURATOR_CONTEXT_MAX_CHARS ?? "4000") || 4000)
+// 13: "Memory leaks" — sessionBuffer previously grew without bound for the
+// life of a session (a long-running session accumulates one entry per
+// observed tool ref / memory intent). Cap it drop-oldest, matching the
+// `.slice(-8)` cap style already used by retrospectiveState.recentRefs.
+const AKM_SESSION_BUFFER_MAX_ENTRIES = Math.max(1, Number(process.env.AKM_SESSION_BUFFER_MAX_ENTRIES ?? "200") || 200)
+// Best-effort sweep age for orphaned curated tmp files (os.tmpdir()/akm-opencode/curated).
+// A session that ends without ever firing session.deleted (host crash, forced
+// kill) would otherwise leak its curated file on disk forever.
+const CURATED_FILE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const SESSION_DATE_TAG_LENGTH = 8
 const CHECKPOINT_DATE_TAG_LENGTH = 15
 const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
@@ -162,7 +176,7 @@ const CURATOR_AGENT_PROMPT_FALLBACK = `You are the AKM curator — a compound-en
 
 Inputs you should inspect:
 1. OpenCode app logs that include the "akm-opencode" service (feedback, memory, tool invocations).
-2. Session-summary memories named memory:opencode-session-*.
+2. Memory candidates awaiting triage (akm_memory candidates / akm_memory audit) and any prior curator reports persisted as memory:akm-curator-*.
 3. The live stash: call akm_search "" --limit 50 (and akm_show <ref>) to enumerate assets; reach for akm_help topic="list sources" if you need the configured-sources view.
 4. Parent-session context via akm_parent_messages when this session was dispatched as a child.
 
@@ -173,7 +187,7 @@ Signals to act on:
 - Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see akm_help topic="reindex").
 - Pending proposals: list or diff them via akm_help topic="proposal" and recommend accept, reject, or revise. Never accept or reject without explicit user approval.
 - Duplicates / drift: near-identical descriptions or overlapping responsibilities. Propose a consolidation.
-- Stale memories: session summaries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
+- Stale memories: memory entries that never get recalled. Propose removal (see akm_help topic="remove") once distilled into a durable knowledge doc or wiki page.
 - Wiki hygiene: for each wiki returned by akm_wiki list, run akm_wiki lint <name> and report orphans, broken xrefs, uncited raws, and stale indexes as fix candidates.
 - Stuck workflows: run akm_workflow list --active and surface any runs in blocked or failed state with their step ids. Propose whether to resume or escalate.
 - Never touch env or secret values: do not call akm_env run or akm_secret path unless the user explicitly asks. Env values and secret material must never appear in reports.
@@ -543,6 +557,8 @@ function addBufferEntry(sessionID: string | undefined, entry: Omit<SessionBuffer
   if (!sessionID) return
   const buf = sessionBuffer.get(sessionID) ?? []
   buf.push({ timestamp: nowIso(), ...entry })
+  // Drop-oldest cap (13: "Memory leaks" — sessionBuffer was uncapped).
+  if (buf.length > AKM_SESSION_BUFFER_MAX_ENTRIES) buf.splice(0, buf.length - AKM_SESSION_BUFFER_MAX_ENTRIES)
   sessionBuffer.set(sessionID, buf)
 }
 
@@ -564,6 +580,111 @@ function writeCuratedFile(sessionID: string, content: string): string {
   return filePath
 }
 
+// 13: "Memory leaks" — session.deleted cleanup only cleared sessionHints,
+// sessionCurated, sessionWorkflow, sessionCuratorReport, the epoch/version
+// tracking pairs, and sessionBuffer. It missed retrospectiveState,
+// sessionRecallAudit, and the per-session pendingProposalSummaryCache entry
+// (cacheKey is the sessionID — see getPendingProposalCount), and never
+// deleted the session's curated tmp file. clearSessionState() is the single
+// place every session-keyed Map/tmp-file is torn down, so a future new map
+// would only need one line added here instead of another hand-maintained list
+// at the session.deleted call site.
+function clearSessionState(sessionID: string): void {
+  sessionHints.delete(sessionID)
+  sessionCurated.delete(sessionID)
+  const curatedFile = sessionCuratedFile.get(sessionID)
+  if (curatedFile) {
+    try {
+      rmSync(curatedFile, { force: true })
+    } catch {
+      // Best-effort: a failed tmp-file cleanup must not block session teardown.
+    }
+  }
+  sessionCuratedFile.delete(sessionID)
+  sessionWorkflow.delete(sessionID)
+  sessionCuratorReport.delete(sessionID)
+  sessionContextEpoch.delete(sessionID)
+  sessionContextInjectedEpoch.delete(sessionID)
+  sessionCuratedVersion.delete(sessionID)
+  sessionCuratedInjectedVersion.delete(sessionID)
+  sessionBuffer.delete(sessionID)
+  sessionLastExtractAt.delete(sessionID)
+  sessionRecallAudit.delete(sessionID)
+  pendingProposalSummaryCache.delete(sessionID)
+  retrospectiveState.delete(sessionID)
+}
+
+// Test-only: snapshot which session-keyed Maps still hold an entry for `sid`,
+// plus the current sessionBuffer contents. Lets tests assert clearSessionState()
+// actually emptied every map (13: "Memory leaks") without exporting the maps
+// themselves. Mirrors the __resetResolvedAkmForTests test-only export above.
+export function __sessionStateSnapshotForTests(sessionID: string): {
+  sessionHints: boolean
+  sessionCurated: boolean
+  sessionCuratedFile: boolean
+  sessionWorkflow: boolean
+  sessionCuratorReport: boolean
+  sessionContextEpoch: boolean
+  sessionContextInjectedEpoch: boolean
+  sessionCuratedVersion: boolean
+  sessionCuratedInjectedVersion: boolean
+  sessionBuffer: boolean
+  sessionBufferLength: number
+  sessionBufferRefs: string[]
+  sessionLastExtractAt: boolean
+  sessionRecallAudit: boolean
+  pendingProposalSummaryCache: boolean
+  retrospectiveState: boolean
+} {
+  return {
+    sessionHints: sessionHints.has(sessionID),
+    sessionCurated: sessionCurated.has(sessionID),
+    sessionCuratedFile: sessionCuratedFile.has(sessionID),
+    sessionWorkflow: sessionWorkflow.has(sessionID),
+    sessionCuratorReport: sessionCuratorReport.has(sessionID),
+    sessionContextEpoch: sessionContextEpoch.has(sessionID),
+    sessionContextInjectedEpoch: sessionContextInjectedEpoch.has(sessionID),
+    sessionCuratedVersion: sessionCuratedVersion.has(sessionID),
+    sessionCuratedInjectedVersion: sessionCuratedInjectedVersion.has(sessionID),
+    sessionBuffer: sessionBuffer.has(sessionID),
+    sessionBufferLength: sessionBuffer.get(sessionID)?.length ?? 0,
+    sessionBufferRefs: (sessionBuffer.get(sessionID) ?? []).flatMap((entry) => (entry.ref ? [entry.ref] : [])),
+    sessionLastExtractAt: sessionLastExtractAt.has(sessionID),
+    sessionRecallAudit: sessionRecallAudit.has(sessionID),
+    pendingProposalSummaryCache: pendingProposalSummaryCache.has(sessionID),
+    retrospectiveState: retrospectiveState.has(sessionID),
+  }
+}
+
+// Test-only: expose the curated tmp-file directory so tests can assert file
+// existence/absence without hardcoding os.tmpdir() path construction twice.
+export function __curatedDirForTests(): string {
+  return CURATED_DIR
+}
+
+// Best-effort sweep of orphaned curated tmp files (13: "tmp-file cleanup").
+// clearSessionState() handles the normal session.deleted path; this covers
+// sessions that never fire it (host crash, forced kill). Async and fully
+// error-trapped internally so a failed sweep never surfaces as an unhandled
+// rejection or blocks the session.created path that triggers it.
+async function pruneStaleCuratedFiles(): Promise<void> {
+  let entries: string[]
+  try {
+    entries = readdirSync(CURATED_DIR)
+  } catch {
+    return
+  }
+  const now = Date.now()
+  for (const name of entries) {
+    try {
+      const filePath = path.join(CURATED_DIR, name)
+      const info = statSync(filePath)
+      if (now - info.mtimeMs > CURATED_FILE_MAX_AGE_MS) rmSync(filePath, { force: true })
+    } catch {
+      // Best-effort per-file: a single stat/rm failure must not abort the sweep.
+    }
+  }
+}
 
 function isAkmRef(value: string): boolean {
   return AKM_REF_PATTERN.test(value)
@@ -1076,14 +1197,20 @@ async function maybeIndexSessionMemory(
 // an owner-gated reference rung) still harvests explicit "remember ..." intents
 // from the session buffer at session end. No stash write — candidates land in
 // the candidate log for review only. Deleting the buffer after extraction is
-// the de-dup: a re-fired terminal event finds an empty buffer and no-ops.
+// the de-dup: a re-fired lifecycle event finds an empty buffer and no-ops.
 function maybeExtractSessionCandidates(sessionID: string, reason: string): void {
   if (!AKM_AUTO_MEMORY) return
   if (!sessionID) return
   const entries = sessionBuffer.get(sessionID) ?? []
   // Require at least two observations before persisting — single events are noise.
   if (entries.length < 2) {
-    sessionBuffer.delete(sessionID)
+    // Below the noise floor, only the terminal session.deleted event may
+    // discard the buffer (the old discard-noise-at-session-end behavior).
+    // Non-terminal events (session.idle fires at every turn's quiescence,
+    // session.compacted mid-session) must KEEP a below-floor buffer so a
+    // lone "remember ..." intent from one turn survives to pair with an
+    // observation from a later turn instead of being wiped at each idle.
+    if (reason === "session.deleted") sessionBuffer.delete(sessionID)
     return
   }
   const targetRefHints = entries.flatMap((entry) => (entry.ref ? [entry.ref] : []))
@@ -1255,24 +1382,25 @@ type AkmHelpEntry = {
   keywords: string[]
 }
 
+// BEGIN GENERATED: akm-help-table (source: docs/akm-help-registry.md; run `node scripts/generate-help-tables.mjs` to refresh)
 const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Review pending proposals and decide whether to accept, reject, or revise them",
-    command: "akm proposal list --status pending --format json; akm proposal show <id>; akm proposal diff <id>",
-    notes: "Accept/reject requires explicit user approval.",
+    command: "akm proposal list --status pending --format json",
+    notes: "Inspect individual entries with `akm proposal show <id>` and `akm proposal diff <id>` (positional id). Accept/reject requires explicit user approval.",
     keywords: ["proposal", "review proposals", "pending proposals", "accept proposal", "reject proposal"],
   },
   {
     task: "Bulk-triage the standing pending proposal backlog by policy",
     command: "akm proposal drain --policy <personal-stash|conservative|manual> --dry-run",
-    notes: "Mutating: promotes/rejects in bulk and commits to git (no batch revert). Preview with --dry-run, then --promote --yes after explicit approval. Supersedes the old manual proposal-management agent session; also runs as the processes.triage improve pre-pass.",
+    notes: "Mutating: promotes/rejects in bulk and commits to git (no batch revert). Preview with `--dry-run`, then `--promote --yes` after explicit approval. Flags: `--max-accepts`, `--max-diff-lines`, `--older-than`, `--judgment`, `--profile`. Supersedes the old manual proposal-management agent session; also runs automatically as the `processes.triage` improve pre-pass.",
     keywords: ["proposal", "drain", "triage", "backlog", "bulk accept", "bulk reject"],
   },
   {
     task: "Improve existing assets or distill repeated evidence into proposals",
     command: "akm improve [<type>|<ref>] [--task \"...\"]",
-    notes: "Improve owns the former reflect/distill flow; proposed assets are not curated until accepted. Profiles add a processes.triage pre-pass and end-of-run sync.",
-    keywords: ["improve", "lesson", "reflect", "distill", "drift", "failure"],
+    notes: "`improve` replaces the old reflect/distill flow in v0.8.0. Proposed assets are not curated until accepted. Profiles add a `processes.triage` pre-pass and end-of-run `sync` (commit/push).",
+    keywords: ["improve", "lesson", "reflect", "distill", "drift", "failure", "triage", "sync"],
   },
   {
     task: "Manage scheduled task assets via the OS scheduler",
@@ -1283,26 +1411,38 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Create a proposed asset for a coverage gap",
     command: "akm propose <type> <name> --task \"...\"",
-    notes: PROPOSED_QUALITY_WARNING,
+    notes: "Drafts a `quality:\"proposed\"` asset that lands in the proposal queue — never directly curated.",
     keywords: ["propose", "coverage gap", "proposed asset"],
   },
   {
     task: "Search including proposed-quality assets",
     command: "akm search <query> --include-proposed",
-    notes: PROPOSED_QUALITY_WARNING,
+    notes: "Default search hides drafts; this flag merges them into hits. Do not treat proposed assets as curated until accepted.",
     keywords: ["include-proposed", "proposed quality", "lesson"],
+  },
+  {
+    task: "Manage whole-file secrets outside chat-safe read paths",
+    command: "akm secret <set|run|remove> ...",
+    notes: "Use `/akm-secret` or `akm_secret` for `list` / `path`. Never paste secret values into chat; `set` reads from stdin/--from-file/--from-env and `run` injects into a child process only.",
+    keywords: ["secret", "docker secret", "pem", "token", "_FILE"],
+  },
+  {
+    task: "Read or use `.env`-style config assets without values reaching chat",
+    command: "akm env <list|path|run> ...",
+    notes: "Chat-safe reads: `list` (key names only), `path <ref>` (file path for `--env-file` consumers), `run <ref> -- <cmd>` (inject into a child process — values never touch stdout). `create`/`set`/`unset`/`remove`/`export` are writes and stay on the raw CLI path; confirm with the user before running them. Use `/akm-env` (Claude) or `akm_env` (OpenCode) for the first-class chat-safe actions.",
+    keywords: ["env", "dotenv", "environment variables", "env file", "secrets group"],
   },
   {
     task: "Install a kit or register an external source (npm, GitHub, git, URL, local dir)",
     command: "akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--provider <p>] [--max-pages N] [--max-depth N] [--allow-insecure]",
-    notes: "Confirm with the user before registering a website crawler or passing --allow-insecure.",
+    notes: "Confirm with the user before registering a website crawler or passing `--allow-insecure`.",
     keywords: ["add", "install", "register", "kit", "source", "github", "npm"],
   },
   {
-    task: "Commit and push pending stash changes",
-    command: "akm sync [<source-name>] [-m <msg>] [--no-push]",
-    notes: "For writable git-backed sources, sync commits and pushes by default (pass --no-push to skip); review the diff first.",
-    keywords: ["sync", "save", "commit", "push", "publish", "git"],
+    task: "Commit (and optionally push) pending stash changes",
+    command: "akm sync [<source-name>] [-m <msg>]",
+    notes: "For writable git-backed sources, sync commits and pushes (`--no-push` to skip); review the diff first.",
+    keywords: ["save", "commit", "push", "publish", "git", "sync"],
   },
   {
     task: "Import a file (or stdin) into the stash as a typed asset",
@@ -1313,7 +1453,7 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Clone an asset from any source for editing",
     command: "akm clone <ref> [--name <new>] [--dest <dir>] [--force]",
-    notes: "Type subdirectory is appended automatically; ref may include origin (e.g. npm:@scope/pkg//script:foo).",
+    notes: "Type subdirectory is appended automatically; ref may include origin (e.g. `npm:@scope/pkg//script:foo`).",
     keywords: ["clone", "copy", "fork", "edit"],
   },
   {
@@ -1335,7 +1475,7 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
   {
     task: "Search the registry only (skip local stash)",
     command: "akm registry search <query> [--limit N] [--assets]",
-    notes: "akm_search with source='registry' covers most cases; this is the explicit form.",
+    notes: "`akm_search` with `source='registry'` covers most cases; this is the explicit form.",
     keywords: ["registry", "search registry", "installable", "discover kit"],
   },
   {
@@ -1343,12 +1483,6 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
     command: "akm index",
     notes: "Rarely needed — the index refreshes implicitly after writes.",
     keywords: ["index", "reindex", "rebuild"],
-  },
-  {
-    task: "Manage whole-file secrets outside the chat-safe read surface",
-    command: "akm secret <set|run|remove> ...",
-    notes: "Use the first-class akm_secret tool for list/path. Secret values must never be pasted back into chat; `set` reads from stdin/--from-file/--from-env and `run` injects into a child process only.",
-    keywords: ["secret", "docker secret", "pem", "token", "_FILE"],
   },
   {
     task: "View or update akm config (get/set/list/unset/path)",
@@ -1367,7 +1501,26 @@ const AKM_HELP_QUICK_REFERENCE: readonly AkmHelpEntry[] = [
     notes: "Or `akm --format json -q show <ref>` and pipe `.run` into your shell.",
     keywords: ["run", "execute", "script", "exec"],
   },
+  {
+    task: "Extract durable insights from a native agent session file into the proposal queue",
+    command: "akm extract --type <claude-code|opencode> --session-id <sid>",
+    notes: "Both plugins fire this automatically and asynchronously at session end (event-driven, content-hash deduped — safe to re-run); the hourly `akm improve` extract pass is the backstop for sessions that never fire the hook. `--auto` sweeps every available harness; `--dry-run` previews without queuing.",
+    keywords: ["extract", "session insights", "distill session", "harvest session", "extraction"],
+  },
+  {
+    task: "Print the current agent-facing usage guide for the akm CLI",
+    command: "akm hints [--detail brief|normal|full]",
+    notes: "Both plugins inject this at session start as context; `/akm-help` and `akm_help` fall back to it for unmatched topics. `--detail full` prints the complete guide.",
+    keywords: ["hints", "guide", "cheat sheet", "how to use akm", "reference"],
+  },
+  {
+    task: "Read release notes and migration guidance for an akm CLI version",
+    command: "akm help migrate <version>",
+    notes: "Bundled per-release notes; an unrecognized version lists what's available.",
+    keywords: ["migrate", "migration", "release notes", "upgrade notes", "changelog"],
+  },
 ]
+// END GENERATED: akm-help-table
 
 function lookupAkmHelpHint(topic: string): AkmHelpEntry[] {
   const needle = topic.toLowerCase().trim()
@@ -1495,8 +1648,19 @@ function getLocalBuildAkmCommand(): ResolvedAkmCommand | null {
   }
 }
 
-function execResolvedAkm(command: ResolvedAkmCommand, args: string[], options?: Parameters<typeof execFileSync>[2]) {
-  return execFileSync(command.command, [...command.argsPrefix, ...args], options)
+// Every call site passes `encoding: "utf8"`, so the real runtime return value
+// is always a string — but `execFileSync`'s overloads resolve on the exact
+// shape of the options argument, and forwarding a loosely-typed `options`
+// parameter defeats that resolution, leaving the inferred return type
+// `string | Buffer`. Pin the options type to require `encoding: "utf8"` and
+// assert the (already-guaranteed) string return so callers get real string
+// typing without changing behavior.
+type ExecResolvedAkmOptions = Omit<NonNullable<Parameters<typeof execFileSync>[2]>, "encoding"> & {
+  encoding: "utf8"
+}
+
+function execResolvedAkm(command: ResolvedAkmCommand, args: string[], options: ExecResolvedAkmOptions): string {
+  return execFileSync(command.command, [...command.argsPrefix, ...args], options) as string
 }
 
 function probeCommand(command: ResolvedAkmCommand): CommandProbe {
@@ -1646,10 +1810,11 @@ function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displ
 // The OpenCode plugin has never silently auto-installed akm-cli — it relies on
 // the bundled binary that ships with the plugin, falling back to PATH. When
 // neither path produces a compatible akm we log a warn-level event to the host
-// AND write a stderr banner so the human running OpenCode actually sees the
-// problem. The banner mirrors the Claude plugin's wording: install must be
-// user-driven, never automatic. The recommended consent point is `akm setup`
-// (or the host-specific akm setup slash command if one exists).
+// AND emit a consent banner through the host's structured logging channel so
+// the human running OpenCode actually sees the problem. The banner mirrors
+// the Claude plugin's wording: install must be user-driven, never automatic.
+// The recommended consent point is `akm setup` (or the host-specific akm
+// setup slash command if one exists).
 async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<void> {
   const installedAkm = getResolvedAkmDetails()
   if (!installedAkm) {
@@ -1661,7 +1826,7 @@ async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<voi
       reason: "no_supported_command",
       trail: lastAkmResolutionTrail,
     })
-    writeAkmConsentBanner({
+    await writeAkmConsentBanner(client, {
       detected: getCommandVersion("akm") ?? undefined,
       bundled: getBundledAkmCommand(),
       trail: lastAkmResolutionTrail,
@@ -1679,7 +1844,7 @@ async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<voi
   })
 }
 
-function writeAkmConsentBanner(info: { detected?: string; bundled?: string | null; trail?: AkmResolutionTrail }) {
+async function writeAkmConsentBanner(client: LogCapableClient, info: { detected?: string; bundled?: string | null; trail?: AkmResolutionTrail }) {
   const detectedLabel = info.detected ?? "(not found on PATH)"
   const bundledLabel = info.bundled ?? "(none)"
   const trailLines: string[] = []
@@ -1701,16 +1866,23 @@ function writeAkmConsentBanner(info: { detected?: string; bundled?: string | nul
     "",
     "Reinstall or update the akm-opencode plugin so OpenCode/Bun",
     "installs the dependency, or install akm-cli manually:",
-    "  bun install -g akm-cli@^0.8.0",
-    "  npm install -g akm-cli@^0.8.0",
+    `  bun install -g ${AKM_RECOMMENDED_INSTALL_REF}`,
+    `  npm install -g ${AKM_RECOMMENDED_INSTALL_REF}`,
     "Then run `akm setup` interactively to configure the stash.",
     "─".repeat(60),
   ].join("\n")
-  try {
-    process.stderr.write(banner + "\n")
-  } catch {
-    // best-effort; never crash the plugin over a banner
-  }
+  // AGENTS.md forbids plugin runtime code from writing to
+  // console.*/stdout/stderr; route the banner through the host's structured
+  // logging channel (client.app.log) instead of process.stderr.write so it
+  // still reaches the user without violating that rule.
+  await writePluginLog(client, "warn", "akm CLI not installed or wrong version", {
+    subsystem: "akm",
+    detected: detectedLabel,
+    bundled: bundledLabel,
+    required: AKM_REQUIRED_VERSION_RANGE,
+    installRef: AKM_RECOMMENDED_INSTALL_REF,
+    banner,
+  })
 }
 
 function resolveAkmCommand(): ResolvedAkmCommand | CliError {
@@ -2448,6 +2620,9 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           })
           if (!sessionContextEpoch.has(sid)) sessionContextEpoch.set(sid, 0)
           if (type === "session.created") {
+            // Best-effort, fire-and-forget, fully error-trapped internally —
+            // must never block or fail session.created (13: "tmp-file cleanup").
+            void pruneStaleCuratedFiles()
             await ensureAgentSetup(logClient, {
               directory,
               sessionID: sid,
@@ -2482,56 +2657,43 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
           // removed. Keep the freshness reindex on session-end events so
           // upstream inference/graph passes still run.
           await maybeIndexSessionMemory(logClient, sid, type, "")
+          // `stop` is not a real OpenCode hook (not in the Hooks contract), so
+          // the memory-candidate harvest has to ride real lifecycle events
+          // instead: idle (per-turn quiescence), compacted, and deleted. This
+          // is safe to fire on all three — a harvest always clears the buffer,
+          // so a later event finds it empty and no-ops rather than
+          // double-harvesting. A below-noise-floor buffer is kept across
+          // non-terminal events (so intents accumulate across turns) and only
+          // discarded on the terminal session.deleted.
+          maybeExtractSessionCandidates(sid, type)
           // Event-driven extraction: only on session.idle (per-turn quiescence),
           // min-interval-gated so it doesn't flood. Not on compacted/deleted.
           if (type === "session.idle") {
             maybeExtractSessionOnIdle(logClient, sid, directory)
           }
           if (type === "session.compacted") {
+            // 03-R1/06-M1: the session_checkpoint capture that used to feed
+            // `memory.ref` here was removed along with the `remember --force`
+            // write. Record the event as an explicit no-capture so
+            // post_compact_summary consumers see a skipped outcome instead of
+            // a dangling/undefined ref.
             writeStructuredEvent({
               event: "post_compact_summary",
               sessionId: sid,
               scope: buildEventScope(sid, directory),
-              memory: { ref: captured ?? null, reason: type },
-              outcome: { status: captured ? "ok" : "skipped" },
+              memory: { ref: null, reason: type },
+              outcome: { status: "skipped" },
             })
           }
-          // Drop per-session state so a re-created session does not inherit
-          // stale hints/curation.
+          // Drop per-session state (every session-keyed Map, plus the curated
+          // tmp file) so a re-created session does not inherit stale
+          // hints/curation and the tmp file does not leak (13: "Memory leaks").
           if (type === "session.deleted") {
-            // Salvage explicit memory-candidate intents before the buffer is
-            // discarded (03-R1/06-M1: candidate harvest, no session_checkpoint write).
-            maybeExtractSessionCandidates(sid, type)
-            sessionHints.delete(sid)
-            sessionCurated.delete(sid)
-            sessionCuratedFile.delete(sid)
-            sessionWorkflow.delete(sid)
-            sessionCuratorReport.delete(sid)
-            sessionContextEpoch.delete(sid)
-            sessionContextInjectedEpoch.delete(sid)
-            sessionCuratedVersion.delete(sid)
-            sessionCuratedInjectedVersion.delete(sid)
-            sessionBuffer.delete(sid)
-            sessionLastExtractAt.delete(sid)
+            clearSessionState(sid)
           }
         }
       } catch (error: unknown) {
         await logHookFailure(logClient, "event", error)
-      }
-    },
-    // Stop is the closest analogue to Claude's Stop/SubagentStop — the user or
-    // agent halted the active run. Flush the session buffer so learnings are
-    // preserved even if the session.idle event does not fire.
-    stop: async (input: unknown) => {
-      try {
-        const sid = extractSessionIdFromEvent(input)
-        if (!sid) return
-        // 03-R1/06-M1: session_checkpoint write removed; keep the reindex and
-        // the owner-gated memory-candidate harvest (no stash write).
-        maybeExtractSessionCandidates(sid, "stop")
-        await maybeIndexSessionMemory(logClient, sid, "stop", "")
-      } catch (error: unknown) {
-        await logHookFailure(logClient, "stop", error)
       }
     },
     // experimental.chat.system.transform is how OpenCode exposes the
@@ -4010,5 +4172,10 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
   }
 }
  
-export const server = AkmPlugin
-export default { server, id: "akm-opencode" }
+// A single named export only. The @opencode-ai/plugin loader initializes
+// every exported plugin function it finds in this module, so exporting the
+// same function again under a second name (`server`) or bundled into a
+// default export risks the host registering — and running — the plugin's
+// hooks twice (double auto-feedback, double session-start curates, etc.).
+// The SDK's own example plugin (dist/example.js) exports exactly one named
+// const with no default export; that is the blessed shape.

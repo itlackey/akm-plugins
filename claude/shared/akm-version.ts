@@ -15,10 +15,15 @@
 // Prerelease note: stable carets (`^0.9.0`) do NOT match prereleases, so each
 // supported prerelease line needs an explicit floor (`^0.9.0-beta.0`). akm
 // publishes beta/rc prereleases; alpha (< beta) is intentionally excluded.
+//
+// 0.8.0 support was dropped for the 0.9.0 release: 0.9.0-only runtime paths
+// (`akm extract --session-id`, curate `--detail brief`) fail against 0.8.x,
+// so accepting 0.8.x here would silently pass the version gate onto a CLI
+// the plugin no longer fully works with.
 
 import { satisfies } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.8.0-rc.0 || ^0.8.0 || ^0.9.0-beta.0 || ^0.9.0"
+export const AKM_VERSION_RANGE = "^0.9.0-beta.0 || ^0.9.0"
 
 /**
  * True when `version` is a valid semver string that satisfies

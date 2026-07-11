@@ -14,13 +14,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.ref }}
 
       - uses: oven-sh/setup-bun@v2
 
-      - name: Install dependencies
+      - name: Install claude deps
+        working-directory: claude
+        run: bun install --frozen-lockfile
+
+      - name: Install opencode deps
         working-directory: opencode
-        run: bun install
+        run: bun install --frozen-lockfile
+
+      - name: Install evals deps
+        working-directory: evals
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck claude plugin
+        working-directory: claude
+        run: bun run typecheck
+
+      - name: Typecheck opencode plugin
+        working-directory: opencode
+        run: bun run typecheck
 
       - name: Run integration tests
         run: bun test tests/
@@ -40,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.ref }}
 
       - uses: actions/setup-node@v4
         with:

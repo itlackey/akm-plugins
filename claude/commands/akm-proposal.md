@@ -1,5 +1,5 @@
 ---
-description: Operate the AKM v0.8.0 proposal queue — list, show, diff, accept, reject, or drain pending drafts.
+description: Operate the AKM proposal queue — list, show, diff, accept, reject, or drain pending drafts.
 argument-hint: <list|show|diff|accept|reject|drain> [id] [--reason "..."]
 ---
 

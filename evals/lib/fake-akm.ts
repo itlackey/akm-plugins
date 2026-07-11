@@ -8,7 +8,11 @@
 // keyword match (computed in the shim's parent process and baked into the
 // shell script as a static lookup table). It also implements the subset of
 // `akm` verbs the hooks actually call: `curate`, `feedback`, `remember`,
-// `index`, `hints`, `search`, `--version`.
+// `index`, `hints`, `search`, `config get`/`config set`, `workflow list`,
+// `proposal list`, `extract`, `--version`. Envelope shapes for these are
+// pinned against a real `akm` binary by tests/fake-akm-contract.test.ts.
+// Any other verb still exits 0 (never breaks the hook) but logs to stderr
+// instead of no-op'ing silently — see the bottom of RANK_HELPER_JS.
 
 import { mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
@@ -344,6 +348,133 @@ if (verb === "hints") {
   process.exit(0)
 }
 
+// --- config get/set -------------------------------------------------------
+// Both hooks call \`config get stashDir\` (fallback path when AKM_STASH_DIR
+// isn't set) and \`config set --silent --layer user <key> <value>\` (to
+// persist defaults.agent / profiles.agent.<platform>). Real akm returns a
+// bare JSON scalar for a leaf \`config get\`, or an object wrapped with
+// {shape:"config", schemaVersion:1} for a subtree; \`config set\` is
+// acknowledged via exit code only when --silent is passed. Persist writes to
+// a JSON store on disk so a later \`config get\` in the same test sees them.
+const configStorePath = path.join(path.dirname(idx.callLog), "akm-config-store.json")
+
+function readConfigStore() {
+  try {
+    return JSON.parse(readFileSync(configStorePath, "utf8"))
+  } catch {
+    return {}
+  }
+}
+
+function writeConfigStore(store) {
+  try {
+    const dir = path.dirname(configStorePath)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(configStorePath, JSON.stringify(store))
+  } catch {}
+}
+
+function getAtPath(obj, dottedKey) {
+  return dottedKey.split(".").reduce((acc, part) => (acc && typeof acc === "object" ? acc[part] : undefined), obj)
+}
+
+function setAtPath(obj, dottedKey, value) {
+  const parts = dottedKey.split(".")
+  let node = obj
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i]
+    if (!node[part] || typeof node[part] !== "object") node[part] = {}
+    node = node[part]
+  }
+  node[parts[parts.length - 1]] = value
+}
+
+// \`config\` subcommand flags (--layer <value>, --silent, --all) are distinct
+// from the global flags already stripped above, so filter them here to
+// isolate the positional [sub, key, value] triple.
+function configPositionals() {
+  const out = []
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i]
+    if (a === "--layer") {
+      i++
+      continue
+    }
+    if (a === "--silent" || a === "--all") continue
+    out.push(a)
+  }
+  return out
+}
+
+if (verb === "config") {
+  const [sub, key, rawValue] = configPositionals()
+  const store = readConfigStore()
+  if (sub === "get") {
+    const value = key ? getAtPath(store, key) : store
+    const result = value === undefined ? null : value
+    process.stdout.write(
+      result && typeof result === "object" ? JSON.stringify({ ...result, shape: "config", schemaVersion: 1 }) : JSON.stringify(result),
+    )
+    process.exit(0)
+  }
+  if (sub === "set" && key) {
+    let value = rawValue
+    if (typeof value === "string") {
+      try {
+        value = JSON.parse(value)
+      } catch {
+        // Plain scalar (e.g. platform name) — keep as string.
+      }
+    }
+    setAtPath(store, key, value)
+    writeConfigStore(store)
+    process.exit(0)
+  }
+  // Any other config subcommand (list/unset/path/...): ack and move on.
+  process.exit(0)
+}
+
+// --- workflow list --active ------------------------------------------------
+// SessionStart / subagentStart summarize active workflow runs from this. The
+// fake stash never has live workflow runs, so an empty-but-real-shaped
+// envelope exercises the parse path without inventing fixture state.
+if (verb === "workflow" && tail[0] === "list") {
+  process.stdout.write(JSON.stringify({ runs: [], shape: "workflow-list", schemaVersion: 1 }))
+  process.exit(0)
+}
+
+// --- proposal list ----------------------------------------------------------
+// getPendingProposalCount() (both plugins) parses \`.proposals\` off this to
+// surface a pending-proposal count in the session-start header.
+if (verb === "proposal" && tail[0] === "list") {
+  process.stdout.write(JSON.stringify({ totalCount: 0, proposals: [] }))
+  process.exit(0)
+}
+
+// --- extract ------------------------------------------------------------
+// SessionEnd fires this fire-and-forget (detached, stdio ignored) on both
+// plugins, so nothing parses its stdout or exit code today. Real akm's
+// extract ALWAYS requires an LLM connection before it does anything —
+// unlike most other verbs, its "feature disabled" fast path only applies
+// when running as an improve-profile stage, not for a direct \`akm extract\`
+// invocation like the hooks make — so a real akm with no LLM profile
+// configured (the state a freshly-installed akm is normally in, and the
+// state tier-2 fixtures are in) deterministically returns this error
+// envelope. Mirroring that exact shape (rather than inventing a synthetic
+// success shape tier-2 can never actually observe from real akm) is what
+// tests/fake-akm-contract.test.ts pins against the real binary.
+if (verb === "extract") {
+  process.stdout.write(
+    JSON.stringify({
+      ok: false,
+      error:
+        "No LLM connection configured for extract. Set profiles.llm + defaults.llm, or set profiles.improve.default.processes.extract.profile to a configured LLM profile.",
+      code: "INVALID_CONFIG_FILE",
+    }),
+  )
+  process.exit(0)
+}
+
 if (verb === "remember") {
   // Capture the piped buffer body so tier-2's memory metric can score
   // what the hook actually flushed (rather than just whether it called
@@ -373,14 +504,21 @@ if (verb === "feedback" || verb === "index" || verb === "show") {
 
 if (verb === "--version" || verb === "-V") {
   // Plugin gates feature paths on satisfiesAkmVersionRange() which only
-  // accepts 0.8.x. Reporting an older fake version made the OpenCode plugin
+  // accepts 0.9.x. Reporting an older fake version made the OpenCode plugin
   // treat the shim as an incompatible CLI and silently short-circuit
   // auto-feedback (queueFeedback bails before spawning). Keep this in lockstep
   // with the plugin's required range so eval harnesses exercise the real path.
-  process.stdout.write("fake-akm 0.8.0\\n")
+  process.stdout.write("fake-akm 0.9.0\\n")
   process.exit(0)
 }
 
-// Unknown verb: silent no-op, exit 0 so the hook never sees a hard failure.
+// Truly unknown verb: still exit 0 so the hook never sees a hard failure it
+// wasn't expecting, but log it to stderr (not swallowed — this shim is a
+// documented fake-CLI exception to the no-stderr-logging rule, see
+// AGENTS.md) so a verb the plugins start calling and this shim doesn't yet
+// model shows up in CI output instead of vanishing silently. The call log
+// (written unconditionally above, before verb dispatch) also has a durable
+// record of the invocation for tier-2 metrics to inspect.
+process.stderr.write("fake-akm: unhandled verb " + JSON.stringify(verb) + " (args: " + JSON.stringify(tail) + ")\\n")
 process.exit(0)
 `

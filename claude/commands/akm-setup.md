@@ -20,11 +20,12 @@ akm --version
 
 Capture the result.
 
-- If the command prints a version that satisfies `^0.8.0` (for example `0.8.0`,
-  `0.8.2`, `0.8.0-rc.5`), skip to step **3** — installation is not needed.
+- If the command prints a version that satisfies `^0.9.0-beta.0 || ^0.9.0`
+  (for example `0.9.0`, `0.9.0-beta.6`, `0.9.4`), skip to step **3** —
+  installation is not needed.
 - If the command is not found, the akm CLI is **not installed**.
-- If the command prints a version outside `^0.8.0` (older `0.7.x`, future
-  `0.9.x`, etc.), the installed version is **incompatible**.
+- If the command prints a version outside that range (older `0.8.x`/`0.7.x`,
+  or a future `1.x`), the installed version is **incompatible**.
 
 For the not-installed and incompatible cases, continue to step 2.
 
@@ -34,11 +35,12 @@ Tell the user, in plain language, exactly what is about to happen and **wait
 for explicit confirmation** before running any install command. For example:
 
 > "I detected that `akm` is not installed (or that the installed version
-> `X.Y.Z` does not satisfy the required `^0.8.0`). I'm about to run:
+> `X.Y.Z` does not satisfy the required `^0.9.0-beta.0 || ^0.9.0`). I'm about
+> to run:
 >
-> &nbsp;&nbsp;`bun install -g akm-cli@^0.8.0`
+> &nbsp;&nbsp;`bun install -g akm-cli@^0.9.0-beta.0`
 >
-> (or `npm install -g akm-cli@^0.8.0` if Bun is unavailable).
+> (or `npm install -g akm-cli@^0.9.0-beta.0` if Bun is unavailable).
 >
 > This installs a global Node.js package on your machine. Do you want me to
 > proceed?"
@@ -51,12 +53,12 @@ or by running one of the install commands above themselves.
 
 Pick the installer in this order, based on what is on PATH:
 
-1. `bun install -g akm-cli@^0.8.0` (preferred — matches what the hook also
-   recommends).
-2. `npm install -g akm-cli@^0.8.0` (fallback when Bun is unavailable).
+1. `bun install -g akm-cli@^0.9.0-beta.0` (preferred — matches what the hook
+   also recommends).
+2. `npm install -g akm-cli@^0.9.0-beta.0` (fallback when Bun is unavailable).
 
 After the install completes, re-run `akm --version` and confirm the version
-now satisfies `^0.8.0`. If it still does not, report the failure clearly to
+now satisfies `^0.9.0-beta.0 || ^0.9.0`. If it still does not, report the failure clearly to
 the user — do **not** loop into another install attempt without asking again.
 
 ## 3. Run the interactive setup wizard

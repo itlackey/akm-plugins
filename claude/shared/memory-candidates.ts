@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { redactObject } from "./redaction"
 
@@ -14,6 +14,61 @@ function chmodSafe(filePath: string, mode: number): void {
     // Best-effort: filesystems without POSIX mode (FAT, some FUSE mounts) or
     // platforms where chmod is a no-op (Windows) silently skip. Don't crash
     // the hook over a hardening attempt.
+  }
+}
+
+// Write a file atomically: temp file in the same directory, then rename over
+// the target. rename(2) is atomic on POSIX (and on Windows via Node's
+// implementation), so a concurrent reader always observes either the old
+// content in full or the new content in full — never a torn/partial write.
+// Used both by the size-cap rotation below and by replaceCandidates() (13:
+// "Non-atomic candidate updates" — updateCandidateStatus() used to
+// read-modify-write straight over the target file with no temp+rename,
+// so a concurrent hook process's appendCandidates() write landing mid-rewrite
+// could be silently dropped).
+function atomicWriteFileSync(filePath: string, content: string, mode?: number): void {
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  writeFileSync(tmpPath, content)
+  if (mode !== undefined) chmodSafe(tmpPath, mode)
+  try {
+    renameSync(tmpPath, filePath)
+  } catch (error) {
+    // Don't orphan the temp file when the swap fails (EXDEV, permissions, a
+    // concurrent unlink of the target dir, ...) — nothing ever prunes them.
+    // The error still propagates per each caller's semantics: swallowed by
+    // rotateIfOversized's best-effort catch, surfaced by replaceCandidates.
+    try {
+      rmSync(tmpPath, { force: true })
+    } catch {}
+    throw error
+  }
+}
+
+// State-file rotation/caps (release-0.9.0 review §2 "Unbounded state
+// growth"): memory-candidates.jsonl is append-only from both plugins and
+// previously had no cap. Mirrors the mechanism in claude/hooks/akm-hook.ts's
+// rotateLogIfOversized(): before an append, if the file already exceeds
+// AKM_PLUGIN_MAX_LOG_BYTES (default 1 MiB), rewrite it down to its newest
+// half (by line count) atomically.
+const MAX_LOG_BYTES = (() => {
+  const raw = Number(process.env.AKM_PLUGIN_MAX_LOG_BYTES)
+  return Number.isFinite(raw) && raw > 0 ? raw : 1024 * 1024
+})()
+
+function rotateIfOversized(filePath: string): void {
+  try {
+    const stat = statSync(filePath)
+    if (stat.size <= MAX_LOG_BYTES) return
+    const lines = readFileSync(filePath, "utf8").split("\n")
+    if (lines[lines.length - 1] === "") lines.pop()
+    // Keep-at-least-one-line guard: a single line larger than the cap would
+    // make slice(ceil(len/2)) empty and rotation would erase the file instead
+    // of capping it. Always retain the newest line.
+    const keep = lines.length <= 1 ? lines : lines.slice(Math.ceil(lines.length / 2))
+    atomicWriteFileSync(filePath, keep.length > 0 ? `${keep.join("\n")}\n` : "", 0o600)
+  } catch {
+    // Rotation is best-effort and must never throw: a failed attempt just
+    // means the file keeps growing until the next successful append/rotate.
   }
 }
 
@@ -150,6 +205,7 @@ export function appendCandidates(filePath: string, candidates: AkmMemoryCandidat
   try {
     mkdirSync(path.dirname(filePath), { recursive: true })
     chmodSafe(path.dirname(filePath), 0o700)
+    rotateIfOversized(filePath)
     const categories: string[] = []
     const created = !existsSync(filePath)
     for (const candidate of candidates) {
@@ -181,8 +237,16 @@ export function readCandidates(filePath: string): AkmMemoryCandidate[] {
 export function replaceCandidates(filePath: string, candidates: AkmMemoryCandidate[]): void {
   mkdirSync(path.dirname(filePath), { recursive: true })
   chmodSafe(path.dirname(filePath), 0o700)
-  writeFileSync(filePath, candidates.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""))
-  chmodSafe(filePath, 0o600)
+  // Atomic rewrite (13: "Non-atomic candidate updates" — see
+  // atomicWriteFileSync above). updateCandidateStatus() is a
+  // read-modify-write over the whole file; without temp+rename, a second
+  // hook process's appendCandidates() (a plain appendFileSync) landing
+  // between this read and this write would be silently overwritten by this
+  // rewrite once it lands, because writeFileSync truncates in place.
+  // temp+rename doesn't fully eliminate that read-modify-write race (true
+  // fix would need a lock), but it does guarantee the file itself is never
+  // observed half-written / truncated by a concurrent reader.
+  atomicWriteFileSync(filePath, candidates.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""), 0o600)
 }
 
 export function updateCandidateStatus(filePath: string, id: string, status: "promoted" | "rejected", reason?: string): AkmMemoryCandidate | undefined {

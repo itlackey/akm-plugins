@@ -1,15 +1,27 @@
 // Regression suite for Item 2 of the 0.8.0 pre-production polish plan:
 // the Claude hook's old `ensureAkm()` silently spawned
-// `bun install -g akm-cli@^0.8.0` (or npm) on every SessionStart. Starting
-// with 0.8.0 we detect-and-warn instead: a stderr banner that points the
-// user at `/akm-setup` for an explicit-consent install. These tests pin
-// down the new behavior and make the regression (silent global install)
-// impossible to reintroduce by accident.
+// `bun install -g akm-cli@…` (or npm) on every SessionStart. Starting
+// with 0.8.0 we detect-and-warn instead: the hook logs the mismatch to the
+// plugin state dir and surfaces the user-facing consent prompt through its
+// supported output channel (SessionStart's `additionalContext`) rather than
+// raw diagnostics on stderr — see AGENTS.md's logging-policy rule and
+// release-0.9.0-plugin-review.md §2 ("Logging-policy violations"). These
+// tests pin down both the no-silent-install behavior and the no-stderr
+// behavior, and make either regression impossible to reintroduce by
+// accident.
+//
+// 0.9.0 also drops 0.8.0 support from the accepted version range (release
+// blocker #4 in the review): `akm extract --session-id` and curate
+// `--detail brief` are 0.9.0-only runtime paths, so accepting 0.8.x here
+// would silently pass the version gate onto a CLI the plugin no longer
+// fully works with. AKM_VERSION_RANGE is now exactly
+// `^0.9.0-beta.0 || ^0.9.0`.
 
 import { afterEach, describe, expect, it } from "bun:test"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { satisfiesAkmVersionRange, AKM_VERSION_RANGE } from "../claude/shared/akm-version"
 
 const repoRoot = path.resolve(import.meta.dir, "..")
 const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.ts")
@@ -29,10 +41,18 @@ afterEach(() => {
   }
 })
 
-type HookResult = { stdout: string; stderr: string; exitCode: number; installLog: string }
+function readLogLines(filePath: string) {
+  try {
+    return readFileSync(filePath, "utf8").trim().split("\n").filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+type HookResult = { stdout: string; stderr: string; exitCode: number; installLog: string; stateDir: string }
 
 // Runs the hook with `ensure-akm` (the legacy alias that still triggers
-// checkAkmVersion in 0.8.0). The PATH is reset to ONLY the sandbox bin
+// checkAkmVersion in 0.8.0+). The PATH is reset to ONLY the sandbox bin
 // directory so we never accidentally see the system's real bun/npm/akm.
 // A fake `bun` and `npm` are placed on PATH; both log every invocation to
 // `install.log`. If checkAkmVersion ever spawns an install, that log will
@@ -127,6 +147,7 @@ exit 0
     stdout: result.stdout.toString(),
     stderr: result.stderr.toString(),
     exitCode: result.exitCode ?? 0,
+    stateDir,
     installLog: (() => {
       try {
         return readFileSync(installLog, "utf8")
@@ -137,22 +158,75 @@ exit 0
   }
 }
 
-describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
-  it("returns ok and is silent on stderr when akm satisfies the required range", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.8.3" })
+describe("AKM_VERSION_RANGE contract (0.9.0: 0.8.0 support dropped)", () => {
+  // Direct unit coverage of the shared contract, independent of the
+  // subprocess sandbox below. This is the fast, precise pin for exactly
+  // which versions the plugin accepts.
+  it("is exactly the 0.9.0 (+ beta prerelease) range", () => {
+    expect(AKM_VERSION_RANGE).toBe("^0.9.0-beta.0 || ^0.9.0")
+  })
+
+  it("rejects every 0.8.x build, including release candidates", () => {
+    for (const v of ["0.8.0", "0.8.2", "0.8.0-rc.5"]) {
+      expect(satisfiesAkmVersionRange(v)).toBe(false)
+    }
+  })
+
+  it("accepts 0.9.0 betas and stable 0.9.x", () => {
+    for (const v of ["0.9.0-beta.33", "0.9.0", "0.9.1"]) {
+      expect(satisfiesAkmVersionRange(v)).toBe(true)
+    }
+  })
+
+  it("rejects 0.7.x and 1.0.0", () => {
+    for (const v of ["0.7.0", "0.7.9", "1.0.0"]) {
+      expect(satisfiesAkmVersionRange(v)).toBe(false)
+    }
+  })
+
+  it("excludes alpha prereleases (below the beta floor)", () => {
+    expect(satisfiesAkmVersionRange("0.9.0-alpha.0")).toBe(false)
+    expect(satisfiesAkmVersionRange("0.9.0-alpha.9")).toBe(false)
+  })
+
+  it("rejects malformed or missing versions", () => {
+    expect(satisfiesAkmVersionRange("not-a-version")).toBe(false)
+    expect(satisfiesAkmVersionRange(null)).toBe(false)
+    expect(satisfiesAkmVersionRange(undefined)).toBe(false)
+  })
+})
+
+describe("checkAkmVersion (Item 2: detect-and-warn, no silent install, no stderr)", () => {
+  it("returns ok, logs akm_ready, and writes nothing to stderr when akm satisfies the required range", () => {
+    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.0" })
     expect(result.exitCode).toBe(0)
-    // Banner is reserved for the failure path. Healthy installs emit no
-    // user-visible warning.
-    expect(result.stderr).not.toContain("akm-plugin:")
+    // AGENTS.md: plugin runtime code must never write diagnostics to
+    // stderr. Healthy installs (and every other checkAkmVersion path) must
+    // be completely silent on stderr — the hook protocol's stdout JSON
+    // envelope is the only supported output channel.
+    expect(result.stderr).toBe("")
+    const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("akm_ready"))).toBe(true)
     // Critical regression assertion: NO install was spawned.
     expect(result.installLog).toBe("")
   })
 
-  it("returns ok and is silent for 0.9.x including prereleases (0.9.0-beta.6)", () => {
+  it("returns ok and is silent on stderr for 0.9.x including prereleases (0.9.0-beta.6)", () => {
     for (const v of ["0.9.0", "0.9.5", "0.9.0-beta.6"]) {
       const result = runHookSandboxed(["ensure-akm"], { akmVersion: v })
       expect(result.exitCode).toBe(0)
-      expect(result.stderr).not.toContain("akm-plugin:")
+      expect(result.stderr).toBe("")
+      expect(result.installLog).toBe("")
+    }
+  })
+
+  it("rejects 0.8.x installs now that 0.8.0 support has been dropped", () => {
+    for (const v of ["0.8.0", "0.8.2", "0.8.0-rc.5"]) {
+      const result = runHookSandboxed(["ensure-akm"], { akmVersion: v })
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).toBe("")
+      const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
+      expect(sessionLog.some((line) => line.includes("akm_version_mismatch") && line.includes(v))).toBe(true)
       expect(result.installLog).toBe("")
     }
   })
@@ -161,7 +235,7 @@ describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
     const tempDir = makeTempDir()
     const localCli = path.join(tempDir, "dist", "cli.js")
     mkdirSync(path.dirname(localCli), { recursive: true })
-    writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.8.0-rc.8')\n")
+    writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.9.0-rc.8')\n")
 
     const result = runHookSandboxed(["ensure-akm"], {
       akmVersion: null,
@@ -172,33 +246,29 @@ describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
     })
 
     expect(result.exitCode).toBe(0)
-    expect(result.stderr).not.toContain("akm-plugin:")
+    expect(result.stderr).toBe("")
     expect(result.installLog).toBe("")
   })
 
-  it("writes a stderr banner pointing at /akm-setup when akm is missing", () => {
+  it("logs (not stderr) when akm is missing", () => {
     const result = runHookSandboxed(["ensure-akm"], { akmVersion: null })
     expect(result.exitCode).toBe(0)
-    // Banner content
-    expect(result.stderr).toContain("akm-plugin: akm CLI not installed or wrong version")
-    expect(result.stderr).toContain("(not found on PATH)")
-    expect(result.stderr).toContain("/akm-setup")
-    // Install hints
-    expect(result.stderr).toContain("bun install -g akm-cli@^0.8.0")
-    expect(result.stderr).toContain("npm install -g akm-cli@^0.8.0")
+    // No raw diagnostics on stderr — see AGENTS.md logging-policy rule.
+    expect(result.stderr).toBe("")
+    const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("akm_missing"))).toBe(true)
     // Critical regression assertion: NO install was spawned even though bun
     // and npm shims are on PATH and would have logged any invocation.
     expect(result.installLog).toBe("")
   })
 
-  it("writes a stderr banner pointing at /akm-setup when akm is the wrong version", () => {
+  it("logs (not stderr) when akm is the wrong version", () => {
     const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.7.9" })
     expect(result.exitCode).toBe(0)
-    expect(result.stderr).toContain("akm-plugin: akm CLI not installed or wrong version")
-    // The detected (wrong) version should be quoted back to the user.
-    expect(result.stderr).toContain("0.7.9")
-    expect(result.stderr).toContain("/akm-setup")
-    expect(result.stderr).toContain("bun install -g akm-cli@^0.8.0")
+    expect(result.stderr).toBe("")
+    const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
+    // The detected (wrong) version should be logged for diagnosis.
+    expect(sessionLog.some((line) => line.includes("akm_version_mismatch") && line.includes("0.7.9"))).toBe(true)
     // Critical regression assertion: still no install spawn.
     expect(result.installLog).toBe("")
   })
@@ -206,7 +276,7 @@ describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
   it("never spawns an install even when bun and npm are both on PATH and akm is missing", () => {
     // This is the headline assertion of Item 2: even with the installers
     // sitting right there, the hook MUST NOT auto-install. The previous
-    // implementation would have run `bun install -g akm-cli@^0.8.0` here.
+    // implementation would have run `bun install -g akm-cli@…` here.
     const result = runHookSandboxed(["ensure-akm"], { akmVersion: null })
     expect(result.installLog).toBe("")
     // Belt-and-braces: no argv containing `install -g akm-cli@` should
@@ -214,24 +284,28 @@ describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
     expect(result.installLog).not.toContain("install\t-g\takm-cli@")
   })
 
-  it("session-start emits a degraded context when akm is missing rather than crashing", () => {
+  it("session-start emits a degraded context (with install hints) when akm is missing, on stdout — not stderr", () => {
     const result = runHookSandboxed(["session-start"], { akmVersion: null })
     expect(result.exitCode).toBe(0)
-    // Banner still printed.
-    expect(result.stderr).toContain("/akm-setup")
+    // No stderr banner anymore — the consent prompt travels entirely
+    // through the hook's supported stdout JSON channel.
+    expect(result.stderr).toBe("")
     // The hook returns JSON additionalContext telling the agent akm is not
-    // available — it does NOT silently swallow this state.
+    // available — it does NOT silently swallow this state — and includes
+    // the install hint (derived from AKM_PACKAGE_REF) that used to live
+    // only in the stderr banner.
     expect(result.stdout).toContain("AKM is NOT available")
     expect(result.stdout).toContain("/akm-setup")
+    expect(result.stdout).toContain("install -g akm-cli@")
     // And no install was spawned.
     expect(result.installLog).toBe("")
   })
 
   it("session-start runs normally when akm satisfies the range", () => {
-    // Set AKM_STASH_DIR to an existing path so the stash-missing banner
+    // Set AKM_STASH_DIR to an existing path so the stash-missing warning
     // (which lights up on missing stash regardless of akm install state)
-    // does not fire. The banner is a separate signal exercised by its own
-    // describe() block below.
+    // does not fire. That path is exercised by its own describe() block
+    // below.
     //
     // #72: also set AKM_PLUGIN_NO_AUTO_DEFAULT=1 so the new "defaults.agent
     // initialized" notice does not fire. That notice IS the intended
@@ -240,48 +314,53 @@ describe("checkAkmVersion (Item 2: detect-and-warn, no silent install)", () => {
     // below exercises that path.
     const stashDir = makeTempDir()
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.8.3",
+      akmVersion: "0.9.0",
       env: { AKM_STASH_DIR: stashDir, AKM_PLUGIN_NO_AUTO_DEFAULT: "1" },
     })
     expect(result.exitCode).toBe(0)
-    expect(result.stderr).not.toContain("akm-plugin:")
+    expect(result.stderr).toBe("")
     // No degraded banner in the additionalContext either.
     expect(result.stdout).not.toContain("AKM is NOT available")
     expect(result.installLog).toBe("")
   })
 
-  it("session-start surfaces the auto-default-agent write on first run (#72)", () => {
+  it("session-start surfaces the auto-default-agent write on first run (#72) without touching stderr", () => {
     // Without AKM_PLUGIN_NO_AUTO_DEFAULT, the first SessionStart writes
-    // defaults.agent=claude AND prints a stderr banner + an
-    // additionalContext notice so OpenCode users who install the Claude
+    // defaults.agent=claude AND surfaces an additionalContext notice (no
+    // longer a stderr banner) so OpenCode users who install the Claude
     // plugin to experiment see that their config was modified.
     const stashDir = makeTempDir()
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.8.3",
+      akmVersion: "0.9.0",
       env: { AKM_STASH_DIR: stashDir },
     })
     expect(result.exitCode).toBe(0)
-    expect(result.stderr).toContain("akm-plugin: defaults.agent initialized")
-    expect(result.stderr).toContain("AKM_PLUGIN_NO_AUTO_DEFAULT=1")
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("defaults.agent=claude")
+    expect(result.stdout).toContain("AKM_PLUGIN_NO_AUTO_DEFAULT=1")
+    const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("agent_default_initialized"))).toBe(true)
     expect(result.installLog).toBe("")
   })
 
-  it("session-start emits a stash-missing stderr banner when the configured stash dir does not exist", () => {
-    // The stash-missing path is the v0.8.0 release-readiness fix for
-    // visibility — the prior implementation only added a warning to
-    // `additionalContext`, which Claude routinely ignored or compacted
-    // away. We mirror the akm-missing path and write the banner to stderr
-    // so the user sees it in their terminal even when the agent ignores
-    // the additionalContext block.
+  it("session-start surfaces a stash-missing warning (additionalContext + state log, not stderr) when the configured stash dir does not exist", () => {
+    // The stash-missing path is a v0.8.0 release-readiness fix for
+    // visibility. It was previously mirrored to a stderr banner; 0.9.0
+    // removes that duplicate stderr write (AGENTS.md logging-policy rule) —
+    // the additionalContext block plus a state-dir log entry are the
+    // supported channels.
     const missingStashDir = path.join(makeTempDir(), "definitely-not-here")
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.8.3",
+      akmVersion: "0.9.0",
       env: { AKM_STASH_DIR: missingStashDir },
     })
     expect(result.exitCode).toBe(0)
-    expect(result.stderr).toContain("akm-plugin: AKM stash directory missing")
-    expect(result.stderr).toContain(missingStashDir)
-    expect(result.stderr).toContain("/akm-setup")
+    expect(result.stderr).toBe("")
+    expect(result.stdout).toContain("AKM stash directory")
+    expect(result.stdout).toContain(missingStashDir)
+    expect(result.stdout).toContain("/akm-setup")
+    const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("stash_missing") && line.includes(missingStashDir))).toBe(true)
   })
 })
 
@@ -294,9 +373,6 @@ describe("/akm-setup is the canonical install consent point", () => {
     // whitespace because the prose may wrap the phrase across lines.
     const normalized = body.toLowerCase().replace(/\s+/g, " ")
     expect(normalized).toContain("wait for explicit confirmation")
-    // The two installer commands the user is offered
-    expect(body).toContain("bun install -g akm-cli@^0.8.0")
-    expect(body).toContain("npm install -g akm-cli@^0.8.0")
     // Pointer at the interactive wizard for post-install configuration
     expect(body).toContain("akm setup")
   })

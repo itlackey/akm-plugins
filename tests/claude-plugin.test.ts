@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -128,15 +128,16 @@ describe("Claude plugin metadata", () => {
 
     // PreToolUse no longer registers a Bash matcher — risky-command gating
     // was removed in 0.8.0 in favor of platform permission rules (see
-    // claude/README.md "Locking down destructive commands"). The PreToolUse
-    // array still exists for Agent / Read / Write / Edit / Glob / Grep
-    // matchers used by model-alias resolution and ref observation.
+    // claude/README.md "Locking down destructive commands"). The Agent-tool
+    // model remap was deleted as a release blocker (release/0.9.0 review §2);
+    // the PreToolUse array now exists only for Read / Write / Edit / Glob /
+    // Grep matchers used for ref observation.
     expect(plugin.hooks.PreToolUse).toBeDefined()
     const preToolMatchers = plugin.hooks.PreToolUse.map(
       (entry: { matcher?: string }) => entry.matcher,
     )
     expect(preToolMatchers).not.toContain("Bash")
-    expect(preToolMatchers).toContain("Agent")
+    expect(preToolMatchers).not.toContain("Agent")
 
     // PostToolUse runs both post-tool and auto-feedback
     const postToolCommands = plugin.hooks.PostToolUse[0].hooks.map(
@@ -234,35 +235,6 @@ describe("Claude plugin metadata", () => {
     expect(setup).toContain("agent.default")
   })
 
-  it("keeps the curated akm_help registry table in parity across embeds", () => {
-    const registryPath = path.join(repoRoot, "docs/akm-help-registry.md")
-    const helpCommandPath = path.join(repoRoot, "claude/commands/akm-help.md")
-    const skillPath = path.join(repoRoot, "claude/skills/akm/SKILL.md")
-
-    const registry = readFileSync(registryPath, "utf8")
-    const helpCommand = readFileSync(helpCommandPath, "utf8")
-    const skill = readFileSync(skillPath, "utf8")
-
-    // Pull every command-column cell from the canonical doc — it's column 2 in
-    // a markdown table where columns are separated by " | ". We skip the
-    // header and separator rows.
-    const tableRows = registry
-      .split("\n")
-      .filter((line) => line.startsWith("| ") && !line.startsWith("| ---") && !line.startsWith("| Task |"))
-    expect(tableRows.length).toBeGreaterThan(0)
-
-    for (const row of tableRows) {
-      // Strip the surrounding pipes, then split on " | " to get the cells:
-      // [task, command, notes, keywords].
-      const trimmed = row.replace(/^\|\s?/, "").replace(/\s?\|$/, "")
-      const cells = trimmed.split(" | ")
-      expect(cells.length).toBe(4)
-      const command = cells[1].trim()
-      expect(helpCommand).toContain(command)
-      expect(skill).toContain(command)
-    }
-  })
-
   it("/akm-help frontmatter and body advertise the help-discovery flow", () => {
     const helpCommandPath = path.join(repoRoot, "claude/commands/akm-help.md")
     const body = readFileSync(helpCommandPath, "utf8")
@@ -281,12 +253,12 @@ describe("Claude plugin metadata", () => {
     expect(body).toContain("## Feature parity tracker")
     expect(body).toContain("| Session-start retrieval | #27 | Shipped in both plugins |")
     expect(body).toContain("| Auto-attach scope | #28 | Shipped in both plugins |")
-    expect(body).toContain("| Conversation-derived feedback | #29 | Deferred to 0.9.0")
+    expect(body).toContain("| Conversation-derived feedback | #29 | Not yet implemented")
     expect(body).toContain("| Session-end `akm index` | #30 | Shipped in both plugins |")
-    expect(body).toContain("| Harness-provided LLM fallback | #31 | Deferred to 0.9.0")
+    expect(body).toContain("| Harness-provided LLM fallback | #31 | Not yet implemented")
     expect(body).toContain("| Shared secret redaction | #64 | Shipped in both plugins |")
     expect(body).toContain("| Structured memory events | #55 | Shipped in both plugins |")
-    expect(body).toContain("| Claude PreToolUse safety guard | #56 | Shipped in Claude |")
+    expect(body).toContain("| Claude PreToolUse safety guard | #56 | Removed in 0.8.0")
     expect(body).toContain("| Checkpoint + candidates | #57 | Shipped in both plugins |")
     expect(body).toContain("| Memory audit and candidate review | #58 | Shipped in both plugins |")
     expect(body).toContain("| Shared recall policy | #59 | Shipped in both plugins |")
@@ -321,7 +293,7 @@ describe("Claude hook scripts", () => {
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 if [ "$1" = "--version" ]; then
-  echo "akm 0.8.3"
+  echo "akm 0.9.0"
   exit 0
 fi
 exit 0
@@ -338,7 +310,7 @@ exit 0
     })
 
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.8.3")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.9.0")
   })
 
   it("extract-session dispatches cleanly and returns no output (fire-and-forget)", () => {
@@ -421,7 +393,15 @@ exit 0
     expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skill:release --negative --reason stale")
   })
 
-  describe("pre-tool-agent model alias resolution", () => {
+  describe("Agent-tool model remap was deleted (release blocker #5)", () => {
+    // The Agent-tool PreToolUse handler used to rewrite `tool_input.model`
+    // (floors unknown aliases to `sonnet`, coupled with `permissionDecision:
+    // "allow"` which silently bypassed user-configured `ask` rules). It was
+    // deleted outright rather than fixed — see release-0.9.0-plugin-review.md
+    // §2 and §8 item 5. These tests pin the deletion: the hook must never
+    // touch Agent tool_input or emit a permissionDecision for it, and the
+    // `pre-tool-agent` subcommand (its only entry point) must no longer
+    // exist as a live dispatch case.
     function runPreToolAgent(model: string | null, options?: { env?: Record<string, string> }) {
       const payload: Record<string, unknown> = { tool_input: model === null ? {} : { model } }
       return runHook(["pre-tool-agent"], {
@@ -434,40 +414,52 @@ exit 0
       })
     }
 
-    it("passes full Claude model IDs through unchanged (no silent downgrade to sonnet)", () => {
-      const fullIds = [
+    it("never modifies the Agent tool's model input, for any input shape", () => {
+      const inputs = [
         "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251001",
-        "claude-3-5-sonnet-20241022",
+        "sonnet",
+        "opus",
+        "haiku",
+        "inherit",
+        "balanced",
+        "gpt-4o",
+        "totally-made-up-alias",
+        null,
       ]
-      for (const id of fullIds) {
-        const stdout = runPreToolAgent(id)
-        // Empty stdout means resolveModel returned the input unchanged — no
-        // rewrite was emitted. The Agent tool keeps the full ID intact.
+      for (const model of inputs) {
+        const stdout = runPreToolAgent(model)
+        // No dispatch case handles `pre-tool-agent` anymore — the hook falls
+        // through to the unknown-command default, which always emits empty
+        // stdout. Never a rewrite, never a permissionDecision.
         expect(stdout.trim()).toBe("")
       }
     })
 
-    it("keeps the four short aliases (sonnet/opus/haiku/inherit) as-is", () => {
-      for (const alias of ["sonnet", "opus", "haiku", "inherit"]) {
-        const stdout = runPreToolAgent(alias)
-        expect(stdout.trim()).toBe("")
-      }
+    it("logs the unrecognized pre-tool-agent invocation to the state dir rather than emitting a rewrite", () => {
+      const tempDir = makeTempDir()
+      const stateDir = path.join(tempDir, "state")
+      mkdirSync(stateDir, { recursive: true })
+
+      const stdout = runHook(["pre-tool-agent"], {
+        input: JSON.stringify({ tool_input: { model: "balanced" } }),
+        env: {
+          HOME: tempDir,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      expect(stdout.trim()).toBe("")
+      const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+      expect(sessionLog.some((line) => line.includes("runtime_error\tunknown_command\tpre-tool-agent"))).toBe(true)
     })
 
-    it("remaps known cross-provider aliases to the configured Claude short alias", () => {
-      const stdout = runPreToolAgent("balanced")
-      const payload = JSON.parse(stdout)
-      expect(payload.hookSpecificOutput.hookEventName).toBe("PreToolUse")
-      expect(payload.hookSpecificOutput.permissionDecision).toBe("allow")
-      expect(payload.hookSpecificOutput.updatedInput.model).toBe("sonnet")
-    })
-
-    it("falls back unknown aliases to sonnet so dispatch is never rejected upstream", () => {
-      const stdout = runPreToolAgent("totally-made-up-alias")
-      const payload = JSON.parse(stdout)
-      expect(payload.hookSpecificOutput.updatedInput.model).toBe("sonnet")
+    it("no longer ships the deleted alias-remap machinery in the hook source", () => {
+      const hookSource = readFileSync(hookScript, "utf8")
+      expect(hookSource).not.toContain("MODEL_ALIAS_MAP")
+      expect(hookSource).not.toContain("resolveModel")
+      expect(hookSource).not.toContain("CC_VALID_MODEL_ALIASES")
+      expect(hookSource).not.toContain("FULL_CLAUDE_MODEL_ID_RE")
     })
   })
 
@@ -696,7 +688,7 @@ fs.writeFileSync(configPath, JSON.stringify(cur, null, 2) + "\\n");
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 0.8.3"; exit 0 ;;
+  --version) echo "akm 0.9.0"; exit 0 ;;
   config)
     if [ "$2" = "set" ]; then
       # Strip the akm-cli 0.8.0+ hook-driven flags before passing positional args.
@@ -1387,7 +1379,7 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory flows")
   })
 
   it("user-prompt-expansion treats akm-memory-reject as mutating guidance", () => {
@@ -1406,7 +1398,7 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory flows")
   })
 
   it("user-prompt-expansion treats akm-proposal list as non-mutating guidance", () => {
@@ -1426,10 +1418,13 @@ exit 0
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
     expect(payload.hookSpecificOutput.additionalContext).toContain("slash-command expansion should keep mutating actions explicit")
-    expect(payload.hookSpecificOutput.additionalContext).not.toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("mutating memory flows")
   })
 
-  it("user-prompt-expansion treats akm-proposal reject as mutating guidance", () => {
+  // proposal accept/reject/drain are no longer singled out by the hook (the
+  // proposal-specific approval guard was removed); they get the generic
+  // slash-command note like any other /akm- command.
+  it("user-prompt-expansion treats akm-proposal reject as generic slash guidance", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
     mkdirSync(stateDir, { recursive: true })
@@ -1445,10 +1440,11 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("slash-command expansion should keep mutating actions explicit")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("mutating memory flows")
   })
 
-  it("user-prompt-expansion treats akm-proposal drain as mutating guidance", () => {
+  it("user-prompt-expansion treats akm-proposal drain as generic slash guidance", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
     mkdirSync(stateDir, { recursive: true })
@@ -1464,7 +1460,8 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptExpansion")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("mutating memory/proposal flows")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("slash-command expansion should keep mutating actions explicit")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("mutating memory flows")
   })
 
   it("task-completed candidate extraction keeps source paths and targets the touched ref", () => {
@@ -1639,4 +1636,267 @@ exit 0
     expect(readFileSync(bufferPath, "utf8")).toContain("post compact")
   })
 
+  describe("state-file rotation and quality-cache freshness", () => {
+    it("rotates append-only logs once they exceed AKM_PLUGIN_MAX_LOG_BYTES, keeping the newest entries", () => {
+      const tempDir = makeTempDir()
+      const stateDir = path.join(tempDir, "state")
+      mkdirSync(stateDir, { recursive: true })
+      const env = {
+        HOME: tempDir,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        XDG_STATE_HOME: stateDir,
+        AKM_PLUGIN_MAX_LOG_BYTES: "300",
+      }
+
+      const totalEntries = 40
+      for (let i = 0; i < totalEntries; i++) {
+        runHook(["user-feedback"], {
+          input: JSON.stringify({ prompt: `remember entry-${i} padding-padding-padding-padding` }),
+          env,
+        })
+      }
+
+      const feedbackLogPath = path.join(stateDir, "akm-claude/feedback.log")
+      const feedbackSize = readFileSync(feedbackLogPath).length
+      // Unbounded growth would be roughly 40 * ~90 bytes ≈ 3600 bytes; rotation
+      // must keep the file close to the configured cap instead.
+      expect(feedbackSize).toBeLessThan(1000)
+
+      const feedbackLines = readLogLines(feedbackLogPath)
+      expect(feedbackLines.some((line) => line.includes(`entry-${totalEntries - 1} `))).toBe(true)
+      expect(feedbackLines.some((line) => line.includes("entry-0 "))).toBe(false)
+
+      // The rewrite must be atomic — no temp-file residue left behind.
+      const stateEntries = readdirSync(path.join(stateDir, "akm-claude"))
+      expect(stateEntries.some((name) => name.endsWith(".tmp"))).toBe(false)
+    })
+
+    it("expires stale quality-cache entries on rotation so a re-classified ref resolves to its newest classification", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+
+      const callLog = path.join(tempDir, "akm-calls.log")
+      const quotedLog = shellQuote(callLog)
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+case "$*" in
+  *show*skill:draft-rollback*)
+    echo '{"type":"skill","ref":"skill:draft-rollback","quality":"curated"}'
+    exit 0
+    ;;
+  *feedback*skill:draft-rollback*)
+    echo '{"ok":true}'
+    exit 0
+    ;;
+esac
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+
+      // Pre-seed a stale cache: an old "proposed" classification for the ref
+      // under test (at the head of the file, i.e. the oldest entry), padded
+      // with filler entries so the file exceeds the tiny rotation cap below.
+      const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
+      const fillerLines: string[] = ["2020-01-01T00:00:00Z\tskill:draft-rollback\tproposed"]
+      for (let i = 0; i < 20; i++) fillerLines.push(`2020-01-01T00:00:0${i % 10}Z\tskill:filler-${i}\tcurated`)
+      writeFileSync(qualityCachePath, `${fillerLines.join("\n")}\n`)
+
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          tool: "Bash",
+          input: { command: "akm show skill:draft-rollback" },
+          output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"curated\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          AKM_PLUGIN_MAX_LOG_BYTES: "200",
+        },
+      })
+
+      const calls = readFileSync(callLog, "utf8")
+      // The stale cached "proposed" entry must not shadow a fresh probe.
+      expect(calls).toContain("show skill:draft-rollback")
+      // Quality is no longer "proposed", so auto-feedback must proceed.
+      expect(calls).toContain("feedback skill:draft-rollback")
+
+      const cacheAfter = readFileSync(qualityCachePath, "utf8")
+      expect(cacheAfter).not.toContain("\tproposed")
+      expect(cacheAfter).toContain("skill:draft-rollback\tcurated")
+    })
+
+    // F2-1: rotation alone is a size cap, not a freshness guarantee — on a
+    // low-traffic install (~50 B/entry, 1 MiB cap ≈ 20k entries) a stale
+    // entry survives essentially forever. Freshness needs a real per-entry
+    // TTL at lookup time, independent of file size.
+    function writeQualityProbeAkm(binDir: string, callLog: string) {
+      const quotedLog = shellQuote(callLog)
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+case "$*" in
+  *show*skill:draft-rollback*)
+    echo '{"type":"skill","ref":"skill:draft-rollback","quality":"curated"}'
+    exit 0
+    ;;
+  *feedback*skill:draft-rollback*)
+    echo '{"ok":true}'
+    exit 0
+    ;;
+esac
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+    }
+
+    it("treats a quality-cache entry older than the TTL as a miss and re-probes, even when the file is far below the rotation cap", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+      const callLog = path.join(tempDir, "akm-calls.log")
+      writeQualityProbeAkm(binDir, callLog)
+
+      // A single stale entry in a tiny file: rotation (1 MiB default cap)
+      // never fires, so only a lookup-time TTL can expire this.
+      const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
+      writeFileSync(qualityCachePath, "2020-01-01T00:00:00Z\tskill:draft-rollback\tproposed\n")
+
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          tool: "Bash",
+          input: { command: "akm show skill:draft-rollback" },
+          output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"curated\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          // No AKM_PLUGIN_MAX_LOG_BYTES override: rotation must not be what
+          // rescues this lookup.
+        },
+      })
+
+      const calls = readFileSync(callLog, "utf8")
+      // The expired entry is a miss → probe re-runs and sees "curated".
+      expect(calls).toContain("show skill:draft-rollback")
+      // "curated" is not skipped, so auto-feedback proceeds.
+      expect(calls).toContain("feedback skill:draft-rollback")
+      // The probe result is appended as a fresh entry (newest wins on the
+      // next lookup).
+      const cacheAfter = readFileSync(qualityCachePath, "utf8")
+      expect(cacheAfter).toContain("skill:draft-rollback\tcurated")
+    })
+
+    it("honors a fresh quality-cache entry within the TTL without re-probing", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+      const callLog = path.join(tempDir, "akm-calls.log")
+      writeQualityProbeAkm(binDir, callLog)
+
+      const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
+      writeFileSync(qualityCachePath, `${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}\tskill:draft-rollback\tproposed\n`)
+
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          tool: "Bash",
+          input: { command: "akm show skill:draft-rollback" },
+          output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"curated\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      // Fresh cache hit: no show probe, and the "proposed" classification
+      // short-circuits the feedback submission.
+      const calls = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+      expect(calls).not.toContain("show skill:draft-rollback")
+      expect(calls).not.toContain("feedback skill:draft-rollback")
+      const skipLog = readLogLines(path.join(claudeStateDir, "feedback.log"))
+      expect(skipLog.some((line) => line.includes("skip_proposed\tskill:draft-rollback"))).toBe(true)
+    })
+
+    it("re-probes on a legacy quality-cache line without a timestamp column instead of crashing", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+      const callLog = path.join(tempDir, "akm-calls.log")
+      writeQualityProbeAkm(binDir, callLog)
+
+      // Legacy 2-field format: `ref<TAB>quality`, no timestamp column. Must
+      // be treated as expired (re-probe), never crash the hook.
+      const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
+      writeFileSync(qualityCachePath, "skill:draft-rollback\tproposed\n")
+
+      // runHook throws on a non-zero exit, so it doubles as the no-crash assertion.
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          tool: "Bash",
+          input: { command: "akm show skill:draft-rollback" },
+          output: "{\"type\":\"skill\",\"ref\":\"skill:draft-rollback\",\"quality\":\"curated\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      const calls = readFileSync(callLog, "utf8")
+      expect(calls).toContain("show skill:draft-rollback")
+      expect(calls).toContain("feedback skill:draft-rollback")
+    })
+
+    // F2-2: the retained-half computation `lines.slice(ceil(len/2))` yields
+    // ZERO lines when the file holds a single line larger than the cap —
+    // rotation would empty the file instead of capping it.
+    it("keeps the newest line when a single oversized line exceeds the rotation cap instead of emptying the file", () => {
+      const tempDir = makeTempDir()
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(claudeStateDir, { recursive: true })
+
+      const feedbackLogPath = path.join(claudeStateDir, "feedback.log")
+      const oversizedLine = `2026-01-01T00:00:00Z\tuser\tprompt\tSINGLE-OVERSIZED-ENTRY ${"x".repeat(150)}`
+      writeFileSync(feedbackLogPath, `${oversizedLine}\n`)
+
+      runHook(["user-feedback"], {
+        input: JSON.stringify({ prompt: "a fresh short entry" }),
+        env: {
+          HOME: tempDir,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          XDG_STATE_HOME: stateDir,
+          AKM_PLUGIN_MAX_LOG_BYTES: "50",
+        },
+      })
+
+      const body = readFileSync(feedbackLogPath, "utf8")
+      // The single line over the cap must survive as the newest retained line...
+      expect(body).toContain("SINGLE-OVERSIZED-ENTRY")
+      // ...and the new append lands after it as usual.
+      expect(body).toContain("a fresh short entry")
+    })
+  })
 })

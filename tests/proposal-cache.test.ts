@@ -59,9 +59,9 @@ const execFileSyncShim = (...args: any[]) => {
     try {
       const r = (mockExecFileSync as any)(...args)
       if (typeof r === "string" && /\d+\.\d+\.\d+/.test(r)) return r
-      return "akm 0.8.9\n"
+      return "akm 0.9.0\n"
     } catch {
-      return "akm 0.8.9\n"
+      return "akm 0.9.0\n"
     }
   }
   if (isAkm && Array.isArray(commandArgs) && commandArgs[0] === "config" && commandArgs[1] === "set") {

@@ -5,7 +5,7 @@ description: Search, show, dispatch agents, execute commands, run workflows, man
 
 # AKM Stash
 
-You have access to the `akm` CLI (AKM, v0.8.0+) to manage extension assets from a stash directory.
+You have access to the `akm` CLI (AKM, v0.9.0+) to manage extension assets from a stash directory.
 
 ## Tool surface vs. CLI
 
@@ -23,7 +23,7 @@ The Claude AKM plugin exposes **22 first-class slash commands** for the high-val
 - `/akm-workflow` — start/next/complete/status/list/create/resume/template
 - `/akm-env` — env `list` / `path` (file path) / `run` (inject env into child command)
 - `/akm-secret` — secret `list` / `path` (absolute file path only; never the bytes)
-- `/akm-proposal` — operate the v0.8.0 proposal queue (list/show/diff/accept/reject/drain)
+- `/akm-proposal` — operate the AKM proposal queue (list/show/diff/accept/reject/drain)
 - `/akm-review-proposals` — list and diff every pending proposal in one pass
 - `/akm-improve` — generate improvement proposals for the stash, a type, or a specific ref
 - `/akm-propose` — generate a new-asset proposal via the configured agent CLI
@@ -34,7 +34,7 @@ The Claude AKM plugin exposes **22 first-class slash commands** for the high-val
 - `/akm-memory-reject <candidate-id>` — reject a pending AKM memory candidate and record why
 - `/akm-help` — discover the right raw `akm` invocation for the long tail
 
-For every other verb — `add` (install kits / register sources), `save`, `import`, `clone`,
+For every other verb — `add` (install kits / register sources), `sync`, `import`, `clone`,
 `update`, `remove` (uninstall a source), `list` (configured sources), `registry search`,
 `index` (reindex), `config`, `upgrade`, `tasks`, ad-hoc `run`, `agent` (raw agent-CLI shell-out),
 env writes (`create` / `remove`), secret writes / command injection (`set` / `run` / `remove`), and any flag not exposed by the slash commands above —
@@ -42,31 +42,37 @@ env writes (`create` / `remove`), secret writes / command injection (`set` / `ru
 
 ### akm_help quick reference
 
-This table is the curated long-tail reference, embedded verbatim from
-`docs/akm-help-registry.md` (the canonical source). The parity test in
-`tests/claude-plugin.test.ts` fails when this table drifts from the canonical doc.
+This table is the curated long-tail reference, generated verbatim from
+`docs/akm-help-registry.md` (the canonical source) by `scripts/generate-help-tables.mjs`.
+`tests/help-registry-parity.test.ts` fails when this table drifts from the canonical doc.
 
+<!-- BEGIN GENERATED: akm-help-table (source: docs/akm-help-registry.md; run `node scripts/generate-help-tables.mjs` to refresh) -->
 | Task | Command | Notes | Keywords |
 | --- | --- | --- | --- |
 | Review pending proposals and decide whether to accept, reject, or revise them | `akm proposal list --status pending --format json` | Inspect individual entries with `akm proposal show <id>` and `akm proposal diff <id>` (positional id). Accept/reject requires explicit user approval. | proposal, review proposals, pending proposals, accept proposal, reject proposal |
-| Bulk-triage the standing pending proposal backlog by policy | `akm proposal drain --policy <personal-stash|conservative|manual> --dry-run` | Mutating: promotes/rejects in bulk and commits to git (no batch revert). Preview with `--dry-run`, then `--promote --yes` after explicit approval. Supersedes the old manual proposal-management agent session; also runs as the `processes.triage` improve pre-pass. | proposal, drain, triage, backlog, bulk accept, bulk reject |
-| Improve existing assets or distill repeated evidence into proposals | `akm improve [<type>|<ref>] [--task "..."]` | `improve` replaces the old reflect/distill flow in v0.8.0. Proposed assets are not curated until accepted. | improve, lesson, reflect, distill, drift, failure |
-| Manage scheduled task assets via the OS scheduler | `akm tasks <add|list|show|remove|enable|disable|run|history|sync|doctor> ...` | Tasks are first-class in v0.8.0 but remain a long-tail CLI surface in this plugin. | tasks, scheduled task, cron, launchd, schtasks |
+| Bulk-triage the standing pending proposal backlog by policy | `akm proposal drain --policy <personal-stash|conservative|manual> --dry-run` | Mutating: promotes/rejects in bulk and commits to git (no batch revert). Preview with `--dry-run`, then `--promote --yes` after explicit approval. Flags: `--max-accepts`, `--max-diff-lines`, `--older-than`, `--judgment`, `--profile`. Supersedes the old manual proposal-management agent session; also runs automatically as the `processes.triage` improve pre-pass. | proposal, drain, triage, backlog, bulk accept, bulk reject |
+| Improve existing assets or distill repeated evidence into proposals | `akm improve [<type>|<ref>] [--task "..."]` | `improve` replaces the old reflect/distill flow in v0.8.0. Proposed assets are not curated until accepted. Profiles add a `processes.triage` pre-pass and end-of-run `sync` (commit/push). | improve, lesson, reflect, distill, drift, failure, triage, sync |
+| Manage scheduled task assets via the OS scheduler | `akm tasks <add\|list\|show\|remove\|enable\|disable\|run\|history\|sync\|doctor> ...` | Tasks are first-class in v0.8.0 but remain a long-tail CLI surface in this plugin. | tasks, scheduled task, cron, launchd, schtasks |
 | Create a proposed asset for a coverage gap | `akm propose <type> <name> --task "..."` | Drafts a `quality:"proposed"` asset that lands in the proposal queue — never directly curated. | propose, coverage gap, proposed asset |
 | Search including proposed-quality assets | `akm search <query> --include-proposed` | Default search hides drafts; this flag merges them into hits. Do not treat proposed assets as curated until accepted. | include-proposed, proposed quality, lesson |
-| Manage whole-file secrets outside chat-safe read paths | `akm secret <set|run|remove> ...` | Use `/akm-secret` for `list` / `path`. Never paste secret values into chat; `set` reads from stdin/--from-file/--from-env and `run` injects into a child process only. | secret, docker secret, pem, token, _FILE |
+| Manage whole-file secrets outside chat-safe read paths | `akm secret <set\|run\|remove> ...` | Use `/akm-secret` or `akm_secret` for `list` / `path`. Never paste secret values into chat; `set` reads from stdin/--from-file/--from-env and `run` injects into a child process only. | secret, docker secret, pem, token, _FILE |
+| Read or use `.env`-style config assets without values reaching chat | `akm env <list\|path\|run> ...` | Chat-safe reads: `list` (key names only), `path <ref>` (file path for `--env-file` consumers), `run <ref> -- <cmd>` (inject into a child process — values never touch stdout). `create`/`set`/`unset`/`remove`/`export` are writes and stay on the raw CLI path; confirm with the user before running them. Use `/akm-env` (Claude) or `akm_env` (OpenCode) for the first-class chat-safe actions. | env, dotenv, environment variables, env file, secrets group |
 | Install a kit or register an external source (npm, GitHub, git, URL, local dir) | `akm add <package-ref> [--name <n>] [--type wiki] [--writable] [--provider <p>] [--max-pages N] [--max-depth N] [--allow-insecure]` | Confirm with the user before registering a website crawler or passing `--allow-insecure`. | add, install, register, kit, source, github, npm |
 | Commit (and optionally push) pending stash changes | `akm sync [<source-name>] [-m <msg>]` | For writable git-backed sources, sync commits and pushes (`--no-push` to skip); review the diff first. | save, commit, push, publish, git, sync |
-| Import a file (or stdin) into the stash as a typed asset | `akm import <path|-> [--name <name>] [--force]` | Use `-` and pipe content via stdin to import a string. | import, ingest, upload, stdin |
+| Import a file (or stdin) into the stash as a typed asset | `akm import <path\|-> [--name <name>] [--force]` | Use `-` and pipe content via stdin to import a string. | import, ingest, upload, stdin |
 | Clone an asset from any source for editing | `akm clone <ref> [--name <new>] [--dest <dir>] [--force]` | Type subdirectory is appended automatically; ref may include origin (e.g. `npm:@scope/pkg//script:foo`). | clone, copy, fork, edit |
 | Update a managed source (or all of them) | `akm update [<package_ref>|--all] [--force]` |  | update, upgrade kit, refresh, pull |
-| Remove a configured source and reindex | `akm remove <id|ref|path|url|name>` | Destructive — confirm intent before running. | remove, uninstall, delete source |
+| Remove a configured source and reindex | `akm remove <id\|ref\|path\|url\|name>` | Destructive — confirm intent before running. | remove, uninstall, delete source |
 | List configured sources (local dirs, kits, remotes) | `akm list` |  | list, sources, kits, show sources |
 | Search the registry only (skip local stash) | `akm registry search <query> [--limit N] [--assets]` | `akm_search` with `source='registry'` covers most cases; this is the explicit form. | registry, search registry, installable, discover kit |
 | Build or rebuild the stash search index | `akm index` | Rarely needed — the index refreshes implicitly after writes. | index, reindex, rebuild |
 | View or update akm config (get/set/list/unset/path) | `akm config <action> [<key>] [<value>] [--all]` | `akm config path --all` prints config, stash, cache, and index paths. | config, settings, configure, path |
 | Check for or install an akm CLI update | `akm upgrade [--check] [--force]` |  | upgrade cli, update cli, self-upgrade |
 | Run a stash script end-to-end (resolve → show → run) | ``akm show <script-ref> # then exec the printed `run` command`` | Or `akm --format json -q show <ref>` and pipe `.run` into your shell. | run, execute, script, exec |
+| Extract durable insights from a native agent session file into the proposal queue | `akm extract --type <claude-code|opencode> --session-id <sid>` | Both plugins fire this automatically and asynchronously at session end (event-driven, content-hash deduped — safe to re-run); the hourly `akm improve` extract pass is the backstop for sessions that never fire the hook. `--auto` sweeps every available harness; `--dry-run` previews without queuing. | extract, session insights, distill session, harvest session, extraction |
+| Print the current agent-facing usage guide for the akm CLI | `akm hints [--detail brief|normal|full]` | Both plugins inject this at session start as context; `/akm-help` and `akm_help` fall back to it for unmatched topics. `--detail full` prints the complete guide. | hints, guide, cheat sheet, how to use akm, reference |
+| Read release notes and migration guidance for an akm CLI version | `akm help migrate <version>` | Bundled per-release notes; an unrecognized version lists what's available. | migrate, migration, release notes, upgrade notes, changelog |
+<!-- END GENERATED: akm-help-table -->
 
 ### Stash directory resolution
 
@@ -91,7 +97,7 @@ The stash directory contains:
 - **env/** — `.env` files (`env:<name>`) whose values are managed by `akm env` and **never** surface in JSON, logs, or search indexes
 - **secrets/** — whole-file secrets (`secret:<name>`) whose contents never surface in JSON, logs, search indexes, or `akm show`
 - **wikis/** — per-wiki directories (`<stashDir>/wikis/<name>/`) containing `schema.md`, `index.md`, `log.md`, `raw/`, and agent-authored pages referenced as `wiki:<name>/<page>`
-- **.akm/proposals/** — v0.8.0 proposal queue (one directory per proposal). Drafts here never leak into search or commits; promote them with `akm proposal accept <id>`.
+- **.akm/proposals/** — AKM proposal queue (one directory per proposal). Drafts here never leak into search or commits; promote them with `akm proposal accept <id>`.
 
 ### Multi-source resolution
 
@@ -146,7 +152,7 @@ The response includes `hits` (ranked results), plus diagnostic fields: `timing` 
 - Local and installed stash hits include `ref`, which you pass to `akm show`. Hits also include optional `quality?` (`curated` / `generated` / `proposed` / unknown) and `warnings?` (string array of non-fatal issues).
 - Registry hits live under a separate `registryHits` key and include `id`, `installRef`, `action` (contains install guidance).
 - Use `--source registry` when the user is looking for installable community kits, or `--source both` to search everything at once. Note: `local` remains a backward-compatible alias for `stash`.
-- 0.8.0: `--source <name>` scopes the search to a single named source (e.g. `--source itlackey/akm-stash`) — useful when narrowing down to one configured kit.
+- `--source <name>` scopes the search to a single named source (e.g. `--source itlackey/akm-stash`) — useful when narrowing down to one configured kit.
 - `--include-proposed` merges `quality:"proposed"` rows into `hits`; without it, drafts in the proposal queue are hidden from default search.
 
 ### Show an asset
@@ -221,7 +227,7 @@ When the user wants to browse community kits:
 
 1. Initialize: `akm init` (creates stash dirs, installs ripgrep)
 2. Build the index: `akm index`
-3. Curate assets for your task (primary): `akm curate "<task>"` — LLM-reranked with relevance scores. v0.8.0 automatically boosts assets matching the current project (cwd-anchored), so an explicit project name in the query is no longer required for ranking, though concrete task descriptions still help the reranker.
+3. Curate assets for your task (primary): `akm curate "<task>"` — LLM-reranked with relevance scores. It automatically boosts assets matching the current project (cwd-anchored), so an explicit project name in the query is no longer required for ranking, though concrete task descriptions still help the reranker.
 4. Inspect a result: `akm show <ref>`
 5. Search for a known ref (fallback): `akm search "<known name>"` — only when you know something exists and need its exact ref
 6. Search the registry when needed: `akm search "deploy" --source registry`
@@ -253,7 +259,7 @@ Auto-feedback (recorded by the plugin hooks on Bash tool success/failure) skips
 direct `akm feedback`. Override an automatic signal by running `akm feedback`
 explicitly.
 
-## Proposal queue (v0.8.0)
+## Proposal queue
 
 All proposal-producing commands (`akm improve`, `akm propose`, plus any plugin-emitted proposals) write through one durable queue at
 `<stashRoot>/.akm/proposals/`. Drafts there never leak into search or commits;
@@ -299,8 +305,8 @@ when_to_use: When this insight applies (problem context, signals, etc.).
 Body in markdown.
 ```
 
-The canonical improvement path is **`/akm-improve <ref>`** — run it on a memory,
-knowledge doc, or session summary that contains repeated evidence. `improve`
+The canonical improvement path is **`/akm-improve <ref>`** — run it on a memory
+or knowledge doc that contains repeated evidence. `improve`
 can emit lesson-oriented proposals at `quality:"proposed"`, which the user then reviews
 via `/akm-proposal accept`. Direct authoring via `akm import` and `akm
 remember`-style flows is also supported.
@@ -359,7 +365,7 @@ intent-bearing parts.
 | Session start | `akm` installed/refreshed; `defaults.agent` (+ a matching `profiles.agent.<name>` entry) initialized to the current platform when missing — the legacy `agent.default` slot is auto-migrated on load; pending proposal count surfaced; `akm hints` injected as context; index warmed in the background. | Skim the hints, agent CLI, and any pending-proposal headline so you know what's queued. If further interactive configuration is still needed, ask the user to run `akm setup` manually. |
 | Each user prompt | `akm curate "<prompt>"` runs and its top matches are injected into context as `additionalContext`. | Prefer the curated assets over writing new code; fetch full payloads with `akm show <ref>` before using. |
 | Each Bash tool call | Asset refs in the command/output are logged. Auto-feedback skips `memory:*` / `env:*` / `secret:*` / `lesson:*` / `quality:"proposed"` refs and records positive/negative feedback for everything else on success/failure. | When the automatic signal is wrong (e.g. the ref was in a discussion, not actually used), correct with an explicit `akm feedback`. |
-| Session or subagent stops; before compaction | The session buffer (memory intents + refs used) is persisted as `memory:claude-session-YYYYMMDD-<sid>`. | Promote durable learnings — improve the session memory into a proposal via `/akm-improve memory:<name>`, review the resulting proposal, and accept it via `/akm-proposal accept <id>`. |
+| Task completion; session end | Completed-task summaries are mined for memory candidates (no direct memory write); `TaskCompleted` and `PostToolBatch` feed the candidate log for `/akm-memory-candidates`. `SessionEnd` runs `akm index` and fires an async, event-driven `akm extract --session-id <sid>` so durable insights reach the proposal queue without waiting for the periodic `akm improve` extract pass. | Review pending candidates with `/akm-memory-candidates` and promote the useful ones via `/akm-memory-promote <id>`; for a full session retrospective, dispatch `/akm-evolve` (the `akm-curator` agent). |
 
 When you discover a pattern worth keeping, **write it back to the stash**
 rather than only answering the user. Options:
@@ -483,7 +489,7 @@ You can dispatch a stash agent as a dedicated Claude Code CLI session. The agent
   "description": "Code review coach",
   "prompt": "You are a code review coach. Focus on ...",
   "toolPolicy": { "read": true, "edit": false, "bash": false },
-  "modelHint": "anthropic/claude-sonnet-4-5-20250514"
+  "modelHint": "<provider>/<model-id>"
 }
 ```
 
@@ -507,21 +513,20 @@ When the user asks you to dispatch, run, or use a stash agent:
    ```
    Parse the JSON. Verify `type` is `"agent"` and `prompt` is non-empty. If validation fails, inform the user.
 
-3. **Compose the Claude CLI invocation.** Build a one-shot CLI call that embeds the stash agent's persona and the user's task:
+3. **Compose the Claude CLI invocation.** Build a one-shot CLI call that embeds the stash agent's persona and the user's task. Enforce `toolPolicy` by passing the resolved tool list through `--allowedTools` — never widen the permission mode to skip the runtime's confirmation prompts entirely, which would ignore the stash agent's own `toolPolicy`:
 
    ```bash
    claude -p \
      --agents '{"stash-agent":{"description":"{description}","prompt":"{prompt}"}}' \
      --agent stash-agent \
      --model {modelHint-or-default} \
-     --allowed-tools {tool-list} \
-     --permission-mode bypassPermissions \
+     --allowedTools {tool-list} \
      --no-session-persistence \
      --output-format json \
      --system-prompt '{task/context}'
    ```
 
-4. **Run the CLI through Bash** so this becomes a real Claude Code session with the requested agent, model, and tool constraints.
+4. **Run the CLI through Bash** so this becomes a real Claude Code session with the requested agent, model, and tool constraints enforced by `--allowedTools`.
 
 5. **Report results** to the user. If `modelHint` is absent or invalid, omit `--model` and fall back to the session default.
 

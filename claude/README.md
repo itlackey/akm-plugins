@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.8.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle env configs and whole-file secrets safely**, **operate the v0.8.0 proposal queue**, and **improve assets** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, and feed asset-usage feedback back into the stash so it improves with every session. `akm setup` remains human-facing and should be run manually when needed.
+Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.9.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle env configs and whole-file secrets safely**, **operate the AKM proposal queue**, and **improve assets** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, and feed asset-usage feedback back into the stash so it improves with every session. `akm setup` remains human-facing and should be run manually when needed.
 
 ## Installation
 
@@ -75,23 +75,21 @@ Claude will search with `akm search ... --source registry`, inspect the returned
 
 The plugin's hooks shell out through a `bun` runtime. **Bun ^1.0 must be on PATH**; if it isn't, every Claude hook short-circuits and the SessionStart context surfaces a clear "Bun runtime not available" banner. Install Bun from <https://bun.sh> first.
 
-On session start, the plugin enforces the documented AKM baseline by requiring `akm-cli@^0.8.0`. If `akm` is already on PATH and satisfies that range, the plugin uses it as-is. Otherwise it writes a clear stderr banner pointing at the `/akm-setup` slash command — installation requires **explicit user confirmation** through `/akm-setup`; the plugin does **not** silently `bun install` or `npm install` on your behalf. You can also install ahead of time with any of the methods below.
+On session start, the plugin enforces the documented AKM baseline by requiring `akm-cli@^0.9.0-beta.0 || ^0.9.0`. If `akm` is already on PATH and satisfies that range, the plugin uses it as-is. Otherwise it surfaces a clear SessionStart context banner pointing at the `/akm-setup` slash command — installation requires **explicit user confirmation** through `/akm-setup`; the plugin does **not** silently `bun install` or `npm install` on your behalf. You can also install ahead of time with any of the methods below.
 
 #### First-session behavior
 
-If `akm` is missing or out of range when Claude Code starts, you will see a banner like this on stderr (visible in your terminal — *not* in the chat panel):
+If `akm` is missing or out of range when Claude Code starts, the SessionStart hook injects a degraded context block like this (visible to Claude, and surfaced to you in the session — *not* a raw stderr banner):
 
 ```
-────────────────────────────────────────────────────────────
-akm-plugin: akm CLI not installed or wrong version
+AKM is NOT available: akm CLI not installed or wrong version
   detected: (not found on PATH)
-  required: ^0.8.0 || ^0.8.0-rc0
+  required: ^0.9.0-beta.0 || ^0.9.0
 
 Run `/akm-setup` in this Claude Code session to install/upgrade
 with your explicit confirmation, or install manually:
-  bun install -g akm-cli@^0.8.0
-  npm install -g akm-cli@^0.8.0
-────────────────────────────────────────────────────────────
+  bun install -g akm-cli@^0.9.0-beta.0
+  npm install -g akm-cli@^0.9.0-beta.0
 ```
 
 This is your cue to run `/akm-setup` from inside Claude Code — the slash command walks you through the install with explicit confirmation. The session continues without akm-aware features until then; nothing else is broken.
@@ -103,8 +101,8 @@ curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
 irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
 
 # Or via Bun / npm
-bun install -g akm-cli@^0.8.0
-npm install -g akm-cli@^0.8.0
+bun install -g akm-cli@^0.9.0-beta.0
+npm install -g akm-cli@^0.9.0-beta.0
 ```
 
 ## Stash model
@@ -131,7 +129,7 @@ stash/
 ├── env/        # .env config/credential files (env:<name>) — values never surface through structured output
 ├── secrets/    # whole-file secrets (secret:<name>) — contents never surface through structured output
 ├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
-└── .akm/proposals/  # v0.8.0 proposal queue — drafts that never leak into search or commits
+└── .akm/proposals/  # AKM proposal queue — drafts that never leak into search or commits
 ```
 
 Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
@@ -144,10 +142,9 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 | Event | What happens |
 | --- | --- |
-| **SessionStart** | Verifies `akm` on PATH satisfies the required `^0.8.0` range (override via `AKM_PACKAGE_REF`). When `akm` is missing or out of range, the hook does **not** install anything — it writes a clear stderr banner pointing the user at the `/akm-setup` slash command (the explicit-consent install path) and emits a degraded SessionStart context telling the agent `akm` tooling is unavailable for this session. When `akm` is healthy, the hook sets `defaults.agent` to `claude` (and ensures `profiles.agent.claude` exists) in `~/.config/akm/config.json` when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
+| **SessionStart** | Verifies `akm` on PATH satisfies the required `^0.9.0-beta.0 || ^0.9.0` range (override via `AKM_PACKAGE_REF`). When `akm` is missing or out of range, the hook does **not** install anything — it emits a degraded SessionStart context telling the agent `akm` tooling is unavailable for this session and pointing at the `/akm-setup` slash command (the explicit-consent install path). When `akm` is healthy, the hook sets `defaults.agent` to `claude` (and ensures `profiles.agent.claude` exists) in `~/.config/akm/config.json` when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
 | **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
 | **UserPromptExpansion** | Logs expanded `/akm-*` slash-command usage and injects a short reminder when a mutating memory/proposal command is expanded without explicit confirmation language. |
-| **PreToolUse** (Agent) | Resolves invalid Claude Code subagent model aliases (e.g. `balanced`, `gpt-4o`) to the four valid aliases (`sonnet`, `opus`, `haiku`, `inherit`) so dispatch is never rejected upstream. |
 | **PreToolUse** (Read / Write / Edit / Glob / Grep) | Observes asset refs in tool input for memory-event capture. Never blocks. |
 | **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs (including `lesson:*`) from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. Skips `memory:*`, `env:*`, `secret:*`, `lesson:*`, and any ref the indexer reports as `quality:"proposed"`. |
 | **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
@@ -161,7 +158,7 @@ or the CLI call fails, the hook exits silently without affecting the session.
 
 Earlier versions of this plugin shipped a `PreToolUse` Bash hook that tokenized
 each shell invocation and **blocked** a hard-coded list of risky `akm`
-subcommands (env writes, `save --push`, `accept` / `reject` / `revert`,
+subcommands (env writes, `sync --push`, `accept` / `reject` / `revert`,
 `tasks add` / `tasks run`, `upgrade`, `update --all`, etc.) until the user
 re-approved them inline. That gate has been removed in 0.8.0. The tokenized
 matcher was brittle — it produced false positives on commit messages,
@@ -232,7 +229,7 @@ Notes:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AKM_PACKAGE_REF` | `akm-cli@^0.8.0` | Override the npm/bun package spec displayed in the SessionStart consent banner and used by `/akm-setup` (for example, to pin a compatible AKM build in CI). The plugin never installs this automatically — it is only quoted in the banner. |
+| `AKM_PACKAGE_REF` | `akm-cli@^0.9.0-beta.0` | Override the npm/bun package spec displayed in the SessionStart consent banner and used by `/akm-setup` (for example, to pin a compatible AKM build in CI). The plugin never installs this automatically — it is only quoted in the banner. |
 | `AKM_LOCAL_BUILD_CLI` | _(unset)_ | Optional absolute path to a locally built AKM CLI entrypoint such as `/abs/path/to/akm/dist/cli.js`. When set, the Claude hook runs that build through Bun before checking `akm` on PATH. Useful when developing `akm` and `akm-plugin` side by side. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
 | `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the post-session `akm index` run (e.g. low-power dev machines or CI runners). |
@@ -262,7 +259,7 @@ The plugin ships 22 first-class verbs. `/akm-add` and `/akm-sync` are not part o
 - `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
 - `/akm-env <list|path|run> [ref] [-- cmd]` — env read paths: list env refs, get the file path, or inject env into a command. Values never reach chat; only key names are surfaced.
 - `/akm-secret <list|path> [ref]` — secret read paths: enumerate secret refs or return an absolute secret file path for `_FILE`-style consumers. Never reads or prints secret contents.
-- `/akm-proposal <list|show|diff|accept|reject|drain> [id] [--reason "..."]` — operate the v0.8.0 proposal queue. Always confirms with the user before `accept`/`reject`/`drain`.
+- `/akm-proposal <list|show|diff|accept|reject|drain> [id] [--reason "..."]` — operate the AKM proposal queue. Always confirms with the user before `accept`/`reject`/`drain`.
 - `/akm-review-proposals [--limit N]` — list every pending proposal and diff each one in a single pass for review.
 - `/akm-improve [type|ref] [--task "..."] [--dry-run]` — generate improvement proposals for the stash, a type, or a specific ref.
 - `/akm-propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.
@@ -275,8 +272,8 @@ The plugin ships 22 first-class verbs. `/akm-add` and `/akm-sync` are not part o
 
 ### When to use what
 
-- **Prefer the 21 slash commands above** for the verbs they cover — they wire the AKM skill flow, hooks, and feedback loop together for you.
-- **For everything else** — `add` (install kits / register sources), `save`, `import`, `clone`, `update`, `remove`, `list` (sources), `registry-search`, `reindex`, `config`, `upgrade`, `run-script`, raw `agent` (one-shot agent shell-out), env writes (`create`, `remove`), and secret writes / command injection (`set`, `run`, `remove`) — call `/akm-help <task>` first to discover the right `akm` CLI invocation, then run it via Bash.
+- **Prefer the 22 slash commands above** for the verbs they cover — they wire the AKM skill flow, hooks, and feedback loop together for you.
+- **For everything else** — `add` (install kits / register sources), `sync`, `import`, `clone`, `update`, `remove`, `list` (sources), `registry-search`, `reindex`, `config`, `upgrade`, `run-script`, raw `agent` (one-shot agent shell-out), env writes (`create`, `remove`), and secret writes / command injection (`set`, `run`, `remove`) — call `/akm-help <task>` first to discover the right `akm` CLI invocation, then run it via Bash.
 - **Env and secret writes bypass the chat turn entirely.** `/akm-env` is read-only for displayed output (`list` and `path`; `run` injects values into a child process only). `/akm-secret` is read-only for displayed output (`list` and `path` only). To create envs or set/run/remove whole-file secrets, use the raw `akm env …` / `akm secret …` CLI so secret material never passes through the chat turn.
 
 ## Docs

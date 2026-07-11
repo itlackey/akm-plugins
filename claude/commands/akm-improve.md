@@ -12,7 +12,7 @@ Parse `"$ARGUMENTS"` as an optional asset type or `[origin//]type:name` ref, fol
 
 Use `/akm-improve memory:<name>` or `/akm-improve lesson` when the goal is to distill repeated evidence or clean up memory-driven assets.
 
-Note: in v0.8.0 `--auto-accept` defaults to OFF — proposals stay in the queue for explicit `/akm-proposal accept` review. Pass `--auto-accept=safe` (alias for `=90`) or `--auto-accept=<N>` to enable whole-batch auto-promotion.
+Note: `--auto-accept` defaults to OFF — proposals stay in the queue for explicit `/akm-proposal accept` review. Pass `--auto-accept=safe` (alias for `=90`) or `--auto-accept=<N>` to enable whole-batch auto-promotion.
 
 Two improve-profile blocks (configured under `profiles.improve.<name>` in `~/.config/akm/config.json`) shape what a run does end to end — surface them when the user asks why `improve` accepted proposals or pushed git:
 

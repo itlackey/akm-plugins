@@ -1,5 +1,10 @@
 # OpenCode AKM Plugin Status And Follow-Up Plan
 
+> **Archived / historical.** This plan predates the 0.9.0 release and is now
+> stale in its own numbers (tool count, hook list, test counts). It is
+> superseded by [`docs/reviews/release-0.9.0-plugin-review.md`](../reviews/release-0.9.0-plugin-review.md)
+> for current state and outstanding follow-ups. Kept for historical context only.
+
 ## Current State
 
 The old upgrade plan is no longer accurate. The OpenCode plugin on `main`
