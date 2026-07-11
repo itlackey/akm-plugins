@@ -5,7 +5,7 @@
 // auto-install is disabled).
 
 import { describe, expect, it } from "bun:test"
-import { satisfies, valid } from "../claude/hooks/vendor-semver"
+import { satisfies, valid } from "../claude/shared/vendor-semver"
 
 describe("valid()", () => {
   it("accepts standard semver", () => {
@@ -38,7 +38,7 @@ describe("valid()", () => {
 describe("satisfies() — AKM_REQUIRED_RANGE behavior", () => {
   // This is the exact range the Claude hook uses: see
   // claude/hooks/akm-hook.ts:AKM_REQUIRED_RANGE.
-  const RANGE = "^0.8.0-rc.0 || ^0.8.0"
+  const RANGE = "^0.8.0-rc.0 || ^0.8.0 || ^0.9.0-beta.0 || ^0.9.0"
 
   it("accepts stable 0.8.x versions", () => {
     expect(satisfies("0.8.0", RANGE)).toBe(true)
@@ -60,9 +60,16 @@ describe("satisfies() — AKM_REQUIRED_RANGE behavior", () => {
     expect(satisfies("0.7.9", RANGE)).toBe(false)
   })
 
-  it("rejects 0.9.x", () => {
-    expect(satisfies("0.9.0", RANGE)).toBe(false)
-    expect(satisfies("0.9.0-rc0", RANGE)).toBe(false)
+  it("accepts stable 0.9.x versions", () => {
+    expect(satisfies("0.9.0", RANGE)).toBe(true)
+    expect(satisfies("0.9.5", RANGE)).toBe(true)
+  })
+
+  it("accepts 0.9.0 prereleases >= beta.0 (e.g. 0.9.0-beta.6, 0.9.0-rc.0)", () => {
+    expect(satisfies("0.9.0-beta.0", RANGE)).toBe(true)
+    expect(satisfies("0.9.0-beta.6", RANGE)).toBe(true)
+    // rc > beta at the same base, so rc prereleases are also accepted
+    expect(satisfies("0.9.0-rc.0", RANGE)).toBe(true)
   })
 
   it("rejects 1.0.x", () => {

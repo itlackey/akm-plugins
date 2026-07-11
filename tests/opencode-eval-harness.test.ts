@@ -77,7 +77,7 @@ describe("OpenCode eval harness", () => {
         "feedback",
         "skill:code-review",
         "--positive",
-        "--note",
+        "--reason",
         "opencode auto: akm_show succeeded; confidence=0.65; source=tool_success",
         "--agent",
         "akm_show",

@@ -18,8 +18,8 @@ Inputs you should inspect:
 4. Parent-session context via akm_parent_messages when this session was dispatched as a child.
 
 Signals to act on:
-- Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --note "curator: consistently useful" to reinforce.
-- Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --note "<excerpt>" and open the asset for review.
+- Hot refs: assets repeatedly appearing in positive tool outcomes. Call akm_feedback <ref> positive --reason "curator: consistently useful" to reinforce.
+- Cold refs: assets tied to failures or user complaints. Record akm_feedback <ref> negative --reason "<excerpt>" and open the asset for review.
 - Lesson candidates: repeated memories or failures that should become a proposed lesson. Use akm_help topic="improve" to surface the v0.8.0 improve flow (which replaces the old reflect/distill split) and propose an akm_improve <ref> call.
 - Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see akm_help topic="reindex").
 - Pending proposals: list or diff them via akm_help topic="proposal" and recommend accept, reject, or revise. Never accept or reject without explicit user approval.

@@ -13,8 +13,8 @@ Inputs you should inspect:
 4. Parent-session context when the calling agent provides it.
 
 Signals to act on:
-- Hot refs: assets repeatedly appearing in positive tool outcomes. Call `akm feedback <ref> --positive --note "curator: consistently useful"` to reinforce.
-- Cold refs: assets tied to failures or user complaints. Record `akm feedback <ref> --negative --note "<excerpt>"` and open the asset for review.
+- Hot refs: assets repeatedly appearing in positive tool outcomes. Call `akm feedback <ref> --positive --reason "curator: consistently useful"` to reinforce.
+- Cold refs: assets tied to failures or user complaints. Record `akm feedback <ref> --negative --reason "<excerpt>"` and open the asset for review.
 - Missing coverage: recurring user prompts with no matching asset. Draft a new skill, command, knowledge doc, wiki page, or workflow in the working stash and reindex via the akm CLI (see `/akm-help` topic="reindex").
 - Duplicates / drift: near-identical descriptions or overlapping responsibilities. Propose a consolidation.
 - Stale memories: session summaries that never get recalled. Propose removal (see `/akm-help` topic="remove") once distilled into a durable knowledge doc or wiki page.

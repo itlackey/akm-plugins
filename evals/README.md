@@ -17,8 +17,6 @@ This framework answers different questions:
 - **Did it break the auto-feedback path on either plugin?**
   (precision/recall over actual `akm feedback` calls in the call log,
   measured symmetrically on both Claude and OpenCode)
-- **Did the session-end memory capture start leaking secrets the user
-  typed by accident?** (`claude_secret_leakages` over labeled fixtures)
 - **Did it slow the hook down on the user's prompt path?** (p50/p95/p99
   per hook verb — observation only; not gated in CI because latency is
   hardware-dependent)
@@ -46,8 +44,8 @@ Reports are JSON + markdown so two runs can be cleanly diffed.
 | 2 — deterministic effectiveness | this framework, no LLM | every PR | seconds |
 | 3 — LLM-in-the-loop scenarios | Claude judge, scenario YAMLs | manual / `workflow_dispatch` | dollars |
 
-Tier 2 ships six metrics: `surface`, `curation`, `latency`,
-`context_budget`, `feedback`, and `memory`. Tier 3 ships a YAML
+Tier 2 ships five metrics: `surface`, `curation`, `latency`,
+`context_budget`, and `feedback`. Tier 3 ships a YAML
 scenario format, an Anthropic SDK judge with prompt caching, and
 pairwise A/B between two git refs. See `tier3/README.md` for details.
 
@@ -67,7 +65,6 @@ bun run tier2:latency
 bun run tier2:surface
 bun run tier2:context-budget
 bun run tier2:feedback
-bun run tier2:memory
 
 # diff a candidate run against the checked-in baseline
 bun run diff tier2/baseline/tier2.json ../eval-results/<ts>/tier2.json
@@ -116,12 +113,11 @@ evals/
 ├── fixtures/
 │   ├── stash/               # ~15 seeded assets (stable refs)
 │   ├── prompts/curation.jsonl       # gold set: prompt → expected refs
-│   ├── tool-outputs/feedback.jsonl  # synthetic outputs for feedback metric
-│   └── session-logs/        # per-fixture session buffers for memory metric
+│   └── tool-outputs/feedback.jsonl  # synthetic outputs for feedback metric
 ├── tier2/
 │   ├── runner.ts            # orchestrator
 │   ├── harness/{claude,opencode}.ts  # plugin invocation harnesses
-│   ├── metrics/{surface,curation,latency,context-budget,feedback,memory}.ts
+│   ├── metrics/{surface,curation,latency,context-budget,feedback}.ts
 │   └── baseline/            # checked-in baseline JSON
 └── tier3/
     ├── runner.ts            # scenario orchestrator + judge driver

@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Evaluation framework for the akm Claude Code and OpenCode plugins. Measures curation quality, hook latency, surface stability, context budget, feedback classification, memory harvest fidelity (tier-2), and end-to-end LLM-judged scenario outcomes (tier-3).",
+  "description": "Evaluation framework for the akm Claude Code and OpenCode plugins. Measures curation quality, hook latency, surface stability, context budget, feedback classification (tier-2), and end-to-end LLM-judged scenario outcomes (tier-3).",
   "scripts": {
     "tier2": "bun tier2/runner.ts",
     "tier2:curation": "bun tier2/runner.ts --metric curation",
@@ -11,7 +11,6 @@
     "tier2:surface": "bun tier2/runner.ts --metric surface",
     "tier2:context-budget": "bun tier2/runner.ts --metric context_budget",
     "tier2:feedback": "bun tier2/runner.ts --metric feedback",
-    "tier2:memory": "bun tier2/runner.ts --metric memory",
     "tier3": "bun tier3/runner.ts",
     "tier3:ab": "bun tier3/ab.ts",
     "diff": "bun lib/cli-diff.ts",

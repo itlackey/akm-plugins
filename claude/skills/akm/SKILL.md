@@ -244,7 +244,7 @@ Use feedback to reinforce helpful assets or down-rank stale ones:
 
 ```bash
 akm feedback skill:code-review --positive
-akm feedback command:release --negative --note "Outdated for the current repo layout"
+akm feedback command:release --negative --reason "Outdated for the current repo layout"
 ```
 
 Auto-feedback (recorded by the plugin hooks on Bash tool success/failure) skips
