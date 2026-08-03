@@ -45,11 +45,14 @@ export function runClaudeHook(
   }
 }
 
-// Parse refs (e.g. `skill:code-review`, `knowledge:foo/bar`) out of the
-// `additionalContext` block the hook emits as JSON on stdout. Mirrors the
-// types listed in AGENTS.md: skill, command, agent, knowledge, memory,
-// lesson, script, workflow, task, vault, wiki.
-const REF_RE = /\b(skill|command|agent|knowledge|memory|lesson|script|workflow|task|vault|wiki):[A-Za-z0-9._\/-]+/g
+// Parse AKM 0.9 refs (e.g. `skills/code-review`, `knowledge/foo/bar`) out of
+// the `additionalContext` block the hook emits as JSON on stdout. Mirrors
+// REF_PATTERN in claude/shared/ref-extraction.ts, including the lookarounds
+// that keep ordinary paths like `src/app.ts` from being read as refs. Keep
+// the concept-root list in lockstep with the plugins: `env` is singular,
+// `facts`/`instructions`/`sessions` are new in 0.9, there is no `wikis`.
+const REF_RE =
+  /(?<![A-Za-z0-9@._+/:=-])(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?(?![A-Za-z0-9@._+/#$=-])/g
 
 const CURATED_FILE_RE = /AKM stash curation written to `([^`]+)`/g
 

@@ -120,8 +120,11 @@ exit 0
 }
 
 describe("AKM_VERSION_RANGE contract", () => {
-  it("uses RC.14 as the exact prerelease floor", () => {
-    expect(AKM_VERSION_RANGE).toBe("^0.9.0-rc.14 || ^0.9.0")
+  it("is a single caret clause anchored at the RC.14 prerelease floor", () => {
+    // The former `^0.9.0-rc.14 || ^0.9.0` second clause was dead: the RC-floor
+    // caret already admits every stable 0.9.x on its own (a version without a
+    // prerelease outranks one with the same major.minor.patch).
+    expect(AKM_VERSION_RANGE).toBe("^0.9.0-rc.14")
   })
 
   it("accepts RC.14 and supported 0.9 builds", () => {
@@ -131,9 +134,20 @@ describe("AKM_VERSION_RANGE contract", () => {
   })
 
   it("rejects prereleases below RC.14 and versions outside 0.9", () => {
-    for (const version of ["0.8.9", "0.9.0-beta.33", "0.9.0-rc.13", "1.0.0"]) {
+    for (const version of ["0.8.9", "0.9.0-beta.33", "0.9.0-rc.13", "1.0.0", "0.10.0"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(false)
     }
+  })
+
+  it("documents that a future 0.9.x prerelease line needs its own explicit clause", () => {
+    // node-semver behavior, reproduced by ./vendor-semver: a prerelease only
+    // satisfies a range whose lower bound is a prerelease with the same
+    // major.minor.patch. A 0.9.1 RC line therefore trips the gate until an
+    // explicit `|| ^0.9.1-rc.N` clause is added. Pinned so the next RC line
+    // is a deliberate edit rather than a surprise.
+    expect(satisfiesAkmVersionRange("0.9.1-rc.1")).toBe(false)
+    // ...while the stable release on that same line is already accepted.
+    expect(satisfiesAkmVersionRange("0.9.1")).toBe(true)
   })
 
   it("rejects malformed or missing versions", () => {
@@ -221,7 +235,7 @@ describe("checkAkmVersion", () => {
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("AKM is NOT available")
-    expect(result.stdout).toContain("^0.9.0-rc.14 || ^0.9.0")
+    expect(result.stdout).toContain("^0.9.0-rc.14")
     expect(result.stdout).toContain("akm-cli@^0.9.0-rc.14")
     expect(result.installLog).toBe("")
   })

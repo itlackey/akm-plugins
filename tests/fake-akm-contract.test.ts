@@ -5,8 +5,8 @@ import path from "node:path"
 import { installFakeAkm } from "../evals/lib/fake-akm"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
-// actually invoke (workflow list --active, proposal list, proposal extract)
-// against a REAL akm binary, so a real 0.9 envelope shape change
+// actually invoke (info, workflow list --active, proposal list, proposal
+// extract) against a REAL akm binary, so a real 0.9 envelope shape change
 // would fail this test instead of passing every eval/unit test silently
 // (the failure mode called out in docs/reviews/release-0.9.0-plugin-review.md
 // §7 "Three independent fake-akm implementations, none contract-tested").
@@ -87,15 +87,6 @@ function runReal(cwd: RealEnv, args: string[]): unknown {
   return JSON.parse(result.stdout)
 }
 
-function runRealAllowError(cwd: RealEnv, args: string[]): unknown {
-  const result = spawnSync(REAL_AKM, args, realAkmEnv(cwd))
-  // akm's own error envelopes (e.g. extract with no LLM configured) exit
-  // non-zero and print JSON to stderr; success envelopes print to stdout.
-  const body = [result.stdout, result.stderr].find((s) => s.trim())
-  if (!body) throw new Error(`akm ${args.join(" ")} exited ${result.exitCode} with no output on stdout or stderr`)
-  return JSON.parse(body)
-}
-
 function runFake(akmPath: string, args: string[]): unknown {
   const result = spawnSync(akmPath, args)
   if (result.exitCode !== 0) {
@@ -104,7 +95,43 @@ function runFake(akmPath: string, args: string[]): unknown {
   return JSON.parse(result.stdout)
 }
 
+/**
+ * Raw spawn for verbs whose FAILURE path is the contract. Returns the exit
+ * code and both streams unparsed so a test can pin which stream the envelope
+ * arrived on — `envelopeShape()` alone cannot catch a fake that writes the
+ * right keys to the wrong stream with the wrong exit code.
+ */
+function runRaw(cmd: string, args: string[], env?: Record<string, string | undefined>): SpawnResult {
+  return spawnSync(cmd, args, env)
+}
+
 describe("fake-akm envelope contract", () => {
+  // `info` gates ALL ref validation on both plugins: they resolve their
+  // bundle root from $AKM_BUNDLE_DIR, else `akm info --format json` →
+  // .bundleDir (claude/hooks/akm-hook.ts resolveStashRoots(),
+  // opencode/index.ts getAkmBundleDir()). With no bundle root,
+  // validateRefCandidates() early-returns [] and auto-feedback silently
+  // never fires — which is exactly how tier-2's feedback recall went 1 → 0
+  // when the fake shim didn't model this verb at all.
+  test.skipIf(!akmAvailable)("info envelope matches real akm", () => {
+    const real = makeRealEnv()
+    const fake = makeFakeEnv()
+    try {
+      const realEnvelope = runReal(real, ["--format", "json", "-q", "info"]) as Record<string, unknown>
+      const fakeEnvelope = runFake(fake.akmPath, ["--format", "json", "-q", "info"]) as Record<string, unknown>
+      expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
+      // The two fields the plugins actually consume: .bundleDir (the bundle
+      // root every ref resolves against) and .assetTypes (the 0.9 asset-type
+      // vocabulary the concept-root lists in ref-extraction derive from).
+      expect(typeof fakeEnvelope.bundleDir).toBe("string")
+      expect(realEnvelope.bundleDir).toBe(real.AKM_BUNDLE_DIR)
+      expect(fakeEnvelope.assetTypes).toEqual(realEnvelope.assetTypes)
+    } finally {
+      cleanup(real)
+      cleanup(fake)
+    }
+  })
+
   test.skipIf(!akmAvailable)("workflow list --active envelope matches real akm", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
@@ -135,11 +162,19 @@ describe("fake-akm envelope contract", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
-      // A freshly-init'd stash (like these temp fixtures, and like tier-2's
-      // fixtures) has no LLM connection configured, so a direct `akm
-      // extract` deterministically returns the config-error envelope —
-      // that's the shape pinned here.
-      const realEnvelope = runRealAllowError(real, [
+      // A freshly-created bundle (like these temp fixtures, and like tier-2's
+      // fixtures) has no LLM engine configured, so a direct `akm proposal
+      // extract` deterministically fails — that failure IS the contract.
+      //
+      // Both plugins now capture and report this envelope rather than
+      // discarding it (SessionEnd harvest was a silent no-op on every
+      // un-configured install). Three properties are load-bearing for that
+      // reporting path, so all three are pinned on BOTH sides rather than
+      // just the key set: the stream the envelope arrives on, the exit code,
+      // and the machine-readable `code`. A fake that emitted these keys on
+      // stdout with exit 0 — which is what it did before — would let a
+      // regression in the reporting path pass this test silently.
+      const args = [
         "--format",
         "json",
         "-q",
@@ -150,22 +185,26 @@ describe("fake-akm envelope contract", () => {
         "--session-id",
         "contract-test",
         "--dry-run",
-      ])
-      const fakeEnvelope = runFake(fake.akmPath, [
-        "--format",
-        "json",
-        "-q",
-        "proposal",
-        "extract",
-        "--type",
-        "opencode",
-        "--session-id",
-        "contract-test",
-        "--dry-run",
-      ])
+      ]
+      const realRun = runRaw(REAL_AKM, args, realAkmEnv(real))
+      const fakeRun = runRaw(fake.akmPath, args)
+
+      // 1. Envelope goes to stderr; stdout stays empty.
+      expect(realRun.stdout.trim()).toBe("")
+      expect(fakeRun.stdout.trim()).toBe("")
+
+      // 2. Non-zero exit, and the fake matches it exactly (78 = akm's
+      //    documented "config error" code).
+      expect(realRun.exitCode).not.toBe(0)
+      expect(fakeRun.exitCode).toBe(realRun.exitCode)
+
+      // 3. Same envelope shape and same machine-readable failure code.
+      const realEnvelope = JSON.parse(realRun.stderr) as Record<string, unknown>
+      const fakeEnvelope = JSON.parse(fakeRun.stderr) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
-      expect((fakeEnvelope as { ok: boolean }).ok).toBe(false)
-      expect((realEnvelope as { ok: boolean }).ok).toBe(false)
+      expect(realEnvelope.ok).toBe(false)
+      expect(fakeEnvelope.ok).toBe(false)
+      expect(fakeEnvelope.code).toBe(realEnvelope.code)
     } finally {
       cleanup(real)
       cleanup(fake)

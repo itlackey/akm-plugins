@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.0-rc.14 || ^0.9.0`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
+Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.0-rc.14`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
 ## Installation
 
@@ -16,7 +16,7 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.0-rc.14 || ^0.9.0`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
+The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.0-rc.14`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
 
 ## Slash Commands
 
@@ -62,6 +62,18 @@ Hook processing never prints secret values. Automatic feedback skips references 
 | `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum AKM context injected by a hook. |
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Local plugin state directory. |
 | `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Scope dimensions attached to remember calls and local lifecycle records. |
+| `AKM_PLUGIN_MAX_LOG_BYTES` | `1048576` | Size cap for each append-only state file. Past the cap the newest half is retained. |
+
+## Troubleshooting
+
+Hooks never write diagnostics to stderr. Everything lands in the state directory (`$XDG_STATE_HOME/akm-claude` by default), owner-only and size-capped:
+
+| File | Contents |
+| --- | --- |
+| `session.log` | Hook lifecycle: AKM readiness, version mismatches, subprocess failures, session-end extraction attempts. |
+| `extract.log` | Output of the detached `akm proposal extract` run at session end. Check here first if durable memories never appear — a fresh install without a configured LLM profile logs `INVALID_CONFIG_FILE`, which `akm setup` resolves. |
+| `feedback.log` / `memory.log` | Automatic feedback decisions and observed concept IDs. |
+| `events.jsonl` | Structured, redacted lifecycle events. |
 
 ## Recommended Flow
 

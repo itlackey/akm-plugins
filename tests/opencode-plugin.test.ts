@@ -257,6 +257,41 @@ describe("akm-opencode plugin", () => {
       )
     })
 
+    it("publishes the AKM 0.9 asset-type vocabulary on both type filters", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      // `akm info --format json` -> .assetTypes (singular, as `--type` accepts),
+      // plus the plugin's own "any" = no-filter sentinel.
+      const supported = [
+        "agent",
+        "command",
+        "env",
+        "fact",
+        "instruction",
+        "knowledge",
+        "lesson",
+        "memory",
+        "script",
+        "secret",
+        "session",
+        "skill",
+        "task",
+        "workflow",
+        "any",
+      ]
+
+      for (const toolName of ["akm_search", "akm_curate"] as const) {
+        const schema = (hooks.tool![toolName] as unknown as { args: Record<string, { safeParse: (v: unknown) => { success: boolean } }> }).args.type
+        for (const value of supported) {
+          expect({ toolName, value, ok: schema.safeParse(value).success }).toEqual({ toolName, value, ok: true })
+        }
+        // 0.9 has no `wiki`/`vault` asset type. `akm search --type wiki`
+        // returns an empty hit list rather than an error, so leaving these
+        // selectable made them silent dead ends for the agent.
+        expect(schema.safeParse("wiki").success).toBe(false)
+        expect(schema.safeParse("vault").success).toBe(false)
+      }
+    })
+
     it("records memories through the CLI with supported scope flags", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_remember.execute({
@@ -286,6 +321,76 @@ describe("akm-opencode plugin", () => {
         ],
         expect.objectContaining({ encoding: "utf8" }),
       )
+    })
+  })
+
+  describe("background akm invocations", () => {
+    it("warms the index with a detached spawn instead of a shell command string", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "warm-1" } } } as any)
+
+      // No shell: JSON.stringify is not POSIX quoting, so the previous
+      // `execSync("<json-quoted argv> &")` form could be mis-parsed by sh for
+      // any resolved binary path containing a quote, backslash, or newline.
+      expect(mockExecSync).not.toHaveBeenCalled()
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "akm",
+        ["index"],
+        expect.objectContaining({ detached: true, stdio: "ignore" }),
+      )
+    })
+
+    it("surfaces a failed session extract through the plugin log", async () => {
+      const { EventEmitter } = await import("node:events")
+      const makeStream = () => Object.assign(new EventEmitter(), { setEncoding() {}, unref() {} })
+      const stdout = makeStream()
+      const stderr = makeStream()
+      const childHandlers = new Map<string, (...args: any[]) => void>()
+      mockSpawn.mockImplementationOnce((() => ({
+        stdout,
+        stderr,
+        on: (event: string, handler: (...args: any[]) => void) => {
+          childHandlers.set(event, handler)
+        },
+        unref: () => undefined,
+      })) as any)
+
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput(client))
+      await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "idle-extract-1" } } } as any)
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "akm",
+        ["proposal", "extract", "--type", "opencode", "--session-id", "idle-extract-1", "--format", "json", "-q"],
+        expect.objectContaining({ detached: true, stdio: ["ignore", "pipe", "pipe"] }),
+      )
+
+      // Real akm with no LLM engine configured: JSON envelope on stderr.
+      // Discarding it (stdio: "ignore") made the only remaining memory-harvest
+      // path fail silently on a default install.
+      stderr.emit(
+        "data",
+        JSON.stringify({
+          ok: false,
+          error: "No LLM engine configured for extract.",
+          code: "LLM_NOT_CONFIGURED",
+          hint: "Run `akm setup`.",
+        }),
+      )
+      childHandlers.get("close")?.(78, null)
+
+      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
+        body: expect.objectContaining({
+          level: "warn",
+          message: "AKM extract failed",
+          extra: expect.objectContaining({
+            subsystem: "extract",
+            sessionID: "idle-extract-1",
+            akmCode: "LLM_NOT_CONFIGURED",
+            error: "No LLM engine configured for extract.",
+          }),
+        }),
+      }))
     })
   })
 

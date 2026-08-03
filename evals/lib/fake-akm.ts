@@ -8,17 +8,28 @@
 // keyword match (computed in the shim's parent process and baked into the
 // shell script as a static lookup table). It also implements the subset of
 // `akm` verbs the hooks actually call: `curate`, `feedback`, `remember`,
-// `index`, `hints`, `search`, `config get`/`config set`, `workflow list`,
-// `proposal list`, `extract`, `--version`. Envelope shapes for these are
-// pinned against a real `akm` binary by tests/fake-akm-contract.test.ts.
-// Any other verb still exits 0 (never breaks the hook) but logs to stderr
-// instead of no-op'ing silently — see the bottom of RANK_HELPER_JS.
+// `index`, `hints`, `info`, `search`, `config get`/`config set`,
+// `workflow list`, `proposal list`, `extract`, `--version`. Envelope shapes
+// for these are pinned against a real `akm` binary by
+// tests/fake-akm-contract.test.ts. Any other verb still exits 0 (never breaks
+// the hook) but logs to stderr instead of no-op'ing silently — see the bottom
+// of RANK_HELPER_JS.
+//
+// `info` is the highest-stakes verb here even though nothing "interesting"
+// happens in it: both plugins resolve their bundle root from
+// `akm info --format json` → .bundleDir when $AKM_BUNDLE_DIR is unset, and
+// validateRefCandidates() early-returns [] with no bundle root — so an
+// unimplemented `info` silently disables every ref-driven code path.
 
 import { mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
 
 export type FakeAkmAsset = {
+  // AKM 0.9 concept ID — the asset's own path inside the bundle, e.g.
+  // `skills/code-review`, `knowledge/api-error-codes`, `scripts/lint.sh`.
+  // (Pre-0.9 this was the `type:slug` form, e.g. `skill:code-review`.)
   ref: string
+  // Singular asset type as reported by `akm info` → .assetTypes.
   type: string
   name: string
   description: string
@@ -69,7 +80,7 @@ function parseFrontmatter(body: string): Record<string, string | string[]> {
   return out
 }
 
-function fileToAsset(filePath: string, type: string, name: string): FakeAkmAsset | null {
+function fileToAsset(filePath: string, type: string, conceptId: string, name: string): FakeAkmAsset | null {
   let body = ""
   try {
     body = readFileSync(filePath, "utf8")
@@ -89,7 +100,7 @@ function fileToAsset(filePath: string, type: string, name: string): FakeAkmAsset
       ? fm.keywords.split(/\s+/)
       : []
   return {
-    ref: `${type}:${name}`,
+    ref: conceptId,
     type,
     name,
     description,
@@ -97,20 +108,47 @@ function fileToAsset(filePath: string, type: string, name: string): FakeAkmAsset
   }
 }
 
+// AKM 0.9 concept IDs are bundle-relative paths. The bundle README documents
+// that a `.md` extension is dropped when forming the ref
+// (`knowledge/auth/oauth-refresh-races.md` → `knowledge/auth/oauth-refresh-races`),
+// while any other extension is part of the ref (`scripts/lint.sh`). This
+// matters: claude/shared/ref-extraction.ts resolves a candidate by probing
+// `<root>/<conceptId>` and `<root>/<conceptId>.md` only, so a `scripts/lint`
+// ref for an on-disk `scripts/lint.sh` would fail validation and vanish.
+function conceptIdFor(dir: string, entry: string): string {
+  return `${dir}/${entry.replace(/\.md$/i, "")}`
+}
+
 // Walk a fixture stash directory and produce an asset inventory the shim
-// can rank against. Mirrors the AKM stash layout (skills/, commands/, …).
+// can rank against. Mirrors the AKM 0.9 bundle layout — the directories
+// `akm bundle create` scaffolds: agents commands env facts instructions
+// knowledge lessons memories scripts secrets sessions skills tasks workflows.
+// (`wikis/` and `vaults/` are NOT 0.9 asset types and were dropped here;
+// `akm info` → .assetTypes lists neither.)
+//
+// `secrets/` is deliberately NOT scanned: a secret is one standalone value
+// per file, and real akm never content-indexes it, so it must never show up
+// in curate output. Its files still exist in the fixture stash so that
+// `secrets/…` refs resolve during ref validation (which is what the
+// auto-feedback skip-list fixtures exercise). `sessions/` is likewise not
+// scanned — session transcripts aren't curation candidates.
 export function loadFixtureStash(stashDir: string): FakeAkmAsset[] {
   const out: FakeAkmAsset[] = []
-  const types: Array<{ dir: string; type: string; layout: "file" | "skill-dir" | "wiki-dir" }> = [
+  const types: Array<{ dir: string; type: string; layout: "file" | "skill-dir" }> = [
     { dir: "skills", type: "skill", layout: "skill-dir" },
     { dir: "commands", type: "command", layout: "file" },
     { dir: "agents", type: "agent", layout: "file" },
     { dir: "knowledge", type: "knowledge", layout: "file" },
+    { dir: "instructions", type: "instruction", layout: "file" },
+    { dir: "facts", type: "fact", layout: "file" },
     { dir: "memories", type: "memory", layout: "file" },
+    { dir: "lessons", type: "lesson", layout: "file" },
     { dir: "scripts", type: "script", layout: "file" },
     { dir: "workflows", type: "workflow", layout: "file" },
-    { dir: "vaults", type: "vault", layout: "file" },
-    { dir: "wikis", type: "wiki", layout: "wiki-dir" },
+    { dir: "tasks", type: "task", layout: "file" },
+    // env values are never content-indexed either, but the asset's own
+    // name/description metadata is discoverable — `akm env` lists them.
+    { dir: "env", type: "env", layout: "file" },
   ]
   for (const t of types) {
     const root = path.join(stashDir, t.dir)
@@ -121,6 +159,9 @@ export function loadFixtureStash(stashDir: string): FakeAkmAsset[] {
       continue
     }
     for (const entry of entries) {
+      // Skip dotfiles (.gitkeep and friends) — they aren't assets, and a
+      // `.gitkeep` previously produced a nameless `memory:` entry in the index.
+      if (entry.startsWith(".")) continue
       const entryPath = path.join(root, entry)
       let stat
       try {
@@ -129,14 +170,11 @@ export function loadFixtureStash(stashDir: string): FakeAkmAsset[] {
         continue
       }
       if (t.layout === "skill-dir" && stat.isDirectory()) {
-        const asset = fileToAsset(path.join(entryPath, "SKILL.md"), t.type, entry)
-        if (asset) out.push(asset)
-      } else if (t.layout === "wiki-dir" && stat.isDirectory()) {
-        const asset = fileToAsset(path.join(entryPath, "index.md"), t.type, entry)
+        const asset = fileToAsset(path.join(entryPath, "SKILL.md"), t.type, `${t.dir}/${entry}`, entry)
         if (asset) out.push(asset)
       } else if (t.layout === "file" && stat.isFile()) {
         const name = entry.replace(/\.[^.]+$/, "")
-        const asset = fileToAsset(entryPath, t.type, name)
+        const asset = fileToAsset(entryPath, t.type, conceptIdFor(t.dir, entry), name)
         if (asset) out.push(asset)
       }
     }
@@ -152,6 +190,11 @@ export function installFakeAkm(config: FakeAkmConfig): LoadedFakeAkm {
     ? config.assets
     : loadFixtureStash(config.assets.stashDir)
   const defaultLimit = config.defaultLimit ?? 5
+  // `akm info` reports the bundle root, and both plugins fall back to it when
+  // $AKM_BUNDLE_DIR is unset. Bake in the same directory the asset inventory
+  // was scanned from so the shim's `info` answer stays consistent with what
+  // it will actually rank and with what refs resolve against on disk.
+  const bundleDir = Array.isArray(config.assets) ? "" : config.assets.stashDir
   const indexPath = path.join(config.binDir, "akm-index.json")
   writeFileSync(
     indexPath,
@@ -159,6 +202,7 @@ export function installFakeAkm(config: FakeAkmConfig): LoadedFakeAkm {
       {
         defaultLimit,
         callLog: config.callLog,
+        bundleDir,
         assets,
       },
       null,
@@ -348,6 +392,60 @@ if (verb === "hints") {
   process.exit(0)
 }
 
+// --- info -------------------------------------------------------------------
+// The verb that gates ALL ref validation. Both plugins resolve their bundle
+// root as: $AKM_BUNDLE_DIR, else \`akm info --format json -q\` → .bundleDir
+// (claude/hooks/akm-hook.ts resolveStashRoots(), opencode/index.ts
+// getAkmBundleDir()). With no bundle root, validateRefCandidates() returns []
+// and auto-feedback never fires — so an unmodelled \`info\` is indistinguishable
+// from a plugin that lost ref extraction entirely.
+//
+// assetTypes is the 0.9 asset-type vocabulary, in the order real akm emits it.
+// tests/fake-akm-contract.test.ts pins both the envelope shape and this list
+// against the real binary.
+if (verb === "info") {
+  const bundleDir = (process.env.AKM_BUNDLE_DIR || idx.bundleDir || "").trim()
+  const byType = {}
+  for (const a of idx.assets) byType[a.type] = (byType[a.type] || 0) + 1
+  process.stdout.write(
+    JSON.stringify({
+      schemaVersion: 1,
+      version: "0.9.0-rc.14",
+      bundleDir,
+      defaultBundle: "bundle",
+      assetTypes: [
+        "skill",
+        "command",
+        "agent",
+        "knowledge",
+        "instruction",
+        "workflow",
+        "script",
+        "memory",
+        "env",
+        "secret",
+        "lesson",
+        "task",
+        "session",
+        "fact",
+      ],
+      searchModes: ["fts"],
+      semanticSearch: { mode: "off", status: "disabled" },
+      registries: [],
+      sourceProviders: bundleDir ? [{ type: "filesystem", name: "bundle", path: bundleDir }] : [],
+      indexStats: {
+        entryCount: idx.assets.length,
+        byType,
+        lastBuiltAt: null,
+        hasEmbeddings: false,
+        vecAvailable: false,
+      },
+      shape: "info",
+    }),
+  )
+  process.exit(0)
+}
+
 // --- config get/set -------------------------------------------------------
 // Both hooks call \`config get stashDir\` (fallback path when AKM_STASH_DIR
 // isn't set) and \`config set --silent --layer user <key> <value>\` (to
@@ -452,28 +550,37 @@ if (verb === "proposal" && tail[0] === "list") {
 }
 
 // --- proposal extract ---------------------------------------------------
-// SessionEnd fires this fire-and-forget (detached, stdio ignored) on both
-// plugins, so nothing parses its stdout or exit code today. Real akm's
-// extract ALWAYS requires an LLM connection before it does anything —
-// unlike most other verbs, its "feature disabled" fast path only applies
-// when running as an improve-profile stage, not for a direct \`akm proposal extract\`
-// invocation like the hooks make — so a real akm with no LLM profile
-// configured (the state a freshly-installed akm is normally in, and the
-// state tier-2 fixtures are in) deterministically returns this error
-// envelope. Mirroring that exact shape (rather than inventing a synthetic
-// success shape tier-2 can never actually observe from real akm) is what
-// tests/fake-akm-contract.test.ts pins against the real binary.
+// SessionEnd fires this fire-and-forget on both plugins. Real akm's extract
+// ALWAYS requires an LLM engine before it does anything — unlike most other
+// verbs, its "feature disabled" fast path only applies when running as an
+// improve-profile stage, not for a direct \`akm proposal extract\` invocation
+// like the hooks make — so a real akm with no engine configured (the state a
+// freshly-installed akm is normally in, and the state tier-2 fixtures are in)
+// deterministically fails.
+//
+// Three properties of that failure are load-bearing and are all reproduced
+// here, verified against akm-cli 0.9.0-rc.15:
+//   1. the envelope goes to STDERR, not stdout (stdout stays empty);
+//   2. the exit code is 78 — akm's documented "config error" code, not 0;
+//   3. the code is LLM_NOT_CONFIGURED.
+// Both plugins now capture and report this failure instead of discarding it
+// (the harvest path was previously a silent no-op on any un-configured
+// install), so a fake that exits 0 on stdout would let a regression in that
+// reporting path pass every eval and unit test. tests/fake-akm-contract.test.ts
+// pins the envelope shape, the stream, and the exit code against the real
+// binary. Writing to stderr here is the documented fake-CLI exception to the
+// no-stderr-logging rule in AGENTS.md.
 if (verb === "proposal" && tail[0] === "extract") {
-  process.stdout.write(
+  process.stderr.write(
     JSON.stringify({
       ok: false,
       error:
-        "No LLM connection configured for extract. Set profiles.llm + defaults.llm, or set profiles.improve.default.processes.extract.profile to a configured LLM profile.",
-      code: "INVALID_CONFIG_FILE",
-      hint: "Configure an engine with akm setup or pass --engine.",
+        "No LLM engine configured for extract. Set defaults.llmEngine, pass --engine, or select an improve strategy with processes.extract.engine.",
+      code: "LLM_NOT_CONFIGURED",
+      hint: "Run \\\`akm setup\\\` or configure an \\\`engines\\\` entry with \\\`kind: \\"llm\\"\\\`, then select it with \\\`defaults.llmEngine\\\`.",
     }),
   )
-  process.exit(0)
+  process.exit(78)
 }
 
 if (verb === "remember") {

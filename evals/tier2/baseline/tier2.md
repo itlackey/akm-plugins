@@ -1,9 +1,9 @@
 # AKM plugin eval — tier2
 
 - Plugin version: `0.9.0-beta.1`
-- Git SHA: `48f9345a3fc44a7a1f5ff2d4d21f7fd21ae57c61`
-- Ran at: 2026-07-05T04:34:50.487Z
-- Duration: 17512 ms
+- Git SHA: `f9559a84b3fe5eb481489600637e11655420b3b8`
+- Ran at: 2026-08-03T07:39:44.484Z
+- Duration: 23989 ms
 
 ## surface
 
@@ -24,11 +24,11 @@
 
 | id | prompt | expected | top-3 retrieved | coverage | top rank |
 | --- | --- | --- | --- | --- | --- |
-| cur-032 | What's the recommended way to handle exceptions in this c... | knowledge:repo-conventions,skill:debug-runtime | script:lint,command:bump-version,knowledge:api-error-codes | 0.00 | — |
-| cur-034 | Write tests for the new parser module | command:scaffold-test | skill:code-review,knowledge:api-error-codes,vault:staging | 0.00 | — |
-| cur-008 | Generate release notes from the staged commits | command:summarize-diff,workflow:release | command:bump-version,command:summarize-diff,script:smoke | 0.50 | 2 |
-| cur-013 | Walk through the deployment runbook for tonight's rollout | knowledge:deployment-runbook,workflow:release | knowledge:deployment-runbook,knowledge:api-error-codes,vault:staging | 0.50 | 1 |
-| cur-040 | Plan a refactor of the payments module with tradeoffs | agent:planner,skill:refactor-py | agent:planner,skill:code-review,command:bump-version | 0.50 | 1 |
+| cur-032 | What's the recommended way to handle exceptions in this c... | knowledge/repo-conventions,skills/debug-runtime | scripts/lint.sh,commands/bump-version,env/staging.env | 0.00 | — |
+| cur-034 | Write tests for the new parser module | commands/scaffold-test | skills/code-review,env/staging.env,knowledge/api-error-codes | 0.00 | — |
+| cur-008 | Generate release notes from the staged commits | commands/summarize-diff,workflows/release | commands/bump-version,commands/summarize-diff,scripts/smoke.sh | 0.50 | 2 |
+| cur-013 | Walk through the deployment runbook for tonight's rollout | knowledge/deployment-runbook,workflows/release | knowledge/deployment-runbook,env/staging.env,knowledge/api-error-codes | 0.50 | 1 |
+| cur-040 | Plan a refactor of the payments module with tradeoffs | agents/planner,skills/refactor-py | agents/planner,skills/code-review,commands/bump-version | 0.50 | 1 |
 
 ## latency
 
@@ -36,9 +36,9 @@
 
 | verb | n | p50 ms | p95 ms | p99 ms | mean ms |
 | --- | --- | --- | --- | --- | --- |
-| curate_prompt | 24 | 60 | 89 | 91 | 66 |
-| session_start | 24 | 140 | 188 | 193 | 150 |
-| post_tool | 24 | 30 | 43 | 46 | 32 |
+| curate_prompt | 24 | 97 | 107 | 108 | 97 |
+| session_start | 24 | 168 | 188 | 192 | 169 |
+| post_tool | 24 | 39 | 44 | 45 | 39 |
 
 ## context_budget
 
@@ -46,15 +46,16 @@
 
 | plugin | n | avg chars | max chars | violations | drop rate |
 | --- | --- | --- | --- | --- | --- |
-| claude | 12 | 1286 | 1379 | 0 | 0.0000 |
+| claude | 12 | 1304 | 1383 | 0 | 0.0000 |
 | opencode | 12 | 281 | 281 | 0 | 0.0000 |
 
 ## feedback
 
 > Both plugins measured by actual `akm feedback` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).
-> n=12 synthetic tool outputs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for memory: and vault: refs.
+> n=13 synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/).
 
 | plugin | tp | fp | fn | tn | precision | recall | polarity flips |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
-| opencode | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
+| claude | 9 | 0 | 0 | 4 | 1.0000 | 1.0000 | 0 |
+| opencode | 9 | 0 | 0 | 4 | 1.0000 | 1.0000 | 0 |
+
