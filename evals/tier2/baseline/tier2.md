@@ -9,13 +9,13 @@
 
 | Component | Count | Items |
 | --- | --- | --- |
-| claude commands | 22 | akm-agent, akm-cmd, akm-curate, akm-env, akm-evolve, akm-feedback, akm-help, akm-improve, akm-memory-audit, akm-memory-candidates, akm-memory-promote, akm-memory-reject, akm-proposal, akm-propose, akm-remember, akm-review-proposals, akm-search, akm-secret, akm-setup, akm-show, akm-wiki, akm-workflow |
-| claude agents | 1 | akm-curator |
+| claude commands | 5 | akm-curate, akm-feedback, akm-remember, akm-search, akm-show |
+| claude agents | 0 |  |
 | claude hooks | 12 | PostCompact, PostToolBatch, PostToolUse, PostToolUseFailure, PreToolUse, SessionEnd, SessionStart, SubagentStart, TaskCompleted, TaskCreated, UserPromptExpansion, UserPromptSubmit |
 | claude skills | 1 | akm |
-| opencode tools | 21 | akm_agent, akm_cmd, akm_curate, akm_env, akm_evolve, akm_feedback, akm_help, akm_improve, akm_info, akm_init, akm_memory, akm_parent_messages, akm_proposal, akm_propose, akm_remember, akm_search, akm_secret, akm_session_messages, akm_show, akm_wiki, akm_workflow |
-| opencode commands | 5 | akm-evolve-session, akm-improve-asset, akm-propose-asset, akm-review-proposals, akm-workflow-status |
-| opencode agents | 1 | akm-curator |
+| opencode tools | 5 | akm_curate, akm_feedback, akm_remember, akm_search, akm_show |
+| opencode commands | 0 |  |
+| opencode agents | 0 |  |
 
 ## curation
 
@@ -58,4 +58,3 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | claude | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
 | opencode | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
-

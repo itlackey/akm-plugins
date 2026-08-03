@@ -60,9 +60,9 @@ user_turns:
   - role: user
     content: "Help me review the diff in src/api/handlers.ts."
 expectations:
-  must_curate_refs: [skill:code-review]   # MUST appear in injected context
-  may_curate_refs: [agent:reviewer]       # bonus if they do
-  must_record_feedback_for: [skill:code-review]
+  must_curate_refs: [skills/code-review]   # MUST appear in injected context
+  may_curate_refs: [agents/reviewer]       # bonus if they do
+  must_record_feedback_for: [skills/code-review]
   forbid_refs: [vault:staging]            # MUST NOT appear
   max_total_tokens: 8000                  # soft budget the judge considers
 judge_rubric: default                     # default | strict
@@ -95,7 +95,7 @@ effectiveness numbers.
 A deterministic projection of `must_curate_refs ⊆ retrieved`. For each
 expected ref that surfaced, it synthesizes a `tool_use → tool_result →
 feedback` triple. It hardcodes the plugins' documented skip rule (no
-auto-feedback for `memory:`/`vault:` refs) so the transcript matches
+auto-feedback for `memories/` refs) so the transcript matches
 what the real plugins would emit. **Stub-mode judge scores are
 smoke-test signal only** — the transcript is mechanically derived from
 the expectations, so the judge has nothing meaningful to disagree with.

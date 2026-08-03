@@ -10,19 +10,15 @@ import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from
 import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
-import { extractAkmRefsFromString, extractAllRefs } from "../shared/ref-extraction"
+import { extractAkmRefsFromString, extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
 
 // AKM_REQUIRED_RANGE is the single shared version contract imported from
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
-// is a SEPARATE concern: the install ref. Bun/npm install spec does NOT parse
-// `akm-cli@^0.9.0-beta.0 || ^0.9.0` as a disjunction — it would splat into argv
-// tokens and refuse the install — so the package ref keeps a single clean
-// range. The validator above (satisfies) accepts the full disjunction; a user
-// can still pin a specific prerelease via AKM_PACKAGE_REF.
-const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.0-beta.0"
+// is a separate concern: the single package range passed to Bun/npm.
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.0-rc.14"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
@@ -62,23 +58,21 @@ const RECALLED_CONTENT_PROVENANCE =
 function tagRecalledContent(content: string): string {
   return `${RECALLED_CONTENT_PROVENANCE}${content}`
 }
-const SESSION_START_FOOTER = "For verbs not covered by a slash command (sync, import, clone, update, remove, list-sources, registry-search, reindex, config, upgrade, run-script, env writes, secret writes/run, agent, tasks, setup, ...), run `/akm-help` first to discover the right `akm` CLI invocation, then run it via Bash. `/akm-proposal`, `/akm-improve`, `/akm-propose`, `/akm-review-proposals`, and `/akm-setup` cover the proposal queue and agent-CLI integration."
+const SESSION_START_FOOTER = "The public plugin surface is limited to search, show, curate, feedback, and remember."
 const SESSION_START_HEADER = [
   "# AKM is available in this session",
   "",
-  'You have an AKM stash on this machine. Before writing anything from scratch, run `akm curate "<task>"` to find relevant assets with LLM-reranked relevance scores.',
+  'You have AKM bundles on this machine. Before writing anything from scratch, run `akm curate "<task>"` to find relevant concepts.',
   "",
   "**Choosing the right lookup command:**",
   "",
-  '- **`akm curate "<task>"`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. It automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is no longer required for ranking — but it still helps the reranker frame intent.',
-  '  - Good: `akm curate "akm CLI improve command performance analysis"` (explicit framing, still ideal)',
-  '  - Bad: `akm curate "improve performance analysis"` (too generic — the reranker has less to work with even with auto-boost)',
-  '- **`akm search "<known name>"`** — use ONLY when you already know an asset exists (e.g. after `akm show` returned "not found") and need to locate its exact ref. Do not use as a discovery tool.',
-  '- **`akm show <stash>//meta`** — when working in or with an unfamiliar stash, read its optional `.meta/` orientation (purpose, key assets, conventions, maintainer) before diving in. `akm show meta` reads your working stash\'s `.meta/index.md`; `akm show meta:<name>` reads other `.meta/` docs (e.g. `meta:about`). These docs are direct-read and never appear in `akm search`.',
+  '- **`akm curate "<task>"`** — primary task-oriented discovery.',
+  '- **`akm search "<known name>"`** — exact lookup when you already know a concept exists.',
+  '- **`akm show <ref>`** — inspect a `[bundle//]conceptId[#fragment]` before relying on it.',
   "",
   'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
-const REF_PATTERN = /(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|lesson|script|workflow|task|env|secret|wiki):[A-Za-z0-9._/-]+/g
+const REF_PATTERN = /(?:[A-Za-z0-9@._+-]+\/\/)?[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?/g
 const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() || ""
 const CURATED_DIR = path.join(STATE_DIR, "curated")
 
@@ -227,31 +221,26 @@ function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
 }
 
 /**
- * Resolve the stash root(s) used for ref validation. Prefers explicit
- * environment override (`AKM_STASH_DIR`) so tests / sandboxed harnesses
- * don't have to spawn `akm`. Falls back to `akm config get stashDir`, then
- * to the conventional `$HOME/akm` location.
+ * Resolve the bundle root used for ref validation. Prefer AKM_BUNDLE_DIR so
+ * tests and sandboxed harnesses do not need to spawn AKM, then use `akm info`.
  *
  * Returns an array because future work may surface multiple roots; today
  * the array has at most one entry.
  */
 function resolveStashRoots(): string[] {
-  const envOverride = process.env.AKM_STASH_DIR?.trim()
+  const envOverride = process.env.AKM_BUNDLE_DIR?.trim()
   if (envOverride) return [envOverride]
   if (akmAvailable()) {
-    const raw = akmRun(["--format", "json", "-q", "config", "get", "stashDir"]).trim()
+    const raw = akmRun(["info", "--format", "json", "-q"]).trim()
     if (raw) {
       const parsed = safeJsonParse<unknown>(raw)
-      if (typeof parsed === "string" && parsed) return [parsed]
       if (parsed && typeof parsed === "object") {
         const record = parsed as Record<string, unknown>
-        const value = record.value ?? record.stashDir
+        const value = record.bundleDir
         if (typeof value === "string" && value) return [value]
       }
     }
   }
-  const home = process.env.HOME
-  if (home) return [path.join(home, "akm")]
   return []
 }
 
@@ -383,72 +372,6 @@ function akmAvailable(): boolean {
   return !!resolveAkmCommandSpec()
 }
 
-function getAkmConfigPath(): string {
-  const configHome = process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? ".", ".config")
-  return path.join(configHome, "akm", "config.json")
-}
-
-function readAkmConfig(): Record<string, unknown> {
-  try {
-    const raw = readFileSync(getAkmConfigPath(), "utf8")
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}
-  } catch {
-    return {}
-  }
-}
-
-function readConfiguredAgentDefault(): string {
-  const config = readAkmConfig()
-  // 0.8.0 canonical shape: defaults.agent. Fall back to the legacy agent.default
-  // slot when running against a pre-0.8 config that has not been migrated yet.
-  const defaults = config.defaults
-  if (defaults && typeof defaults === "object") {
-    const value = (defaults as Record<string, unknown>).agent
-    if (typeof value === "string" && value.trim()) return value.trim()
-  }
-  const agent = config.agent
-  if (agent && typeof agent === "object") {
-    const value = (agent as Record<string, unknown>).default
-    if (typeof value === "string" && value.trim()) return value.trim()
-  }
-  return ""
-}
-
-function writeConfiguredAgentDefault(platform: string): boolean {
-  if (!platform.trim()) return false
-  // #463: route through `akm config set --silent --layer user` so akm's
-  // schema-walker / validator is the single source of truth for the on-disk
-  // shape. Direct JSON writes here would bypass strict-mode validation and
-  // the 5-backup ring buffer, and historically clobbered nearby keys when
-  // the legacy `agent.default` slot triggered an auto-migration.
-  //
-  // --silent suppresses akm's normal stdout (we're invoked from a hook, not
-  // a user prompt), and --layer user pins the write to the user-layer
-  // config file regardless of where merged reads look — both flags were
-  // added in akm-cli 0.8.0 specifically to make hook-driven writes safe.
-  const profileSet = akmRunChecked([
-    "config",
-    "set",
-    "--silent",
-    "--layer",
-    "user",
-    `profiles.agent.${platform}`,
-    JSON.stringify({ platform }),
-  ])
-  if (!profileSet.ok) return false
-  const defaultSet = akmRunChecked([
-    "config",
-    "set",
-    "--silent",
-    "--layer",
-    "user",
-    "defaults.agent",
-    platform,
-  ])
-  return defaultSet.ok
-}
-
 function akmRun(args: string[], input?: string): string {
   const akm = resolveAkmCommandSpec()
   if (!akm) return ""
@@ -518,15 +441,6 @@ function akmRunChecked(args: string[], input?: string): { ok: boolean; stdout: s
     ? runCommand(timeout, ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args], { input, suppressStderr: false })
     : runCommand(akm.command, [...akm.argsPrefix, ...args], { input, suppressStderr: false })
   return { ok: result.ok, stdout: result.stdout, stderr: result.stderr }
-}
-
-function buildRunScopeArgs(sessionID: string): string[] {
-  const args: string[] = []
-  if (SCOPE_KEYS.includes("run") && sessionID) args.push("--run", sessionID)
-  if (SCOPE_KEYS.includes("user") && process.env.AKM_USER_ID) args.push("--user", process.env.AKM_USER_ID)
-  if (SCOPE_KEYS.includes("agent") && process.env.AKM_AGENT_ID) args.push("--agent", process.env.AKM_AGENT_ID)
-  if (SCOPE_KEYS.includes("channel") && process.env.AKM_CHANNEL) args.push("--channel", process.env.AKM_CHANNEL)
-  return args
 }
 
 function emitHookContext(eventName: string, body: string): string {
@@ -616,12 +530,13 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
   const rawOutputText = getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || ""
   const commandText = sanitize(rawCommandText)
   const outputText = sanitize(rawOutputText)
-  const commandRefs = extractAllRefs(rawCommandText)
-  const outputRefs = extractAllRefs(rawOutputText)
+  const bundleRoots = resolveStashRoots()
+  const commandRefs = validateRefCandidates(extractAllRefs(rawCommandText), bundleRoots)
+  const outputRefs = validateRefCandidates(extractAllRefs(rawOutputText), bundleRoots)
   const refs = [...new Set([...commandRefs, ...outputRefs])]
   if (refs.length === 0 && commandText.includes("akm remember")) {
     const match = commandText.match(/--name\s+([A-Za-z0-9._/-]+)/)
-    if (match) refs.push(`memory:${match[1]}`)
+    if (match) refs.push(`memories/${match[1]}`)
   }
   const sid = typeof parsed.session_id === "string"
     ? parsed.session_id.replace(/[^A-Za-z0-9._-]/g, "")
@@ -636,7 +551,7 @@ function pretoolNonBash(): string {
   const parsed = safeJsonParse<Record<string, unknown>>(rawInput)
   if (!parsed) return ""
   const text = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || sanitize(rawInput)
-  const refs = extractAkmRefsFromString(text)
+  const refs = validateRefCandidates(extractAkmRefsFromString(text), resolveStashRoots())
   if (refs.length === 0) return ""
   const sid = extractSessionId(rawInput)
   const toolName = typeof parsed.tool === "string" ? parsed.tool : typeof parsed.tool_name === "string" ? parsed.tool_name : "nonbash"
@@ -914,56 +829,13 @@ function refQuality(ref: string): string {
   return resolved
 }
 
-type AgentDefaultResult = {
-  value: string
-  writeAttempted: boolean
-  writeOk: boolean
-  /** True when this SessionStart freshly initialised defaults.agent=claude. */
-  initialized: boolean
-}
-
-/**
- * Resolve (and lazily initialise) `defaults.agent` for the Claude plugin.
- *
- * Pre-#72 behavior: when `defaults.agent` was empty, silently wrote
- * `defaults.agent=claude` + `profiles.agent.claude` to ~/.config/akm/config.json
- * with no user-visible signal. OpenCode users who installed the Claude plugin
- * to experiment saw their config silently flipped.
- *
- * Post-#72 behavior: we still write (the plugin needs the default to dispatch
- * improve/propose), but we ALSO surface a SessionStart additionalContext line
- * on the first write — see gatherSessionStartWarnings. Users can opt OUT of
- * the write entirely with `AKM_PLUGIN_NO_AUTO_DEFAULT=1`
- * (in which case the agent stays unset and improve/propose will refuse until
- * the user runs `/akm-setup`).
- */
-function detectAgentDefault(): AgentDefaultResult {
-  if (!akmAvailable()) return { value: "", writeAttempted: false, writeOk: false, initialized: false }
-  const current = readConfiguredAgentDefault()
-  if (current) return { value: current, writeAttempted: false, writeOk: true, initialized: false }
-  if (process.env.AKM_PLUGIN_NO_AUTO_DEFAULT === "1") {
-    appendLog(SESSION_LOG, "agent_default_skipped", "AKM_PLUGIN_NO_AUTO_DEFAULT=1")
-    return { value: "", writeAttempted: false, writeOk: false, initialized: false }
-  }
-  const writeOk = writeConfiguredAgentDefault("claude")
-  if (writeOk) {
-    appendLog(SESSION_LOG, "agent_default_initialized", "claude")
-  } else {
-    appendLog(SESSION_LOG, "agent_default_init_failed", "claude", `failed to write ${getAkmConfigPath()}`)
-  }
-  return { value: readConfiguredAgentDefault(), writeAttempted: true, writeOk, initialized: writeOk }
-}
-
 function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   if (!INDEX_ON_SESSION_END || !akmAvailable()) return
   const result = akmRunChecked(["index"])
   if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
 }
 
-function gatherSessionStartWarnings(
-  versionCheck: { ok: boolean; version?: string },
-  agentDefault: AgentDefaultResult,
-): string[] {
+function gatherSessionStartWarnings(versionCheck: { ok: boolean; version?: string }): string[] {
   const warnings: string[] = []
 
   // H1: stash directory does not exist — curation will return empty context
@@ -971,44 +843,21 @@ function gatherSessionStartWarnings(
   // additionalContext (the hook's supported output channel) and mirror it to
   // the plugin state-dir log; runtime code must never write raw diagnostics
   // to stderr/stdout outside the hook protocol envelope.
-  const stashRoots = resolveStashRoots()
-  const stashDir = stashRoots[0]
-  if (!stashDir || !existsSync(stashDir)) {
+  const bundleRoots = resolveStashRoots()
+  const bundleDir = bundleRoots[0]
+  if (!bundleDir || !existsSync(bundleDir)) {
     warnings.push(
-      stashDir
-        ? `⚠ AKM stash directory \`${stashDir}\` does not exist. Run \`/akm-setup\` to initialize the stash, or set \`AKM_STASH_DIR\` to point at an existing one. AKM curation will be empty until then.`
-        : `⚠ No AKM stash directory is configured. Run \`/akm-setup\` to choose one, or set \`AKM_STASH_DIR\`. AKM curation will be empty until then.`,
+      bundleDir
+        ? `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\` or set \`AKM_BUNDLE_DIR\` to an existing bundle.`
+        : "No AKM default bundle is configured. Run `akm setup` or set `AKM_BUNDLE_DIR`.",
     )
-    appendLog(SESSION_LOG, "stash_missing", stashDir ?? "(unconfigured)")
+    appendLog(SESSION_LOG, "bundle_missing", bundleDir ?? "(unconfigured)")
   }
 
-  // H2: agent default write was attempted but failed — improve/propose
-  // workflows will fall back to the unconfigured CLI and may fail mysteriously
-  // downstream. Surface this so the user can re-run setup.
-  if (agentDefault.writeAttempted && !agentDefault.writeOk) {
-    warnings.push(
-      `⚠ Failed to write \`defaults.agent\` to \`${getAkmConfigPath()}\`. \`/akm-improve\` and \`/akm-propose\` may not work until this is configured. Run \`/akm-setup\` to retry.`,
-    )
-  }
-
-  // H3 (#72): agent default was just initialised by THIS SessionStart.
-  // Surface the write so OpenCode users (who installed the Claude plugin to
-  // experiment) see that their config was modified. Suppresses subsequent
-  // SessionStart firings — only the initial write generates this notice.
-  // detectAgentDefault() already logged the write to the state dir.
-  if (agentDefault.initialized) {
-    warnings.push(
-      `ℹ The Claude plugin set \`defaults.agent=claude\` in \`${getAkmConfigPath()}\` so \`/akm-improve\` and \`/akm-propose\` can dispatch tasks. ` +
-        `To use a different default, run \`/akm-setup\`. To suppress this auto-write on future installs, set \`AKM_PLUGIN_NO_AUTO_DEFAULT=1\` before SessionStart.`,
-    )
-  }
-
-  // L5: detected version is a pre-release. AKM_REQUIRED_RANGE accepts the
-  // 0.9.0-beta line explicitly — make the pre-release status visible so
-  // users know to track a stable 0.9.x release once published.
+  // Make prerelease status explicit so users know to track stable when it lands.
   if (versionCheck.ok && versionCheck.version && /-/.test(versionCheck.version)) {
     warnings.push(
-      `ℹ Detected pre-release \`akm-cli@${versionCheck.version}\`. Tracking is fine; upgrade to a stable 0.9.x once published for production use.`,
+      `Detected pre-release \`akm-cli@${versionCheck.version}\`. Upgrade to stable 0.9.x when available.`,
     )
   }
 
@@ -1055,13 +904,14 @@ function recordPostTool() {
 function autoFeedback() {
   if (!AUTO_FEEDBACK || !akmAvailable()) return
   const rawInput = readStdin()
+  const parsedInput = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
+  const rawCommand = getText(parsedInput.input) || getText(parsedInput.tool_input) || getText(parsedInput.command) || ""
+  if (!/(?:^|[\s;&|])(?:akm|\/akm(?:-[A-Za-z0-9-]+)?)(?=\s|$)/.test(rawCommand)) return
   const { commandText, statusText, refs, commandRefs, sid } = extractPostToolFields(rawInput, MODE)
-  if (!/akm|\/akm/.test(commandText)) return
   if (/akm\s+feedback|\/akm\s+feedback/.test(commandText)) return
   if (refs.length === 0) return
-  const scopeArgs = buildRunScopeArgs(sid)
   for (const ref of refs) {
-    if (/^(?:.*\/\/)?(?:memory|env|secret|lesson):/.test(ref)) continue
+    if (/^(?:.*\/\/)?(?:memories|env|secrets|lessons)\//.test(ref)) continue
     if (refQuality(ref) === "proposed") {
       appendLog(FEEDBACK_LOG, "system", "skip_proposed", ref, statusText)
       continue
@@ -1085,7 +935,7 @@ function autoFeedback() {
       })
       continue
     }
-    const result = akmRun(["--format", "json", "-q", "feedback", ref, signal.polarity === "negative" ? "--negative" : "--positive", "--reason", redactSecrets(signal.note).text, ...scopeArgs])
+    const result = akmRun(["feedback", ref, signal.polarity === "negative" ? "--negative" : "--positive", "--reason", redactSecrets(signal.note).text, "--format", "json", "-q"])
     if (!result.trim()) appendLog(FEEDBACK_LOG, "system", "feedback_failed", ref, statusText, "empty stdout from akm feedback")
     else {
       writeMemoryEvent({
@@ -1123,7 +973,7 @@ function curatePrompt(): string {
     })
     return ""
   }
-  const curated = akmRun(["--shape", "agent", "--format", "text", "-q", "curate", text, "--limit", String(CURATE_LIMIT), ...buildRunScopeArgs(sid)])
+  const curated = akmRun(["curate", text, "--limit", String(CURATE_LIMIT), "--shape", "agent", "--format", "text", "-q"])
   writeMemoryEvent({
     event: "prompt_recall",
     sessionId: sid || undefined,
@@ -1158,9 +1008,7 @@ async function sessionStart(): Promise<string> {
         "# AKM is NOT available in this session",
         "",
         `The akm CLI is missing or does not satisfy \`${AKM_REQUIRED_RANGE}\` (reason: ${versionCheck.reason ?? "unknown"}).`,
-        "Do not call any `akm` Bash command. Tell the user to run `/akm-setup`",
-        "in this session to install/upgrade akm-cli with their explicit confirmation,",
-        "or install manually:",
+        "Do not call any `akm` Bash command. Ask the user to install or upgrade akm-cli manually:",
         `  bun install -g ${AKM_PACKAGE_REF}`,
         `  npm install -g ${AKM_PACKAGE_REF}`,
       ].join("\n"),
@@ -1178,8 +1026,7 @@ async function sessionStart(): Promise<string> {
     }
   }
 
-  const agentDefault = detectAgentDefault()
-  const sessionWarnings = gatherSessionStartWarnings(versionCheck, agentDefault)
+  const sessionWarnings = gatherSessionStartWarnings(versionCheck)
 
   // #71 perceived-latency fix: hints, curate, and proposals have no
   // inter-dependency — issue them concurrently via Promise.all instead of
@@ -1198,7 +1045,6 @@ async function sessionStart(): Promise<string> {
       cwdContext,
       "--limit",
       String(CURATE_LIMIT),
-      ...buildRunScopeArgs(sid),
     ]),
     akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
   ])
@@ -1221,21 +1067,20 @@ async function sessionStart(): Promise<string> {
     pending <= 0
       ? ""
       : pending === 1
-        ? "There is 1 pending AKM proposal - review with `/akm-review-proposals` or `/akm-proposal list`."
-        : `There are ${pending} pending AKM proposals - review with \`/akm-review-proposals\` or \`/akm-proposal list\`.`
+        ? "There is 1 pending AKM proposal. Review it with `akm proposal list --status pending`."
+        : `There are ${pending} pending AKM proposals. Review them with \`akm proposal list --status pending\`.`
 
-  if (!hints && !curatedTrimmed && !agentDefault.value && !pendingSummary && sessionWarnings.length === 0) return ""
+  if (!hints && !curatedTrimmed && !pendingSummary && sessionWarnings.length === 0) return ""
   writeMemoryEvent({
     event: "session_started",
     sessionId: sid || undefined,
     scope: buildScope(sid),
-    input: { agentDefault: agentDefault.value, pendingProposals: pending },
+    input: { pendingProposals: pending },
     refs: [...new Set(curatedTrimmed.match(REF_PATTERN) ?? [])],
     outcome: { status: "ok" },
   })
   let body = SESSION_START_HEADER
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
-  if (agentDefault.value) body = `${body}\n\nAgent CLI: ${agentDefault.value} (configured via \`akm setup\`).`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (hints) body = `${body}\n\n${hints}`
   if (curatedFile) body = `${body}\n\nAKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${CURATED_CONTEXT_TAIL}`
@@ -1281,7 +1126,7 @@ async function main(): Promise<string> {
     case "ensure-akm":
     case "check-akm":
       // Legacy alias "ensure-akm" no longer installs anything; both subcommands
-      // are now version checks that warn-and-point-at-/akm-setup. See
+      // are now version checks that warn with manual installation guidance. See
       // checkAkmVersion() for the rationale (Item 2, 0.8.0 polish plan).
       checkAkmVersion()
       return ""

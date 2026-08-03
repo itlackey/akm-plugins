@@ -1,283 +1,72 @@
 # akm-claude
 
-Claude Code plugin for the [AKM](https://github.com/itlackey/akm) CLI (v0.9.0+). Provides a skill that teaches Claude to **search**, **show**, **discover registry kits**, **dispatch agents**, **execute commands**, **drive workflows**, **manage wikis**, **handle env configs and whole-file secrets safely**, **operate the AKM proposal queue**, and **improve assets** — plus **agentic hooks** that auto-load relevant assets, record memories, surface pending proposals, and feed asset-usage feedback back into the stash so it improves with every session. `akm setup` remains human-facing and should be run manually when needed.
+Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.0-rc.14 || ^0.9.0`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
 ## Installation
 
-Add the marketplace and install the plugin:
-
 ```sh
-# Add the AKM marketplace
 /plugin marketplace add itlackey/akm-plugins
-
-# Install the plugin
 /plugin install akm
 ```
 
-Or via the Claude CLI:
+Or use the Claude CLI:
 
 ```sh
 claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-## What's included
+The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.0-rc.14 || ^0.9.0`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
 
-- **AKM Skill** — Claude automatically uses the `akm` CLI when you ask about stash assets
-- **Agentic hooks** — lifecycle hooks that install `akm`, set `defaults.agent` to `claude` (and add a matching `profiles.agent.claude` entry) in `~/.config/akm/config.json` when no agent default is configured, auto-curate stash matches into every user prompt, auto-record feedback when assets are used (skipping proposed-quality drafts plus `lesson:*` and `secret:*` refs), surface pending-proposal counts in the SessionStart header, mine memory candidates for `/akm-memory-promote`, and refresh the stash index + run extraction on session end
-- **Slash commands** — 22 first-class verbs (`/akm-search`, `/akm-show`, `/akm-agent`, `/akm-cmd`, `/akm-curate`, `/akm-remember`, `/akm-feedback`, `/akm-evolve`, `/akm-wiki`, `/akm-workflow`, `/akm-env`, `/akm-secret`, `/akm-proposal`, `/akm-review-proposals`, `/akm-improve`, `/akm-propose`, `/akm-setup`, `/akm-memory-audit`, `/akm-memory-candidates`, `/akm-memory-promote`, `/akm-memory-reject`, `/akm-help`) for explicit control of the compound-engineering loop
-- **`akm-curator` agent** — a self-evolution subagent that reviews session logs and proposes stash improvements
+## Slash Commands
 
-The skill teaches Claude to:
-
-- **Search & show** assets via `akm search` and `akm show`
-- **Search the registry** for installable kits via `akm search --source registry` and install them with `akm add`
-- **Dispatch stash agents** dynamically — Claude fetches an agent's markdown definition (prompt, toolPolicy, modelHint) and spawns a subagent on the fly with those instructions embedded
-- **Execute stash commands** — Claude resolves a command template, renders `$ARGUMENTS`/`$1`/`$2` placeholders, and executes the result
-- **Run scripts** — Claude fetches a script via `akm show`, extracts the `run` field, and executes it directly
-
-### Dynamic agent dispatch
-
-Ask Claude to dispatch any agent from your stash:
-
-```
-Dispatch the coach agent to review src/auth.ts
-```
-
-Claude will resolve the agent ref, fetch its prompt and metadata via `akm show`, compose a subagent with the agent's persona, and execute the task autonomously.
-
-### Command execution
-
-Ask Claude to run any command template from your stash:
-
-```
-Run the review command on src/main.ts --strict
-```
-
-Claude will fetch the command template, render argument placeholders, and execute the result.
-
-### Registry discovery
-
-Ask Claude to find installable kits from the community registry:
-
-```
-Find an akm kit for code review and install the best match
-```
-
-Claude will search with `akm search ... --source registry`, inspect the returned `id` and `action` fields, and then use `akm add` when you ask it to install a result.
-
-### Limitations vs OpenCode plugin
-
-- **modelHint** is advisory only — Claude Code does not support per-subagent model selection
-- **toolPolicy** is embedded as natural-language guidance in the subagent prompt, not enforced at the runtime level
-
-## Prerequisites
-
-The plugin's hooks shell out through a `bun` runtime. **Bun ^1.0 must be on PATH**; if it isn't, every Claude hook short-circuits and the SessionStart context surfaces a clear "Bun runtime not available" banner. Install Bun from <https://bun.sh> first.
-
-On session start, the plugin enforces the documented AKM baseline by requiring `akm-cli@^0.9.0-beta.0 || ^0.9.0`. If `akm` is already on PATH and satisfies that range, the plugin uses it as-is. Otherwise it surfaces a clear SessionStart context banner pointing at the `/akm-setup` slash command — installation requires **explicit user confirmation** through `/akm-setup`; the plugin does **not** silently `bun install` or `npm install` on your behalf. You can also install ahead of time with any of the methods below.
-
-#### First-session behavior
-
-If `akm` is missing or out of range when Claude Code starts, the SessionStart hook injects a degraded context block like this (visible to Claude, and surfaced to you in the session — *not* a raw stderr banner):
-
-```
-AKM is NOT available: akm CLI not installed or wrong version
-  detected: (not found on PATH)
-  required: ^0.9.0-beta.0 || ^0.9.0
-
-Run `/akm-setup` in this Claude Code session to install/upgrade
-with your explicit confirmation, or install manually:
-  bun install -g akm-cli@^0.9.0-beta.0
-  npm install -g akm-cli@^0.9.0-beta.0
-```
-
-This is your cue to run `/akm-setup` from inside Claude Code — the slash command walks you through the install with explicit confirmation. The session continues without akm-aware features until then; nothing else is broken.
-
-```sh
-# macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/itlackey/akm/main/install.sh | bash
-# PowerShell (Windows)
-irm https://raw.githubusercontent.com/itlackey/akm/main/install.ps1 -OutFile install.ps1; ./install.ps1
-
-# Or via Bun / npm
-bun install -g akm-cli@^0.9.0-beta.0
-npm install -g akm-cli@^0.9.0-beta.0
-```
-
-## Stash model
-
-The stash directory is resolved automatically via a three-tier fallback: `AKM_STASH_DIR` env var (optional override) → `stashDir` in `config.json` → platform default. Set it persistently with:
-
-```sh
-akm config set stashDir /abs/path/to/your-stash
-```
-
-Expected layout:
-
-```
-stash/
-├── scripts/    # executable scripts (.sh, .ts, .js, .ps1, .cmd, .bat, .py, .rb, .go, .pl, .php, .lua, .r, .swift, .kt)
-├── skills/     # skill directories containing SKILL.md
-├── commands/   # markdown files
-├── agents/     # markdown files
-├── knowledge/  # markdown files
-├── memories/   # markdown memory files (akm remember)
-├── lessons/    # first-class durable learnings (lesson:<name>) — often produced via akm improve, accepted via akm proposal accept
-├── tasks/      # scheduled task definitions (task:<name>) managed via akm tasks ...
-├── workflows/  # multi-step procedures (workflow:<name>)
-├── env/        # .env config/credential files (env:<name>) — values never surface through structured output
-├── secrets/    # whole-file secrets (secret:<name>) — contents never surface through structured output
-├── wikis/      # per-wiki directories <name>/{schema,index,log}.md + raw/ + pages
-└── .akm/proposals/  # AKM proposal queue — drafts that never leak into search or commits
-```
-
-Assets are resolved from three source types: **working** (local stash), **search paths** (additional dirs via `searchPaths` config), and **installed** (registry kits via `akm add`).
-
-## Hooks
-
-The Claude plugin registers these hooks. Each one runs automatically on the
-corresponding Claude Code event and is non-blocking — if `akm` is not on PATH
-or the CLI call fails, the hook exits silently without affecting the session.
-
-| Event | What happens |
+| Command | Description |
 | --- | --- |
-| **SessionStart** | Verifies `akm` on PATH satisfies the required `^0.9.0-beta.0 || ^0.9.0` range (override via `AKM_PACKAGE_REF`). When `akm` is missing or out of range, the hook does **not** install anything — it emits a degraded SessionStart context telling the agent `akm` tooling is unavailable for this session and pointing at the `/akm-setup` slash command (the explicit-consent install path). When `akm` is healthy, the hook sets `defaults.agent` to `claude` (and ensures `profiles.agent.claude` exists) in `~/.config/akm/config.json` when no agent default is configured (legacy `agent.default` is auto-migrated on load), surfaces the configured agent CLI plus any pending-proposal count in the injected header, warms the stash index in the background, injects `akm hints`, and runs a scoped `akm curate --run <session_id>` so Claude gets relevant stash context before the first user message. Human users should run `akm setup` manually when interactive setup is needed. |
-| **UserPromptSubmit** | Runs `akm curate "<prompt>" --run <session_id>` and injects the top matches as `additionalContext` so Claude sees relevant stash assets before answering. Short prompts (under `AKM_CURATE_MIN_CHARS` chars, default 16) are skipped. Also records `remember`/`memory` intents to the session buffer. |
-| **UserPromptExpansion** | Logs expanded `/akm-*` slash-command usage and injects a short reminder when a mutating memory/proposal command is expanded without explicit confirmation language. |
-| **PreToolUse** (Read / Write / Edit / Glob / Grep) | Observes asset refs in tool input for memory-event capture. Never blocks. |
-| **PostToolUse** (Bash, success) | Logs `akm` Bash invocations, harvests any `type:name` asset refs (including `lesson:*`) from command+output, and calls `akm feedback <ref> --positive` so successful usage boosts ranking. Skips `memory:*`, `env:*`, `secret:*`, `lesson:*`, and any ref the indexer reports as `quality:"proposed"`. |
-| **PostToolUseFailure** (Bash) | Same as above but records `--negative` feedback with the failure note. |
-| **PostToolBatch** | Records grouped tool-batch observations as structured events and appends a short batch summary to the local session buffer for later candidate extraction. |
-| **SubagentStart** | Injects concise AKM subagent context, including the detected role, task preview, and any active workflow summary. |
-| **TaskCreated** / **TaskCompleted** | Records task lifecycle events, appends task summaries to the local session buffer, and lets completed-task summaries feed candidate extraction (surfaces suggestions for `/akm-memory-promote`) using the buffer as source-path evidence. |
-| **PostCompact** | Records the compacted summary as a structured event and buffers a short post-compaction note for later recall. |
-| **SessionEnd** | Runs `akm index` so upstream inference/graph passes pick up the session's changes (set `AKM_INDEX_ON_SESSION_END=0` to skip), and separately fires event-driven `akm extract` for the just-ended session so durable insights reach the proposal queue without waiting for the periodic `akm improve` extract pass. |
+| `/akm-search [query] [flags]` | Search configured bundles or registries; omit the query to browse. |
+| `/akm-show <ref>` | Show a concept by concept-ID reference. |
+| `/akm-curate <task>` | Curate ranked concepts for a task or topic. |
+| `/akm-feedback <ref> <+|-> [note]` | Record positive or negative feedback. Negative feedback requires a note. |
+| `/akm-remember [name]` | Distill durable knowledge from the conversation into a memory. |
 
-### Locking down destructive commands
+AKM references use `[bundle//]conceptId[#fragment]`, for example `skills/code-review`, `memories/release-retro`, or `team-playbook//knowledge/deploy#Rollback`. Search flags use current source names: `--from local`, `--from registry`, `--from all`, or `--from <bundle-name>`.
 
-Earlier versions of this plugin shipped a `PreToolUse` Bash hook that tokenized
-each shell invocation and **blocked** a hard-coded list of risky `akm`
-subcommands (env writes, `sync --push`, `accept` / `reject` / `revert`,
-`tasks add` / `tasks run`, `upgrade`, `update --all`, etc.) until the user
-re-approved them inline. That gate has been removed in 0.8.0. The tokenized
-matcher was brittle — it produced false positives on commit messages,
-heredoc bodies, and other prose that happened to contain `akm <verb>`
-substrings — and gating destructive shell calls is fundamentally the host
-platform's job, not a plugin's.
+## Lifecycle Hooks
 
-The replacement is to use Claude Code's first-class permission system. Drop
-the following block into `~/.claude/settings.json` (user-wide) or
-`.claude/settings.json` (current project). Claude Code plugins cannot ship
-default permission rules, so this step is opt-in and manual:
+Hooks are non-blocking and keep local, redacted state for feedback and memory capture.
 
-```json
-{
-  "permissions": {
-    "ask": [
-      "Bash(akm proposal accept:*)",
-      "Bash(akm proposal diff:*)",
-      "Bash(akm proposal drain:*)",
-      "Bash(akm proposal list:*)",
-      "Bash(akm proposal reject:*)",
-      "Bash(akm proposal revert:*)",
-      "Bash(akm remove:*)",
-      "Bash(akm sync:*)",
-      "Bash(akm upgrade:*)",
-      "Bash(akm update --all:*)",
-      "Bash(akm config set:*)",
-      "Bash(akm tasks add:*)",
-      "Bash(akm tasks remove:*)",
-      "Bash(akm tasks enable:*)",
-      "Bash(akm tasks disable:*)",
-      "Bash(akm tasks run:*)",
-      "Bash(akm env create:*)",
-      "Bash(akm env remove:*)",
-      "Bash(akm env run:*)",
-      "Bash(akm secret set:*)",
-      "Bash(akm secret run:*)",
-      "Bash(akm secret remove:*)"
-    ],
-    "deny": [
-      "Bash(akm upgrade --force:*)"
-    ]
-  }
-}
-```
+| Event | Behavior |
+| --- | --- |
+| `SessionStart` | Verifies Bun and AKM availability, warms AKM data, and injects initial scoped guidance and curated context when available. |
+| `UserPromptSubmit` | Curates substantive prompts and supplies the result as additional context. It also records explicit memory intent. |
+| `UserPromptExpansion` | Records use of the five AKM slash commands. |
+| `PreToolUse` | Observes concept references in non-Bash tool input without blocking. |
+| `PostToolUse` / `PostToolUseFailure` | Records tool observations and submits deduplicated positive or negative feedback for eligible concepts. |
+| `PostToolBatch` | Adds a compact batch observation to local session state. |
+| `SubagentStart` | Injects concise AKM context for the subagent. |
+| `TaskCreated` / `TaskCompleted` | Records task lifecycle summaries for later memory extraction. |
+| `PostCompact` | Preserves a compacted-session observation for later recall. |
+| `SessionEnd` | Refreshes the local AKM index and starts non-blocking session extraction. |
 
-Notes:
+Hook processing never prints secret values. Automatic feedback skips references that AKM reports as ineligible.
 
-- `permissions.ask` shows a one-time confirm-then-proceed dialog. Use it for
-  reversible mutations the user occasionally wants to run.
-- `permissions.deny` is a hard block with no override at the prompt — the
-  user has to remove the rule to run the command. Use it for irreversible
-  toolchain mutations (the example above hard-blocks `akm upgrade --force`).
-- The `Bash(prefix:*)` matcher is **prefix-anchored** and only fires on the
-  actual bash invocation. It does not trip on the same phrase appearing
-  inside argv (commit messages, heredoc bodies, README quotes, etc.), so it
-  does not suffer the tokenizer's false-positive class.
-- Patterns that cannot be expressed as a simple prefix (for example "any
-  `akm env` or `akm secret` subcommand that includes a sensitive value") aren't
-  coverable by these rules. For those, prefer to type the command into the
-  shell directly rather than route it through the chat turn — env and secret
-  writes should bypass the agent entirely.
-- If you want a command to skip the permission dialog entirely, put it
-  under `permissions.allow` instead of `permissions.ask` — but only do this
-  for commands you genuinely want to auto-approve.
-
-### Environment overrides
+## Environment
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AKM_PACKAGE_REF` | `akm-cli@^0.9.0-beta.0` | Override the npm/bun package spec displayed in the SessionStart consent banner and used by `/akm-setup` (for example, to pin a compatible AKM build in CI). The plugin never installs this automatically — it is only quoted in the banner. |
-| `AKM_LOCAL_BUILD_CLI` | _(unset)_ | Optional absolute path to a locally built AKM CLI entrypoint such as `/abs/path/to/akm/dist/cli.js`. When set, the Claude hook runs that build through Bun before checking `akm` on PATH. Useful when developing `akm` and `akm-plugin` side by side. |
-| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic `akm feedback` on tool success/failure. |
-| `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the post-session `akm index` run (e.g. low-power dev machines or CI runners). |
-| `AKM_CURATE_LIMIT` | `5` | Max curated results injected into context per prompt. |
-| `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length before curation runs. |
-| `AKM_CURATE_TIMEOUT` | `8` | Wall-clock seconds for `akm` invocations inside hooks. |
-| `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Max total characters injected into `additionalContext` for a single hook fire. |
-| `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Where session logs and per-session buffers live. Also holds the `setup.stamp` and `quality-cache.tsv` files. |
-| `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Comma-separated list of scope fields to attach on every `akm curate`, `akm feedback`, and `akm remember` CLI call. Remove a key to opt out of that dimension (e.g. `run,channel` to omit user/agent). |
-| `AKM_USER_ID` | _(unset)_ | User identifier forwarded as `--user` on scoped calls. Set in your shell environment or Claude Code settings for multi-user deployments. |
-| `AKM_AGENT_ID` | _(unset)_ | Agent identifier forwarded as `--agent` on scoped calls. |
-| `AKM_CHANNEL` | _(unset)_ | Channel or variant name forwarded as `--channel` on scoped calls (e.g. a PR branch name or pipeline stage). |
+| `AKM_PACKAGE_REF` | `akm-cli@^0.9.0-rc.14` | Package specification shown when AKM is unavailable. It is never installed automatically. |
+| `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to a locally built AKM CLI entry point. |
+| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback. |
+| `AKM_CURATE_LIMIT` | `5` | Maximum curated results injected per prompt. |
+| `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length for automatic curation. |
+| `AKM_CURATE_TIMEOUT` | `8` | Timeout in seconds for hook AKM calls. |
+| `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum AKM context injected by a hook. |
+| `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Local plugin state directory. |
+| `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Scope dimensions attached to remember calls and local lifecycle records. |
 
-### Slash commands
+## Recommended Flow
 
-The plugin ships 22 first-class verbs. `/akm-add` and `/akm-sync` are not part of the slash-command surface — both `akm add` and `akm sync` are reachable via `/akm-help` (see "When to use what" below).
-
-- `/akm-search <query> [flags]` — run `akm search` directly from Claude.
-- `/akm-show <ref> [view args]` — inspect a stash asset by ref.
-- `/akm-agent <agent-ref-or-query> [task]` — resolve and dispatch a stash agent through the AKM skill flow.
-- `/akm-cmd <command-ref-or-query> [args]` — resolve and execute a stash command template through the AKM skill flow.
-- `/akm-curate <task>` — manually curate stash assets for a topic and load them.
-- `/akm-remember [slug]` — distill the current conversation into a durable memory.
-- `/akm-feedback <ref> <+|-> [note]` — record explicit feedback on an asset.
-- `/akm-evolve [focus]` — dispatch the `akm-curator` agent to review session logs and propose stash improvements.
-- `/akm-wiki <subcommand> [args]` — manage AKM wikis (create, register, list, show, pages, search, stash, lint, ingest, remove).
-- `/akm-workflow <subcommand> [args]` — drive workflow runs (start, next, complete, status, list, create, resume, template).
-- `/akm-env <list|path|run> [ref] [-- cmd]` — env read paths: list env refs, get the file path, or inject env into a command. Values never reach chat; only key names are surfaced.
-- `/akm-secret <list|path> [ref]` — secret read paths: enumerate secret refs or return an absolute secret file path for `_FILE`-style consumers. Never reads or prints secret contents.
-- `/akm-proposal <list|show|diff|accept|reject|drain> [id] [--reason "..."]` — operate the AKM proposal queue. Always confirms with the user before `accept`/`reject`/`drain`.
-- `/akm-review-proposals [--limit N]` — list every pending proposal and diff each one in a single pass for review.
-- `/akm-improve [type|ref] [--task "..."] [--dry-run]` — generate improvement proposals for the stash, a type, or a specific ref.
-- `/akm-propose <type> <name> --task "..."` — generate a new-asset proposal via the configured agent CLI.
-- `/akm-setup` — run the interactive `akm setup` wizard. It can configure `defaults.agent` (with a matching `profiles.agent.<name>` entry), which is required for improve/propose. The legacy `agent.default` shape is auto-migrated on load.
-- `/akm-memory-audit` — inspect recent AKM memory recall, writes, refs, and safety blocks for this Claude session.
-- `/akm-memory-candidates` — review AKM memory candidates captured from Claude checkpoints and hooks.
-- `/akm-memory-promote <candidate-id>` — promote a pending AKM memory candidate through the appropriate AKM path (remember / feedback / improve / propose).
-- `/akm-memory-reject <candidate-id>` — reject a pending AKM memory candidate and record why.
-- `/akm-help [task]` — surface a curated quick-reference for non-first-class `akm` verbs and fall back to live `akm --help`.
-
-### When to use what
-
-- **Prefer the 22 slash commands above** for the verbs they cover — they wire the AKM skill flow, hooks, and feedback loop together for you.
-- **For everything else** — `add` (install kits / register sources), `sync`, `import`, `clone`, `update`, `remove`, `list` (sources), `registry-search`, `reindex`, `config`, `upgrade`, `run-script`, raw `agent` (one-shot agent shell-out), env writes (`create`, `remove`), and secret writes / command injection (`set`, `run`, `remove`) — call `/akm-help <task>` first to discover the right `akm` CLI invocation, then run it via Bash.
-- **Env and secret writes bypass the chat turn entirely.** `/akm-env` is read-only for displayed output (`list` and `path`; `run` injects values into a child process only). `/akm-secret` is read-only for displayed output (`list` and `path` only). To create envs or set/run/remove whole-file secrets, use the raw `akm env …` / `akm secret …` CLI so secret material never passes through the chat turn.
-
-## Docs
-
-- [AKM CLI](https://github.com/itlackey/akm)
-- [Claude Code Plugins](https://code.claude.com/docs/en/plugins)
-- [Claude Code Skills](https://code.claude.com/docs/en/skills)
+1. Use `/akm-curate` for task-oriented discovery.
+2. Use `/akm-search` when you need an exact concept ID.
+3. Inspect the selected concept with `/akm-show`.
+4. Record the result with `/akm-feedback`.
+5. Save durable project knowledge with `/akm-remember`.

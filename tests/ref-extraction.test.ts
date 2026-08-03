@@ -2,11 +2,16 @@ import { afterEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { extractAllRefs, validateLiveRefs, validateRefCandidates } from "../claude/shared/ref-extraction"
+import {
+  extractAkmRefsFromString,
+  extractAllRefs,
+  validateLiveRefs,
+  validateRefCandidates,
+} from "../claude/shared/ref-extraction"
 
 const tempDirs: string[] = []
 
-function makeStash() {
+function makeBundle() {
   const dir = mkdtempSync(path.join(tmpdir(), "akm-ref-extraction-"))
   tempDirs.push(dir)
   return dir
@@ -25,138 +30,128 @@ afterEach(() => {
 })
 
 describe("extractAllRefs", () => {
-  it("matches every ref-shaped token regardless of context", () => {
-    const text = [
-      "Plain prose with memory:hello and knowledge:projects/akm/foo.",
-      "Also task:release-checklist should be recognized.",
-      "```",
-      "grep -E 'memory:foo|memory:bar' file.md",
-      "```",
-      "JSON: {\"ref\": \"agent:bunjs-coder\"}",
-      "Repeat: memory:hello (dedup)",
-    ].join("\n")
-    expect(extractAllRefs(text)).toEqual([
-      "memory:hello",
-      "knowledge:projects/akm/foo",
-      "task:release-checklist",
-      "memory:foo",
-      "memory:bar",
-      "agent:bunjs-coder",
+  it("does not classify ordinary repository paths as AKM refs", () => {
+    expect(extractAllRefs("Changed src/app.ts and docs/guide.md; used skills/code-review.")).toEqual([
+      "skills/code-review",
     ])
   })
 
-  it("returns empty list for empty input", () => {
+  it("extracts concept refs with bundles and heading fragments", () => {
+    const text = [
+      "Use skills/code-review, then knowledge/deploy.md#Rollback.",
+      "Also team-playbook//lessons/release-safety#Before-you-start!",
+      "Repeat skills/code-review (deduped).",
+    ].join("\n")
+
+    expect(extractAllRefs(text)).toEqual([
+      "skills/code-review",
+      "knowledge/deploy.md#Rollback",
+      "team-playbook//lessons/release-safety#Before-you-start",
+    ])
+  })
+
+  it("extracts candidates around shell separators without accepting retired refs", () => {
+    expect(extractAllRefs("grep 'memories/foo|knowledge/bar.md' skill:retired skills/partial$(cmd)")).toEqual([
+      "memories/foo",
+      "knowledge/bar.md",
+    ])
+  })
+
+  it("returns an empty list when no refs are present", () => {
     expect(extractAllRefs("")).toEqual([])
     expect(extractAllRefs("nothing-to-see-here")).toEqual([])
   })
 })
 
-describe("validateRefCandidates", () => {
-  it("keeps only refs that resolve in the stash", () => {
-    const stash = makeStash()
-    touch(path.join(stash, "memories", "real-memory.md"), "---\n---\nbody")
-    touch(path.join(stash, "knowledge", "projects", "akm", "release-notes.md"), "x")
-    touch(path.join(stash, "skills", "rollout", "SKILL.md"), "x")
-
-    const candidates = [
-      "memory:real-memory",
-      "memory:foo", // literal — does not exist
-      "knowledge:projects/akm/release-notes",
-      "knowledge:projects/akm/foo", // literal
-      "skill:rollout",
-      "agent:nonexistent",
-    ]
-    expect(validateRefCandidates(candidates, [stash])).toEqual([
-      "knowledge:projects/akm/release-notes",
-      "memory:real-memory",
-      "skill:rollout",
+describe("extractAkmRefsFromString", () => {
+  it("handles surrounding punctuation and requires complete tokens", () => {
+    expect(extractAkmRefsFromString("(skills/foo), knowledge/doc.md#Heading. xskills/nope")).toEqual([
+      "skills/foo",
+      "knowledge/doc.md#Heading",
     ])
-  })
-
-  it("strips local// prefix and rejects remote origins", () => {
-    const stash = makeStash()
-    touch(path.join(stash, "memories", "rollout.md"), "x")
-    expect(validateRefCandidates(["local//memory:rollout", "github//memory:rollout"], [stash])).toEqual([
-      "memory:rollout",
-    ])
-  })
-
-  it("rejects shell-expansion, placeholder, and ACP-typed candidates", () => {
-    const stash = makeStash()
-    touch(path.join(stash, "memories", "real.md"), "x")
-    expect(
-      validateRefCandidates(
-        ["memory:$(cmd)", "knowledge:${VAR}", "agent::Type", "memory:x", "memory:**", "memory:real"],
-        [stash],
-      ),
-    ).toEqual(["memory:real"])
-  })
-
-  it("rejects refs containing shell metacharacters (pasted regex)", () => {
-    const stash = makeStash()
-    touch(path.join(stash, "memories", "real.md"), "x")
-    expect(
-      validateRefCandidates(["memory:foo|knowledge:projects/akm/foo|memory:bar", "memory:real"], [stash]),
-    ).toEqual(["memory:real"])
-  })
-
-  it("returns deduped and sorted output", () => {
-    const stash = makeStash()
-    touch(path.join(stash, "memories", "beta.md"), "x")
-    touch(path.join(stash, "memories", "alpha.md"), "x")
-    expect(validateRefCandidates(["memory:beta", "memory:alpha", "memory:beta"], [stash])).toEqual([
-      "memory:alpha",
-      "memory:beta",
-    ])
-  })
-
-  it("returns empty list when stash roots are empty", () => {
-    expect(validateRefCandidates(["memory:foo"], [])).toEqual([])
-  })
-
-  it("recognises memories backed by a .derived.md sibling", () => {
-    const stash = makeStash()
-    touch(path.join(stash, "memories", "session-x.derived.md"), "x")
-    expect(validateRefCandidates(["memory:session-x"], [stash])).toEqual(["memory:session-x"])
-  })
-
-  it("recognises knowledge refs one level deep under subdirectories", () => {
-    const stash = makeStash()
-    // knowledge/<category>/<name>.md — single level scan mirrors lint walker.
-    touch(path.join(stash, "knowledge", "projects", "release-notes.md"), "x")
-    expect(validateRefCandidates(["knowledge:release-notes"], [stash])).toEqual(["knowledge:release-notes"])
-  })
-
-  it("recognises task refs", () => {
-    const stash = makeStash()
-    touch(path.join(stash, "tasks", "release-checklist.md"), "x")
-    expect(validateRefCandidates(["task:release-checklist"], [stash])).toEqual(["task:release-checklist"])
+    expect(extractAkmRefsFromString("skills/foo|knowledge/doc.md")).toEqual([])
   })
 })
 
-describe("validateLiveRefs (transcript fixture)", () => {
-  it("filters a heredoc-laden transcript down to the refs that actually exist", () => {
-    const stash = makeStash()
-    touch(path.join(stash, "memories", "rollout-notes.md"), "x")
-    touch(path.join(stash, "agents", "bunjs-coder.md"), "x")
+describe("validateRefCandidates", () => {
+  it("keeps only concept IDs that resolve in a bundle root", () => {
+    const bundle = makeBundle()
+    touch(path.join(bundle, "skills", "rollout", "SKILL.md"))
+    touch(path.join(bundle, "knowledge", "projects", "akm", "release-notes.md"))
+    touch(path.join(bundle, "memories", "real-memory.md"))
+
+    expect(
+      validateRefCandidates(
+        [
+          "skills/rollout",
+          "knowledge/projects/akm/release-notes",
+          "memories/real-memory",
+          "memories/missing",
+        ],
+        [bundle],
+      ),
+    ).toEqual(["knowledge/projects/akm/release-notes", "memories/real-memory", "skills/rollout"])
+  })
+
+  it("preserves bundle qualifiers and fragments while validating the concept path", () => {
+    const bundle = makeBundle()
+    touch(path.join(bundle, "lessons", "release-safety.md"), "# Before rollout")
+
+    expect(
+      validateRefCandidates(
+        ["team-playbook//lessons/release-safety#Before-rollout", "lessons/release-safety#Summary"],
+        [bundle],
+      ),
+    ).toEqual(["lessons/release-safety#Summary", "team-playbook//lessons/release-safety#Before-rollout"])
+  })
+
+  it("supports explicit Markdown extensions and derived memories", () => {
+    const bundle = makeBundle()
+    touch(path.join(bundle, "knowledge", "doc.md"))
+    touch(path.join(bundle, "memories", "session-x.derived.md"))
+
+    expect(validateRefCandidates(["knowledge/doc.md", "memories/session-x"], [bundle])).toEqual([
+      "knowledge/doc.md",
+      "memories/session-x",
+    ])
+  })
+
+  it("rejects traversal, malformed, retired, and shell-like candidates", () => {
+    const bundle = makeBundle()
+    touch(path.join(bundle, "memories", "real.md"))
+
+    expect(
+      validateRefCandidates(
+        ["memories/../outside", "memories/$(cmd)", "memory:real", "memories/real|knowledge/doc", "memories/real"],
+        [bundle],
+      ),
+    ).toEqual(["memories/real"])
+  })
+
+  it("returns sorted, deduplicated refs and requires bundle roots", () => {
+    const bundle = makeBundle()
+    touch(path.join(bundle, "memories", "beta.md"))
+    touch(path.join(bundle, "memories", "alpha.md"))
+
+    expect(validateRefCandidates(["memories/beta", "memories/alpha", "memories/beta"], [bundle])).toEqual([
+      "memories/alpha",
+      "memories/beta",
+    ])
+    expect(validateRefCandidates(["memories/alpha"], [])).toEqual([])
+  })
+})
+
+describe("validateLiveRefs", () => {
+  it("filters ref-shaped transcript literals against the bundle", () => {
+    const bundle = makeBundle()
+    touch(path.join(bundle, "memories", "rollout-notes.md"))
+    touch(path.join(bundle, "skills", "bun-review", "SKILL.md"))
 
     const transcript = `
-# Session capture (sanitized fake)
-
-The user requested a status update on memory:rollout-notes.
-
-Bash command (heredoc literal — must NOT survive validation):
-cat <<'EOF' > /tmp/x
-- pattern: memory:foo
-- pattern: knowledge:projects/akm/foo
-EOF
-
-JSON dump (also must NOT survive):
-{"ref": "memory:bar"}
-
-Real dispatch:
-agent:bunjs-coder ran the task.
+Use memories/rollout-notes.
+grep 'memories/missing|knowledge/projects/akm/missing' file.md
+skills/bun-review handled it.
 `
-    expect(validateLiveRefs(transcript, [stash])).toEqual(["agent:bunjs-coder", "memory:rollout-notes"])
+    expect(validateLiveRefs(transcript, [bundle])).toEqual(["memories/rollout-notes", "skills/bun-review"])
   })
 })

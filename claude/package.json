@@ -6,7 +6,6 @@
   "license": "MPL-2.0",
   "files": [
     ".claude-plugin",
-    "agents",
     "commands",
     "hooks",
     "shared",

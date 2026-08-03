@@ -89,7 +89,7 @@ git add tier2/baseline/tier2.json
 
 Each metric:
 1. Spawns a sandbox via `lib/stash-sandbox.ts` — a temp dir with
-   isolated `$AKM_STASH_DIR`, `$AKM_PLUGIN_STATE_DIR`, `$XDG_*` so the
+   isolated `$AKM_BUNDLE_DIR`, `$AKM_PLUGIN_STATE_DIR`, `$XDG_*` so the
    hook never touches the user's real stash.
 2. Installs a deterministic fake `akm` binary on `$PATH` via
    `lib/fake-akm.ts`. The shim ranks fixture assets with simple keyword
@@ -144,7 +144,7 @@ evals/
 Append a JSONL line to `fixtures/prompts/curation.jsonl`:
 
 ```jsonl
-{"id":"cur-NNN","prompt":"…","expected":["skill:foo","knowledge:bar"],"k":5}
+{"id":"cur-NNN","prompt":"…","expected":["skills/foo","knowledge/bar.md"],"k":5}
 ```
 
 Refs in `expected` must exist in `fixtures/stash/`. The fake-akm shim

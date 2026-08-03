@@ -10,7 +10,7 @@ Use `"$ARGUMENTS"` — if provided — as the memory name or topic hint. Otherwi
 Write the memory to stdin and persist it with:
 
 ```sh
-akm --format json -q remember --name <slug> --force
+akm remember --name <slug> --force --format json -q
 ```
 
-Include front matter-free markdown: a one-line summary, then headings for **Context**, **Decision/Learning**, and **References** (link to files, PRs, or stash refs). Report the resulting `memory:<slug>` ref back to the user.
+Include front matter-free markdown: a one-line summary, then headings for **Context**, **Decision/Learning**, and **References** (link to files, PRs, or AKM refs). Report the resulting `memories/<slug>` ref back to the user.

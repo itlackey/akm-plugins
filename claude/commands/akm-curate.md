@@ -3,11 +3,11 @@ description: Curate AKM stash assets for a task or topic and load the top matche
 argument-hint: <task or topic>
 ---
 
-Run `akm --shape agent --format json -q curate "$ARGUMENTS" --limit 6` and report the curated matches back to the user, grouped by asset type.
+Run `akm curate "$ARGUMENTS" --limit 4 --format json -q` and report the curated matches back to the user, grouped by asset type.
 
-For each non-trivial match, fetch the full payload with `akm --format json show <ref>` and summarize:
+For each non-trivial match, fetch the full payload with `akm show <ref> --format json` and summarize:
 - what the asset does
 - when it fits this task
-- whether it should be cloned, dispatched, or executed
+- how it should be applied
 
-If the user confirms a candidate, proceed to use it: clone with `akm clone <ref>`, dispatch with the AKM skill's agent-dispatch flow, or execute its `run` command directly. After using an asset, record `akm feedback <ref> --positive` (or `--negative` with a note) so the stash learns from this outcome.
+After using an asset, record `akm feedback <ref> --positive` (or `--negative --reason "<note>"`) so the stash learns from this outcome.

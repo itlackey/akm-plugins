@@ -12,9 +12,7 @@
 // published OpenCode tarball by opencode/scripts/vendor-shared.mjs, so the
 // same code path runs on both sides.
 //
-// Prerelease note: stable carets (`^0.9.0`) do NOT match prereleases, so each
-// supported prerelease line needs an explicit floor (`^0.9.0-beta.0`). akm
-// publishes beta/rc prereleases; alpha (< beta) is intentionally excluded.
+// Stable carets do not match prereleases, so the current RC floor is explicit.
 //
 // 0.8.0 support was dropped for the 0.9.0 release: 0.9.0-only runtime paths
 // (`akm extract --session-id`, curate `--detail brief`) fail against 0.8.x,
@@ -23,7 +21,7 @@
 
 import { satisfies } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.0-beta.0 || ^0.9.0"
+export const AKM_VERSION_RANGE = "^0.9.0-rc.14 || ^0.9.0"
 
 /**
  * True when `version` is a valid semver string that satisfies
