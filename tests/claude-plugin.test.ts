@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -45,6 +45,29 @@ function makeBundle(tempDir: string, conceptIds: string[] = []) {
 
 function readEvents(stateDir: string) {
   return readLogLines(path.join(stateDir, "akm-claude/events.jsonl")).map((line) => JSON.parse(line))
+}
+
+/**
+ * Poll until `probe` returns a value. Used for assertions about a detached,
+ * unref'd child process: the hook returns before the child has written, and a
+ * fixed sleep would be either flaky or slow.
+ */
+async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      const value = probe()
+      if (value !== undefined) return value
+    } catch {
+      // Not ready yet (file may not exist) — keep polling.
+    }
+    if (Date.now() >= deadline) throw new Error("waitFor timed out")
+    await Bun.sleep(25)
+  }
+}
+
+function permissionBits(filePath: string) {
+  return statSync(filePath).mode & 0o777
 }
 
 function runHook(args: string[], options?: { input?: string; env?: Record<string, string> }) {
@@ -255,6 +278,57 @@ exit 0
     expect(runHook(["extract-session"], { input: JSON.stringify({ session_id: "abc-123", reason: "clear" }), env })).toBe(
       "",
     )
+  })
+
+  it("extract-session records the spawn and captures the child's output in extract.log", async () => {
+    // `akm proposal extract` is the ONLY remaining memory-harvest path (the
+    // Stop / SubagentStop / PreCompact hooks were dropped from plugin.json in
+    // 0.9.0), and on a fresh install with no LLM profile configured real akm
+    // answers with {"ok":false,...,"code":"INVALID_CONFIG_FILE"}. Under the old
+    // stdio: "ignore" that failure left no trace anywhere.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+if [ "$1" = "proposal" ] && [ "$2" = "extract" ]; then
+  printf '{"ok":false,"code":"INVALID_CONFIG_FILE"}\\n'
+  printf 'no LLM connection configured for extract\\n' >&2
+  exit 1
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    const stdout = runHook(["extract-session"], {
+      input: JSON.stringify({ session_id: "sess-extract-log", reason: "other" }),
+      env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir },
+    })
+
+    // Still fire-and-forget: SessionEnd must not stall or emit hook output.
+    expect(stdout.trim()).toBe("")
+
+    const extractLogPath = path.join(stateDir, "akm-claude/extract.log")
+    // The attempt is recorded synchronously, in both logs.
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("extract_spawned\tsess-extract-log"))).toBe(true)
+    expect(readFileSync(extractLogPath, "utf8")).toContain("proposal_extract\tsess-extract-log")
+
+    // ...and the detached child's stdout AND stderr land in the same file.
+    const body = await waitFor(() => {
+      const text = readFileSync(extractLogPath, "utf8")
+      return text.includes("INVALID_CONFIG_FILE") && text.includes("no LLM connection") ? text : undefined
+    })
+    expect(body).toContain("INVALID_CONFIG_FILE")
+    expect(body).toContain("no LLM connection configured for extract")
+
+    // extract.log carries the same owner-only posture as every other state file.
+    expect(permissionBits(extractLogPath)).toBe(0o600)
   })
 
   it("records user feedback and memory intent from prompt submissions", () => {
@@ -570,7 +644,7 @@ echo "[knowledge] should-not-appear"
     const quotedLog = shellQuote(invokeLog)
 
     // Fake akm: version/install, index no-op, hints + curated output.
-    // The version MUST satisfy the plugin's required range (^0.9.0-rc.14 || ^0.9.0)
+    // The version MUST satisfy the plugin's required range (^0.9.0-rc.14)
     // so the new SessionStart consent gate treats akm as healthy and proceeds
     // with the normal injected-context flow.
     writeFileSync(
@@ -1497,6 +1571,44 @@ exit 0
       // The rewrite must be atomic — no temp-file residue left behind.
       const stateEntries = readdirSync(path.join(stateDir, "akm-claude"))
       expect(stateEntries.some((name) => name.endsWith(".tmp"))).toBe(false)
+    })
+
+    it("keeps the rotated file owner-only instead of dropping it to the umask default", () => {
+      // The hook's rotation wrote its temp file without a chmod, so a rotated
+      // session.log / feedback.log / memory.log / quality-cache.tsv /
+      // sessions/<sid>.md came back at whatever the umask allowed — while the
+      // sister rotations in shared/memory-events.ts and
+      // shared/memory-candidates.ts chmod'd 0o600. All three now share one
+      // implementation (shared/state-files.ts) and one posture.
+      const tempDir = makeTempDir()
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      mkdirSync(claudeStateDir, { recursive: true })
+
+      const feedbackLogPath = path.join(claudeStateDir, "feedback.log")
+      const lines: string[] = []
+      for (let i = 0; i < 40; i++) lines.push(`2026-01-01T00:00:00Z\tuser\tprompt\tentry-${i} padding-padding-padding`)
+      writeFileSync(feedbackLogPath, `${lines.join("\n")}\n`)
+      // Start from a world-readable file so the assertion cannot pass by accident.
+      chmodSync(feedbackLogPath, 0o644)
+      expect(permissionBits(feedbackLogPath)).toBe(0o644)
+
+      runHook(["user-feedback"], {
+        input: JSON.stringify({ prompt: "remember the entry that triggers rotation" }),
+        env: {
+          HOME: tempDir,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          XDG_STATE_HOME: stateDir,
+          AKM_PLUGIN_MAX_LOG_BYTES: "300",
+        },
+      })
+
+      // Rotation actually fired...
+      const rotated = readLogLines(feedbackLogPath)
+      expect(rotated.some((line) => line.includes("entry-0 "))).toBe(false)
+      expect(rotated.some((line) => line.includes("remember the entry that triggers rotation"))).toBe(true)
+      // ...and the replacement is owner-only.
+      expect(permissionBits(feedbackLogPath)).toBe(0o600)
     })
 
     it("expires stale quality-cache entries on rotation so a re-classified ref resolves to its newest classification", () => {

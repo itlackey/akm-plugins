@@ -23,23 +23,23 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import type { TranscriptTurn } from "./run-scenario"
 
-const SYSTEM_PROMPT = `You are a software engineer with access to the AKM CLI for finding reusable assets (skills, commands, agents, knowledge, scripts, workflows, vaults, wikis) in the user's stash.
+const SYSTEM_PROMPT = `You are a software engineer with access to the AKM CLI for finding reusable assets (skills, commands, agents, knowledge, scripts, workflows, env files, secrets) in the user's stash.
 
 You have a Bash tool. Use it to:
-- \`akm show <ref>\` — fetch the full content of a stash asset (e.g., \`akm show skill:code-review\`)
+- \`akm show <ref>\` — fetch the full content of a stash asset (e.g., \`akm show skills/code-review\`)
 - \`akm search "<query>"\` — search the stash
 - \`akm feedback <ref> --positive --note "..."\` — record that an asset helped
 - \`akm feedback <ref> --negative --note "..."\` — record that an asset failed or was wrong
 
-Reference grammar: \`<type>:<name>\` where type ∈ {skill, command, agent, knowledge, memory, lesson, script, workflow, task, vault, wiki}.
+Reference grammar: \`[bundle//]<conceptId>[#fragment]\`, where the concept id is the asset's own path inside the bundle — e.g. \`skills/code-review\`, \`knowledge/api-error-codes\`, \`scripts/lint.sh\`. Concept roots: agents, commands, env, facts, instructions, knowledge, lessons, memories, scripts, secrets, sessions, skills, tasks, workflows.
 
 Workflow when handling a request:
 1. If curated assets are in your context, decide which (if any) are relevant. Don't use them blindly — pick only assets that fit the request.
 2. Run \`akm show <ref>\` for the assets you'll use, to load their full content.
 3. Complete the user's task using the loaded content.
 4. Record \`akm feedback <ref> --positive\` for assets that helped you complete the task. Record \`akm feedback <ref> --negative\` for assets that turned out to be wrong fits or unhelpful.
-5. NEVER call \`akm vault show\` or \`akm vault load\` — vault values are sensitive. Only mention vault refs by name when the user asks about secrets.
-6. NEVER record feedback on \`memory:\` or \`vault:\` refs — feedback only applies to skills, commands, agents, knowledge, scripts, workflows, and wikis.
+5. NEVER read or print the value of a \`secrets/\` or \`env/\` asset — those values are sensitive. Only mention them by ref when the user asks about secrets.
+6. NEVER record feedback on \`memories/\`, \`env/\`, \`secrets/\`, or \`lessons/\` refs — feedback only applies to skills, commands, agents, knowledge, scripts, and workflows.
 7. When you've finished the task, write a brief summary and stop calling tools.
 
 Be efficient — don't show every curated ref just because it surfaced. Use judgment.`
@@ -82,7 +82,11 @@ export type ClaudeAgentResult = {
   error?: string
 }
 
-const REF_RE = /\b(skill|command|agent|knowledge|memory|lesson|script|workflow|task|vault|wiki):[A-Za-z0-9._\/-]+/g
+// AKM 0.9 concept-ID refs. Mirrors REF_PATTERN in
+// claude/shared/ref-extraction.ts; keep the concept-root list in lockstep
+// with the plugins and with evals/tier2/harness/{claude,opencode}.ts.
+const REF_RE =
+  /(?<![A-Za-z0-9@._+/:=-])(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?(?![A-Za-z0-9@._+/#$=-])/g
 
 function extractRefs(text: string): string[] {
   const seen = new Set<string>()

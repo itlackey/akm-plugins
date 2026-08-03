@@ -61,6 +61,46 @@ describe("extractAllRefs", () => {
     expect(extractAllRefs("")).toEqual([])
     expect(extractAllRefs("nothing-to-see-here")).toEqual([])
   })
+
+  it("observes the 0.9 concept roots added since 0.8 (facts, instructions, sessions)", () => {
+    // `akm bundle create` scaffolds facts/, instructions/ and sessions/ in 0.9
+    // and `akm info --format json` lists fact, instruction and session in
+    // assetTypes. Refs to them were previously invisible to passive extraction,
+    // so they could never be observed or receive automatic feedback.
+    expect(
+      extractAllRefs("See facts/pricing-tiers, instructions/pr-review.md, and sessions/2026-08-03-retro."),
+    ).toEqual(["facts/pricing-tiers", "instructions/pr-review.md", "sessions/2026-08-03-retro"])
+  })
+
+  it("covers exactly the 0.9 concept roots — no wikis, no vaults", () => {
+    // The canonical list is the set of directories `akm bundle create`
+    // scaffolds: agents commands env facts instructions knowledge lessons
+    // memories scripts secrets sessions skills tasks workflows.
+    const roots = [
+      "agents",
+      "commands",
+      "env",
+      "facts",
+      "instructions",
+      "knowledge",
+      "lessons",
+      "memories",
+      "scripts",
+      "secrets",
+      "sessions",
+      "skills",
+      "tasks",
+      "workflows",
+    ]
+    for (const root of roots) {
+      expect(extractAllRefs(`touched ${root}/example today`)).toEqual([`${root}/example`])
+    }
+    // `wikis` was retired for 0.9: it is neither an asset type nor a
+    // scaffolded bundle directory, so it must read as an ordinary path.
+    for (const retired of ["wikis", "vaults", "src", "docs", "node_modules"]) {
+      expect(extractAllRefs(`touched ${retired}/example today`)).toEqual([])
+    }
+  })
 })
 
 describe("extractAkmRefsFromString", () => {
@@ -114,6 +154,34 @@ describe("validateRefCandidates", () => {
       "knowledge/doc.md",
       "memories/session-x",
     ])
+  })
+
+  it("resolves the 0.9 concept roots added since 0.8 (facts, instructions, sessions)", () => {
+    const bundle = makeBundle()
+    touch(path.join(bundle, "facts", "pricing-tiers.md"))
+    touch(path.join(bundle, "instructions", "pr-review.md"))
+    touch(path.join(bundle, "sessions", "2026-08-03-retro.md"))
+
+    expect(
+      validateRefCandidates(
+        [
+          "facts/pricing-tiers",
+          "instructions/pr-review",
+          "sessions/2026-08-03-retro",
+          "instructions/missing",
+        ],
+        [bundle],
+      ),
+    ).toEqual(["facts/pricing-tiers", "instructions/pr-review", "sessions/2026-08-03-retro"])
+  })
+
+  it("rejects retired roots even when the file exists on disk", () => {
+    // A bundle carried over from 0.8 may still have wikis/ on disk; 0.9 does
+    // not scaffold or recognize it, so it must never validate as a ref.
+    const bundle = makeBundle()
+    touch(path.join(bundle, "wikis", "legacy-page.md"))
+
+    expect(validateRefCandidates(["wikis/legacy-page"], [bundle])).toEqual([])
   })
 
   it("rejects traversal, malformed, retired, and shell-like candidates", () => {

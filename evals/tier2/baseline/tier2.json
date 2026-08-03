@@ -2,9 +2,9 @@
   "version": "1",
   "tier": "tier2",
   "pluginVersion": "0.9.0-beta.1",
-  "gitSha": "48f9345a3fc44a7a1f5ff2d4d21f7fd21ae57c61",
-  "ranAt": "2026-07-05T04:34:50.487Z",
-  "durationMs": 17512,
+  "gitSha": "f9559a84b3fe5eb481489600637e11655420b3b8",
+  "ranAt": "2026-08-03T07:39:44.484Z",
+  "durationMs": 23989,
   "metrics": {
     "surface": {
       "name": "surface",
@@ -40,14 +40,10 @@
         "claudeSkills": [
           "akm"
         ],
-        "claudeAgents": [
-          "akm-curator"
-        ],
-        "opencodeAgents": [
-          "akm-curator"
-        ],
-        "toolCount": 21,
-        "commandCount": 27,
+        "claudeAgents": [],
+        "opencodeAgents": [],
+        "toolCount": 5,
+        "commandCount": 5,
         "hookCount": 12
       },
       "table": {
@@ -59,13 +55,13 @@
         "rows": [
           [
             "claude commands",
-            22,
-            "akm-agent, akm-cmd, akm-curate, akm-env, akm-evolve, akm-feedback, akm-help, akm-improve, akm-memory-audit, akm-memory-candidates, akm-memory-promote, akm-memory-reject, akm-proposal, akm-propose, akm-remember, akm-review-proposals, akm-search, akm-secret, akm-setup, akm-show, akm-wiki, akm-workflow"
+            5,
+            "akm-curate, akm-feedback, akm-remember, akm-search, akm-show"
           ],
           [
             "claude agents",
-            1,
-            "akm-curator"
+            0,
+            ""
           ],
           [
             "claude hooks",
@@ -79,18 +75,18 @@
           ],
           [
             "opencode tools",
-            21,
-            "akm_agent, akm_cmd, akm_curate, akm_env, akm_evolve, akm_feedback, akm_help, akm_improve, akm_info, akm_init, akm_memory, akm_parent_messages, akm_proposal, akm_propose, akm_remember, akm_search, akm_secret, akm_session_messages, akm_show, akm_wiki, akm_workflow"
+            5,
+            "akm_curate, akm_feedback, akm_remember, akm_search, akm_show"
           ],
           [
             "opencode commands",
-            5,
-            "akm-evolve-session, akm-improve-asset, akm-propose-asset, akm-review-proposals, akm-workflow-status"
+            0,
+            ""
           ],
           [
             "opencode agents",
-            1,
-            "akm-curator"
+            0,
+            ""
           ]
         ]
       }
@@ -107,15 +103,15 @@
             "id": "cur-001",
             "prompt": "Help me review this pull request for style issues and bugs",
             "expected": [
-              "skill:code-review",
-              "agent:reviewer"
+              "skills/code-review",
+              "agents/reviewer"
             ],
             "retrieved": [
-              "skill:code-review",
-              "agent:reviewer",
-              "agent:planner",
-              "command:scaffold-test",
-              "knowledge:api-error-codes"
+              "skills/code-review",
+              "agents/reviewer",
+              "agents/planner",
+              "commands/scaffold-test",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -125,15 +121,15 @@
             "id": "cur-002",
             "prompt": "Walk me through the diff in src/api/handlers and flag style and security issues",
             "expected": [
-              "skill:code-review",
-              "agent:reviewer"
+              "skills/code-review",
+              "agents/reviewer"
             ],
             "retrieved": [
-              "skill:code-review",
-              "knowledge:api-error-codes",
-              "agent:reviewer",
-              "command:bump-version",
-              "knowledge:repo-conventions"
+              "skills/code-review",
+              "knowledge/api-error-codes",
+              "agents/reviewer",
+              "commands/bump-version",
+              "env/staging.env"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -143,14 +139,14 @@
             "id": "cur-003",
             "prompt": "Refactor this messy python module to add type hints and split big functions",
             "expected": [
-              "skill:refactor-py"
+              "skills/refactor-py"
             ],
             "retrieved": [
-              "skill:refactor-py",
-              "agent:planner",
-              "agent:reviewer",
-              "command:bump-version",
-              "command:scaffold-test"
+              "skills/refactor-py",
+              "lessons/postmortem-cache-stampede",
+              "agents/planner",
+              "agents/reviewer",
+              "commands/bump-version"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -160,14 +156,14 @@
             "id": "cur-004",
             "prompt": "Clean up this python file for readability and add typing",
             "expected": [
-              "skill:refactor-py"
+              "skills/refactor-py"
             ],
             "retrieved": [
-              "skill:refactor-py",
-              "command:scaffold-test",
-              "skill:code-review",
-              "agent:planner",
-              "knowledge:api-error-codes"
+              "skills/refactor-py",
+              "commands/scaffold-test",
+              "skills/code-review",
+              "agents/planner",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -177,14 +173,14 @@
             "id": "cur-005",
             "prompt": "I have a stack trace from a runtime crash, can you help me debug it",
             "expected": [
-              "skill:debug-runtime"
+              "skills/debug-runtime"
             ],
             "retrieved": [
-              "skill:debug-runtime",
-              "vault:staging",
-              "agent:planner",
-              "agent:reviewer",
-              "command:bump-version"
+              "skills/debug-runtime",
+              "env/staging.env",
+              "lessons/postmortem-cache-stampede",
+              "agents/planner",
+              "agents/reviewer"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -194,14 +190,14 @@
             "id": "cur-006",
             "prompt": "Diagnose this exception traceback and propose a fix",
             "expected": [
-              "skill:debug-runtime"
+              "skills/debug-runtime"
             ],
             "retrieved": [
-              "skill:debug-runtime",
-              "agent:reviewer",
-              "command:bump-version",
-              "knowledge:api-error-codes",
-              "knowledge:repo-conventions"
+              "skills/debug-runtime",
+              "agents/reviewer",
+              "commands/bump-version",
+              "knowledge/api-error-codes",
+              "knowledge/repo-conventions"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -211,14 +207,14 @@
             "id": "cur-007",
             "prompt": "Summarize the diff between main and the release branch as a changelog entry",
             "expected": [
-              "command:summarize-diff"
+              "commands/summarize-diff"
             ],
             "retrieved": [
-              "command:summarize-diff",
-              "command:bump-version",
-              "skill:code-review",
-              "agent:reviewer",
-              "knowledge:api-error-codes"
+              "commands/summarize-diff",
+              "commands/bump-version",
+              "skills/code-review",
+              "agents/reviewer",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -228,15 +224,15 @@
             "id": "cur-008",
             "prompt": "Generate release notes from the staged commits",
             "expected": [
-              "command:summarize-diff",
-              "workflow:release"
+              "commands/summarize-diff",
+              "workflows/release"
             ],
             "retrieved": [
-              "command:bump-version",
-              "command:summarize-diff",
-              "script:smoke",
-              "knowledge:api-error-codes",
-              "script:lint"
+              "commands/bump-version",
+              "commands/summarize-diff",
+              "scripts/smoke.sh",
+              "lessons/postmortem-cache-stampede",
+              "env/staging.env"
             ],
             "expected_coverage": 0.5,
             "top_rank_of_expected": 2,
@@ -246,14 +242,14 @@
             "id": "cur-009",
             "prompt": "Scaffold a unit test for src/utils/parser.ts",
             "expected": [
-              "command:scaffold-test"
+              "commands/scaffold-test"
             ],
             "retrieved": [
-              "command:scaffold-test",
-              "command:summarize-diff",
-              "knowledge:api-error-codes",
-              "script:smoke",
-              "vault:staging"
+              "commands/scaffold-test",
+              "commands/summarize-diff",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "scripts/smoke.sh"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -263,14 +259,14 @@
             "id": "cur-010",
             "prompt": "I need a quick test scaffold for the new module covering the happy path",
             "expected": [
-              "command:scaffold-test"
+              "commands/scaffold-test"
             ],
             "retrieved": [
-              "command:scaffold-test",
-              "knowledge:api-error-codes",
-              "script:smoke",
-              "skill:code-review",
-              "vault:staging"
+              "commands/scaffold-test",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "scripts/smoke.sh",
+              "skills/code-review"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -280,15 +276,15 @@
             "id": "cur-011",
             "prompt": "Bump version to 1.4.0 across all package manifests and tag the release",
             "expected": [
-              "command:bump-version",
-              "workflow:release"
+              "commands/bump-version",
+              "workflows/release"
             ],
             "retrieved": [
-              "command:bump-version",
-              "workflow:release",
-              "script:lint",
-              "knowledge:api-error-codes",
-              "script:smoke"
+              "commands/bump-version",
+              "workflows/release",
+              "scripts/lint.sh",
+              "knowledge/api-error-codes",
+              "lessons/postmortem-cache-stampede"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -298,15 +294,15 @@
             "id": "cur-012",
             "prompt": "Cut a new semver release and publish",
             "expected": [
-              "command:bump-version",
-              "workflow:release"
+              "commands/bump-version",
+              "workflows/release"
             ],
             "retrieved": [
-              "command:bump-version",
-              "workflow:release",
-              "wiki:onboarding",
-              "agent:reviewer",
-              "knowledge:api-error-codes"
+              "commands/bump-version",
+              "workflows/release",
+              "knowledge/onboarding",
+              "agents/reviewer",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -316,15 +312,15 @@
             "id": "cur-013",
             "prompt": "Walk through the deployment runbook for tonight's rollout",
             "expected": [
-              "knowledge:deployment-runbook",
-              "workflow:release"
+              "knowledge/deployment-runbook",
+              "workflows/release"
             ],
             "retrieved": [
-              "knowledge:deployment-runbook",
-              "knowledge:api-error-codes",
-              "vault:staging",
-              "skill:code-review",
-              "agent:planner"
+              "knowledge/deployment-runbook",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "skills/code-review",
+              "agents/planner"
             ],
             "expected_coverage": 0.5,
             "top_rank_of_expected": 1,
@@ -334,14 +330,14 @@
             "id": "cur-014",
             "prompt": "What are the rollback steps if the production deploy fails",
             "expected": [
-              "knowledge:deployment-runbook"
+              "knowledge/deployment-runbook"
             ],
             "retrieved": [
-              "knowledge:deployment-runbook",
-              "script:smoke",
-              "command:bump-version",
-              "knowledge:api-error-codes",
-              "script:lint"
+              "knowledge/deployment-runbook",
+              "scripts/smoke.sh",
+              "commands/bump-version",
+              "env/staging.env",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -351,14 +347,14 @@
             "id": "cur-015",
             "prompt": "What does HTTP 422 mean from our public API and how do I fix it",
             "expected": [
-              "knowledge:api-error-codes"
+              "knowledge/api-error-codes"
             ],
             "retrieved": [
-              "knowledge:api-error-codes",
-              "skill:debug-runtime",
-              "agent:planner",
-              "agent:reviewer",
-              "command:bump-version"
+              "knowledge/api-error-codes",
+              "lessons/postmortem-cache-stampede",
+              "skills/debug-runtime",
+              "agents/planner",
+              "agents/reviewer"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -368,14 +364,14 @@
             "id": "cur-016",
             "prompt": "Look up what API error code 503 means in our reference",
             "expected": [
-              "knowledge:api-error-codes"
+              "knowledge/api-error-codes"
             ],
             "retrieved": [
-              "knowledge:api-error-codes",
-              "knowledge:repo-conventions",
-              "vault:staging",
-              "skill:refactor-py",
-              "skill:debug-runtime"
+              "knowledge/api-error-codes",
+              "env/staging.env",
+              "knowledge/repo-conventions",
+              "skills/refactor-py",
+              "skills/debug-runtime"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -385,14 +381,14 @@
             "id": "cur-017",
             "prompt": "Run the linters across the codebase and report errors",
             "expected": [
-              "script:lint"
+              "scripts/lint.sh"
             ],
             "retrieved": [
-              "script:lint",
-              "command:bump-version",
-              "skill:debug-runtime",
-              "knowledge:api-error-codes",
-              "skill:code-review"
+              "scripts/lint.sh",
+              "commands/bump-version",
+              "skills/debug-runtime",
+              "knowledge/api-error-codes",
+              "lessons/postmortem-cache-stampede"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -402,14 +398,14 @@
             "id": "cur-018",
             "prompt": "Check formatting and lint everything",
             "expected": [
-              "script:lint"
+              "scripts/lint.sh"
             ],
             "retrieved": [
-              "script:lint",
-              "skill:code-review",
-              "command:bump-version",
-              "agent:reviewer",
-              "knowledge:api-error-codes"
+              "scripts/lint.sh",
+              "skills/code-review",
+              "commands/bump-version",
+              "agents/reviewer",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -419,15 +415,15 @@
             "id": "cur-019",
             "prompt": "Run smoke tests after the deploy finishes",
             "expected": [
-              "script:smoke",
-              "knowledge:deployment-runbook"
+              "scripts/smoke.sh",
+              "knowledge/deployment-runbook"
             ],
             "retrieved": [
-              "script:smoke",
-              "knowledge:deployment-runbook",
-              "script:lint",
-              "workflow:release",
-              "skill:code-review"
+              "scripts/smoke.sh",
+              "knowledge/deployment-runbook",
+              "scripts/lint.sh",
+              "workflows/release",
+              "skills/code-review"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -437,14 +433,14 @@
             "id": "cur-020",
             "prompt": "Verify the production endpoints respond with a healthcheck",
             "expected": [
-              "script:smoke"
+              "scripts/smoke.sh"
             ],
             "retrieved": [
-              "script:smoke",
-              "skill:code-review",
-              "command:bump-version",
-              "knowledge:api-error-codes",
-              "script:lint"
+              "scripts/smoke.sh",
+              "skills/code-review",
+              "commands/bump-version",
+              "env/staging.env",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -454,14 +450,14 @@
             "id": "cur-021",
             "prompt": "What are our naming conventions for new files",
             "expected": [
-              "knowledge:repo-conventions"
+              "knowledge/repo-conventions"
             ],
             "retrieved": [
-              "knowledge:repo-conventions",
-              "agent:planner",
-              "command:bump-version",
-              "command:summarize-diff",
-              "knowledge:api-error-codes"
+              "knowledge/repo-conventions",
+              "agents/planner",
+              "commands/bump-version",
+              "commands/summarize-diff",
+              "env/staging.env"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -471,14 +467,14 @@
             "id": "cur-022",
             "prompt": "Read me the house style guide for comments and PR descriptions",
             "expected": [
-              "knowledge:repo-conventions"
+              "knowledge/repo-conventions"
             ],
             "retrieved": [
-              "knowledge:repo-conventions",
-              "skill:code-review",
-              "knowledge:api-error-codes",
-              "agent:planner",
-              "command:bump-version"
+              "knowledge/repo-conventions",
+              "skills/code-review",
+              "knowledge/api-error-codes",
+              "agents/planner",
+              "commands/bump-version"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -488,14 +484,14 @@
             "id": "cur-023",
             "prompt": "Plan the implementation for a new caching layer",
             "expected": [
-              "agent:planner"
+              "agents/planner"
             ],
             "retrieved": [
-              "agent:planner",
-              "knowledge:api-error-codes",
-              "vault:staging",
-              "skill:code-review",
-              "command:bump-version"
+              "agents/planner",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "skills/code-review",
+              "commands/bump-version"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -505,14 +501,14 @@
             "id": "cur-024",
             "prompt": "Design an architecture for the new feature with tradeoffs",
             "expected": [
-              "agent:planner"
+              "agents/planner"
             ],
             "retrieved": [
-              "agent:planner",
-              "skill:code-review",
-              "knowledge:api-error-codes",
-              "vault:staging",
-              "command:scaffold-test"
+              "agents/planner",
+              "skills/code-review",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "commands/scaffold-test"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -522,14 +518,14 @@
             "id": "cur-025",
             "prompt": "Walk me through onboarding for a new hire this week",
             "expected": [
-              "wiki:onboarding"
+              "knowledge/onboarding"
             ],
             "retrieved": [
-              "wiki:onboarding",
-              "agent:planner",
-              "command:summarize-diff",
-              "knowledge:api-error-codes",
-              "vault:staging"
+              "knowledge/onboarding",
+              "agents/planner",
+              "commands/summarize-diff",
+              "env/staging.env",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -539,14 +535,14 @@
             "id": "cur-026",
             "prompt": "Set up my devenv as a new engineer joining the team",
             "expected": [
-              "wiki:onboarding"
+              "knowledge/onboarding"
             ],
             "retrieved": [
-              "wiki:onboarding",
-              "command:bump-version",
-              "knowledge:api-error-codes",
-              "script:lint",
-              "script:smoke"
+              "knowledge/onboarding",
+              "commands/bump-version",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "scripts/lint.sh"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -556,14 +552,14 @@
             "id": "cur-027",
             "prompt": "Load staging API keys into my shell",
             "expected": [
-              "vault:staging"
+              "env/staging.env"
             ],
             "retrieved": [
-              "vault:staging",
-              "knowledge:api-error-codes",
-              "command:summarize-diff",
-              "command:bump-version",
-              "agent:reviewer"
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "commands/summarize-diff",
+              "commands/bump-version",
+              "memories/session-x"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -573,14 +569,14 @@
             "id": "cur-028",
             "prompt": "Pull the staging environment secrets",
             "expected": [
-              "vault:staging"
+              "env/staging.env"
             ],
             "retrieved": [
-              "vault:staging",
-              "skill:code-review",
-              "command:bump-version",
-              "agent:reviewer",
-              "knowledge:api-error-codes"
+              "env/staging.env",
+              "skills/code-review",
+              "commands/bump-version",
+              "agents/reviewer",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -590,15 +586,15 @@
             "id": "cur-029",
             "prompt": "Drive the multi-step release workflow from start to finish",
             "expected": [
-              "workflow:release",
-              "command:bump-version"
+              "workflows/release",
+              "commands/bump-version"
             ],
             "retrieved": [
-              "workflow:release",
-              "command:bump-version",
-              "script:smoke",
-              "command:summarize-diff",
-              "knowledge:api-error-codes"
+              "workflows/release",
+              "commands/bump-version",
+              "lessons/postmortem-cache-stampede",
+              "scripts/smoke.sh",
+              "commands/summarize-diff"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -608,14 +604,14 @@
             "id": "cur-030",
             "prompt": "Resume the release workflow that was paused yesterday",
             "expected": [
-              "workflow:release"
+              "workflows/release"
             ],
             "retrieved": [
-              "command:bump-version",
-              "script:smoke",
-              "workflow:release",
-              "command:summarize-diff",
-              "knowledge:api-error-codes"
+              "commands/bump-version",
+              "scripts/smoke.sh",
+              "workflows/release",
+              "commands/summarize-diff",
+              "env/staging.env"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 3,
@@ -625,15 +621,15 @@
             "id": "cur-031",
             "prompt": "How do I review a PR diff for security issues",
             "expected": [
-              "skill:code-review",
-              "agent:reviewer"
+              "skills/code-review",
+              "agents/reviewer"
             ],
             "retrieved": [
-              "skill:code-review",
-              "agent:reviewer",
-              "command:summarize-diff",
-              "vault:staging",
-              "knowledge:api-error-codes"
+              "skills/code-review",
+              "agents/reviewer",
+              "commands/summarize-diff",
+              "env/staging.env",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -643,15 +639,15 @@
             "id": "cur-032",
             "prompt": "What's the recommended way to handle exceptions in this codebase",
             "expected": [
-              "knowledge:repo-conventions",
-              "skill:debug-runtime"
+              "knowledge/repo-conventions",
+              "skills/debug-runtime"
             ],
             "retrieved": [
-              "script:lint",
-              "command:bump-version",
-              "knowledge:api-error-codes",
-              "script:smoke",
-              "vault:staging"
+              "scripts/lint.sh",
+              "commands/bump-version",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "scripts/smoke.sh"
             ],
             "expected_coverage": 0,
             "top_rank_of_expected": 0,
@@ -661,14 +657,14 @@
             "id": "cur-033",
             "prompt": "Format and lint before pushing",
             "expected": [
-              "script:lint"
+              "scripts/lint.sh"
             ],
             "retrieved": [
-              "script:lint",
-              "knowledge:repo-conventions",
-              "skill:code-review",
-              "command:bump-version",
-              "agent:reviewer"
+              "scripts/lint.sh",
+              "knowledge/repo-conventions",
+              "lessons/postmortem-cache-stampede",
+              "skills/code-review",
+              "commands/bump-version"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -678,14 +674,14 @@
             "id": "cur-034",
             "prompt": "Write tests for the new parser module",
             "expected": [
-              "command:scaffold-test"
+              "commands/scaffold-test"
             ],
             "retrieved": [
-              "skill:code-review",
-              "knowledge:api-error-codes",
-              "vault:staging",
-              "command:bump-version",
-              "command:summarize-diff"
+              "skills/code-review",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "commands/bump-version",
+              "commands/summarize-diff"
             ],
             "expected_coverage": 0,
             "top_rank_of_expected": 0,
@@ -695,14 +691,14 @@
             "id": "cur-035",
             "prompt": "Make this Python script more readable",
             "expected": [
-              "skill:refactor-py"
+              "skills/refactor-py"
             ],
             "retrieved": [
-              "skill:refactor-py",
-              "command:bump-version",
-              "vault:staging",
-              "agent:reviewer",
-              "knowledge:api-error-codes"
+              "skills/refactor-py",
+              "commands/bump-version",
+              "env/staging.env",
+              "memories/session-x",
+              "agents/reviewer"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -712,14 +708,14 @@
             "id": "cur-036",
             "prompt": "What's the rollback procedure documented in the runbook",
             "expected": [
-              "knowledge:deployment-runbook"
+              "knowledge/deployment-runbook"
             ],
             "retrieved": [
-              "knowledge:deployment-runbook",
-              "command:bump-version",
-              "vault:staging",
-              "knowledge:api-error-codes",
-              "script:lint"
+              "knowledge/deployment-runbook",
+              "commands/bump-version",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "scripts/lint.sh"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -729,14 +725,14 @@
             "id": "cur-037",
             "prompt": "Generate a one-paragraph release note from the diff",
             "expected": [
-              "command:summarize-diff"
+              "commands/summarize-diff"
             ],
             "retrieved": [
-              "command:summarize-diff",
-              "command:bump-version",
-              "script:smoke",
-              "skill:code-review",
-              "agent:reviewer"
+              "commands/summarize-diff",
+              "commands/bump-version",
+              "scripts/smoke.sh",
+              "lessons/postmortem-cache-stampede",
+              "skills/code-review"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -746,14 +742,14 @@
             "id": "cur-038",
             "prompt": "Help me debug this traceback from the production logs",
             "expected": [
-              "skill:debug-runtime"
+              "skills/debug-runtime"
             ],
             "retrieved": [
-              "skill:debug-runtime",
-              "command:bump-version",
-              "knowledge:api-error-codes",
-              "knowledge:deployment-runbook",
-              "script:lint"
+              "skills/debug-runtime",
+              "lessons/postmortem-cache-stampede",
+              "commands/bump-version",
+              "env/staging.env",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -763,14 +759,14 @@
             "id": "cur-039",
             "prompt": "Set up onboarding wiki tour for a new joiner",
             "expected": [
-              "wiki:onboarding"
+              "knowledge/onboarding"
             ],
             "retrieved": [
-              "wiki:onboarding",
-              "command:summarize-diff",
-              "knowledge:api-error-codes",
-              "vault:staging",
-              "agent:planner"
+              "knowledge/onboarding",
+              "commands/summarize-diff",
+              "env/staging.env",
+              "knowledge/api-error-codes",
+              "agents/planner"
             ],
             "expected_coverage": 1,
             "top_rank_of_expected": 1,
@@ -780,15 +776,15 @@
             "id": "cur-040",
             "prompt": "Plan a refactor of the payments module with tradeoffs",
             "expected": [
-              "agent:planner",
-              "skill:refactor-py"
+              "agents/planner",
+              "skills/refactor-py"
             ],
             "retrieved": [
-              "agent:planner",
-              "skill:code-review",
-              "command:bump-version",
-              "knowledge:api-error-codes",
-              "script:lint"
+              "agents/planner",
+              "skills/code-review",
+              "commands/bump-version",
+              "env/staging.env",
+              "knowledge/api-error-codes"
             ],
             "expected_coverage": 0.5,
             "top_rank_of_expected": 1,
@@ -809,40 +805,40 @@
           [
             "cur-032",
             "What's the recommended way to handle exceptions in this c...",
-            "knowledge:repo-conventions,skill:debug-runtime",
-            "script:lint,command:bump-version,knowledge:api-error-codes",
+            "knowledge/repo-conventions,skills/debug-runtime",
+            "scripts/lint.sh,commands/bump-version,env/staging.env",
             "0.00",
             "—"
           ],
           [
             "cur-034",
             "Write tests for the new parser module",
-            "command:scaffold-test",
-            "skill:code-review,knowledge:api-error-codes,vault:staging",
+            "commands/scaffold-test",
+            "skills/code-review,env/staging.env,knowledge/api-error-codes",
             "0.00",
             "—"
           ],
           [
             "cur-008",
             "Generate release notes from the staged commits",
-            "command:summarize-diff,workflow:release",
-            "command:bump-version,command:summarize-diff,script:smoke",
+            "commands/summarize-diff,workflows/release",
+            "commands/bump-version,commands/summarize-diff,scripts/smoke.sh",
             "0.50",
             2
           ],
           [
             "cur-013",
             "Walk through the deployment runbook for tonight's rollout",
-            "knowledge:deployment-runbook,workflow:release",
-            "knowledge:deployment-runbook,knowledge:api-error-codes,vault:staging",
+            "knowledge/deployment-runbook,workflows/release",
+            "knowledge/deployment-runbook,env/staging.env,knowledge/api-error-codes",
             "0.50",
             1
           ],
           [
             "cur-040",
             "Plan a refactor of the payments module with tradeoffs",
-            "agent:planner,skill:refactor-py",
-            "agent:planner,skill:code-review,command:bump-version",
+            "agents/planner,skills/refactor-py",
+            "agents/planner,skills/code-review,commands/bump-version",
             "0.50",
             1
           ]
@@ -856,48 +852,48 @@
     "latency": {
       "name": "latency",
       "values": {
-        "curate_prompt_p50_ms": 60,
-        "curate_prompt_p95_ms": 89,
-        "curate_prompt_p99_ms": 91,
-        "curate_prompt_mean_ms": 66,
+        "curate_prompt_p50_ms": 97,
+        "curate_prompt_p95_ms": 107,
+        "curate_prompt_p99_ms": 108,
+        "curate_prompt_mean_ms": 97,
         "curate_prompt_n": 24,
-        "session_start_p50_ms": 140,
+        "session_start_p50_ms": 168,
         "session_start_p95_ms": 188,
-        "session_start_p99_ms": 193,
-        "session_start_mean_ms": 150,
+        "session_start_p99_ms": 192,
+        "session_start_mean_ms": 169,
         "session_start_n": 24,
-        "post_tool_p50_ms": 30,
-        "post_tool_p95_ms": 43,
-        "post_tool_p99_ms": 46,
-        "post_tool_mean_ms": 32,
+        "post_tool_p50_ms": 39,
+        "post_tool_p95_ms": 44,
+        "post_tool_p99_ms": 45,
+        "post_tool_mean_ms": 39,
         "post_tool_n": 24,
         "summaries": {
           "curate_prompt": {
             "n": 24,
-            "p50": 60.358155500000066,
-            "p95": 88.63874200000019,
-            "p99": 91.31198205000027,
-            "min": 55.100626999999804,
-            "max": 91.69188800000029,
-            "mean": 65.96976058333341
+            "p50": 96.63780799999995,
+            "p95": 107.16794419999928,
+            "p99": 108.06322804999948,
+            "min": 87.19404099999974,
+            "max": 108.27309499999956,
+            "mean": 96.6587176666665
           },
           "session_start": {
             "n": 24,
-            "p50": 139.5977624999996,
-            "p95": 187.8414737499999,
-            "p99": 193.41734255999955,
-            "min": 121.01806300000044,
-            "max": 195.03843499999948,
-            "mean": 149.63060562499996
+            "p50": 168.40939650000018,
+            "p95": 187.8161623000007,
+            "p99": 191.63632542000138,
+            "min": 147.50143800000023,
+            "max": 192.72488000000158,
+            "mean": 168.65553741666713
           },
           "post_tool": {
             "n": 24,
-            "p50": 29.719246500000736,
-            "p95": 42.90881894999911,
-            "p99": 45.67825068999962,
-            "min": 25.615552000001117,
-            "max": 46.451302999999825,
-            "mean": 31.670379708333485
+            "p50": 39.090901999999915,
+            "p95": 44.29916450000064,
+            "p99": 44.81531399999914,
+            "min": 34.4092440000004,
+            "max": 44.89470999999867,
+            "mean": 39.230803583333305
           }
         }
       },
@@ -914,26 +910,26 @@
           [
             "curate_prompt",
             24,
-            60,
-            89,
-            91,
-            66
+            97,
+            107,
+            108,
+            97
           ],
           [
             "session_start",
             24,
-            140,
+            168,
             188,
-            193,
-            150
+            192,
+            169
           ],
           [
             "post_tool",
             24,
-            30,
-            43,
-            46,
-            32
+            39,
+            44,
+            45,
+            39
           ]
         ]
       },
@@ -946,8 +942,8 @@
       "values": {
         "budget": 4000,
         "claude_n": 12,
-        "claude_avg_chars": 1286,
-        "claude_max_chars": 1379,
+        "claude_avg_chars": 1304,
+        "claude_max_chars": 1383,
         "claude_violations": 0,
         "claude_drop_rate": 0,
         "opencode_n": 12,
@@ -970,8 +966,8 @@
           [
             "claude",
             12,
-            1286,
-            1379,
+            1304,
+            1383,
             0,
             "0.0000"
           ],
@@ -992,11 +988,11 @@
     "feedback": {
       "name": "feedback",
       "values": {
-        "n": 12,
+        "n": 13,
         "claude_tp": 9,
         "claude_fp": 0,
         "claude_fn": 0,
-        "claude_tn": 3,
+        "claude_tn": 4,
         "claude_precision": 1,
         "claude_recall": 1,
         "claude_polarity_flips": 0,
@@ -1004,7 +1000,7 @@
         "opencode_tp": 9,
         "opencode_fp": 0,
         "opencode_fn": 0,
-        "opencode_tn": 3,
+        "opencode_tn": 4,
         "opencode_precision": 1,
         "opencode_recall": 1,
         "opencode_polarity_flips": 0,
@@ -1027,7 +1023,7 @@
             9,
             0,
             0,
-            3,
+            4,
             "1.0000",
             "1.0000",
             0
@@ -1037,7 +1033,7 @@
             9,
             0,
             0,
-            3,
+            4,
             "1.0000",
             "1.0000",
             0
@@ -1046,7 +1042,7 @@
       },
       "notes": [
         "Both plugins measured by actual `akm feedback` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).",
-        "n=12 synthetic tool outputs. \"neither\"-labeled fixtures verify the plugins correctly skip auto-feedback for memory: and vault: refs."
+        "n=13 synthetic tool outputs, all using AKM 0.9 concept-ID refs. \"neither\"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/)."
       ]
     }
   }

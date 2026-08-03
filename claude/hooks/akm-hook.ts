@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { AKM_VERSION_RANGE as AKM_REQUIRED_RANGE } from "../shared/akm-version"
@@ -11,6 +11,7 @@ import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
 import { extractAkmRefsFromString, extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
+import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
 const COMMAND = process.argv[2] ?? ""
 const MODE = process.argv[3] ?? ""
@@ -24,6 +25,10 @@ const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
 const FEEDBACK_LOG = path.join(STATE_DIR, "feedback.log")
 const MEMORY_LOG = path.join(STATE_DIR, "memory.log")
+// SessionEnd fires `akm proposal extract` detached; its stdout/stderr land here
+// so a failing harvest (e.g. no LLM profile configured -> INVALID_CONFIG_FILE)
+// leaves a trace instead of vanishing into stdio: "ignore". See extractSession().
+const EXTRACT_LOG = path.join(STATE_DIR, "extract.log")
 const EVENT_LOG = getEventLogPath("claude-code")
 const CANDIDATE_LOG = getCandidateLogPath("claude-code")
 const QUALITY_CACHE = path.join(STATE_DIR, "quality-cache.tsv")
@@ -72,7 +77,12 @@ const SESSION_START_HEADER = [
   "",
   'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
-const REF_PATTERN = /(?:[A-Za-z0-9@._+-]+\/\/)?[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?/g
+// There is deliberately no local ref regex in this file. Every ref observed by
+// a hook goes through ../shared/ref-extraction, whose concept-root allowlist
+// keeps ordinary repository paths (src/index.ts, node_modules/foo, a/b) out of
+// the `refs:` field of memory events and out of the auto-feedback path. A local
+// "any path-like token" pattern used to shadow it and reintroduced exactly the
+// false positives the shared extractor exists to prevent.
 const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() || ""
 const CURATED_DIR = path.join(STATE_DIR, "curated")
 
@@ -119,14 +129,11 @@ mkdirSync(CURATED_DIR, { recursive: true })
 mkdirSync(SESSIONS_DIR, { recursive: true })
 // State directory holds session feedback / memory / candidate logs that may
 // retain sensitive context post-redaction. Lock to owner-only.
+// chmodSafe is best-effort: filesystems / platforms without POSIX mode are
+// silently skipped (Windows, FAT, some FUSE mounts). We never crash a hook over
+// a hardening attempt.
 for (const dir of [STATE_DIR, CURATED_DIR, SESSIONS_DIR]) {
-  try {
-    chmodSync(dir, 0o700)
-  } catch {
-    // Best-effort: filesystems / platforms without POSIX mode are silently
-    // skipped (Windows, FAT, some FUSE mounts). We never crash a hook over
-    // a hardening attempt.
-  }
+  chmodSafe(dir, 0o700)
 }
 
 function timestamp(): string {
@@ -137,52 +144,22 @@ function sanitize(value: string): string {
   return value.replace(/[\t\r\n]+/g, " ").replace(/ {2,}/g, " ").trim()
 }
 
-// 13: state-file rotation/caps. Seven append-only files live under STATE_DIR
-// (session.log, feedback.log, memory.log, quality-cache.tsv via appendLog();
-// sessions/<sid>.md via writeSessionBuffer(); events.jsonl and
-// memory-candidates.jsonl via the shared modules, which carry their own copy
-// of this same mechanism). None had a size cap, so they grew without bound
-// for the lifetime of the machine. rotateLogIfOversized() is the single
-// mechanism used at every append site in this file: before an append, if the
-// file already exceeds AKM_PLUGIN_MAX_LOG_BYTES (default 1 MiB), rewrite it
-// down to its newest half (by line count) via write-temp-then-rename so a
-// concurrent reader/writer never observes a truncated/partial file.
-const MAX_LOG_BYTES = (() => {
-  const raw = Number(process.env.AKM_PLUGIN_MAX_LOG_BYTES)
-  return Number.isFinite(raw) && raw > 0 ? raw : 1024 * 1024
-})()
-
-function rotateLogIfOversized(filePath: string): void {
-  try {
-    const stat = statSync(filePath)
-    if (stat.size <= MAX_LOG_BYTES) return
-    const lines = readFileSync(filePath, "utf8").split("\n")
-    if (lines[lines.length - 1] === "") lines.pop()
-    // Keep-at-least-one-line guard: a single line larger than the cap would
-    // make slice(ceil(len/2)) empty and rotation would erase the file instead
-    // of capping it. Always retain the newest line.
-    const keep = lines.length <= 1 ? lines : lines.slice(Math.ceil(lines.length / 2))
-    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
-    writeFileSync(tmpPath, keep.length > 0 ? `${keep.join("\n")}\n` : "")
-    try {
-      renameSync(tmpPath, filePath)
-    } catch (error) {
-      // Don't orphan the temp file when the swap fails (EXDEV, permissions,
-      // a concurrent unlink of the target dir, ...) — nothing ever prunes it.
-      try {
-        rmSync(tmpPath, { force: true })
-      } catch {}
-      throw error
-    }
-  } catch {
-    // Rotation is best-effort and must never throw: a failed attempt just
-    // means the file keeps growing until the next successful append/rotate.
-  }
-}
+// 13: state-file rotation/caps. Eight append-only files live under STATE_DIR
+// (session.log, feedback.log, memory.log, quality-cache.tsv, extract.log via
+// appendLog(); sessions/<sid>.md via writeSessionBuffer(); events.jsonl and
+// memory-candidates.jsonl via the shared modules). None had a size cap, so they
+// grew without bound for the lifetime of the machine. rotateIfOversized() from
+// ../shared/state-files is now the single implementation used by all three
+// call sites (this file, memory-events.ts, memory-candidates.ts): before an
+// append, if the file already exceeds AKM_PLUGIN_MAX_LOG_BYTES (default 1 MiB),
+// rewrite it down to its newest half (by line count) via
+// write-temp-then-rename — chmod 0o600 on the replacement — so a concurrent
+// reader/writer never observes a truncated/partial file and the rewritten file
+// keeps its owner-only posture.
 
 function appendLog(filePath: string, ...fields: string[]) {
   try {
-    rotateLogIfOversized(filePath)
+    rotateIfOversized(filePath)
     const redacted = fields.map((field) => redactSecrets(field).text)
     appendFileSync(filePath, `${timestamp()}${redacted.map((field) => `\t${field}`).join("")}\n`)
   } catch {
@@ -215,7 +192,7 @@ function writeMemoryEvent(event: Omit<import("../shared/memory-events").AkmMemor
 function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
   if (!sid) return
   const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
-  rotateLogIfOversized(bufferPath)
+  rotateIfOversized(bufferPath)
   const redacted = redactSecrets(body).text.replace(/\b([A-Z][A-Z0-9_]{2,})\s*=\s*(?:\[[^\]]+\]|[^\s"'`,;]+)/g, "[REDACTED_ASSIGNMENT:$1]")
   appendFileSync(bufferPath, `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
 }
@@ -523,8 +500,11 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
   // Capture the *raw* (pre-sanitize) command/output text so we can collect
   // ref candidates from any sub-string position (heredocs, fenced code,
   // JSON values, prose). Candidates feed the memory-candidate pipeline
-  // (extractCandidatesFromText / /akm-memory-promote), which validates
-  // against the live stash before surfacing a suggestion.
+  // (extractCandidatesFromText -> memory-candidates.jsonl), which is written
+  // but no longer read by any shipped surface: the /akm-memory-promote,
+  // -reject, -audit and -candidates slash commands were all deleted in 0.9.0.
+  // Whether to retire the pipeline is an open maintainer decision; until then
+  // the file is a passive, redacted record under STATE_DIR.
   // (sanitize() is still used for log-line readability.)
   const rawCommandText = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || ""
   const rawOutputText = getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || ""
@@ -591,7 +571,13 @@ function userPromptExpansion(): string {
   const text = extractUserText(rawInput)
   const expanded = typeof parsed.command === "string" ? parsed.command : text
   if (!expanded) return ""
-  const refs = [...new Set(expanded.match(REF_PATTERN) ?? [])]
+  // Extract only — no bundle validation. UserPromptExpansion is an interactive
+  // path with a 10 s hook budget that currently spawns no subprocess at all;
+  // resolveStashRoots() would add an `akm info` spawn to every slash-command
+  // expansion. The shared extractor's concept-root allowlist already removes
+  // the false positives that matter here (src/index.ts, node_modules/foo), and
+  // these refs are observational only — they never drive auto-feedback.
+  const refs = extractAllRefs(expanded)
   writeMemoryEvent({
     event: "tool_observation",
     sessionId: sid || undefined,
@@ -600,9 +586,10 @@ function userPromptExpansion(): string {
     refs,
     outcome: { status: "ok" },
   })
-  if (/\/akm-memory-(promote|reject)\b/.test(expanded) && !/\b(confirm|approved|approval)\b/i.test(expanded)) {
-    return emitHookContext("UserPromptExpansion", "AKM note: mutating memory flows should be explicit. Confirm promotion/rejection before changing durable state.")
-  }
+  // The special case for `/akm-memory-promote` / `/akm-memory-reject` was
+  // removed with those commands in 0.9.0 — the shipped slash commands are
+  // exactly /akm-search, /akm-show, /akm-curate, /akm-feedback and
+  // /akm-remember, and the generic `/akm-` note below already covers them.
   if (/\/akm-/.test(expanded)) {
     return emitHookContext("UserPromptExpansion", "AKM note: slash-command expansion should keep mutating actions explicit and prefer review before durable writes.")
   }
@@ -614,8 +601,14 @@ function postToolBatch(): string {
   const sid = extractSessionId(rawInput)
   const parsed = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
   const tools = Array.isArray(parsed.tools) ? parsed.tools : Array.isArray(parsed.batch) ? parsed.batch : []
-  const flattened = sanitize(getText(tools))
-  const refs = [...new Set(flattened.match(REF_PATTERN) ?? [])]
+  const rawFlattened = getText(tools)
+  const flattened = sanitize(rawFlattened)
+  // Validate against the bundle: this is the batch sibling of post-tool /
+  // post-tool-nonbash, which both validate, and it writes the same
+  // tool-observation refs. Candidates come from the *raw* text (heredocs,
+  // fenced code, JSON values) for the same reason extractPostToolFields() does
+  // it; resolveStashRoots() is resolved once per invocation, never per ref.
+  const refs = validateRefCandidates(extractAllRefs(rawFlattened), resolveStashRoots())
   writeMemoryEvent({
     event: "tool_batch_observation",
     sessionId: sid || undefined,
@@ -713,7 +706,12 @@ function taskCompleted(): string {
   if (sid && summary) {
     writeSessionBuffer(sid, "task completed", summary)
     const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
-    const targetRefHints = [...new Set(summary.match(REF_PATTERN) ?? [])]
+    // Validate against the bundle: these hints become the `targetRef` of a
+    // memory candidate, i.e. the asset a later promotion would attach feedback
+    // to. A hint that does not resolve is worse than no hint, so the
+    // filesystem check earns its cost here. Once per completed task, and
+    // resolveStashRoots() is called once — not per ref.
+    const targetRefHints = validateRefCandidates(extractAllRefs(summary), resolveStashRoots())
     const candidates = extractCandidatesFromText({
       harness: "claude-code",
       sessionId: sid,
@@ -806,7 +804,7 @@ function refQuality(ref: string): string {
   // Rotate BEFORE reading, not just before appending: expired entries keep
   // being superseded by fresh appends, so without rotation-on-read the cache
   // would only be size-capped when auto-feedback happens to append.
-  rotateLogIfOversized(QUALITY_CACHE)
+  rotateIfOversized(QUALITY_CACHE)
   if (existsSync(QUALITY_CACHE)) {
     // Newest-first scan: appendLog writes `timestamp<TAB>ref<TAB>quality`, so
     // the first matching line after reverse() is the latest classification.
@@ -835,7 +833,11 @@ function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
 }
 
-function gatherSessionStartWarnings(versionCheck: { ok: boolean; version?: string }): string[] {
+// `bundleRoots` is passed in rather than resolved here: sessionStart() needs
+// the same roots to validate the refs it records, and resolveStashRoots() can
+// spawn `akm info`. Resolving once per SessionStart and threading the result
+// keeps the subprocess count at one.
+function gatherSessionStartWarnings(versionCheck: { ok: boolean; version?: string }, bundleRoots: readonly string[]): string[] {
   const warnings: string[] = []
 
   // H1: stash directory does not exist — curation will return empty context
@@ -843,7 +845,6 @@ function gatherSessionStartWarnings(versionCheck: { ok: boolean; version?: strin
   // additionalContext (the hook's supported output channel) and mirror it to
   // the plugin state-dir log; runtime code must never write raw diagnostics
   // to stderr/stdout outside the hook protocol envelope.
-  const bundleRoots = resolveStashRoots()
   const bundleDir = bundleRoots[0]
   if (!bundleDir || !existsSync(bundleDir)) {
     warnings.push(
@@ -886,8 +887,11 @@ function recordPostTool() {
   // Record one buffer section per post-tool event (command + status). We
   // deliberately do NOT inject `- ref: <type>:<slug>` lines into the body —
   // the buffer feeds candidate mining in taskCompleted() (extractCandidatesFromText
-  // sourcePaths), which surfaces suggestions for /akm-memory-promote; leaving
-  // raw command text (not synthetic ref lines) keeps that pipeline honest.
+  // sourcePaths) and is one of the transcript sources `akm proposal extract`
+  // reads at SessionEnd; leaving raw command text (not synthetic ref lines)
+  // keeps both honest. There is no longer a slash command that reviews the
+  // resulting candidates — see extractPostToolFields() for the status of that
+  // pipeline.
   if (sid && refs.length > 0) {
     writeSessionBuffer(sid, `${toolName || "Bash"} ${statusText}`, `- command: ${commandText}`)
   }
@@ -979,7 +983,12 @@ function curatePrompt(): string {
     sessionId: sid || undefined,
     scope: buildScope(sid),
     input: { promptPreview: text.slice(0, 280), query: decision.query, reason: decision.reason },
-    refs: [...new Set(curated.match(REF_PATTERN) ?? [])],
+    // Extract only — no bundle validation. `curated` is the stdout of `akm
+    // curate`, so the refs in it were produced by AKM against the live stash
+    // and are authoritative by construction. Validating would add a second
+    // `akm info` spawn to a UserPromptSubmit hook that has already spent up to
+    // CURATE_TIMEOUT seconds on the curate call itself.
+    refs: extractAllRefs(curated),
     outcome: { status: curated.trim() ? "ok" : "skipped" },
   })
   if (!curated.trim()) return ""
@@ -1026,7 +1035,11 @@ async function sessionStart(): Promise<string> {
     }
   }
 
-  const sessionWarnings = gatherSessionStartWarnings(versionCheck)
+  // Resolve the bundle roots exactly once for this SessionStart: the
+  // missing-bundle warning and the ref validation below both need them, and
+  // resolveStashRoots() may spawn `akm info`.
+  const bundleRoots = resolveStashRoots()
+  const sessionWarnings = gatherSessionStartWarnings(versionCheck, bundleRoots)
 
   // #71 perceived-latency fix: hints, curate, and proposals have no
   // inter-dependency — issue them concurrently via Promise.all instead of
@@ -1076,7 +1089,10 @@ async function sessionStart(): Promise<string> {
     sessionId: sid || undefined,
     scope: buildScope(sid),
     input: { pendingProposals: pending },
-    refs: [...new Set(curatedTrimmed.match(REF_PATTERN) ?? [])],
+    // Validate: the roots were already resolved above for the missing-bundle
+    // warning, so the filesystem check costs no extra subprocess here — only a
+    // handful of existsSync() calls on a path SessionStart has already stat'd.
+    refs: validateRefCandidates(extractAllRefs(curatedTrimmed), bundleRoots),
     outcome: { status: "ok" },
   })
   let body = SESSION_START_HEADER
@@ -1089,9 +1105,10 @@ async function sessionStart(): Promise<string> {
 }
 
 /**
- * SessionEnd → event-driven extraction. Fires `akm extract --type claude-code
- * --session-id <id>` for the just-ended session so its durable insights reach
- * the proposal queue in seconds instead of waiting for the periodic `akm improve` extract pass.
+ * SessionEnd → event-driven extraction. Fires `akm proposal extract --type
+ * claude-code --session-id <id>` for the just-ended session so its durable
+ * insights reach the proposal queue in seconds instead of waiting for the
+ * periodic `akm improve` extract pass.
  *
  * Safe + idempotent: `--session-id` respects the content-hash ledger (akm
  * #602 / the beta.33 fix), so a re-fire or a later backstop run is a cheap skip
@@ -1099,6 +1116,15 @@ async function sessionStart(): Promise<string> {
  * session close. Skipped on transient terminations (`clear`/`resume`) where the
  * session isn't really done; the hourly `akm improve` extract pass remains the
  * backstop for crashes that fire no hook.
+ *
+ * Observability: this is the only remaining memory-harvest path (the
+ * Stop/SubagentStop/PreCompact hooks were removed from plugin.json in 0.9.0),
+ * and on a fresh install with no LLM profile configured `akm proposal extract`
+ * exits having printed `{"ok":false,...,"code":"INVALID_CONFIG_FILE"}`. With
+ * `stdio: "ignore"` that failure was invisible everywhere. The child's
+ * stdout/stderr are now appended to STATE_DIR/extract.log (rotated and
+ * owner-only like every other state file) and the spawn attempt itself is
+ * recorded in session.log. Still detached, still unref'd, still no wait.
  */
 function extractSession(): string {
   const raw = readStdin()
@@ -1108,31 +1134,75 @@ function extractSession(): string {
   if (reason === "clear" || reason === "resume") return ""
   const akm = resolveAkmCommandSpec()
   if (!akm) return ""
+
+  // Header line first: it rotates the log, timestamps the attempt, and gives
+  // the child's untimestamped output something to be attributed to.
+  appendLog(EXTRACT_LOG, "proposal_extract", sid)
+  chmodSafe(EXTRACT_LOG, 0o600)
+  let logFd: number | undefined
+  try {
+    // The mode argument applies only if appendLog() above could not create the
+    // file; it keeps the owner-only posture in that fallback too.
+    logFd = openSync(EXTRACT_LOG, "a", 0o600)
+  } catch {
+    // Fall back to a discarding child rather than skipping the harvest.
+    logFd = undefined
+  }
+
   try {
     const child = spawn(
       akm.command,
       [...akm.argsPrefix, "proposal", "extract", "--type", "claude-code", "--session-id", sid],
-      { detached: true, stdio: "ignore" },
+      {
+        detached: true,
+        stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
+      },
     )
     child.unref()
-  } catch {
-    // Best-effort: a failed spawn must never block session close; the cron backstop covers it.
+    appendLog(SESSION_LOG, "extract_spawned", sid, logFd === undefined ? "unlogged" : EXTRACT_LOG)
+  } catch (error: unknown) {
+    // Best-effort: a failed spawn must never block session close; the cron
+    // backstop covers it. It is recorded, not swallowed.
+    appendLog(SESSION_LOG, "extract_spawn_failed", sid, error instanceof Error ? error.message : String(error))
+  } finally {
+    // The child dup'd the descriptor at spawn time; the parent must not leak it.
+    if (logFd !== undefined) {
+      try {
+        closeSync(logFd)
+      } catch {}
+    }
   }
   return ""
 }
 
+// Dispatch. .claude-plugin/plugin.json wires exactly: session-start,
+// curate-prompt, user-prompt-expansion, pre-tool-nonbash, post-tool,
+// post-tool-nonbash, post-tool-batch, auto-feedback, subagent-start,
+// task-created, task-completed, post-compact, session-end, extract-session.
+//
+// `ensure-akm` / `check-akm` / `user-feedback` / `pre-tool` are NOT reachable
+// from the manifest. They are retained deliberately as manual-diagnostic
+// entry points and as the entry points the test suite uses to exercise
+// checkAkmVersion() and recordUserFeedback() in isolation — both of which are
+// live code (checkAkmVersion() runs on every SessionStart; recordUserFeedback()
+// duplicates the feedback/memory-intent logging that curatePrompt() performs
+// inline). Do not add manifest wiring for them without re-reviewing that
+// duplication.
 async function main(): Promise<string> {
   switch (COMMAND) {
     case "ensure-akm":
     case "check-akm":
-      // Legacy alias "ensure-akm" no longer installs anything; both subcommands
-      // are now version checks that warn with manual installation guidance. See
-      // checkAkmVersion() for the rationale (Item 2, 0.8.0 polish plan).
+      // Not manifest-wired (see above). Legacy alias "ensure-akm" no longer
+      // installs anything; both subcommands are version checks that warn with
+      // manual installation guidance. See checkAkmVersion() for the rationale
+      // (Item 2, 0.8.0 polish plan).
       checkAkmVersion()
       return ""
     case "session-start":
       return await sessionStart()
     case "user-feedback":
+      // Not manifest-wired (see above). curatePrompt(), which IS wired to
+      // UserPromptSubmit, performs the same feedback/memory-intent logging.
       recordUserFeedback()
       return ""
     case "curate-prompt":
@@ -1140,10 +1210,12 @@ async function main(): Promise<string> {
     case "user-prompt-expansion":
       return userPromptExpansion()
     case "pre-tool":
-      // Bash gating was removed in 0.8.0 — defer to the platform's
-      // permission system (see claude/README.md "Locking down destructive
-      // commands"). Non-bash matchers still flow through pre-tool-nonbash
-      // for ref observation.
+      // Not manifest-wired (see above): PreToolUse registers only the
+      // Read/Write/Edit/Glob/Grep matchers, which run pre-tool-nonbash. Bash
+      // gating was removed in 0.8.0 — defer to the platform's permission
+      // system (see claude/README.md "Locking down destructive commands").
+      // Kept as an explicit no-op so an out-of-date user settings.json that
+      // still calls it cannot block a tool or spam the unknown-command log.
       return ""
     case "pre-tool-nonbash":
       return pretoolNonBash()

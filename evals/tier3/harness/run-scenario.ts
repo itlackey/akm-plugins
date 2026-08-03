@@ -178,11 +178,12 @@ export async function runScenario(
           if (!refs.includes(expectedRef)) continue
           transcript.push({ type: "tool_use", tool: "bash", ref: expectedRef, args: { command: `akm show ${expectedRef}` } })
           transcript.push({ type: "tool_result", tool: "bash", ok: true, output: `{"ok":true,"ref":"${expectedRef}"}` })
-          // Honor the same skip rule the plugins enforce: no auto-feedback
-          // on memory: or vault: refs. (Real agent learns this from its
-          // system prompt; stub gets it hardcoded so the transcript
-          // matches what the real plugins would actually emit.)
-          const skipFeedback = expectedRef.startsWith("memory:") || expectedRef.startsWith("vault:")
+          // Honor the same skip rule the plugins enforce: no auto-feedback on
+          // memories/, env/, secrets/, or lessons/ refs (the concept roots in
+          // claude/hooks/akm-hook.ts autoFeedback()). Real agent learns this
+          // from its system prompt; stub gets it hardcoded so the transcript
+          // matches what the real plugins would actually emit.
+          const skipFeedback = /^(?:.*\/\/)?(?:memories|env|secrets|lessons)\//.test(expectedRef)
           if (skipFeedback) continue
           if (plugin === "claude") {
             runClaudeHook(["auto-feedback", "success"], {

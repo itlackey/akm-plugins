@@ -18,8 +18,15 @@
 //       * fire when label=neither                              → FP
 //       * no fire when label≠neither                           → FN
 //       * fire with the wrong sentiment                        → polarity flip
-//   - "neither"-labeled fixtures cover the documented skip list:
-//     memory:*, vault:*, and secret:* refs MUST NOT receive auto-feedback.
+//   - "neither"-labeled fixtures cover the documented skip list. As of
+//     AKM 0.9 that list is `memories/`, `env/`, `secrets/`, and `lessons/`
+//     (claude/hooks/akm-hook.ts, autoFeedback()); refs under those concept
+//     roots MUST NOT receive auto-feedback. `lessons/` is new in this
+//     release. There are no `vault:`/`wiki:` types in 0.9 — the fixtures
+//     that used them were repointed at roots that actually exist.
+//
+// Refs throughout are AKM 0.9 concept IDs (`skills/code-review`), not the
+// pre-0.9 `type:slug` form (`skill:code-review`).
 
 import { readFileSync } from "node:fs"
 import path from "node:path"
@@ -51,7 +58,13 @@ function loadFixtures(p: string): FeedbackFixture[] {
     .map((l) => JSON.parse(l) as FeedbackFixture)
 }
 
-const REF_RE = /^(?:[A-Za-z0-9@._+/-]+\/\/)?(?:skill|command|agent|knowledge|memory|script|workflow|vault|wiki|lesson):[A-Za-z0-9._\/-]+$/
+// AKM 0.9 ref grammar: [bundle//]conceptId[#fragment], where conceptId is the
+// asset's own path inside the bundle. Anchored, because this is tested against
+// a single argv element. Keep the concept-root list in lockstep with
+// claude/shared/ref-extraction.ts and opencode/index.ts — `env` is singular,
+// `facts`/`instructions`/`sessions` are new in 0.9, and there is no `wikis`.
+const REF_RE =
+  /^(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?$/
 
 // Inspect the call log for any `akm feedback <ref> --positive|--negative` calls.
 function readEmittedFeedback(callLog: string): Array<{ ref: string; sentiment: "positive" | "negative" }> {
@@ -233,7 +246,7 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
     },
     notes: [
       `Both plugins measured by actual \`akm feedback\` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).`,
-      `n=${fixtures.length} synthetic tool outputs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for memory: and vault: refs.`,
+      `n=${fixtures.length} synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/).`,
     ],
   }
 }

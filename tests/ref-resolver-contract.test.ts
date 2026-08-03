@@ -1,5 +1,13 @@
 // CONTRACT TEST: AKM 0.9 concept refs resolve directly under bundle roots.
 // Keep this fixture aligned with the core resolver contract.
+//
+// The fixture mirrors the directory layout `akm bundle create` scaffolds in
+// 0.9 — agents commands env facts instructions knowledge lessons memories
+// scripts secrets sessions skills tasks workflows — verified against
+// akm-cli@0.9.0-rc.15. `wikis` is deliberately absent: it is neither in
+// `akm info --format json`'s assetTypes nor scaffolded by `bundle create`, so
+// including it would assert a contract the sister implementation does not
+// have. facts/, instructions/ and sessions/ are the roots added since 0.8.
 
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
@@ -24,6 +32,9 @@ function makeBundle(): string {
   touch(path.join(dir, "memories", "rollout-notes.md"))
   touch(path.join(dir, "memories", "session-derived.derived.md"))
   touch(path.join(dir, "lessons", "no-fine-tuning.md"))
+  touch(path.join(dir, "facts", "pricing-tiers.md"))
+  touch(path.join(dir, "instructions", "pr-review.md"))
+  touch(path.join(dir, "sessions", "2026-08-03-retro.md"))
   return dir
 }
 
@@ -45,18 +56,35 @@ describe("AKM 0.9 ref-resolver contract", () => {
       "memories/rollout-notes",
       "memories/session-derived",
       "lessons/no-fine-tuning",
+      "facts/pricing-tiers",
+      "instructions/pr-review",
+      "sessions/2026-08-03-retro",
       "knowledge/missing",
     ]
 
     expect(validateRefCandidates(candidates, [bundle])).toEqual([
+      "facts/pricing-tiers",
+      "instructions/pr-review",
       "knowledge/projects/akm/deep-dive",
       "knowledge/release-notes",
       "knowledge/release-notes.md",
       "lessons/no-fine-tuning",
       "memories/rollout-notes",
       "memories/session-derived",
+      "sessions/2026-08-03-retro",
       "skills/rollout",
     ])
+  })
+
+  test("does not resolve concept roots the 0.9 bundle layout no longer defines", () => {
+    // `wikis` was a 0.8-era root. A bundle upgraded in place may still carry
+    // the directory, but 0.9 neither scaffolds it nor reports it in
+    // assetTypes, so the resolver must treat it as an ordinary path.
+    const bundle = makeBundle()
+    touch(path.join(bundle, "wikis", "legacy-page.md"))
+    touch(path.join(bundle, "vaults", "legacy-vault.md"))
+
+    expect(validateRefCandidates(["wikis/legacy-page", "vaults/legacy-vault"], [bundle])).toEqual([])
   })
 
   test("uses the concept path for qualified and fragmented refs", () => {

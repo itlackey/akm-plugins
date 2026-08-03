@@ -7,13 +7,13 @@ user_turns:
     content: "Plan an implementation for a new caching layer with tradeoffs and critical files I should look at first."
 expectations:
   must_curate_refs:
-    - agent:planner
+    - agents/planner
   may_curate_refs:
-    - knowledge:repo-conventions
+    - knowledge/repo-conventions
   must_record_feedback_for:
-    - agent:planner
+    - agents/planner
   forbid_refs:
-    - vault:staging
+    - env/staging.env
   max_total_tokens: 6000
 judge_rubric: default
 weight: 1.0

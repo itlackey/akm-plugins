@@ -63,7 +63,7 @@ expectations:
   must_curate_refs: [skills/code-review]   # MUST appear in injected context
   may_curate_refs: [agents/reviewer]       # bonus if they do
   must_record_feedback_for: [skills/code-review]
-  forbid_refs: [vault:staging]            # MUST NOT appear
+  forbid_refs: [env/staging.env]            # MUST NOT appear
   max_total_tokens: 8000                  # soft budget the judge considers
 judge_rubric: default                     # default | strict
 weight: 1.0                               # multiplier in aggregate scores

@@ -13,10 +13,18 @@ import path from "node:path";
 // Passive extraction is intentionally narrower than AKM's explicit ref parser:
 // only standard concept roots are observed. This prevents ordinary paths such
 // as src/app.ts from becoming automatic feedback targets.
+//
+// The concept-root list is the exact set of directories `akm bundle create`
+// scaffolds in 0.9 (agents commands env facts instructions knowledge lessons
+// memories scripts secrets sessions skills tasks workflows), which matches the
+// `assetTypes` array reported by `akm info --format json` modulo pluralization.
+// `wikis` was dropped for 0.9 — it is neither an asset type nor a scaffolded
+// directory — and facts/instructions/sessions were added. Keep this list byte
+// for byte in sync with opencode/index.ts and evals/tier2/metrics/feedback.ts.
 const REF_PATTERN =
-  /(?<![A-Za-z0-9@._+/:=-])(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|knowledge|lessons|memories|scripts|secrets|skills|tasks|wikis|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?(?![A-Za-z0-9@._+/#$=-])/g;
+  /(?<![A-Za-z0-9@._+/:=-])(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?(?![A-Za-z0-9@._+/#$=-])/g;
 const AKM_REF_STRICT =
-  /^(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|knowledge|lessons|memories|scripts|secrets|skills|tasks|wikis|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?$/;
+  /^(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?$/;
 const EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"]);
 
 function normalizeToken(token: string): string {
