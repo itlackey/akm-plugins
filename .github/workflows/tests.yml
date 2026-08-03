@@ -29,8 +29,5 @@ jobs:
         working-directory: opencode
         run: bun run typecheck
 
-      - name: Check generated help tables are in sync with the registry
-        run: node scripts/generate-help-tables.mjs --check
-
       - name: Run unit tests
         run: bun test tests/

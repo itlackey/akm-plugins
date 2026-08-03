@@ -1111,7 +1111,7 @@ function extractSession(): string {
   try {
     const child = spawn(
       akm.command,
-      [...akm.argsPrefix, "extract", "--type", "claude-code", "--session-id", sid],
+      [...akm.argsPrefix, "proposal", "extract", "--type", "claude-code", "--session-id", sid],
       { detached: true, stdio: "ignore" },
     )
     child.unref()

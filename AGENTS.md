@@ -11,7 +11,7 @@
 You have access to a searchable library of tools, skills, commands, agents,
 knowledge, lessons, workflows, env configs, secrets, and wikis via the `akm` CLI (v0.9.0+).
 
-> For any AKM verb that isn't a first-class tool/slash-command, agents should call `akm_help` (OpenCode) or `/akm-help` (Claude Code) to discover the right `akm` CLI invocation before reaching for raw flags.
+> The plugin exposes only search, show, curate, feedback, and remember. For other AKM verbs, inspect `akm --help` or `akm <command> --help` before invoking the CLI directly.
 
 **Finding assets:**
 

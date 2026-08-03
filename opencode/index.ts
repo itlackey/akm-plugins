@@ -1120,7 +1120,7 @@ function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, direct
   if (typeof command === "object" && "ok" in command) return // akm unavailable — cron backstop covers it
   sessionLastExtractAt.set(sid, now)
   try {
-    const child = spawn(command.command, [...command.argsPrefix, "extract", "--type", "opencode", "--session-id", sid], {
+    const child = spawn(command.command, [...command.argsPrefix, "proposal", "extract", "--type", "opencode", "--session-id", sid], {
       detached: true,
       stdio: "ignore",
     })

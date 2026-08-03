@@ -451,25 +451,26 @@ if (verb === "proposal" && tail[0] === "list") {
   process.exit(0)
 }
 
-// --- extract ------------------------------------------------------------
+// --- proposal extract ---------------------------------------------------
 // SessionEnd fires this fire-and-forget (detached, stdio ignored) on both
 // plugins, so nothing parses its stdout or exit code today. Real akm's
 // extract ALWAYS requires an LLM connection before it does anything —
 // unlike most other verbs, its "feature disabled" fast path only applies
-// when running as an improve-profile stage, not for a direct \`akm extract\`
+// when running as an improve-profile stage, not for a direct \`akm proposal extract\`
 // invocation like the hooks make — so a real akm with no LLM profile
 // configured (the state a freshly-installed akm is normally in, and the
 // state tier-2 fixtures are in) deterministically returns this error
 // envelope. Mirroring that exact shape (rather than inventing a synthetic
 // success shape tier-2 can never actually observe from real akm) is what
 // tests/fake-akm-contract.test.ts pins against the real binary.
-if (verb === "extract") {
+if (verb === "proposal" && tail[0] === "extract") {
   process.stdout.write(
     JSON.stringify({
       ok: false,
       error:
         "No LLM connection configured for extract. Set profiles.llm + defaults.llm, or set profiles.improve.default.processes.extract.profile to a configured LLM profile.",
       code: "INVALID_CONFIG_FILE",
+      hint: "Configure an engine with akm setup or pass --engine.",
     }),
   )
   process.exit(0)

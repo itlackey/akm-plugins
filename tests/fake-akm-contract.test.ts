@@ -5,8 +5,8 @@ import path from "node:path"
 import { installFakeAkm } from "../evals/lib/fake-akm"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
-// actually invoke (config get/set, workflow list --active, proposal list,
-// extract) against a REAL akm binary, so a real 0.9.0 envelope shape change
+// actually invoke (workflow list --active, proposal list, proposal extract)
+// against a REAL akm binary, so a real 0.9 envelope shape change
 // would fail this test instead of passing every eval/unit test silently
 // (the failure mode called out in docs/reviews/release-0.9.0-plugin-review.md
 // §7 "Three independent fake-akm implementations, none contract-tested").
@@ -69,7 +69,8 @@ function realAkmEnv(cwd: RealEnv): Record<string, string | undefined> {
     ...process.env,
     HOME: cwd.HOME,
     XDG_CONFIG_HOME: cwd.XDG_CONFIG_HOME,
-    AKM_STASH_DIR: cwd.AKM_STASH_DIR,
+    AKM_BUNDLE_DIR: cwd.AKM_BUNDLE_DIR,
+    AKM_FORCE_INIT_TMP_STASH: "1",
     // akm-cli refuses to resolve a data/state directory under `bun test`
     // unless these are explicitly pointed at a temp dir (guards against
     // tests touching the developer's real ~/.local/share|state/akm).
@@ -104,30 +105,6 @@ function runFake(akmPath: string, args: string[]): unknown {
 }
 
 describe("fake-akm envelope contract", () => {
-  test.skipIf(!akmAvailable)("config get/set envelopes match real akm", () => {
-    const real = makeRealEnv()
-    const fake = makeFakeEnv()
-    try {
-      // --silent suppresses stdout on success (the hooks' own write path) —
-      // nothing to parse here, just confirm both exit 0.
-      const realSet = spawnSync(REAL_AKM, ["config", "set", "--silent", "--layer", "user", "defaults.agent", "opencode"], realAkmEnv(real))
-      expect(realSet.exitCode).toBe(0)
-      const fakeSet = spawnSync(fake.akmPath, ["config", "set", "--silent", "--layer", "user", "defaults.agent", "opencode"])
-      expect(fakeSet.exitCode).toBe(0)
-
-      const realScalar = runReal(real, ["--format", "json", "-q", "config", "get", "defaults.agent"])
-      const fakeScalar = runFake(fake.akmPath, ["--format", "json", "-q", "config", "get", "defaults.agent"])
-      expect(envelopeShape(fakeScalar)).toEqual(envelopeShape(realScalar))
-
-      const realObject = runReal(real, ["--format", "json", "-q", "config", "get", "defaults"])
-      const fakeObject = runFake(fake.akmPath, ["--format", "json", "-q", "config", "get", "defaults"])
-      expect(envelopeShape(fakeObject)).toEqual(envelopeShape(realObject))
-    } finally {
-      cleanup(real)
-      cleanup(fake)
-    }
-  })
-
   test.skipIf(!akmAvailable)("workflow list --active envelope matches real akm", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
@@ -166,6 +143,7 @@ describe("fake-akm envelope contract", () => {
         "--format",
         "json",
         "-q",
+        "proposal",
         "extract",
         "--type",
         "opencode",
@@ -177,6 +155,7 @@ describe("fake-akm envelope contract", () => {
         "--format",
         "json",
         "-q",
+        "proposal",
         "extract",
         "--type",
         "opencode",
@@ -197,7 +176,7 @@ describe("fake-akm envelope contract", () => {
 type RealEnv = {
   HOME: string
   XDG_CONFIG_HOME: string
-  AKM_STASH_DIR: string
+  AKM_BUNDLE_DIR: string
   XDG_DATA_HOME: string
   XDG_STATE_HOME: string
   root: string
@@ -208,15 +187,15 @@ function makeRealEnv(): RealEnv {
   const env: RealEnv = {
     HOME: root,
     XDG_CONFIG_HOME: path.join(root, "config"),
-    AKM_STASH_DIR: path.join(root, "stash"),
+    AKM_BUNDLE_DIR: path.join(root, "bundle"),
     XDG_DATA_HOME: path.join(root, "data"),
     XDG_STATE_HOME: path.join(root, "state"),
     root,
   }
-  mkdirSync(env.AKM_STASH_DIR, { recursive: true })
-  const init = spawnSync(REAL_AKM, ["init"], realAkmEnv(env))
+  mkdirSync(env.AKM_BUNDLE_DIR, { recursive: true })
+  const init = spawnSync(REAL_AKM, ["bundle", "create", "--dir", env.AKM_BUNDLE_DIR, "--set-default"], realAkmEnv(env))
   if (init.exitCode !== 0) {
-    throw new Error(`akm init failed: exit ${init.exitCode}\nstdout: ${init.stdout}\nstderr: ${init.stderr}`)
+    throw new Error(`akm bundle create failed: exit ${init.exitCode}\nstdout: ${init.stdout}\nstderr: ${init.stderr}`)
   }
   return env
 }
