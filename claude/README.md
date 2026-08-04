@@ -2,6 +2,11 @@
 
 Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.0-rc.14`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
+The AKM skill also supports delegating work to an AKM agent through Claude's
+existing Bash tool. It invokes `akm agent` directly; it does not use MCP,
+generated Claude agent definitions, or hooks that intercept Claude's native
+`Agent` tool. See `skills/akm/SKILL.md` for the dispatch contract.
+
 ## Installation
 
 ```sh
@@ -82,3 +87,5 @@ Hooks never write diagnostics to stderr. Everything lands in the state directory
 3. Inspect the selected concept with `/akm-show`.
 4. Record the result with `/akm-feedback`.
 5. Save durable project knowledge with `/akm-remember`.
+6. Delegate specialized work with `akm agent <agent-ref>` when an AKM agent's
+   prompt, model, or tool policy is part of the task.

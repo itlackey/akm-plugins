@@ -8,6 +8,7 @@ const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.ts")
 const pluginJsonPath = path.join(repoRoot, "claude/.claude-plugin/plugin.json")
 const claudePackageJsonPath = path.join(repoRoot, "claude/package.json")
 const marketplaceJsonPath = path.join(repoRoot, ".claude-plugin/marketplace.json")
+const akmSkillPath = path.join(repoRoot, "claude/skills/akm/SKILL.md")
 
 const tempDirs: string[] = []
 
@@ -30,6 +31,24 @@ function getFirstLogEntry(stateDir: string, logName: string) {
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+function parseFrontmatter(filePath: string) {
+  const body = readFileSync(filePath, "utf8")
+  const match = body.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  if (!match) throw new Error(`${filePath} does not have a YAML frontmatter block`)
+
+  const fields: Record<string, string> = {}
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([A-Za-z][A-Za-z0-9_-]*): ([^\n]+)$/)
+    if (!field) throw new Error(`${filePath} has invalid frontmatter line: ${line}`)
+    const [, key, rawValue] = field
+    if (rawValue.startsWith("[")) {
+      throw new Error(`${filePath} has an unsupported or malformed flow value: ${line}`)
+    }
+    fields[key] = rawValue.replace(/^(['"])(.*)\1$/, "$2")
+  }
+  return fields
 }
 
 function makeBundle(tempDir: string, conceptIds: string[] = []) {
@@ -207,9 +226,22 @@ describe("Claude plugin metadata", () => {
       "akm-show.md",
     ])
     for (const name of commandFiles) {
-      const body = readFileSync(path.join(commandsDir, name), "utf8")
-      expect(body).toMatch(/^---\s*\ndescription:[^\n]+\nargument-hint:[^\n]+\n---/)
+      const frontmatter = parseFrontmatter(path.join(commandsDir, name))
+      expect(frontmatter.description.length).toBeGreaterThan(0)
+      expect(frontmatter["argument-hint"].length).toBeGreaterThan(0)
     }
+  })
+
+  it("documents direct AKM agent dispatch through Bash", () => {
+    const skill = readFileSync(akmSkillPath, "utf8")
+    expect(skill).toContain("akm agent <agent-ref>")
+    expect(skill).toContain('--prompt "')
+    expect(skill).toContain('--cwd "$PWD"')
+    expect(skill).toContain("--format json -q")
+    expect(skill).toContain("ok: false")
+    expect(skill).toContain("do not use MCP")
+    expect(skill).toContain("generated Claude")
+    expect(skill).toContain("the `Agent` tool")
   })
 
   it("claude/shared contains real implementations — no re-export shims", () => {

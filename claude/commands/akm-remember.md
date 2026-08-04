@@ -1,6 +1,6 @@
 ---
 description: Capture a durable memory in the AKM stash from the current conversation.
-argument-hint: [optional name or topic hint]
+argument-hint: "[optional name or topic hint]"
 ---
 
 Distill the most reusable learning from the current conversation into a concise markdown memory. Prefer durable knowledge (invariants, non-obvious constraints, gotchas, decisions with rationale) over ephemeral chat.

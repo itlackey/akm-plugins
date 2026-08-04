@@ -1,6 +1,6 @@
 ---
 description: Search AKM bundles or registries from Claude.
-argument-hint: [query] [flags]
+argument-hint: "[query] [flags]"
 ---
 
 Run:
