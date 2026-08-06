@@ -120,31 +120,30 @@ exit 0
 }
 
 describe("AKM_VERSION_RANGE contract", () => {
-  it("is a single caret clause anchored at the RC.14 prerelease floor", () => {
-    // The former `^0.9.0-rc.14 || ^0.9.0` second clause was dead: the RC-floor
-    // caret already admits every stable 0.9.x on its own (a version without a
-    // prerelease outranks one with the same major.minor.patch).
-    expect(AKM_VERSION_RANGE).toBe("^0.9.0-rc.14")
+  it("is a single caret clause anchored at the stable 0.9.0 release", () => {
+    // The RC floor (`^0.9.0-rc.14`) was retired when akm-cli 0.9.0 stable
+    // shipped: release candidates are dead once the release exists.
+    expect(AKM_VERSION_RANGE).toBe("^0.9.0")
   })
 
-  it("accepts RC.14 and supported 0.9 builds", () => {
-    for (const version of ["0.9.0-rc.14", "0.9.0-rc.15", "0.9.0", "0.9.5"]) {
+  it("accepts stable 0.9.x builds", () => {
+    for (const version of ["0.9.0", "0.9.1", "0.9.5"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(true)
     }
   })
 
-  it("rejects prereleases below RC.14 and versions outside 0.9", () => {
-    for (const version of ["0.8.9", "0.9.0-beta.33", "0.9.0-rc.13", "1.0.0", "0.10.0"]) {
+  it("rejects every prerelease and versions outside 0.9", () => {
+    for (const version of ["0.8.9", "0.9.0-beta.33", "0.9.0-rc.14", "0.9.0-rc.15", "1.0.0", "0.10.0"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(false)
     }
   })
 
-  it("documents that a future 0.9.x prerelease line needs its own explicit clause", () => {
+  it("documents that a 0.9.x prerelease line needs its own explicit clause", () => {
     // node-semver behavior, reproduced by ./vendor-semver: a prerelease only
     // satisfies a range whose lower bound is a prerelease with the same
-    // major.minor.patch. A 0.9.1 RC line therefore trips the gate until an
-    // explicit `|| ^0.9.1-rc.N` clause is added. Pinned so the next RC line
-    // is a deliberate edit rather than a surprise.
+    // major.minor.patch. Any 0.9.x RC line therefore trips the gate until an
+    // explicit `|| ^0.9.N-rc.N` clause is added. Pinned so re-admitting a
+    // prerelease line is a deliberate edit rather than a surprise.
     expect(satisfiesAkmVersionRange("0.9.1-rc.1")).toBe(false)
     // ...while the stable release on that same line is already accepted.
     expect(satisfiesAkmVersionRange("0.9.1")).toBe(true)
@@ -159,7 +158,7 @@ describe("AKM_VERSION_RANGE contract", () => {
 
 describe("checkAkmVersion", () => {
   it("returns ok, logs readiness, and stays silent on stderr for a compatible CLI", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.0-rc.14" })
+    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.0" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
@@ -167,8 +166,8 @@ describe("checkAkmVersion", () => {
     expect(result.installLog).toBe("")
   })
 
-  it("accepts the RC floor and stable 0.9.x", () => {
-    for (const version of ["0.9.0-rc.14", "0.9.0", "0.9.5"]) {
+  it("accepts stable 0.9.x", () => {
+    for (const version of ["0.9.0", "0.9.5"]) {
       const result = runHookSandboxed(["ensure-akm"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
@@ -176,8 +175,8 @@ describe("checkAkmVersion", () => {
     }
   })
 
-  it("rejects every tested build below the RC.14 floor", () => {
-    for (const version of ["0.8.3", "0.9.0-beta.6", "0.9.0-rc.13"]) {
+  it("rejects every tested build below the stable floor", () => {
+    for (const version of ["0.8.3", "0.9.0-beta.6", "0.9.0-rc.15"]) {
       const result = runHookSandboxed(["ensure-akm"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
@@ -187,11 +186,11 @@ describe("checkAkmVersion", () => {
     }
   })
 
-  it("accepts AKM_LOCAL_BUILD_CLI when a local build reports RC.14", () => {
+  it("accepts AKM_LOCAL_BUILD_CLI when a local build reports a stable 0.9.x", () => {
     const tempDir = makeTempDir()
     const localCli = path.join(tempDir, "dist", "cli.js")
     mkdirSync(path.dirname(localCli), { recursive: true })
-    writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.9.0-rc.14')\n")
+    writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.9.0')\n")
 
     const result = runHookSandboxed(["ensure-akm"], {
       akmVersion: null,
@@ -216,11 +215,11 @@ describe("checkAkmVersion", () => {
   })
 
   it("logs an incompatible CLI without writing to stderr", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.0-rc.13" })
+    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.0-rc.15" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("akm_version_mismatch") && line.includes("0.9.0-rc.13"))).toBe(true)
+    expect(sessionLog.some((line) => line.includes("akm_version_mismatch") && line.includes("0.9.0-rc.15"))).toBe(true)
     expect(result.installLog).toBe("")
   })
 
@@ -235,15 +234,16 @@ describe("checkAkmVersion", () => {
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("AKM is NOT available")
-    expect(result.stdout).toContain("^0.9.0-rc.14")
-    expect(result.stdout).toContain("akm-cli@^0.9.0-rc.14")
+    expect(result.stdout).toContain("^0.9.0")
+    expect(result.stdout).toContain("akm-cli@^0.9.0")
+    expect(result.stdout).not.toContain("rc.14")
     expect(result.installLog).toBe("")
   })
 
   it("session-start runs normally with a compatible CLI and existing bundle", () => {
     const bundleDir = makeTempDir()
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.9.0-rc.14",
+      akmVersion: "0.9.0",
       env: { AKM_BUNDLE_DIR: bundleDir },
     })
     expect(result.exitCode).toBe(0)
@@ -255,7 +255,7 @@ describe("checkAkmVersion", () => {
   it("session-start reports a missing bundle through context and the state log, not stderr", () => {
     const missingBundleDir = path.join(makeTempDir(), "definitely-not-here")
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.9.0-rc.14",
+      akmVersion: "0.9.0",
       env: { AKM_BUNDLE_DIR: missingBundleDir },
     })
     expect(result.exitCode).toBe(0)

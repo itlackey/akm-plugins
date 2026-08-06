@@ -38,8 +38,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.2.20",
-    "akm-cli": "^0.9.0-rc.14"
+    "@opencode-ai/plugin": "^1.18.14",
+    "akm-cli": "^0.9.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

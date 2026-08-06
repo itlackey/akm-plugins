@@ -410,7 +410,7 @@ if (verb === "info") {
   process.stdout.write(
     JSON.stringify({
       schemaVersion: 1,
-      version: "0.9.0-rc.14",
+      version: "0.9.0",
       bundleDir,
       defaultBundle: "bundle",
       assetTypes: [
@@ -559,7 +559,7 @@ if (verb === "proposal" && tail[0] === "list") {
 // deterministically fails.
 //
 // Three properties of that failure are load-bearing and are all reproduced
-// here, verified against akm-cli 0.9.0-rc.15:
+// here, verified against akm-cli 0.9.0 (stable):
 //   1. the envelope goes to STDERR, not stdout (stdout stays empty);
 //   2. the exit code is 78 — akm's documented "config error" code, not 0;
 //   3. the code is LLM_NOT_CONFIGURED.
@@ -616,7 +616,7 @@ if (verb === "--version" || verb === "-V") {
   // treat the shim as an incompatible CLI and silently short-circuit
   // auto-feedback (queueFeedback bails before spawning). Keep this in lockstep
   // with the plugin's required range so eval harnesses exercise the real path.
-  process.stdout.write("fake-akm 0.9.0-rc.14\\n")
+  process.stdout.write("fake-akm 0.9.0\\n")
   process.exit(0)
 }
 

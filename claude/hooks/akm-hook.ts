@@ -19,7 +19,7 @@ const MODE = process.argv[3] ?? ""
 // AKM_REQUIRED_RANGE is the single shared version contract imported from
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
 // is a separate concern: the single package range passed to Bun/npm.
-const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.0-rc.14"
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.0"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
@@ -630,13 +630,20 @@ function postToolBatch(): string {
  */
 function summarizeActiveWorkflows(raw: string): string {
   if (!raw || raw === "[]") return ""
-  let runs: unknown
+  let parsed: unknown
   try {
-    runs = JSON.parse(raw)
+    parsed = JSON.parse(raw)
   } catch {
     return ""
   }
-  if (!Array.isArray(runs) || runs.length === 0) return ""
+  // akm 0.9.0 wraps the list: `{ runs: [...], shape: "workflow-list", ... }`.
+  // A bare array is kept as a fallback for older envelope shapes.
+  const runs = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as { runs?: unknown }).runs)
+      ? (parsed as { runs: unknown[] }).runs
+      : []
+  if (runs.length === 0) return ""
   const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined)
   const reduced = runs.map((r) => {
     const run = (r ?? {}) as Record<string, unknown>
@@ -837,7 +844,7 @@ function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
 // the same roots to validate the refs it records, and resolveStashRoots() can
 // spawn `akm info`. Resolving once per SessionStart and threading the result
 // keeps the subprocess count at one.
-function gatherSessionStartWarnings(versionCheck: { ok: boolean; version?: string }, bundleRoots: readonly string[]): string[] {
+function gatherSessionStartWarnings(bundleRoots: readonly string[]): string[] {
   const warnings: string[] = []
 
   // H1: stash directory does not exist — curation will return empty context
@@ -855,12 +862,9 @@ function gatherSessionStartWarnings(versionCheck: { ok: boolean; version?: strin
     appendLog(SESSION_LOG, "bundle_missing", bundleDir ?? "(unconfigured)")
   }
 
-  // Make prerelease status explicit so users know to track stable when it lands.
-  if (versionCheck.ok && versionCheck.version && /-/.test(versionCheck.version)) {
-    warnings.push(
-      `Detected pre-release \`akm-cli@${versionCheck.version}\`. Upgrade to stable 0.9.x when available.`,
-    )
-  }
+  // No prerelease warning here: since the range moved to `^0.9.0` (stable
+  // floor), no prerelease build can pass the version gate, so a passing
+  // versionCheck is always a stable release.
 
   return warnings
 }
@@ -1039,7 +1043,7 @@ async function sessionStart(): Promise<string> {
   // missing-bundle warning and the ref validation below both need them, and
   // resolveStashRoots() may spawn `akm info`.
   const bundleRoots = resolveStashRoots()
-  const sessionWarnings = gatherSessionStartWarnings(versionCheck, bundleRoots)
+  const sessionWarnings = gatherSessionStartWarnings(bundleRoots)
 
   // #71 perceived-latency fix: hints, curate, and proposals have no
   // inter-dependency — issue them concurrently via Promise.all instead of

@@ -7,7 +7,7 @@ import path from "node:path"
 const realChildProcess = await import("node:child_process")
 
 const mockExecFileSync = mock((_command: string, args?: string[]) => {
-  if (args?.[0] === "--version") return "akm 0.9.0-rc.14\n"
+  if (args?.[0] === "--version") return "akm 0.9.0\n"
   if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
   return "mock output"
 })
@@ -92,7 +92,7 @@ describe("akm-opencode plugin", () => {
   beforeEach(() => {
     mockExecFileSync.mockClear()
     mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-      if (args?.[0] === "--version") return "akm 0.9.0-rc.14\n"
+      if (args?.[0] === "--version") return "akm 0.9.0\n"
       if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
       return "mock output"
     })

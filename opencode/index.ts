@@ -39,8 +39,8 @@ const AKM_REQUIRED_VERSION_RANGE = AKM_VERSION_RANGE
 // The consent banner's "install this" recommendation is deliberately a single
 // version floor rather than the full AKM_VERSION_RANGE (which is an
 // OR-list of accepted ranges, not a valid single npm install specifier).
-// Keep it in sync with the lowest currently-recommended 0.9.x prerelease.
-const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.0-rc.14"
+// Keep it in sync with the lowest currently-recommended stable 0.9.x release.
+const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.0"
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_MEMORY = (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
@@ -589,11 +589,15 @@ function summarizeWorkflowList(value: unknown): string | null {
             ? record.workflowRef
             : null
         const state = typeof record.state === "string" ? record.state : typeof record.status === "string" ? record.status : null
-        const step = typeof record.step === "string"
-          ? record.step
-          : typeof record.currentStep === "string"
-            ? record.currentStep
-            : null
+        // akm 0.9.0 run summaries carry `currentStepId`; `step`/`currentStep`
+        // are retained as fallbacks for older envelope shapes.
+        const step = typeof record.currentStepId === "string"
+          ? record.currentStepId
+          : typeof record.step === "string"
+            ? record.step
+            : typeof record.currentStep === "string"
+              ? record.currentStep
+              : null
         if (!id && !ref && !state && !step) return null
         return `- ${ref ?? "workflow"} (${id ?? "run"})${state ? ` — ${state}` : ""}${step ? ` — next: ${step}` : ""}`
       })
@@ -1034,7 +1038,7 @@ const AKM_HINTS_PREFIX = [
   "",
   "**Choosing the right lookup command:**",
   "",
-  "- **`akm_curate`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. v0.8.0 automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is no longer required for ranking — but it still helps the reranker frame intent.",
+  "- **`akm_curate`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. akm automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is not required for ranking — but it still helps the reranker frame intent.",
   '  - Good: `akm_curate("akm CLI improve command performance analysis")` (explicit framing, still ideal)',
   '  - Bad: `akm_curate("improve performance analysis")` (too generic — the reranker has less to work with even with auto-boost)',
   "- **`akm_search` (known name)** — use ONLY when you already know an asset exists (e.g. after `akm_show` returned \"not found\") and need to locate its exact ref. Do not use as a discovery tool.",
@@ -1544,9 +1548,9 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
     return JSON.stringify(command)
   }
 
-  // `akm improve` hard-rejects --format in 0.8.0 (cli.ts:4131-4137); never auto-inject it there.
-  const skipFormatInjection = args[0] === "improve"
-  const fullArgs = skipFormatInjection || args.includes("--format") ? [...args] : [...args, "--format", "json"]
+  // --format is a global flag on every 0.9.0 verb (the 0.8.0-era `akm improve`
+  // hard-reject is gone), so it is safe to auto-inject unconditionally.
+  const fullArgs = args.includes("--format") ? [...args] : [...args, "--format", "json"]
   const proposalId = args[0] === "proposal" && typeof args[2] === "string" ? args[2] : null
 
   const recordSuccess = async (stdout: string): Promise<string> => {

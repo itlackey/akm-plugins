@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.0-rc.14`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
+Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.0`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
 The AKM skill also supports delegating work to an AKM agent through Claude's
 existing Bash tool. It invokes `akm agent` directly; it does not use MCP,
@@ -21,7 +21,7 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.0-rc.14`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
+The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.0`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
 
 ## Slash Commands
 
@@ -58,7 +58,7 @@ Hook processing never prints secret values. Automatic feedback skips references 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AKM_PACKAGE_REF` | `akm-cli@^0.9.0-rc.14` | Package specification shown when AKM is unavailable. It is never installed automatically. |
+| `AKM_PACKAGE_REF` | `akm-cli@^0.9.0` | Package specification shown when AKM is unavailable. It is never installed automatically. |
 | `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to a locally built AKM CLI entry point. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback. |
 | `AKM_CURATE_LIMIT` | `5` | Maximum curated results injected per prompt. |

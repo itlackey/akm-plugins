@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.0-rc.14`. Both integrations expose exactly five public AKM surfaces:
+Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.0`. Both integrations expose exactly five public AKM surfaces:
 
 | Capability | OpenCode tool | Claude slash command |
 | --- | --- | --- |

@@ -29,12 +29,12 @@ Fall back to `akm search` only for known-ref lookups:
 ```sh
 akm search "<known name>"              # Only when akm show returned "not found" and you need the exact ref
 akm search "<query>" --type script     # Filter by type (agent, command, env, fact, instruction, knowledge, lesson, memory, script, secret, session, skill, task, workflow)
-akm search "<query>" --source <source> # Filter by source (e.g., "stash", "registry", "both"; "local" is a legacy alias for "stash")
-akm search "<query>" --source <name>   # scope to a single named stash (e.g., --source itlackey/akm-stash)
+akm search "<query>" --from <source>   # Filter by source: local (default), registry, or all ("--source" was renamed to "--from" in 0.9)
+akm search "<query>" --from <name>     # scope to a single configured source name (e.g., --from akm-stash)
 akm search "<query>" --include-proposed  # Merge proposed-quality drafts into hits (default search hides them)
 ```
 
-Project-context ranking is automatic — assets matching the current cwd get a small ranking boost, and usage signals are scoped per-project (no cross-project pollution). Set `AKM_DISABLE_PROJECT_CONTEXT=1` or `AKM_DISABLE_SCOPED_UTILITY=1` to opt out (registry searches, tests, etc.).
+Project-context ranking is automatic — assets matching the current cwd get a small ranking boost, and usage signals are scoped per-project (no cross-project pollution). Pass `--no-project-context` to disable the boost and the scoped-utility signal for one search, or `--no-track-usage` for a read-only search that does not influence future ranking.
 Each hit includes a `ref` you use to retrieve the full asset, plus optional `quality?` (`curated`/`generated`/`proposed`/unknown) and `warnings?` fields.
 
 **Using assets:**
@@ -52,7 +52,7 @@ What you get back depends on the asset type:
 - **instruction** — Standing guidance an agent should follow for a domain or repo
 - **fact** — A single atomic assertion. A new bundle ships a `facts/conventions/...` set describing the bundle's own asset conventions
 - **session** — A captured agent session, the raw material `akm proposal extract` mines for durable insights
-- **workflow** — A stateful multi-step procedure driven by `akm workflow start|next|complete|resume`
+- **workflow** — A stateful multi-step procedure driven by `akm workflow run|status|resume`
 - **env** — A `.env`-style configuration store. **Only key names surface** — values never appear in JSON, logs, or search indexes. Use `akm env run <ref> -- $SHELL` to load into a shell (never `eval`/`source` raw values).
 - **secret** — One standalone sensitive value per file (an API token, a PEM key, a TLS cert). Values never surface
 
@@ -81,8 +81,8 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 - `akm search ... --include-proposed` — merge `quality:"proposed"` drafts into hits.
 
 **Store, workflow, and sync verbs:**
-- `akm env list|path|export|run|create|remove` / `akm secret set` — manage configuration/secret stores (values never echoed)
-- `akm workflow start|next|complete|status|list|create|resume|template` — drive stateful runs
+- `akm env list|path|export|run|create|remove` / `akm secret list|run|set` — manage configuration/secret stores (values never echoed)
+- `akm workflow status|list|create|resume|abandon|run` — drive stateful runs
 - `akm sync [-m "msg"]` — commit (and push, when writable; `--no-push` to skip) a git-backed stash
 - `akm import <file|-> [--name <slug>]` — promote a file into the indexed stash
 - `akm help migrate <version>` — release notes / migration guidance
@@ -110,7 +110,7 @@ The replacement is documented in the platform-specific READMEs:
   [opencode/README.md "Locking down destructive commands"](./opencode/README.md#locking-down-destructive-commands).
 
 Agents should still treat destructive verbs (`proposal accept`, `proposal reject`,
-`proposal revert`, `sync --push`, `remove`, env/secret writes, `tasks add` / `tasks
+`proposal revert`, `sync --push`, `remove`, env/secret writes, `task add` / `task
 run`, `upgrade`, `update --all`, `config set`) as requiring explicit
 user approval before invocation — that contract is independent of the
 platform's permission machinery.
