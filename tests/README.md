@@ -4,12 +4,12 @@
 
 | File | What it covers |
 | --- | --- |
-| `opencode-plugin.test.ts` | Full integration coverage for the OpenCode plugin (`opencode/index.ts`): all tools, lifecycle hooks, proposal queue, improve/propose, vault, wiki, workflow, akm CLI resolution |
-| `claude-plugin.test.ts` | Claude Code plugin (`claude/index.ts`): hook wiring, safety guard, feature parity assertions |
+| `opencode-plugin.test.ts` | Full integration coverage for the OpenCode plugin (`opencode/index.ts`): all tools, lifecycle hooks, proposal queue, improve/propose, env, secret, wiki, workflow, akm CLI resolution |
+| `claude-plugin.test.ts` | Claude Code plugin (`claude/hooks/akm-hook.ts`): hook wiring, command/doc parity assertions |
 | `ref-extraction.test.ts` | `extractAkmRefs()` pattern matching: all ref shapes, edge cases |
 | `ref-resolver-contract.test.ts` | Ref resolver contract: resolve + feedback integration |
 | `opencode-eval-harness.test.ts` | Eval harness fixtures and score thresholds |
-| `akm-version-check.test.ts` | `satisfiesAkmVersionRange()` against 0.7.x, 0.8.x, 0.8.0-rc builds |
+| `akm-version-check.test.ts` | `satisfiesAkmVersionRange()` against the `^0.9.0` contract: accepts stable 0.9.x only, rejects 0.7.x/0.8.x and every 0.9.0 prerelease (betas and RCs) |
 
 ## AKM CLI resolution (audit #19)
 

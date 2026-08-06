@@ -164,10 +164,10 @@ export class Judge {
     const rubric = getRubric(scenario.judge_rubric)
     const userPrompt = buildJudgeUserPrompt(scenario, run)
     const start = performance.now()
-    // System prompt is split: the rubric (frozen, cacheable) goes in the
-    // first text block with cache_control. The scenario expectations are
+    // The rubric goes in the system prompt; the scenario expectations are
     // already in the user prompt, so the system stays prefix-stable
-    // across all runs of the same scenario.
+    // across all runs of the same scenario. (No cache_control marker —
+    // see the prompt-caching note at the top of this file.)
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: 1024,

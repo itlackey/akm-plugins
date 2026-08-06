@@ -1,17 +1,12 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { redactObject } from "./redaction"
-
 // Memory events log session activity (refs touched, outcomes, scope). Even
-// post-redaction this is a privileged record; lock the directory + file down
-// to owner-only access. Mirrors memory-candidates' chmodSafe helper.
-function chmodSafe(target: string, mode: number): void {
-  try {
-    chmodSync(target, mode)
-  } catch {
-    // Best-effort; see memory-candidates.ts for rationale.
-  }
-}
+// post-redaction this is a privileged record, so the directory + file are
+// locked to owner-only and events.jsonl is size-capped like every other
+// append-only state file. Both primitives live in ./state-files so the Claude
+// hook, this module and ./memory-candidates share one implementation.
+import { chmodSafe, rotateIfOversized } from "./state-files"
 
 export type AkmMemoryEventType =
   | "session_started"
@@ -90,6 +85,7 @@ export function appendMemoryEvent(filePath: string, event: AkmMemoryEvent): { ok
   try {
     mkdirSync(path.dirname(filePath), { recursive: true })
     chmodSafe(path.dirname(filePath), 0o700)
+    rotateIfOversized(filePath)
     const redacted = redactObject(event)
     const enriched = {
       ...redacted.value,

@@ -64,8 +64,8 @@ export function runLatencyMetric(opts: LatencyOptions): MetricResult {
         runClaudeHook(["post-tool", "success"], {
           input: JSON.stringify({
             tool: "Bash",
-            input: { command: "akm show skill:code-review" },
-            output: `{"ref":"skill:code-review","prompt":"${prompt.slice(0, 32)}"}`,
+            input: { command: "akm show skills/code-review" },
+            output: `{"ref":"skills/code-review","prompt":"${prompt.slice(0, 32)}"}`,
           }),
           env,
         }).durationMs,

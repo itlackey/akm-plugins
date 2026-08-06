@@ -1,21 +1,16 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { redactObject } from "./redaction"
-
 // Memory candidates can contain prompt fragments, ref names, and (despite
 // redaction) potentially sensitive contextual data harvested from session
-// activity. Lock the on-disk file down to user-only read/write so multi-user
+// activity. The on-disk file is locked to user-only read/write so multi-user
 // hosts (CI runners, shared VMs, dev sandboxes) cannot side-read another
-// user's stash signals.
-function chmodSafe(filePath: string, mode: number): void {
-  try {
-    chmodSync(filePath, mode)
-  } catch {
-    // Best-effort: filesystems without POSIX mode (FAT, some FUSE mounts) or
-    // platforms where chmod is a no-op (Windows) silently skip. Don't crash
-    // the hook over a hardening attempt.
-  }
-}
+// user's stash signals, and memory-candidates.jsonl is size-capped like every
+// other append-only state file. Both primitives — plus the temp+rename write
+// used by replaceCandidates() (13: "Non-atomic candidate updates") — live in
+// ./state-files so the Claude hook, ./memory-events and this module share one
+// implementation.
+import { atomicWriteFileSync, chmodSafe, rotateIfOversized } from "./state-files"
 
 export type AkmMemoryCandidate = {
   id: string
@@ -150,6 +145,7 @@ export function appendCandidates(filePath: string, candidates: AkmMemoryCandidat
   try {
     mkdirSync(path.dirname(filePath), { recursive: true })
     chmodSafe(path.dirname(filePath), 0o700)
+    rotateIfOversized(filePath)
     const categories: string[] = []
     const created = !existsSync(filePath)
     for (const candidate of candidates) {
@@ -181,8 +177,16 @@ export function readCandidates(filePath: string): AkmMemoryCandidate[] {
 export function replaceCandidates(filePath: string, candidates: AkmMemoryCandidate[]): void {
   mkdirSync(path.dirname(filePath), { recursive: true })
   chmodSafe(path.dirname(filePath), 0o700)
-  writeFileSync(filePath, candidates.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""))
-  chmodSafe(filePath, 0o600)
+  // Atomic rewrite (13: "Non-atomic candidate updates" — see
+  // atomicWriteFileSync above). updateCandidateStatus() is a
+  // read-modify-write over the whole file; without temp+rename, a second
+  // hook process's appendCandidates() (a plain appendFileSync) landing
+  // between this read and this write would be silently overwritten by this
+  // rewrite once it lands, because writeFileSync truncates in place.
+  // temp+rename doesn't fully eliminate that read-modify-write race (true
+  // fix would need a lock), but it does guarantee the file itself is never
+  // observed half-written / truncated by a concurrent reader.
+  atomicWriteFileSync(filePath, candidates.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""), 0o600)
 }
 
 export function updateCandidateStatus(filePath: string, id: string, status: "promoted" | "rejected", reason?: string): AkmMemoryCandidate | undefined {

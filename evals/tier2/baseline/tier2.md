@@ -1,21 +1,21 @@
 # AKM plugin eval — tier2
 
-- Plugin version: `0.6.0`
-- Git SHA: `2aafb1681325dd87afbcd2fdea90b98c99d4e643`
-- Ran at: 2026-05-02T15:54:10.150Z
-- Duration: 37194 ms
+- Plugin version: `0.9.0`
+- Git SHA: `f9559a84b3fe5eb481489600637e11655420b3b8`
+- Ran at: 2026-08-03T07:39:44.484Z
+- Duration: 23989 ms
 
 ## surface
 
 | Component | Count | Items |
 | --- | --- | --- |
-| claude commands | 12 | akm-agent, akm-cmd, akm-curate, akm-evolve, akm-feedback, akm-help, akm-remember, akm-search, akm-show, akm-vault, akm-wiki, akm-workflow |
-| claude agents | 1 | akm-curator |
-| claude hooks | 7 | PostToolUse, PostToolUseFailure, PreCompact, SessionStart, Stop, SubagentStop, UserPromptSubmit |
+| claude commands | 5 | akm-curate, akm-feedback, akm-remember, akm-search, akm-show |
+| claude agents | 0 |  |
+| claude hooks | 12 | PostCompact, PostToolBatch, PostToolUse, PostToolUseFailure, PreToolUse, SessionEnd, SessionStart, SubagentStart, TaskCompleted, TaskCreated, UserPromptExpansion, UserPromptSubmit |
 | claude skills | 1 | akm |
-| opencode tools | 14 | akm_agent, akm_cmd, akm_curate, akm_evolve, akm_feedback, akm_help, akm_parent_messages, akm_remember, akm_search, akm_session_messages, akm_show, akm_vault, akm_wiki, akm_workflow |
-| opencode commands | 5 | akm-improve-asset, akm-evolve-session, akm-propose-asset, akm-review-proposals, akm-workflow-status |
-| opencode agents | 1 | akm-curator |
+| opencode tools | 5 | akm_curate, akm_feedback, akm_remember, akm_search, akm_show |
+| opencode commands | 0 |  |
+| opencode agents | 0 |  |
 
 ## curation
 
@@ -24,11 +24,11 @@
 
 | id | prompt | expected | top-3 retrieved | coverage | top rank |
 | --- | --- | --- | --- | --- | --- |
-| cur-032 | What's the recommended way to handle exceptions in this c... | knowledge:repo-conventions,skill:debug-runtime | script:lint,command:bump-version,knowledge:api-error-codes | 0.00 | — |
-| cur-034 | Write tests for the new parser module | command:scaffold-test | skill:code-review,knowledge:api-error-codes,vault:staging | 0.00 | — |
-| cur-008 | Generate release notes from the staged commits | command:summarize-diff,workflow:release | command:bump-version,command:summarize-diff,script:smoke | 0.50 | 2 |
-| cur-013 | Walk through the deployment runbook for tonight's rollout | knowledge:deployment-runbook,workflow:release | knowledge:deployment-runbook,knowledge:api-error-codes,vault:staging | 0.50 | 1 |
-| cur-040 | Plan a refactor of the payments module with tradeoffs | agent:planner,skill:refactor-py | agent:planner,skill:code-review,command:bump-version | 0.50 | 1 |
+| cur-032 | What's the recommended way to handle exceptions in this c... | knowledge/repo-conventions,skills/debug-runtime | scripts/lint.sh,commands/bump-version,env/staging.env | 0.00 | — |
+| cur-034 | Write tests for the new parser module | commands/scaffold-test | skills/code-review,env/staging.env,knowledge/api-error-codes | 0.00 | — |
+| cur-008 | Generate release notes from the staged commits | commands/summarize-diff,workflows/release | commands/bump-version,commands/summarize-diff,scripts/smoke.sh | 0.50 | 2 |
+| cur-013 | Walk through the deployment runbook for tonight's rollout | knowledge/deployment-runbook,workflows/release | knowledge/deployment-runbook,env/staging.env,knowledge/api-error-codes | 0.50 | 1 |
+| cur-040 | Plan a refactor of the payments module with tradeoffs | agents/planner,skills/refactor-py | agents/planner,skills/code-review,commands/bump-version | 0.50 | 1 |
 
 ## latency
 
@@ -36,9 +36,9 @@
 
 | verb | n | p50 ms | p95 ms | p99 ms | mean ms |
 | --- | --- | --- | --- | --- | --- |
-| curate_prompt | 24 | 129 | 134 | 135 | 130 |
-| session_start | 24 | 486 | 507 | 529 | 486 |
-| post_tool | 24 | 42 | 46 | 47 | 43 |
+| curate_prompt | 24 | 97 | 107 | 108 | 97 |
+| session_start | 24 | 168 | 188 | 192 | 169 |
+| post_tool | 24 | 39 | 44 | 45 | 39 |
 
 ## context_budget
 
@@ -46,27 +46,16 @@
 
 | plugin | n | avg chars | max chars | violations | drop rate |
 | --- | --- | --- | --- | --- | --- |
-| claude | 12 | 867 | 960 | 0 | 0.0000 |
-| opencode | 12 | 863 | 956 | 0 | 0.0000 |
+| claude | 12 | 1304 | 1383 | 0 | 0.0000 |
+| opencode | 12 | 281 | 281 | 0 | 0.0000 |
 
 ## feedback
 
 > Both plugins measured by actual `akm feedback` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).
-> n=12 synthetic tool outputs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for memory: and vault: refs.
+> n=13 synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/).
 
 | plugin | tp | fp | fn | tn | precision | recall | polarity flips |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
-| opencode | 9 | 0 | 0 | 3 | 1.0000 | 1.0000 | 0 |
+| claude | 9 | 0 | 0 | 4 | 1.0000 | 1.0000 | 0 |
+| opencode | 9 | 0 | 0 | 4 | 1.0000 | 1.0000 | 0 |
 
-## memory
-
-> Sparse fixtures (< 2 buffer entries) are expected to be trivial-rate dropped.
-> claude_secret_leakages > 0 means the plugin committed a buffer containing a secret-shaped value (e.g. KEY=value). This is a finding about the plugin's lack of buffer scrubbing — vault values stored via the akm CLI are protected, but raw user prompts captured into the buffer are not.
-
-| fixture | captured? | body chars | name format | secret leakage? |
-| --- | --- | --- | --- | --- |
-| rich-multi-asset | yes | 632 | ok | — |
-| memory-intent-only | yes | 294 | ok | — |
-| sparse-single-entry | no (trivial) | 0 | — | — |
-| vault-leak-attempt | yes | 511 | ok | LEAK: DATABASE_URL=postgres://staging-pw-DO-NOT-LEAK@db.example.co |

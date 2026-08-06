@@ -1,0 +1,33 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install claude plugin deps
+        working-directory: claude
+        run: bun install --frozen-lockfile
+
+      - name: Install opencode plugin deps
+        working-directory: opencode
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck claude plugin
+        working-directory: claude
+        run: bun run typecheck
+
+      - name: Typecheck opencode plugin
+        working-directory: opencode
+        run: bun run typecheck
+
+      - name: Run unit tests
+        run: bun test tests/

@@ -17,8 +17,6 @@ This framework answers different questions:
 - **Did it break the auto-feedback path on either plugin?**
   (precision/recall over actual `akm feedback` calls in the call log,
   measured symmetrically on both Claude and OpenCode)
-- **Did the session-end memory capture start leaking secrets the user
-  typed by accident?** (`claude_secret_leakages` over labeled fixtures)
 - **Did it slow the hook down on the user's prompt path?** (p50/p95/p99
   per hook verb — observation only; not gated in CI because latency is
   hardware-dependent)
@@ -46,9 +44,9 @@ Reports are JSON + markdown so two runs can be cleanly diffed.
 | 2 — deterministic effectiveness | this framework, no LLM | every PR | seconds |
 | 3 — LLM-in-the-loop scenarios | Claude judge, scenario YAMLs | manual / `workflow_dispatch` | dollars |
 
-Tier 2 ships six metrics: `surface`, `curation`, `latency`,
-`context_budget`, `feedback`, and `memory`. Tier 3 ships a YAML
-scenario format, an Anthropic SDK judge with prompt caching, and
+Tier 2 ships five metrics: `surface`, `curation`, `latency`,
+`context_budget`, and `feedback`. Tier 3 ships a YAML
+scenario format, an Anthropic SDK judge, and
 pairwise A/B between two git refs. See `tier3/README.md` for details.
 
 ## Quick start
@@ -67,7 +65,6 @@ bun run tier2:latency
 bun run tier2:surface
 bun run tier2:context-budget
 bun run tier2:feedback
-bun run tier2:memory
 
 # diff a candidate run against the checked-in baseline
 bun run diff tier2/baseline/tier2.json ../eval-results/<ts>/tier2.json
@@ -92,7 +89,7 @@ git add tier2/baseline/tier2.json
 
 Each metric:
 1. Spawns a sandbox via `lib/stash-sandbox.ts` — a temp dir with
-   isolated `$AKM_STASH_DIR`, `$AKM_PLUGIN_STATE_DIR`, `$XDG_*` so the
+   isolated `$AKM_BUNDLE_DIR`, `$AKM_PLUGIN_STATE_DIR`, `$XDG_*` so the
    hook never touches the user's real stash.
 2. Installs a deterministic fake `akm` binary on `$PATH` via
    `lib/fake-akm.ts`. The shim ranks fixture assets with simple keyword
@@ -116,12 +113,11 @@ evals/
 ├── fixtures/
 │   ├── stash/               # ~15 seeded assets (stable refs)
 │   ├── prompts/curation.jsonl       # gold set: prompt → expected refs
-│   ├── tool-outputs/feedback.jsonl  # synthetic outputs for feedback metric
-│   └── session-logs/        # per-fixture session buffers for memory metric
+│   └── tool-outputs/feedback.jsonl  # synthetic outputs for feedback metric
 ├── tier2/
 │   ├── runner.ts            # orchestrator
 │   ├── harness/{claude,opencode}.ts  # plugin invocation harnesses
-│   ├── metrics/{surface,curation,latency,context-budget,feedback,memory}.ts
+│   ├── metrics/{surface,curation,latency,context-budget,feedback}.ts
 │   └── baseline/            # checked-in baseline JSON
 └── tier3/
     ├── runner.ts            # scenario orchestrator + judge driver
@@ -148,7 +144,7 @@ evals/
 Append a JSONL line to `fixtures/prompts/curation.jsonl`:
 
 ```jsonl
-{"id":"cur-NNN","prompt":"…","expected":["skill:foo","knowledge:bar"],"k":5}
+{"id":"cur-NNN","prompt":"…","expected":["skills/foo","knowledge/bar.md"],"k":5}
 ```
 
 Refs in `expected` must exist in `fixtures/stash/`. The fake-akm shim
@@ -160,10 +156,11 @@ a new prompt usually means tweaking those fields too.
 - The akm CLI's actual retrieval quality. The shim is held constant; if
   you want to evaluate a new akm-cli ranking algorithm, evaluate it in
   the akm-cli repo.
-- A real Claude API agent driving the plugin end-to-end. Tier-3 uses a
-  deterministic stub agent (the harness simulates the agent's reaction
-  to curated context). A real-loop variant is a future enhancement —
-  the transcript shape would stay the same.
+- Free/offline tier-3 runs. Tier-3 runs a real Claude agent loop by
+  default when `ANTHROPIC_API_KEY` is set (`--agent stub` forces the
+  deterministic stub agent for free harness validation, but judge
+  scores from stub runs are smoke-test signal only, not effectiveness
+  measurements).
 - The `akm-curator` sub-agent's own performance. That would need a
   separate scenario class with longer multi-turn fixtures and a
   different rubric. Listed as future work in the design doc.

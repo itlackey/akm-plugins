@@ -16,10 +16,10 @@ fixed rubric.
 - **`judge/rubric.ts`** — 5-dimension rubric (asset_use, on_task,
   feedback_loop, hallucination, conciseness) + JSON schema enforced via
   tool-use forcing.
-- **`judge/client.ts`** — Anthropic SDK wrapper with prompt caching on
-  the rubric system prompt, structured outputs via tool-use forcing,
-  per-run dollar cap, and verdict cache keyed on
-  `sha256(scenario.id + transcript)`.
+- **`judge/client.ts`** — Anthropic SDK wrapper with structured outputs
+  via tool-use forcing, per-run dollar cap, and verdict cache keyed on
+  `sha256(scenario.id + transcript)`. (Prompt caching was removed: the
+  ~600-token rubric is below the model's minimum cacheable prefix.)
 - **`runner.ts`** — Loads scenarios, runs them, judges them, writes
   `eval-results/tier3-<ts>/tier3.{json,md}`.
 - **`ab.ts`** — Pairwise A/B between two git refs via `git worktree`.
@@ -60,10 +60,10 @@ user_turns:
   - role: user
     content: "Help me review the diff in src/api/handlers.ts."
 expectations:
-  must_curate_refs: [skill:code-review]   # MUST appear in injected context
-  may_curate_refs: [agent:reviewer]       # bonus if they do
-  must_record_feedback_for: [skill:code-review]
-  forbid_refs: [vault:staging]            # MUST NOT appear
+  must_curate_refs: [skills/code-review]   # MUST appear in injected context
+  may_curate_refs: [agents/reviewer]       # bonus if they do
+  must_record_feedback_for: [skills/code-review]
+  forbid_refs: [env/staging.env]            # MUST NOT appear
   max_total_tokens: 8000                  # soft budget the judge considers
 judge_rubric: default                     # default | strict
 weight: 1.0                               # multiplier in aggregate scores
@@ -95,7 +95,7 @@ effectiveness numbers.
 A deterministic projection of `must_curate_refs ⊆ retrieved`. For each
 expected ref that surfaced, it synthesizes a `tool_use → tool_result →
 feedback` triple. It hardcodes the plugins' documented skip rule (no
-auto-feedback for `memory:`/`vault:` refs) so the transcript matches
+auto-feedback for `memories/` refs) so the transcript matches
 what the real plugins would emit. **Stub-mode judge scores are
 smoke-test signal only** — the transcript is mechanically derived from
 the expectations, so the judge has nothing meaningful to disagree with.
@@ -110,8 +110,6 @@ consumers can't accidentally treat smoke runs as effectiveness data.
 - Verdict cache (`tier3/.verdict-cache/`) — keyed on
   `(scenario.id, plugin, sha256(transcript))`. Re-running the same
   candidate is free.
-- Prompt caching — the rubric system prompt is cached; routine runs hit
-  ~90% read price on system tokens.
 
 ## Pairwise A/B
 

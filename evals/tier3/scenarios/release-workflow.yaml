@@ -7,14 +7,14 @@ user_turns:
     content: "Cut a new semver release and publish — bump version everywhere and tag the release."
 expectations:
   must_curate_refs:
-    - command:bump-version
-    - workflow:release
+    - commands/bump-version
+    - workflows/release
   may_curate_refs: []
   must_record_feedback_for:
-    - command:bump-version
-    - workflow:release
+    - commands/bump-version
+    - workflows/release
   forbid_refs:
-    - vault:staging
+    - env/staging.env
   max_total_tokens: 8000
 judge_rubric: strict
 weight: 1.5

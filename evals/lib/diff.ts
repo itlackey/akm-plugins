@@ -60,9 +60,6 @@ export const DEFAULT_POLICY: DiffPolicy = {
     { metric: "feedback", key: "opencode_precision", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
     { metric: "feedback", key: "opencode_recall", direction: "higher-is-better", epsilon: 0.005, regressionPct: 0.03 },
     { metric: "feedback", key: "opencode_polarity_flips", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
-    { metric: "memory", key: "claude_avg_body_chars", direction: "higher-is-better", epsilon: 20, regressionPct: 0.20 },
-    { metric: "memory", key: "claude_name_format_violations", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
-    { metric: "memory", key: "claude_secret_leakages", direction: "lower-is-better", epsilon: 0, regressionPct: 0.0001 },
   ],
 }
 

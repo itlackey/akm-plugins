@@ -46,8 +46,8 @@ describe("OpenCode eval harness", () => {
         await harness.toolAfter({
           sessionID: "eval-feedback-1",
           tool: "akm_show",
-          toolArgs: { ref: "skill:code-review" },
-          output: "{\\"ok\\":true,\\"type\\":\\"skill\\",\\"ref\\":\\"skill:code-review\\",\\"content\\":\\"Review pull requests...\\"}",
+          toolArgs: { ref: "skills/code-review" },
+          output: "{\\"ok\\":true,\\"type\\":\\"skill\\",\\"ref\\":\\"skills/code-review\\",\\"content\\":\\"Review pull requests...\\"}",
         })
         writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(await waitForFeedback(sandbox.callLog)))
       } finally {
@@ -71,18 +71,14 @@ describe("OpenCode eval harness", () => {
 
       const emitted = JSON.parse(readFileSync(resultPath, "utf8")) as string[][]
       expect(emitted).toContainEqual([
+        "feedback",
+        "skills/code-review",
+        "--positive",
+        "--reason",
+        "opencode auto: akm_show succeeded; confidence=0.65; source=tool_success",
         "--format",
         "json",
         "-q",
-        "feedback",
-        "skill:code-review",
-        "--positive",
-        "--note",
-        "opencode auto: akm_show succeeded; confidence=0.65; source=tool_success",
-        "--agent",
-        "akm_show",
-        "--run",
-        "eval-feedback-1",
       ])
     } finally {
       rmSync(resultDir, { recursive: true, force: true })

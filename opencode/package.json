@@ -1,8 +1,8 @@
 {
   "name": "akm-opencode",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "type": "module",
-  "description": "OpenCode plugin for AKM v0.8.0 - search, show, and manage extension assets via the akm CLI, including vaults, wikis, workflows, the proposal queue, lesson assets, and improve/propose commands, with agentic hooks that auto-load relevant stash assets, record feedback, and harvest session memories so the stash improves every session.",
+  "description": "OpenCode plugin for AKM 0.9 with in-process search, show, and curate tools plus feedback and remember.",
   "keywords": [
     "opencode",
     "opencode-ai",
@@ -25,8 +25,6 @@
   "license": "MPL-2.0",
   "files": [
     "index.ts",
-    "agent/",
-    "commands/",
     "shared/",
     "README.md"
   ],
@@ -36,11 +34,15 @@
   },
   "scripts": {
     "prepack": "node ./scripts/vendor-shared.mjs",
-    "postpack": "node ./scripts/unvendor-shared.mjs"
+    "postpack": "node ./scripts/unvendor-shared.mjs",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.2.20",
-    "akm-cli": "^0.8.0",
-    "semver": "^7.7.2"
+    "@opencode-ai/plugin": "^1.18.14",
+    "akm-cli": "^0.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.8.3"
   }
 }

@@ -1,0 +1,45 @@
+// Single source of truth for the akm-cli version contract.
+//
+// Both the Claude hook (claude/hooks/akm-hook.ts) and the OpenCode plugin
+// (opencode/index.ts) validate the user's installed akm-cli against this exact
+// range. Keeping it here — alongside the vendored semver matcher — means a
+// version bump is a one-line change in one file instead of three drifting
+// copies (a hand-rolled `minor === 8` check previously diverged here).
+//
+// The matcher is the vendored `satisfies()` rather than the npm `semver`
+// package because the Claude hook runs as a bare Bun script with no
+// node_modules at hook-execution time. This module is vendored into the
+// published OpenCode tarball by opencode/scripts/vendor-shared.mjs, so the
+// same code path runs on both sides.
+//
+// A single caret clause anchored at the stable release covers the whole
+// supported line: `^0.9.0` admits every stable 0.9.x (0.9.0, 0.9.3, ...).
+// The pre-release floor (`^0.9.0-rc.14`) was retired when akm-cli 0.9.0
+// stable shipped: release candidates are dead once the release exists, and
+// keeping the RC floor would have kept recommending a prerelease install ref.
+//
+// KNOWN GAP: NO prerelease satisfies this range — not 0.9.0-rc.15, and not a
+// *future* line such as 0.9.1-rc.1. That is node-semver's documented behavior
+// and the vendored matcher reproduces it: a prerelease only satisfies a range
+// whose lower bound is a prerelease with the same major.minor.patch. Admitting
+// a prerelease line again is an explicit one-clause edit here
+// (`^0.9.0 || ^0.9.1-rc.1`) when such a build actually needs testing — a
+// deliberate opt-in rather than a range that silently accepts untested
+// prereleases.
+//
+// 0.8.0 support was dropped for the 0.9.0 release: 0.9.0-only runtime paths
+// (`akm proposal extract --session-id`, curate `--detail brief`) fail against
+// 0.8.x, so accepting 0.8.x here would silently pass the version gate onto a
+// CLI the plugin no longer fully works with.
+
+import { satisfies } from "./vendor-semver"
+
+export const AKM_VERSION_RANGE = "^0.9.0"
+
+/**
+ * True when `version` is a valid semver string that satisfies
+ * {@link AKM_VERSION_RANGE}. Non-strings (e.g. a failed probe) return false.
+ */
+export function satisfiesAkmVersionRange(version: string | null | undefined): boolean {
+  return typeof version === "string" && satisfies(version, AKM_VERSION_RANGE)
+}
