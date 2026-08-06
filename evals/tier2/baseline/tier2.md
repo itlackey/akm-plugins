@@ -1,6 +1,6 @@
 # AKM plugin eval — tier2
 
-- Plugin version: `0.9.0-beta.1`
+- Plugin version: `0.9.0`
 - Git SHA: `f9559a84b3fe5eb481489600637e11655420b3b8`
 - Ran at: 2026-08-03T07:39:44.484Z
 - Duration: 23989 ms
