@@ -1,13 +1,28 @@
-// Context budget compliance metric.
+// Curated-material volume + pipeline-integrity metric.
 //
-// Both plugins enforce AKM_CONTEXT_BUDGET_CHARS (default 4000) on the
-// curated assets they inject — Claude via the curate-prompt hook, OpenCode
-// via experimental.chat.system.transform. We measure:
-//   - violations: prompts where the injected context exceeded the budget
-//   - avg_chars / max_chars: distributional stats
-//   - drop_rate: how often refs are dropped due to truncation, comparing
-//     the refs the fake-akm produced vs refs that survived in the
-//     injected context.
+// This is NOT a measurement of AKM_CONTEXT_BUDGET_CHARS compliance on the
+// Claude side, despite the name. The curate-prompt hook does not inline
+// curated text any more: it writes the curation to a file under the plugin
+// state dir and injects a one-line pointer to it, and the budget caps only
+// that injected pointer line. The Claude harness then reads the file back
+// (hydrateCuratedContext in ../harness/claude.ts) BEFORE we measure, so
+// `chars` here is pointer + file contents — material the budget never
+// governed, and which the model only pays for if it opens the file.
+//
+// What each number actually means:
+//   - claude avg_chars / max_chars: total curated material handed to the
+//     model for one prompt (pointer line + the file it names). A useful
+//     volume trend; not a budget number. claude_violations counts samples
+//     where that total crossed the budget, which the truncation path
+//     cannot itself cause.
+//   - opencode avg_chars / max_chars / violations: the real thing. The
+//     OpenCode side measures output.system verbatim, with no hydration, so
+//     it is exactly the text AKM_CONTEXT_BUDGET_CHARS truncates in
+//     experimental.chat.system.transform.
+//   - drop_rate (both): end-to-end pipeline integrity — of the refs the
+//     fake-akm produced, how many reach the model by either route
+//     (inlined, or via the pointed-at file). Non-zero means the plugin
+//     lost refs somewhere, not necessarily to truncation.
 
 import path from "node:path"
 import { readFileSync } from "node:fs"

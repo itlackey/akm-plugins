@@ -47,7 +47,7 @@ describe("OpenCode eval harness", () => {
           sessionID: "eval-feedback-1",
           tool: "akm_show",
           toolArgs: { ref: "skills/code-review" },
-          output: "{\\"ok\\":true,\\"type\\":\\"skill\\",\\"ref\\":\\"skills/code-review\\",\\"content\\":\\"Review pull requests...\\"}",
+          output: "{\\"ok\\":false,\\"error\\":\\"asset not found\\",\\"ref\\":\\"skills/code-review\\"}",
         })
         writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(await waitForFeedback(sandbox.callLog)))
       } finally {
@@ -69,13 +69,18 @@ describe("OpenCode eval harness", () => {
       expect(stdout).toBe("")
       expect(stderr).toBe("")
 
+      // A FAILING lookup, because a successful read-only one deliberately
+      // emits nothing (AKM_READ_ONLY_TOOLS). What this test is about is the
+      // routing — that the harness's child-process patch sends the plugin's
+      // `akm feedback` spawn to the sandbox shim rather than to a real akm on
+      // PATH — and the negative path exercises exactly the same spawn.
       const emitted = JSON.parse(readFileSync(resultPath, "utf8")) as string[][]
       expect(emitted).toContainEqual([
         "feedback",
         "skills/code-review",
-        "--positive",
+        "--negative",
         "--reason",
-        "opencode auto: akm_show succeeded; confidence=0.65; source=tool_success",
+        "opencode auto: akm_show failed; confidence=0.65; source=tool_failure",
         "--format",
         "json",
         "-q",

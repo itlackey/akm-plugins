@@ -1,5 +1,6 @@
 {
   "name": "akm",
+  "displayName": "AKM",
   "description": "Search, show, and curate AKM concepts, record feedback, and remember durable knowledge, with lifecycle hooks that load relevant context and learn from asset usage.",
   "version": "0.9.0",
   "author": {
@@ -24,6 +25,33 @@
   "skills": [
     "./skills/akm"
   ],
+  "userConfig": {
+    "bundle_dir": {
+      "type": "directory",
+      "title": "AKM bundle directory",
+      "description": "Absolute path to the AKM bundle root. Leave empty to let the hooks discover it by running `akm info`. Setting it removes that subprocess from every file-tool hook, which is the single biggest hook-latency win available. Equivalent to the AKM_BUNDLE_DIR environment variable."
+    },
+    "auto_feedback": {
+      "type": "boolean",
+      "title": "Record feedback automatically",
+      "description": "Submit `akm feedback` for concepts a tool call used, based on whether the call succeeded, and credit concepts when you say something worked. Turn off to record feedback only via /akm-feedback. Equivalent to AKM_AUTO_FEEDBACK.",
+      "default": true
+    },
+    "curate_limit": {
+      "type": "number",
+      "title": "Curated results per prompt",
+      "description": "How many ranked concepts the curation hooks retrieve for a prompt or session. Higher values surface more but cost more time per turn. Equivalent to AKM_CURATE_LIMIT.",
+      "default": 5,
+      "min": 1,
+      "max": 25
+    },
+    "index_on_session_end": {
+      "type": "boolean",
+      "title": "Refresh the AKM index when a session ends",
+      "description": "Run `akm index` at SessionEnd so the local stash stays current. Turn off on CI runners or low-power machines; the periodic `akm improve` pass remains the backstop. Equivalent to AKM_INDEX_ON_SESSION_END.",
+      "default": true
+    }
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -32,7 +60,7 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-start",
             "timeout": 120,
-            "statusMessage": "Ensuring AKM is available and loading stash hints..."
+            "statusMessage": "Checking the AKM CLI and loading stash hints..."
           }
         ]
       }
@@ -55,58 +83,6 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" user-prompt-expansion",
             "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Glob",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" pre-tool-nonbash",
-            "timeout": 5
           }
         ]
       }

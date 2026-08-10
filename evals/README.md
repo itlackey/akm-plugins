@@ -73,7 +73,6 @@ bun run diff tier2/baseline/tier2.json ../eval-results/<ts>/tier2.json
 bun run tier3 -- --no-judge --agent stub    # smoke test, no API spend
 bun run tier3                               # real agent + judge (recommended)
 bun run tier3 -- --scenarios "curate-skill-*" --budget 1
-bun run tier3:ab -- main HEAD --trials 3 --budget 5
 ```
 
 Reports land in `eval-results/<timestamp>/tier2.{json,md}` at the repo
@@ -121,7 +120,6 @@ evals/
 │   └── baseline/            # checked-in baseline JSON
 └── tier3/
     ├── runner.ts            # scenario orchestrator + judge driver
-    ├── ab.ts                # pairwise A/B with git worktree
     ├── scenarios.ts         # YAML loader + types
     ├── scenarios/*.yaml     # scenario definitions
     ├── harness/run-scenario.ts  # plugin-driving stub agent

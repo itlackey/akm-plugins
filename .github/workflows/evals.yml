@@ -98,10 +98,34 @@ jobs:
               })
             }
 
+      # The tier3 job below is workflow_dispatch-only, so ~1,700 lines of
+      # scenario harness never executed on a normal PR and rotted unnoticed.
+      # `--no-judge --agent stub` drives every scenario through the real
+      # plugin-invocation harness — the part that rots — with no judge call, no
+      # ANTHROPIC_API_KEY and therefore zero API spend. It is a wiring smoke
+      # test, NOT an effectiveness measurement: stub transcripts are
+      # mechanically derived from each scenario's own expectations.
+      #
+      # always() so a tier-2 regression above does not hide a broken tier-3
+      # harness; the two failures are independent signals.
+      - name: Smoke-test the tier-3 harness (stub agent, no judge, no API cost)
+        if: always()
+        working-directory: evals
+        run: bun tier3/runner.ts --no-judge --agent stub --out ../eval-results/tier3-smoke
+
+      # `always()` so the tier-3 smoke step above still runs when tier-2
+      # regresses. The exit_code check is written to distinguish "the runner
+      # exited non-zero" from "the runner died before writing its output" —
+      # a bare `!= '0'` is TRUE for the empty string, which reported a
+      # regression with a blank code for what was actually a crashed step.
       - name: Fail job on regression
-        if: steps.tier2.outputs.exit_code != '0'
+        if: always() && (steps.tier2.outputs.exit_code == '' || steps.tier2.outputs.exit_code != '0')
         run: |
-          echo "tier-2 evals exited with code ${{ steps.tier2.outputs.exit_code }}"
+          if [ -z "${{ steps.tier2.outputs.exit_code }}" ]; then
+            echo "tier-2 evals did not report an exit code — the step failed before finishing"
+          else
+            echo "tier-2 evals exited with code ${{ steps.tier2.outputs.exit_code }}"
+          fi
           exit 1
 
   tier3:

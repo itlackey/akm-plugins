@@ -2,9 +2,9 @@
   "version": "1",
   "tier": "tier2",
   "pluginVersion": "0.9.0",
-  "gitSha": "f9559a84b3fe5eb481489600637e11655420b3b8",
-  "ranAt": "2026-08-03T07:39:44.484Z",
-  "durationMs": 23989,
+  "gitSha": "83de80205da91f6789ffeb9b063f8b89ed91f730",
+  "ranAt": "2026-08-10T20:13:59.249Z",
+  "durationMs": 26979,
   "metrics": {
     "surface": {
       "name": "surface",
@@ -28,7 +28,6 @@
           "claude:PostToolBatch",
           "claude:PostToolUse",
           "claude:PostToolUseFailure",
-          "claude:PreToolUse",
           "claude:SessionEnd",
           "claude:SessionStart",
           "claude:SubagentStart",
@@ -44,7 +43,7 @@
         "opencodeAgents": [],
         "toolCount": 5,
         "commandCount": 5,
-        "hookCount": 12
+        "hookCount": 11
       },
       "table": {
         "headers": [
@@ -65,8 +64,8 @@
           ],
           [
             "claude hooks",
-            12,
-            "PostCompact, PostToolBatch, PostToolUse, PostToolUseFailure, PreToolUse, SessionEnd, SessionStart, SubagentStart, TaskCompleted, TaskCreated, UserPromptExpansion, UserPromptSubmit"
+            11,
+            "PostCompact, PostToolBatch, PostToolUse, PostToolUseFailure, SessionEnd, SessionStart, SubagentStart, TaskCompleted, TaskCreated, UserPromptExpansion, UserPromptSubmit"
           ],
           [
             "claude skills",
@@ -852,48 +851,48 @@
     "latency": {
       "name": "latency",
       "values": {
-        "curate_prompt_p50_ms": 97,
-        "curate_prompt_p95_ms": 107,
-        "curate_prompt_p99_ms": 108,
-        "curate_prompt_mean_ms": 97,
+        "curate_prompt_p50_ms": 109,
+        "curate_prompt_p95_ms": 129,
+        "curate_prompt_p99_ms": 142,
+        "curate_prompt_mean_ms": 113,
         "curate_prompt_n": 24,
-        "session_start_p50_ms": 168,
-        "session_start_p95_ms": 188,
-        "session_start_p99_ms": 192,
-        "session_start_mean_ms": 169,
+        "session_start_p50_ms": 189,
+        "session_start_p95_ms": 276,
+        "session_start_p99_ms": 289,
+        "session_start_mean_ms": 197,
         "session_start_n": 24,
-        "post_tool_p50_ms": 39,
-        "post_tool_p95_ms": 44,
-        "post_tool_p99_ms": 45,
-        "post_tool_mean_ms": 39,
+        "post_tool_p50_ms": 40,
+        "post_tool_p95_ms": 56,
+        "post_tool_p99_ms": 58,
+        "post_tool_mean_ms": 42,
         "post_tool_n": 24,
         "summaries": {
           "curate_prompt": {
             "n": 24,
-            "p50": 96.63780799999995,
-            "p95": 107.16794419999928,
-            "p99": 108.06322804999948,
-            "min": 87.19404099999974,
-            "max": 108.27309499999956,
-            "mean": 96.6587176666665
+            "p50": 109.33854949999977,
+            "p95": 129.4612399999998,
+            "p99": 142.2103627700001,
+            "min": 100.85084800000004,
+            "max": 145.68828500000018,
+            "mean": 112.51234612500006
           },
           "session_start": {
             "n": 24,
-            "p50": 168.40939650000018,
-            "p95": 187.8161623000007,
-            "p99": 191.63632542000138,
-            "min": 147.50143800000023,
-            "max": 192.72488000000158,
-            "mean": 168.65553741666713
+            "p50": 189.03806200000054,
+            "p95": 276.2287728500007,
+            "p99": 289.00699361000045,
+            "min": 174.56693300000006,
+            "max": 289.3145480000003,
+            "mean": 197.30267012500016
           },
           "post_tool": {
             "n": 24,
-            "p50": 39.090901999999915,
-            "p95": 44.29916450000064,
-            "p99": 44.81531399999914,
-            "min": 34.4092440000004,
-            "max": 44.89470999999867,
-            "mean": 39.230803583333305
+            "p50": 40.38988049999898,
+            "p95": 55.671581950000984,
+            "p99": 58.48592504999946,
+            "min": 37.90735599999971,
+            "max": 58.66711099999884,
+            "mean": 41.853364166666324
           }
         }
       },
@@ -910,26 +909,26 @@
           [
             "curate_prompt",
             24,
-            97,
-            107,
-            108,
-            97
+            109,
+            129,
+            142,
+            113
           ],
           [
             "session_start",
             24,
-            168,
-            188,
-            192,
-            169
+            189,
+            276,
+            289,
+            197
           ],
           [
             "post_tool",
             24,
-            39,
-            44,
-            45,
-            39
+            40,
+            56,
+            58,
+            42
           ]
         ]
       },
@@ -947,8 +946,8 @@
         "claude_violations": 0,
         "claude_drop_rate": 0,
         "opencode_n": 12,
-        "opencode_avg_chars": 281,
-        "opencode_max_chars": 281,
+        "opencode_avg_chars": 2393,
+        "opencode_max_chars": 2393,
         "opencode_violations": 0,
         "opencode_drop_rate": 0,
         "opencode_available": true
@@ -974,8 +973,8 @@
           [
             "opencode",
             12,
-            281,
-            281,
+            2393,
+            2393,
             0,
             "0.0000"
           ]
@@ -988,19 +987,19 @@
     "feedback": {
       "name": "feedback",
       "values": {
-        "n": 13,
-        "claude_tp": 9,
+        "n": 14,
+        "claude_tp": 7,
         "claude_fp": 0,
         "claude_fn": 0,
-        "claude_tn": 4,
+        "claude_tn": 7,
         "claude_precision": 1,
         "claude_recall": 1,
         "claude_polarity_flips": 0,
         "opencode_available": true,
-        "opencode_tp": 9,
+        "opencode_tp": 7,
         "opencode_fp": 0,
         "opencode_fn": 0,
-        "opencode_tn": 4,
+        "opencode_tn": 7,
         "opencode_precision": 1,
         "opencode_recall": 1,
         "opencode_polarity_flips": 0,
@@ -1020,20 +1019,20 @@
         "rows": [
           [
             "claude",
-            9,
+            7,
             0,
             0,
-            4,
+            7,
             "1.0000",
             "1.0000",
             0
           ],
           [
             "opencode",
-            9,
+            7,
             0,
             0,
-            4,
+            7,
             "1.0000",
             "1.0000",
             0
@@ -1042,7 +1041,8 @@
       },
       "notes": [
         "Both plugins measured by actual `akm feedback` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).",
-        "n=13 synthetic tool outputs, all using AKM 0.9 concept-ID refs. \"neither\"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/)."
+        "n=14 synthetic tool outputs, all using AKM 0.9 concept-ID refs. \"neither\"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/) and, for the success-only ones, for a read-only `show`/`search`/`curate` that succeeded.",
+        "Positive fixtures are driven through each plugin's real positive channel: a use-shaped `akm` verb on Claude, a retrospective \"thanks, that worked\" on OpenCode, whose ref-yielding tools are all read-only."
       ]
     }
   }

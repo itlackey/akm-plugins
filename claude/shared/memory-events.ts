@@ -1,13 +1,18 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync } from "node:fs"
 import path from "node:path"
 import { redactObject } from "./redaction"
 // Memory events log session activity (refs touched, outcomes, scope). Even
 // post-redaction this is a privileged record, so the directory + file are
 // locked to owner-only and events.jsonl is size-capped like every other
 // append-only state file. Both primitives live in ./state-files so the Claude
-// hook, this module and ./memory-candidates share one implementation.
+// hook and this module share one implementation.
 import { chmodSafe, rotateIfOversized } from "./state-files"
 
+// Exactly the event names some shipped surface emits. The union used to carry
+// 18 more (workflow_*, candidate_*, session_ended, ...) that no call site ever
+// wrote — a vocabulary describing pipelines that were removed or never built.
+// Keep this list emitter-driven: add a name when something emits it, not in
+// anticipation.
 export type AkmMemoryEventType =
   | "session_started"
   | "prompt_recall"
@@ -15,29 +20,11 @@ export type AkmMemoryEventType =
   | "tool_batch_observation"
   | "tool_ref_observed"
   | "workflow_step"
-  | "workflow_started"
-  | "workflow_next_loaded"
-  | "workflow_step_completed"
-  | "workflow_step_blocked"
-  | "workflow_step_failed"
-  | "workflow_step_skipped"
-  | "workflow_evidence_attached"
-  | "workflow_drift_detected"
-  | "workflow_resumed"
-  | "workflow_abandoned"
   | "task_created"
   | "task_completed"
   | "subagent_started"
-  | "subagent_completed"
-  | "pre_compact_checkpoint"
   | "post_compact_summary"
-  | "session_ended"
-  | "candidate_extracted"
-  | "candidate_promoted"
-  | "candidate_rejected"
-  | "durable_memory_written"
   | "feedback_recorded"
-  | "safety_blocked"
 
 export type AkmMemoryEvent = {
   version: 1
@@ -101,18 +88,4 @@ export function appendMemoryEvent(filePath: string, event: AkmMemoryEvent): { ok
   } catch (error: unknown) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
-}
-
-export function readJsonl<T>(filePath: string): T[] {
-  if (!existsSync(filePath)) return []
-  return readFileSync(filePath, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as T]
-      } catch {
-        return []
-      }
-    })
 }

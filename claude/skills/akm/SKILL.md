@@ -70,7 +70,7 @@ Use references returned by search or curate rather than constructing them when p
 Curate first when solving a task:
 
 ```sh
-akm curate "<specific task description>" --limit 4 --format json -q
+akm curate "<specific task description>" --limit 5 --format json -q
 ```
 
 Use search when you know a concept exists and need its exact ID:
@@ -107,7 +107,9 @@ Negative feedback requires a reason. Do not submit feedback for a reference AKM 
 Store reusable facts, constraints, decisions, and gotchas rather than ephemeral chat:
 
 ```sh
-akm remember "<content>" --name <short-kebab-case-name> --format json -q
+akm remember --name <short-kebab-case-name> --format json -q <<'MEMORY'
+<content>
+MEMORY
 ```
 
 Report the returned `memories/<name>` concept ID. Avoid storing secrets or credentials.

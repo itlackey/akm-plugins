@@ -1,11 +1,10 @@
 /**
  * Shared helpers for the append-only state files both plugins keep under their
  * harness state dir (session.log, feedback.log, memory.log, quality-cache.tsv,
- * sessions/<sid>.md, extract.log, events.jsonl, memory-candidates.jsonl).
+ * sessions/<sid>.md, extract.log, events.jsonl).
  *
  * This module is the single copy of three primitives that were previously
- * duplicated near-verbatim in claude/hooks/akm-hook.ts, ./memory-events.ts and
- * ./memory-candidates.ts:
+ * duplicated near-verbatim in claude/hooks/akm-hook.ts and ./memory-events.ts:
  *
  *   chmodSafe()          best-effort owner-only hardening that never throws
  *   atomicWriteFileSync() write-temp-then-rename, with temp cleanup on failure
@@ -43,8 +42,8 @@ export function chmodSafe(target: string, mode: number): void {
  * content in full or the new content in full — never a torn/partial write.
  *
  * A failed rename removes the temp file (nothing else ever prunes it) and then
- * rethrows, so each caller keeps its own error semantics: rotateIfOversized()
- * swallows the error, memory-candidates' replaceCandidates() propagates it.
+ * rethrows, so a caller keeps its own error semantics — rotateIfOversized(),
+ * the only caller today, swallows it.
  */
 export function atomicWriteFileSync(filePath: string, content: string, mode?: number): void {
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`

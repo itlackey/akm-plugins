@@ -327,7 +327,13 @@ export async function createOpenCodeHarness(env: Record<string, string>): Promis
           const output: { system: string[] } = { system: [] }
           await hooks["experimental.chat.system.transform"]({ sessionID }, output)
           context = output.system.join("\n")
-          if (context.length > 0) break
+          // Wait for the CURATED POINTER, not merely for non-empty context.
+          // The transform now pushes the static doctrine block on every call,
+          // so `context.length > 0` is satisfied on the first iteration — the
+          // loop exited before the background curate ever landed and every
+          // sample scored zero surviving refs. The pointer line is the only
+          // evidence the async curate finished.
+          if (context.match(CURATED_FILE_RE)) break
           await new Promise((resolve) => setTimeout(resolve, 25))
         }
         const durationMs = performance.now() - start

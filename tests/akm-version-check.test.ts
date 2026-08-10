@@ -238,9 +238,22 @@ describe("checkAkmVersion", () => {
     expect(result.stdout).toContain("akm-cli@^0.9.0")
     expect(result.stdout).not.toContain("rc.14")
     expect(result.installLog).toBe("")
+    // additionalContext reaches the model, which cannot install anything.
+    // systemMessage is the channel to the person who can, so it has to carry
+    // the concrete command rather than a pointer to the model's context.
+    const payload = JSON.parse(result.stdout.trim())
+    expect(payload.systemMessage).toContain("AKM is unavailable this session")
+    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.9.0")
   })
 
-  it("session-start runs normally with a compatible CLI and existing bundle", () => {
+  it("session-start ships the header and footer on a healthy CLI with a completely quiet stash", () => {
+    // The most common profile there is: akm installed and in range, bundle
+    // present, but nothing curated, no hints and no pending proposals. This
+    // test used to assert only that stdout did NOT contain "AKM is NOT
+    // available" — which the empty string satisfies, and the empty string is
+    // exactly what this path emitted. SessionStart's whole job (tell the agent
+    // akm exists, which lookup verb to reach for, how wide the surface is) was
+    // unreachable on a fresh install. Assert the header actually ships.
     const bundleDir = makeTempDir()
     const result = runHookSandboxed(["session-start"], {
       akmVersion: "0.9.0",
@@ -248,8 +261,13 @@ describe("checkAkmVersion", () => {
     })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
-    expect(result.stdout).not.toContain("AKM is NOT available")
     expect(result.installLog).toBe("")
+
+    const context = JSON.parse(result.stdout.trim()).hookSpecificOutput.additionalContext as string
+    expect(context).toContain("# AKM is available in this session")
+    expect(context).toContain('akm curate "<task>"')
+    expect(context).toContain("The public plugin surface is limited to search, show, curate, feedback, and remember.")
+    expect(context).not.toContain("AKM is NOT available")
   })
 
   it("session-start reports a missing bundle through context and the state log, not stderr", () => {
