@@ -31,7 +31,7 @@ let akmMissingToastShown = false
 // probe cache is keyed by command path and is process-lifetime, so it has to be
 // dropped here too or a stale probe would survive the reset — as does the
 // once-per-process missing-akm toast latch.
-export function __resetResolvedAkmForTests(): void {
+function __resetResolvedAkmForTests(): void {
   resolvedAkmCommand = "akm"
   akmVersionProbeCache.clear()
   akmResolutionFailed = false
@@ -401,7 +401,7 @@ function clearSessionState(sessionID: string): void {
 
 // Test-only: expose the curated tmp-file directory so tests can assert file
 // existence/absence without hardcoding os.tmpdir() path construction twice.
-export function __curatedDirForTests(): string {
+function __curatedDirForTests(): string {
   return CURATED_DIR
 }
 
@@ -1881,7 +1881,7 @@ function truncateLogText(value: string, limit = 1_000): string {
   return value.length > limit ? `${value.slice(0, limit)}…` : value
 }
 
-export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
+const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
   await ensureSupportedAkmResolved(client as unknown as LogCapableClient)
 
   const logClient = client as unknown as LogCapableClient
@@ -2496,3 +2496,21 @@ export const AkmPlugin: Plugin = async ({ client, worktree, directory }) => {
 // hooks twice (double auto-feedback, double session-start curates, etc.).
 // The SDK's own example plugin (dist/example.js) exports exactly one named
 // const with no default export; that is the blessed shape.
+//
+// "Only" means ONLY, including test helpers — issue #86. Two `__*ForTests`
+// functions were exported alongside this one, and the loader dutifully called
+// them as plugin factories. `__resetResolvedAkmForTests` returns void, so the
+// host then read `.config` off `undefined` and every OpenCode session using
+// akm-opencode@0.9.0 died at startup with "undefined is not an object
+// (evaluating 'N.config')". It was not even an inert crash: that helper resets
+// resolvedAkmCommand and clears the version-probe cache, so the loader
+// invoking it also wiped real plugin state.
+//
+// Hanging the helpers off the plugin function keeps them reachable from tests
+// while leaving exactly one module export for the loader to find. The guard is
+// in tests/opencode-plugin.test.ts and asserts the whole export list, not a
+// denylist of names that have already burned us once.
+export const AkmPlugin = Object.assign(akmPlugin, {
+  __resetResolvedAkmForTests,
+  __curatedDirForTests,
+})
