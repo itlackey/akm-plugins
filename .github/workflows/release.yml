@@ -62,6 +62,53 @@ jobs:
         with:
           node-version: 24
 
+      # Fail before anything is written. The steps below stamp four manifests,
+      # commit, and push a tag; npm is the first thing that would reject a bad
+      # version, and by then the tag already exists. Two rules are checked:
+      # the version must be plain semver (a four-component string such as
+      # 0.9.0.20260811.1 is not, and the registry refuses it), and its
+      # MAJOR.MINOR must match the akm line the plugins target — see the
+      # versioning policy in tests/version-policy.test.ts.
+      - name: Validate release version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node <<'EOF'
+          const fs = require('fs')
+
+          const version = process.env.VERSION.trim()
+          const source = fs.readFileSync('claude/shared/akm-version.ts', 'utf8')
+          const range = /AKM_VERSION_RANGE\s*=\s*"([^"]+)"/.exec(source)?.[1]
+          if (!range) {
+            console.error('Could not read AKM_VERSION_RANGE from claude/shared/akm-version.ts')
+            process.exit(1)
+          }
+
+          const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+          const parsed = SEMVER.exec(version)
+          if (!parsed) {
+            console.error(`Version "${version}" is not valid semver (MAJOR.MINOR.PATCH[-prerelease][+build]).`)
+            console.error('npm rejects anything else on publish, and this job tags before it publishes.')
+            process.exit(1)
+          }
+
+          const floor = SEMVER.exec(range.replace(/^[\^~>=v\s]+/, ''))
+          if (!floor) {
+            console.error(`AKM_VERSION_RANGE "${range}" has no parseable floor; expected a caret range like ^0.9.0.`)
+            process.exit(1)
+          }
+
+          const want = `${floor[1]}.${floor[2]}`
+          const got = `${parsed[1]}.${parsed[2]}`
+          if (got !== want) {
+            console.error(`Version "${version}" is on the ${got} line but the plugins target akm ${range} (the ${want} line).`)
+            console.error(`Release a ${want}.x version, or move AKM_VERSION_RANGE first if the plugins now target a new akm minor.`)
+            process.exit(1)
+          }
+
+          console.log(`Version ${version} is valid semver on the ${got} line, matching akm ${range}.`)
+          EOF
+
       - name: Bump versions
         run: |
           VERSION="${{ inputs.version }}"
