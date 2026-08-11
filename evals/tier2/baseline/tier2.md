@@ -1,9 +1,9 @@
 # AKM plugin eval — tier2
 
 - Plugin version: `0.9.0`
-- Git SHA: `f9559a84b3fe5eb481489600637e11655420b3b8`
-- Ran at: 2026-08-03T07:39:44.484Z
-- Duration: 23989 ms
+- Git SHA: `83de80205da91f6789ffeb9b063f8b89ed91f730`
+- Ran at: 2026-08-10T20:13:59.249Z
+- Duration: 26979 ms
 
 ## surface
 
@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | claude commands | 5 | akm-curate, akm-feedback, akm-remember, akm-search, akm-show |
 | claude agents | 0 |  |
-| claude hooks | 12 | PostCompact, PostToolBatch, PostToolUse, PostToolUseFailure, PreToolUse, SessionEnd, SessionStart, SubagentStart, TaskCompleted, TaskCreated, UserPromptExpansion, UserPromptSubmit |
+| claude hooks | 11 | PostCompact, PostToolBatch, PostToolUse, PostToolUseFailure, SessionEnd, SessionStart, SubagentStart, TaskCompleted, TaskCreated, UserPromptExpansion, UserPromptSubmit |
 | claude skills | 1 | akm |
 | opencode tools | 5 | akm_curate, akm_feedback, akm_remember, akm_search, akm_show |
 | opencode commands | 0 |  |
@@ -36,9 +36,9 @@
 
 | verb | n | p50 ms | p95 ms | p99 ms | mean ms |
 | --- | --- | --- | --- | --- | --- |
-| curate_prompt | 24 | 97 | 107 | 108 | 97 |
-| session_start | 24 | 168 | 188 | 192 | 169 |
-| post_tool | 24 | 39 | 44 | 45 | 39 |
+| curate_prompt | 24 | 109 | 129 | 142 | 113 |
+| session_start | 24 | 189 | 276 | 289 | 197 |
+| post_tool | 24 | 40 | 56 | 58 | 42 |
 
 ## context_budget
 
@@ -47,15 +47,16 @@
 | plugin | n | avg chars | max chars | violations | drop rate |
 | --- | --- | --- | --- | --- | --- |
 | claude | 12 | 1304 | 1383 | 0 | 0.0000 |
-| opencode | 12 | 281 | 281 | 0 | 0.0000 |
+| opencode | 12 | 2393 | 2393 | 0 | 0.0000 |
 
 ## feedback
 
 > Both plugins measured by actual `akm feedback` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).
-> n=13 synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/).
+> n=14 synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/) and, for the success-only ones, for a read-only `show`/`search`/`curate` that succeeded.
+> Positive fixtures are driven through each plugin's real positive channel: a use-shaped `akm` verb on Claude, a retrospective "thanks, that worked" on OpenCode, whose ref-yielding tools are all read-only.
 
 | plugin | tp | fp | fn | tn | precision | recall | polarity flips |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude | 9 | 0 | 0 | 4 | 1.0000 | 1.0000 | 0 |
-| opencode | 9 | 0 | 0 | 4 | 1.0000 | 1.0000 | 0 |
+| claude | 7 | 0 | 0 | 7 | 1.0000 | 1.0000 | 0 |
+| opencode | 7 | 0 | 0 | 7 | 1.0000 | 1.0000 | 0 |
 

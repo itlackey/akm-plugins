@@ -1,16 +1,21 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { AKM_VERSION_RANGE as AKM_REQUIRED_RANGE } from "../shared/akm-version"
 import { satisfies, valid } from "../shared/vendor-semver"
-import { classifyFeedbackSignal, shouldSubmitAutomaticFeedback } from "../shared/feedback-signals"
-import { appendCandidates, extractCandidatesFromText, getCandidateLogPath } from "../shared/memory-candidates"
+import {
+  classifyFeedbackSignal,
+  createExplicitCorrectionRegex,
+  createRetrospectiveFeedbackRegex,
+  createRetrospectiveNegativeRegex,
+  shouldSubmitAutomaticFeedback,
+} from "../shared/feedback-signals"
 import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
-import { extractAkmRefsFromString, extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
+import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
 const COMMAND = process.argv[2] ?? ""
@@ -30,19 +35,85 @@ const MEMORY_LOG = path.join(STATE_DIR, "memory.log")
 // leaves a trace instead of vanishing into stdio: "ignore". See extractSession().
 const EXTRACT_LOG = path.join(STATE_DIR, "extract.log")
 const EVENT_LOG = getEventLogPath("claude-code")
-const CANDIDATE_LOG = getCandidateLogPath("claude-code")
 const QUALITY_CACHE = path.join(STATE_DIR, "quality-cache.tsv")
-const CURATE_LIMIT = Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5
-const CURATE_MIN_CHARS = Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16
-const CURATE_TIMEOUT = String(Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8)
+// `?? pluginOption(...)` here and below reads the matching plugin.json
+// userConfig option — see pluginOption() for the resolution order.
+const CURATE_LIMIT = Number(process.env.AKM_CURATE_LIMIT ?? pluginOption("CURATE_LIMIT") ?? "5") || 5
+// Seconds. It was a string only because it used to be spliced into a
+// `timeout --preserve-status <n> …` argv; the caps are applied by spawnSync /
+// Bun.spawn directly now, so it is the number it always meant to be.
+const CURATE_TIMEOUT = Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8
+// Seconds. SessionEnd's `akm index` is the one spawn that is allowed to be
+// slow — see runIndexOnSessionEnd().
+const INDEX_TIMEOUT = Number(process.env.AKM_INDEX_TIMEOUT ?? "60") || 60
+// `akm --version` is a local print with no stash, embedding or LLM work behind
+// it, and it is the FIRST thing SessionStart runs. It gets its own much tighter
+// cap so a wedged binary cannot spend the whole CURATE_TIMEOUT budget before a
+// single useful call has been issued.
+const VERSION_TIMEOUT_MS = 3000
 const CONTEXT_BUDGET_CHARS = Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000
-const AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") === "1"
-// SessionEnd `akm index` is opt-OUT (default enabled) because the README
-// parity matrix advertises "Session-end `akm index` Shipped in both plugins";
-// shipping it gated behind an opt-in env var made the claim a lie. Users
-// who want to disable it (e.g. CI runners, low-power dev machines) set
+/**
+ * Every AKM kill switch is opt-OUT and reads the same way: only the literal
+ * "0" disables it. AKM_AUTO_FEEDBACK used to be parsed here as `=== "1"` while
+ * the OpenCode plugin parsed it as `!== "0"`, so `AKM_AUTO_FEEDBACK=true`
+ * silently DISABLED auto-feedback on Claude and enabled it on OpenCode. One
+ * helper so the two harnesses cannot drift again.
+ */
+function envFlag(name: string, defaultOn: boolean): boolean {
+  return (process.env[name] ?? (defaultOn ? "1" : "0")) !== "0"
+}
+
+/**
+ * .claude-plugin/plugin.json declares four `userConfig` options, and Claude
+ * Code exports every declared option to hook processes as
+ * CLAUDE_PLUGIN_OPTION_<KEY uppercased>. Shell-form hook commands (which all of
+ * ours are) cannot use ${user_config.*} substitution, so the env var is the
+ * only delivery route — without these reads the settings dialog would render
+ * four controls wired to nothing.
+ *
+ * Each option is an alias for an AKM_* variable that already existed, so the
+ * resolution order is explicit env var -> plugin option -> built-in default.
+ * An operator who exports AKM_BUNDLE_DIR in their shell keeps overriding the
+ * settings UI, and a host that sets none of these behaves exactly as before.
+ */
+function pluginOption(key: string): string | undefined {
+  const raw = process.env[`CLAUDE_PLUGIN_OPTION_${key}`]?.trim()
+  return raw ? raw : undefined
+}
+
+/**
+ * Boolean options get their own parse rather than going through envFlag().
+ * Claude Code does not document how a boolean userConfig value is stringified
+ * into its env var, so an OFF setting may well arrive as "false"; envFlag()'s
+ * "only the literal 0 disables" rule would read that as ON — precisely the
+ * class of bug envFlag exists to prevent. Env vars keep the documented "0"
+ * rule, which is what claude/README.md promises.
+ */
+const OPTION_OFF_VALUES = new Set(["0", "false", "off", "no"])
+
+function flagSetting(envName: string, optionKey: string, defaultOn: boolean): boolean {
+  if (process.env[envName] !== undefined) return envFlag(envName, defaultOn)
+  const option = pluginOption(optionKey)
+  if (option !== undefined) return !OPTION_OFF_VALUES.has(option.toLowerCase())
+  return defaultOn
+}
+
+const AUTO_FEEDBACK = flagSetting("AKM_AUTO_FEEDBACK", "AUTO_FEEDBACK", true)
+// AKM_AUTO_MEMORY gates automatic memory harvesting. That harvest is exactly
+// one `akm proposal extract` spawn on each harness — SessionEnd here (see
+// extractSession()), session.idle on OpenCode (maybeExtractSessionOnIdle) —
+// so the one variable really does switch both off.
+const AUTO_MEMORY = envFlag("AKM_AUTO_MEMORY", true)
+const AUTO_CURATE = envFlag("AKM_AUTO_CURATE", true)
+const AUTO_HINTS = envFlag("AKM_AUTO_HINTS", true)
+// SessionEnd `akm index` is opt-OUT (default enabled) because this is the only
+// index refresh either plugin makes at the end of a session — OpenCode's runs
+// once too, on session.deleted (never on session.idle, which fires after every
+// turn), so the two harnesses end a session with the same stash freshness. Skip
+// it and the stash stays stale until the next hourly `akm improve`. Users who
+// want that (e.g. CI runners, low-power dev machines) set
 // AKM_INDEX_ON_SESSION_END=0.
-const INDEX_ON_SESSION_END = (process.env.AKM_INDEX_ON_SESSION_END ?? "1") !== "0"
+const INDEX_ON_SESSION_END = flagSetting("AKM_INDEX_ON_SESSION_END", "INDEX_ON_SESSION_END", true)
 const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM stash - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM stash - assets relevant to this session"
@@ -127,8 +198,8 @@ function gatherCwdContext(): string {
 mkdirSync(STATE_DIR, { recursive: true })
 mkdirSync(CURATED_DIR, { recursive: true })
 mkdirSync(SESSIONS_DIR, { recursive: true })
-// State directory holds session feedback / memory / candidate logs that may
-// retain sensitive context post-redaction. Lock to owner-only.
+// State directory holds session feedback / memory logs that may retain
+// sensitive context post-redaction. Lock to owner-only.
 // chmodSafe is best-effort: filesystems / platforms without POSIX mode are
 // silently skipped (Windows, FAT, some FUSE mounts). We never crash a hook over
 // a hardening attempt.
@@ -144,14 +215,14 @@ function sanitize(value: string): string {
   return value.replace(/[\t\r\n]+/g, " ").replace(/ {2,}/g, " ").trim()
 }
 
-// 13: state-file rotation/caps. Eight append-only files live under STATE_DIR
+// 13: state-file rotation/caps. Seven append-only files live under STATE_DIR
 // (session.log, feedback.log, memory.log, quality-cache.tsv, extract.log via
-// appendLog(); sessions/<sid>.md via writeSessionBuffer(); events.jsonl and
-// memory-candidates.jsonl via the shared modules). None had a size cap, so they
-// grew without bound for the lifetime of the machine. rotateIfOversized() from
-// ../shared/state-files is now the single implementation used by all three
-// call sites (this file, memory-events.ts, memory-candidates.ts): before an
-// append, if the file already exceeds AKM_PLUGIN_MAX_LOG_BYTES (default 1 MiB),
+// appendLog(); sessions/<sid>.md via writeSessionBuffer(); events.jsonl via the
+// shared module). None had a size cap, so they grew without bound for the
+// lifetime of the machine. rotateIfOversized() from ../shared/state-files is
+// now the single implementation used by both call sites (this file and
+// memory-events.ts): before an append, if the file already exceeds
+// AKM_PLUGIN_MAX_LOG_BYTES (default 1 MiB),
 // rewrite it down to its newest half (by line count) via
 // write-temp-then-rename — chmod 0o600 on the replacement — so a concurrent
 // reader/writer never observes a truncated/partial file and the rewritten file
@@ -198,14 +269,15 @@ function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
 }
 
 /**
- * Resolve the bundle root used for ref validation. Prefer AKM_BUNDLE_DIR so
- * tests and sandboxed harnesses do not need to spawn AKM, then use `akm info`.
+ * Resolve the bundle root used for ref validation. Prefer AKM_BUNDLE_DIR (or
+ * the equivalent `bundle_dir` plugin option) so tests and sandboxed harnesses
+ * do not need to spawn AKM, then fall back to `akm info`.
  *
  * Returns an array because future work may surface multiple roots; today
  * the array has at most one entry.
  */
 function resolveStashRoots(): string[] {
-  const envOverride = process.env.AKM_BUNDLE_DIR?.trim()
+  const envOverride = process.env.AKM_BUNDLE_DIR?.trim() || pluginOption("BUNDLE_DIR")
   if (envOverride) return [envOverride]
   if (akmAvailable()) {
     const raw = akmRun(["info", "--format", "json", "-q"]).trim()
@@ -312,7 +384,7 @@ function resolveAkmCommandSpec(): AkmCommandSpec | null {
 }
 
 function readAkmVersion(commandSpec: AkmCommandSpec): string {
-  const result = runCommand(commandSpec.command, [...commandSpec.argsPrefix, "--version"])
+  const result = runCommand(commandSpec.command, [...commandSpec.argsPrefix, "--version"], { timeoutMs: VERSION_TIMEOUT_MS })
   return parseAkmVersion(result.stdout)
 }
 
@@ -324,11 +396,23 @@ function akmVersionSatisfies(commandSpec: AkmCommandSpec): { ok: boolean; versio
   return { ok: true, version }
 }
 
-function runCommand(command: string, args: string[], options?: { input?: string; suppressStderr?: boolean }): { ok: boolean; stdout: string; stderr: string } {
+// Every subprocess this file spawns is capped here, by spawnSync itself. The
+// cap used to be delegated to the `timeout(1)` binary and applied only when
+// findCommandOnPath("timeout") resolved — true on Linux, false on stock macOS,
+// where AKM_CURATE_TIMEOUT therefore degraded to no limit at all and a wedged
+// akm could burn the entire hook budget. spawnSync's own `timeout` needs no
+// external binary, so the cap is real on every platform.
+//
+// The failure shape changed with it: instead of `--preserve-status` handing
+// back the child's exit code, an expired call comes back with status === null
+// and error.code === "ETIMEDOUT", so `ok` is false. That is what every caller
+// already wants — a timed-out akm has produced no usable result.
+function runCommand(command: string, args: string[], options?: { input?: string; suppressStderr?: boolean; timeoutMs?: number }): { ok: boolean; stdout: string; stderr: string } {
   try {
     const result = spawnSync(command, args, {
       encoding: "utf8",
       input: options?.input,
+      timeout: options?.timeoutMs ?? CURATE_TIMEOUT * 1000,
       stdio: ["pipe", "pipe", options?.suppressStderr === false ? "pipe" : "ignore"],
     })
     return {
@@ -349,17 +433,15 @@ function akmAvailable(): boolean {
   return !!resolveAkmCommandSpec()
 }
 
-function akmRun(args: string[], input?: string): string {
+function akmRun(args: string[], input?: string, options?: { timeoutMs?: number }): string {
   const akm = resolveAkmCommandSpec()
   if (!akm) return ""
-  const timeout = findCommandOnPath("timeout")
-  const result = timeout
-    ? runCommand(timeout, ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args], { input, suppressStderr: false })
-    : runCommand(akm.command, [...akm.argsPrefix, ...args], { input, suppressStderr: false })
+  const fullArgs = [...akm.argsPrefix, ...args]
+  const result = runCommand(akm.command, fullArgs, { input, suppressStderr: false, timeoutMs: options?.timeoutMs })
   if (!result.ok) {
     logSubprocessFailure("akm_failed", {
-      command: timeout ?? akm.command,
-      args: (timeout ? ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args] : [...akm.argsPrefix, ...args]).join(" "),
+      command: akm.command,
+      args: fullArgs.join(" "),
       error: "akm invocation failed",
       stderr: sanitize(result.stderr),
     })
@@ -375,24 +457,28 @@ function akmRun(args: string[], input?: string): string {
  * instead of sequentially. Worst-case perceived latency drops from ~3×timeout
  * to ~1×timeout for the typical case where all three calls hit the same
  * embedding/LLM bottleneck.
+ *
+ * Bun.spawn's own `timeout` caps the child. This path previously carried no
+ * timeout on ANY platform — not even Linux, where the sync helpers at least
+ * had `timeout(1)` — so SessionStart's three parallel calls were unbounded
+ * everywhere.
  */
 async function akmRunAsync(args: string[], input?: string): Promise<string> {
   const akm = resolveAkmCommandSpec()
   if (!akm) return ""
-  const timeout = findCommandOnPath("timeout")
-  const cmd = timeout ? timeout : akm.command
-  const fullArgs = timeout ? ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args] : [...akm.argsPrefix, ...args]
+  const fullArgs = [...akm.argsPrefix, ...args]
   try {
-    const proc = Bun.spawn([cmd, ...fullArgs], {
+    const proc = Bun.spawn([akm.command, ...fullArgs], {
       stdin: input !== undefined ? new TextEncoder().encode(input) : "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      timeout: CURATE_TIMEOUT * 1000,
     })
     const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
     const exitCode = await proc.exited
     if (exitCode !== 0) {
       logSubprocessFailure("akm_failed", {
-        command: cmd,
+        command: akm.command,
         args: fullArgs.join(" "),
         error: `akm invocation failed (exit ${exitCode})`,
         stderr: sanitize(stderr),
@@ -401,7 +487,7 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
     return stdout
   } catch (error) {
     logSubprocessFailure("akm_failed", {
-      command: cmd,
+      command: akm.command,
       args: fullArgs.join(" "),
       error: error instanceof Error ? error.message : String(error),
       stderr: "",
@@ -410,31 +496,71 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
   }
 }
 
-function akmRunChecked(args: string[], input?: string): { ok: boolean; stdout: string; stderr: string } {
+function akmRunChecked(args: string[], input?: string, timeoutMs?: number): { ok: boolean; stdout: string; stderr: string } {
   const akm = resolveAkmCommandSpec()
   if (!akm) return { ok: false, stdout: "", stderr: "akm not found on PATH" }
-  const timeout = findCommandOnPath("timeout")
-  const result = timeout
-    ? runCommand(timeout, ["--preserve-status", CURATE_TIMEOUT, akm.command, ...akm.argsPrefix, ...args], { input, suppressStderr: false })
-    : runCommand(akm.command, [...akm.argsPrefix, ...args], { input, suppressStderr: false })
+  const result = runCommand(akm.command, [...akm.argsPrefix, ...args], { input, suppressStderr: false, timeoutMs })
   return { ok: result.ok, stdout: result.stdout, stderr: result.stderr }
 }
 
-function emitHookContext(eventName: string, body: string): string {
-  if (!body.trim()) return ""
-  const marker = "\n\n[truncated for context]"
-  let additionalContext = body
-  if (additionalContext.length > CONTEXT_BUDGET_CHARS) {
-    additionalContext = CONTEXT_BUDGET_CHARS <= marker.length
-      ? additionalContext.slice(0, CONTEXT_BUDGET_CHARS)
-      : `${additionalContext.slice(0, CONTEXT_BUDGET_CHARS - marker.length)}${marker}`
-  }
-  return JSON.stringify({
-    hookSpecificOutput: {
+/**
+ * The hook protocol has two output channels and this file used to write only
+ * one. `additionalContext` is read by the MODEL; `systemMessage` is the
+ * documented top-level field Claude Code shows to the HUMAN. Every failure
+ * mode here (akm missing, no bundle, last extraction failed) is something only
+ * the person at the keyboard can fix, so callers may emit context, a
+ * user-visible message, or both — hence the relaxed empty check: a
+ * user-visible message can ride alone with no model context at all.
+ */
+function emitHookContext(eventName: string, body: string, systemMessage?: string): string {
+  const visible = systemMessage?.trim() ?? ""
+  if (!body.trim() && !visible) return ""
+  const payload: Record<string, unknown> = {}
+  if (body.trim()) {
+    const marker = "\n\n[truncated for context]"
+    let additionalContext = body
+    if (additionalContext.length > CONTEXT_BUDGET_CHARS) {
+      additionalContext = CONTEXT_BUDGET_CHARS <= marker.length
+        ? additionalContext.slice(0, CONTEXT_BUDGET_CHARS)
+        : `${additionalContext.slice(0, CONTEXT_BUDGET_CHARS - marker.length)}${marker}`
+    }
+    payload.hookSpecificOutput = {
       hookEventName: eventName,
       additionalContext,
-    },
-  })
+    }
+  }
+  // CONTEXT_BUDGET_CHARS is a model-context budget and deliberately does not
+  // apply here: the user-visible message is a single sentence by construction.
+  if (visible) payload.systemMessage = visible
+  return JSON.stringify(payload)
+}
+
+/**
+ * Bounded tail read. Callers only care about the newest few records of an
+ * append-only state file, and rotateIfOversized() caps those files at 1 MiB by
+ * default — reading a whole megabyte to look at its end is not something a
+ * SessionStart or UserPromptSubmit hook can afford. The first line of the
+ * result may be a partial record (the window can start mid-line) and rotation
+ * can have cut the head of the file itself, so every caller must tolerate a
+ * truncated head. Never throws: a missing or unreadable file reads as empty.
+ */
+function readTailBytes(filePath: string, maxBytes: number): string {
+  try {
+    if (!existsSync(filePath)) return ""
+    const size = statSync(filePath).size
+    if (size <= 0) return ""
+    const start = Math.max(0, size - maxBytes)
+    const fd = openSync(filePath, "r")
+    try {
+      const buffer = Buffer.alloc(size - start)
+      const read = readSync(fd, buffer, 0, buffer.length, start)
+      return buffer.subarray(0, read).toString("utf8")
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return ""
+  }
 }
 
 function safeJsonParse<T>(raw: string): T | undefined {
@@ -499,20 +625,22 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
         : ""
   // Capture the *raw* (pre-sanitize) command/output text so we can collect
   // ref candidates from any sub-string position (heredocs, fenced code,
-  // JSON values, prose). Candidates feed the memory-candidate pipeline
-  // (extractCandidatesFromText -> memory-candidates.jsonl), which is written
-  // but no longer read by any shipped surface: the /akm-memory-promote,
-  // -reject, -audit and -candidates slash commands were all deleted in 0.9.0.
-  // Whether to retire the pipeline is an open maintainer decision; until then
-  // the file is a passive, redacted record under STATE_DIR.
-  // (sanitize() is still used for log-line readability.)
+  // JSON values, prose). (sanitize() is still used for log-line readability.)
   const rawCommandText = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || ""
   const rawOutputText = getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || ""
   const commandText = sanitize(rawCommandText)
   const outputText = sanitize(rawOutputText)
-  const bundleRoots = resolveStashRoots()
-  const commandRefs = validateRefCandidates(extractAllRefs(rawCommandText), bundleRoots)
-  const outputRefs = validateRefCandidates(extractAllRefs(rawOutputText), bundleRoots)
+  // Extract BEFORE resolving. resolveStashRoots() shells out to `akm info`
+  // whenever AKM_BUNDLE_DIR is unset, and validateRefCandidates() throws the
+  // roots away outright on an empty candidate list — so resolving first meant
+  // an `akm info` spawn on every ref-free tool event, which is nearly all of
+  // them. Memoization cannot help: each Claude hook invocation is a fresh
+  // sh+bun process. Reordering is the only fix that works.
+  const commandCandidates = extractAllRefs(rawCommandText)
+  const outputCandidates = extractAllRefs(rawOutputText)
+  const bundleRoots = commandCandidates.length > 0 || outputCandidates.length > 0 ? resolveStashRoots() : []
+  const commandRefs = validateRefCandidates(commandCandidates, bundleRoots)
+  const outputRefs = validateRefCandidates(outputCandidates, bundleRoots)
   const refs = [...new Set([...commandRefs, ...outputRefs])]
   if (refs.length === 0 && commandText.includes("akm remember")) {
     const match = commandText.match(/--name\s+([A-Za-z0-9._/-]+)/)
@@ -524,26 +652,6 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
       ? parsed.sessionId.replace(/[^A-Za-z0-9._-]/g, "")
       : ""
   return { toolName, commandText, outputText, statusText: mode || "success", refs, commandRefs, outputRefs, sid }
-}
-
-function pretoolNonBash(): string {
-  const rawInput = readStdin()
-  const parsed = safeJsonParse<Record<string, unknown>>(rawInput)
-  if (!parsed) return ""
-  const text = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || sanitize(rawInput)
-  const refs = validateRefCandidates(extractAkmRefsFromString(text), resolveStashRoots())
-  if (refs.length === 0) return ""
-  const sid = extractSessionId(rawInput)
-  const toolName = typeof parsed.tool === "string" ? parsed.tool : typeof parsed.tool_name === "string" ? parsed.tool_name : "nonbash"
-  writeMemoryEvent({
-    event: "tool_ref_observed",
-    sessionId: sid || undefined,
-    scope: buildScope(sid),
-    input: { tool: toolName, phase: "pre" },
-    refs,
-    outcome: { status: "ok" },
-  })
-  return ""
 }
 
 function posttoolNonBash(): string {
@@ -607,8 +715,11 @@ function postToolBatch(): string {
   // post-tool-nonbash, which both validate, and it writes the same
   // tool-observation refs. Candidates come from the *raw* text (heredocs,
   // fenced code, JSON values) for the same reason extractPostToolFields() does
-  // it; resolveStashRoots() is resolved once per invocation, never per ref.
-  const refs = validateRefCandidates(extractAllRefs(rawFlattened), resolveStashRoots())
+  // it, and — also for the same reason — they are extracted BEFORE the roots
+  // are resolved, so a ref-free batch never pays for an `akm info` spawn whose
+  // result validateRefCandidates() would discard anyway.
+  const candidates = extractAllRefs(rawFlattened)
+  const refs = candidates.length > 0 ? validateRefCandidates(candidates, resolveStashRoots()) : []
   writeMemoryEvent({
     event: "tool_batch_observation",
     sessionId: sid || undefined,
@@ -710,34 +821,9 @@ function taskCompleted(): string {
     input: { taskId: parsed.task_id ?? parsed.taskId ?? null, summary },
     outcome: { status: "ok" },
   })
-  if (sid && summary) {
-    writeSessionBuffer(sid, "task completed", summary)
-    const bufferPath = path.join(SESSIONS_DIR, `${sid}.md`)
-    // Validate against the bundle: these hints become the `targetRef` of a
-    // memory candidate, i.e. the asset a later promotion would attach feedback
-    // to. A hint that does not resolve is worse than no hint, so the
-    // filesystem check earns its cost here. Once per completed task, and
-    // resolveStashRoots() is called once — not per ref.
-    const targetRefHints = validateRefCandidates(extractAllRefs(summary), resolveStashRoots())
-    const candidates = extractCandidatesFromText({
-      harness: "claude-code",
-      sessionId: sid,
-      text: summary,
-      evidence: [summary],
-      sourcePaths: [bufferPath, EVENT_LOG, CANDIDATE_LOG],
-      targetRefHints,
-    })
-    if (candidates.length > 0) {
-      appendCandidates(CANDIDATE_LOG, candidates)
-      writeMemoryEvent({
-        event: "candidate_extracted",
-        sessionId: sid || undefined,
-        scope: buildScope(sid),
-        memory: { source: "task_completed", count: candidates.length },
-        outcome: { status: "ok" },
-      })
-    }
-  }
+  // The session buffer is the transcript `akm proposal extract` reads at
+  // SessionEnd, so a completed task's summary has to land in it.
+  if (sid && summary) writeSessionBuffer(sid, "task completed", summary)
   return ""
 }
 
@@ -836,8 +922,52 @@ function refQuality(ref: string): string {
 
 function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   if (!INDEX_ON_SESSION_END || !akmAvailable()) return
-  const result = akmRunChecked(["index"])
+  // Its own, much larger cap. Every other spawn here is a per-turn retrieval
+  // where CURATE_TIMEOUT is the right budget; a full reindex of a large stash
+  // is neither, and it runs once, at SessionEnd, where nothing is waiting on
+  // it. Capping it at CURATE_TIMEOUT would SIGTERM a reindex that used to be
+  // uncapped on macOS (no `timeout(1)`) and leave the index half-built.
+  const result = akmRunChecked(["index"], undefined, INDEX_TIMEOUT * 1000)
   if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
+}
+
+// Enough of extract.log to hold the newest `proposal_extract` block; the file
+// is rotated like every other state file, so this is a fixed cost regardless of
+// how long the install has been running.
+const EXTRACT_LOG_TAIL_BYTES = 8 * 1024
+
+/**
+ * SessionEnd's `akm proposal extract` is the only memory-harvest path left and
+ * it runs detached, so its failure was 100% silent: a fresh install with no LLM
+ * profile prints `{"ok":false,...,"code":"INVALID_CONFIG_FILE"}` into
+ * extract.log, and no hook output has ever named that file — claude/README.md
+ * tells the user to "check here first if durable memories never appear" without
+ * anywhere to check. Report the newest failure at SessionStart, with the path.
+ *
+ * This repeats every SessionStart until a later `proposal_extract` block
+ * succeeds — deliberately, because the condition itself persists (an unset LLM
+ * profile fails every harvest, not just one), and a warning shown once and then
+ * suppressed is how a broken install stays broken. It costs one bounded tail
+ * read, never a full parse, and it cannot throw.
+ */
+function lastExtractFailureWarning(): string {
+  try {
+    const tail = readTailBytes(EXTRACT_LOG, EXTRACT_LOG_TAIL_BYTES)
+    // extractSession() writes a `proposal_extract` header line and then lets
+    // the child append its own stdout/stderr underneath, so everything after
+    // the newest header is the newest run's outcome.
+    const newestBlock = tail.lastIndexOf("\tproposal_extract\t")
+    if (newestBlock < 0) return ""
+    const block = tail.slice(newestBlock)
+    // `ok:false` alone. This also accepted any `"code":` in the block, which
+    // matches a SUCCESSFUL extraction whose JSON happens to carry a `code`
+    // field anywhere — including inside a proposal body echoed into the log —
+    // and warned the user that memory extraction had failed when it had not.
+    if (!/"ok"\s*:\s*false/.test(block)) return ""
+    return `The last AKM session-end memory extraction failed — durable memories were not harvested. See \`${EXTRACT_LOG}\` for the error (a fresh install without a configured LLM profile logs INVALID_CONFIG_FILE; \`akm setup\` configures one).`
+  } catch {
+    return ""
+  }
 }
 
 // `bundleRoots` is passed in rather than resolved here: sessionStart() needs
@@ -886,16 +1016,18 @@ function recordPostTool() {
   const { toolName, commandText, outputText, statusText, refs, sid } = extractPostToolFields(rawInput, MODE)
   if (/akm|\/akm/.test(commandText)) appendLog(FEEDBACK_LOG, "system", statusText, toolName || "Bash", commandText)
   for (const ref of refs) {
-    appendLog(MEMORY_LOG, "system", toolName || "Bash", ref, commandText)
+    // The session id is the last column: captureRetrospectiveFeedback replays
+    // this file from an unrelated hook process later in the session, and the
+    // file is shared by every session on the machine — without the column a
+    // "thanks, that worked" in one session credits refs another session
+    // touched. Appended last so the existing column order is unchanged.
+    appendLog(MEMORY_LOG, "system", toolName || "Bash", ref, commandText, sid)
   }
   // Record one buffer section per post-tool event (command + status). We
   // deliberately do NOT inject `- ref: <type>:<slug>` lines into the body —
-  // the buffer feeds candidate mining in taskCompleted() (extractCandidatesFromText
-  // sourcePaths) and is one of the transcript sources `akm proposal extract`
-  // reads at SessionEnd; leaving raw command text (not synthetic ref lines)
-  // keeps both honest. There is no longer a slash command that reviews the
-  // resulting candidates — see extractPostToolFields() for the status of that
-  // pipeline.
+  // the buffer is one of the transcript sources `akm proposal extract` reads
+  // at SessionEnd, and leaving raw command text (not synthetic ref lines)
+  // keeps that transcript honest.
   if (sid && refs.length > 0) {
     writeSessionBuffer(sid, `${toolName || "Bash"} ${statusText}`, `- command: ${commandText}`)
   }
@@ -909,6 +1041,48 @@ function recordPostTool() {
   })
 }
 
+// Refs that must never receive automatic feedback, in bundle-qualified form
+// too (`local//lessons/foo`). Lessons take feedback through the proposal
+// queue; memories/env/secrets are not ranked assets at all. Shared by both
+// auto-feedback paths so the two cannot drift.
+const NO_AUTO_FEEDBACK_REF_RE = /^(?:.*\/\/)?(?:memories|env|secrets|lessons)\//
+// Verbs that only LOOK at an asset. `akm show <ref>` names the ref in the
+// command, so directInput scored it 0.65 — over the 0.6 floor — and merely
+// inspecting an asset submitted POSITIVE feedback for it, biasing the exact
+// ranking loop this plugin exists to feed. Failures still count for these
+// verbs: a `show`/`search`/`curate` that errors says something real about the
+// ref it was pointed at.
+const AKM_READ_ONLY_VERBS = new Set(["show", "search", "curate"])
+// Global flags that take a separate value, so `akm --format json -q show <ref>`
+// resolves to `show` rather than to `json`.
+const AKM_VALUE_FLAGS = new Set(["--format", "--shape", "--limit"])
+
+// Only the FIRST akm invocation in the command text is inspected, so a
+// compound `akm show skills/x && akm workflow start skills/x` resolves to
+// `show` and the whole event is skipped — the use is thrown away along with
+// the lookup. Deliberate: the alternative is scanning every invocation and
+// taking the most use-shaped one, which turns a lookup that merely PRECEDED an
+// unrelated use into positive feedback. Under-crediting is the safe direction
+// for a ranking signal; the retrospective path still credits the ref if the
+// user says it worked.
+function akmSubcommand(commandText: string): string {
+  const invocation = /(?:^|[\s;&|])(?:akm|\/akm(?:-([A-Za-z0-9-]+))?)(?=\s|$)/.exec(commandText)
+  if (!invocation) return ""
+  // `/akm-show <ref>` carries the verb in the command name itself.
+  if (invocation[1]) return invocation[1].toLowerCase()
+  const tokens = commandText.slice(invocation.index + invocation[0].length).trim().split(/\s+/)
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]
+    if (!token) continue
+    if (token.startsWith("-")) {
+      if (AKM_VALUE_FLAGS.has(token)) index++
+      continue
+    }
+    return token.toLowerCase()
+  }
+  return ""
+}
+
 function autoFeedback() {
   if (!AUTO_FEEDBACK || !akmAvailable()) return
   const rawInput = readStdin()
@@ -917,9 +1091,11 @@ function autoFeedback() {
   if (!/(?:^|[\s;&|])(?:akm|\/akm(?:-[A-Za-z0-9-]+)?)(?=\s|$)/.test(rawCommand)) return
   const { commandText, statusText, refs, commandRefs, sid } = extractPostToolFields(rawInput, MODE)
   if (/akm\s+feedback|\/akm\s+feedback/.test(commandText)) return
+  // Inspecting is not helping — see AKM_READ_ONLY_VERBS.
+  if (statusText !== "failure" && AKM_READ_ONLY_VERBS.has(akmSubcommand(commandText))) return
   if (refs.length === 0) return
   for (const ref of refs) {
-    if (/^(?:.*\/\/)?(?:memories|env|secrets|lessons)\//.test(ref)) continue
+    if (NO_AUTO_FEEDBACK_REF_RE.test(ref)) continue
     if (refQuality(ref) === "proposed") {
       appendLog(FEEDBACK_LOG, "system", "skip_proposed", ref, statusText)
       continue
@@ -958,6 +1134,113 @@ function autoFeedback() {
   }
 }
 
+// How far back into memory.log to look for refs this session already touched,
+// and how many of them a single "that worked" may credit. Three matches the
+// OpenCode cap: past that, the message is crediting assets the user has long
+// stopped thinking about.
+const RETROSPECTIVE_TAIL_BYTES = 16 * 1024
+const RETROSPECTIVE_MAX_REFS = 3
+// Wall-clock cap for the whole retrospective-feedback leg, shared across its
+// akm feedback spawns. Sized to leave the UserPromptSubmit curate call its full
+// CURATE_TIMEOUT inside the hook's declared 15 s budget.
+const RETROSPECTIVE_BUDGET_MS = 3000
+const RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
+const RETROSPECTIVE_NEGATIVE_RE = createRetrospectiveNegativeRegex()
+const EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
+
+/**
+ * Retrospective user feedback ("that worked"): the highest-confidence signal
+ * the shared classifier defines short of an explicit `akm feedback` (0.7
+ * positive), and until now only OpenCode captured it. UserPromptSubmit is
+ * where Claude sees the user's own words, so the branch lives here.
+ *
+ * The refs come from memory.log rather than an in-process buffer because every
+ * Claude hook invocation is a fresh process with no session state to read.
+ * Only `system` rows carry a ref column (recordPostTool writes
+ * `system<TAB>tool<TAB>ref<TAB>command<TAB>session`); the same file also holds
+ * `user<TAB>intent<TAB>text` rows, and both the bounded tail read and
+ * rotateIfOversized() can cut the first line in half — the column check is
+ * what makes a partial head harmless rather than a parse error.
+ *
+ * That shared file is the reason for the session column: concurrent (or merely
+ * consecutive) sessions append to it, so an unscoped tail read lets session B's
+ * "thanks, that worked" credit refs only session A ever touched. OpenCode has
+ * no equivalent hazard — its retrospective path reads the in-process
+ * sessionBuffer, which is already per-session.
+ */
+function captureRetrospectiveFeedback(text: string, sid: string) {
+  if (!AUTO_FEEDBACK) return
+  if (!RETROSPECTIVE_FEEDBACK_RE.test(text)) return
+  // A mixed-signal message ("thanks, but it did not work") carries a positive
+  // token AND a negative one. It is ambiguous, not praise: skip rather than
+  // misattribute. Same guard OpenCode applies before its retrospective branch.
+  if (RETROSPECTIVE_NEGATIVE_RE.test(text) || EXPLICIT_CORRECTION_RE.test(text)) return
+  // Cheapest checks first: the regexes reject the overwhelming majority of
+  // prompts before this PATH scan or the memory.log read below.
+  if (!akmAvailable()) return
+  // No session id means nothing to scope the log read to, and the feedback
+  // record would carry no session either — credit nothing rather than credit
+  // whatever the shared log happens to end with.
+  if (!sid) return
+  const recentRefs: string[] = []
+  for (const line of readTailBytes(MEMORY_LOG, RETROSPECTIVE_TAIL_BYTES).split("\n")) {
+    const columns = line.split("\t")
+    if (columns[1] !== "system") continue
+    const ref = columns[3]
+    if (!ref || NO_AUTO_FEEDBACK_REF_RE.test(ref)) continue
+    // Another session's row — or one from a build that predates the session
+    // column — is not this session's evidence.
+    if (columns[5] !== sid) continue
+    // Keep each ref's LAST occurrence, so `slice(-N)` really means "the N most
+    // recently touched distinct refs". First-occurrence order would sort a ref
+    // touched early and again just now to the front and drop it.
+    const previous = recentRefs.indexOf(ref)
+    if (previous !== -1) recentRefs.splice(previous, 1)
+    recentRefs.push(ref)
+  }
+  // Bound the whole leg against the hook's own budget. UserPromptSubmit
+  // declares timeout 15 in plugin.json and the curate spawn below can already
+  // take CURATE_TIMEOUT; letting up to RETROSPECTIVE_MAX_REFS feedback spawns
+  // each run to that same cap first made the pathological path exceed the
+  // budget, which kills the hook and loses the curation too. `akm feedback` is
+  // a fast local write, so a small shared deadline costs nothing on the normal
+  // path and degrades to "credit fewer refs" instead of "lose the turn".
+  const retrospectiveDeadline = Date.now() + RETROSPECTIVE_BUDGET_MS
+  for (const ref of recentRefs.slice(-RETROSPECTIVE_MAX_REFS)) {
+    const remainingMs = retrospectiveDeadline - Date.now()
+    if (remainingMs <= 0) {
+      appendLog(FEEDBACK_LOG, "system", "retrospective_budget_exhausted", ref)
+      break
+    }
+    const signal = classifyFeedbackSignal({
+      ref,
+      polarity: "positive",
+      harness: "claude-code",
+      sessionId: sid || undefined,
+      retrospective: true,
+      note: "claude-code retrospective: user confirmed it worked",
+    })
+    if (!shouldSubmitAutomaticFeedback(signal)) continue
+    const result = akmRun(
+      ["feedback", ref, "--positive", "--reason", redactSecrets(signal.note).text, "--format", "json", "-q"],
+      undefined,
+      { timeoutMs: remainingMs },
+    )
+    if (!result.trim()) {
+      appendLog(FEEDBACK_LOG, "system", "feedback_failed", ref, "retrospective", "empty stdout from akm feedback")
+      continue
+    }
+    writeMemoryEvent({
+      event: "feedback_recorded",
+      sessionId: sid || undefined,
+      scope: buildScope(sid),
+      refs: [ref],
+      input: { source: signal.source, confidence: signal.confidence, note: signal.note },
+      outcome: { status: "ok" },
+    })
+  }
+}
+
 function curatePrompt(): string {
   const rawInput = readStdin()
   const text = extractUserText(rawInput)
@@ -970,6 +1253,14 @@ function curatePrompt(): string {
     }
   }
   if (!text) return ""
+  // Before the curate gate on purpose: "that worked" is a short prompt that
+  // shouldRecall() rejects and AKM_AUTO_CURATE=0 skips entirely, and neither
+  // has anything to do with whether the user just handed us a feedback signal.
+  captureRetrospectiveFeedback(text, sid)
+  // AKM_AUTO_CURATE=0 disables prompt curation only. It deliberately sits below
+  // the feedback/memory-intent logging above: an early return at the top of the
+  // function would silently drop those writes too.
+  if (!AUTO_CURATE) return ""
   const decision = shouldRecall(text)
   if (!decision.shouldRecall || !akmAvailable()) {
     writeMemoryEvent({
@@ -1025,6 +1316,10 @@ async function sessionStart(): Promise<string> {
         `  bun install -g ${AKM_PACKAGE_REF}`,
         `  npm install -g ${AKM_PACKAGE_REF}`,
       ].join("\n"),
+      // The model cannot install anything; the user can. Give the human the
+      // one command they need instead of leaving the whole failure inside the
+      // model's context window.
+      `AKM is unavailable this session (${versionCheck.reason ?? "unknown"}). Install it with: bun install -g ${AKM_PACKAGE_REF}`,
     )
   }
   if (!akmAvailable()) return ""
@@ -1044,26 +1339,36 @@ async function sessionStart(): Promise<string> {
   // resolveStashRoots() may spawn `akm info`.
   const bundleRoots = resolveStashRoots()
   const sessionWarnings = gatherSessionStartWarnings(bundleRoots)
+  const extractWarning = lastExtractFailureWarning()
+  if (extractWarning) sessionWarnings.push(extractWarning)
 
-  // #71 perceived-latency fix: hints, curate, and proposals have no
-  // inter-dependency — issue them concurrently via Promise.all instead of
-  // running them sequentially. Worst-case wall-clock drops from ~3×CURATE_TIMEOUT
-  // to ~1×CURATE_TIMEOUT when all three calls hit the same embedding bottleneck.
+  // #71 perceived-latency fix: hints, curate, proposals and the active-workflow
+  // list have no inter-dependency — issue them concurrently via Promise.all
+  // instead of running them sequentially. Worst-case wall-clock stays at
+  // ~1×CURATE_TIMEOUT however many of them hit the same embedding bottleneck,
+  // which is why the fourth call costs nothing.
+  //
+  // A disabled leg resolves to "" without spawning at all: AKM_AUTO_HINTS=0 /
+  // AKM_AUTO_CURATE=0 have to mean "no subprocess", not "spawn it and throw the
+  // result away".
   const cwdContext = gatherCwdContext()
-  const [hintsRaw, curatedRaw, pendingRaw] = await Promise.all([
-    akmRunAsync(["--format", "text", "-q", "hints"]),
-    akmRunAsync([
-      "--shape",
-      "agent",
-      "--format",
-      "text",
-      "-q",
-      "curate",
-      cwdContext,
-      "--limit",
-      String(CURATE_LIMIT),
-    ]),
+  const [hintsRaw, curatedRaw, pendingRaw, activeWorkflowRaw] = await Promise.all([
+    AUTO_HINTS ? akmRunAsync(["--format", "text", "-q", "hints"]) : Promise.resolve(""),
+    AUTO_CURATE
+      ? akmRunAsync([
+          "--shape",
+          "agent",
+          "--format",
+          "text",
+          "-q",
+          "curate",
+          cwdContext,
+          "--limit",
+          String(CURATE_LIMIT),
+        ])
+      : Promise.resolve(""),
     akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
+    akmRunAsync(["--format", "json", "-q", "workflow", "list", "--active"]),
   ])
   const hints = hintsRaw.trim()
   const curatedTrimmed = curatedRaw.trim()
@@ -1080,14 +1385,31 @@ async function sessionStart(): Promise<string> {
     : Array.isArray(pendingItems?.hits)
       ? pendingItems?.hits.length
       : 0
+  // The banner used to point at `akm proposal list --status pending` — the
+  // exact listing this hook just ran to produce the count. Point at the next
+  // useful step instead.
+  const PENDING_NEXT_STEPS =
+    'Inspect one with `akm proposal show <id>`, then `akm proposal accept <id>` or `akm proposal reject <id> --reason "..."`.'
   const pendingSummary =
     pending <= 0
       ? ""
       : pending === 1
-        ? "There is 1 pending AKM proposal. Review it with `akm proposal list --status pending`."
-        : `There are ${pending} pending AKM proposals. Review them with \`akm proposal list --status pending\`.`
+        ? `There is 1 pending AKM proposal. ${PENDING_NEXT_STEPS}`
+        : `There are ${pending} pending AKM proposals. ${PENDING_NEXT_STEPS}`
+  // The active-workflow list used to reach subagents only, which is backwards:
+  // the main session is the one that can run `akm workflow resume`. Same
+  // reduction function as subagentStart() — run ids and status only, never the
+  // attacker-influenceable workflowTitle/params.
+  const workflowSummary = summarizeActiveWorkflows(activeWorkflowRaw.trim())
 
-  if (!hints && !curatedTrimmed && !pendingSummary && sessionWarnings.length === 0) return ""
+  // No early return for a quiet stash. The header + footer below are the whole
+  // point of SessionStart — they tell the agent that akm exists, which lookup
+  // verb to reach for, and that the surface is five commands wide. On the most
+  // common profile of all (fresh install, nothing curated, no hints, no
+  // proposals) an early return here made SessionStart emit zero bytes, so the
+  // header and footer were unreachable exactly when they were most needed. The
+  // optional blocks still append only when non-empty, and the version gate
+  // above still returns early when akm is unusable.
   writeMemoryEvent({
     event: "session_started",
     sessionId: sid || undefined,
@@ -1102,10 +1424,14 @@ async function sessionStart(): Promise<string> {
   let body = SESSION_START_HEADER
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
+  if (workflowSummary) body = `${body}\n\n${workflowSummary}`
   if (hints) body = `${body}\n\n${hints}`
   if (curatedFile) body = `${body}\n\nAKM stash curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${CURATED_CONTEXT_TAIL}`
   body = `${body}\n\n${SESSION_START_FOOTER}`
-  return emitHookContext("SessionStart", body)
+  // The warnings also ride the user-visible channel: a missing bundle or a
+  // failed extraction is the user's to fix, and telling only the model about it
+  // is how both stayed invisible.
+  return emitHookContext("SessionStart", body, sessionWarnings.join("\n"))
 }
 
 /**
@@ -1131,6 +1457,9 @@ async function sessionStart(): Promise<string> {
  * recorded in session.log. Still detached, still unref'd, still no wait.
  */
 function extractSession(): string {
+  // AKM_AUTO_MEMORY=0 turns automatic memory harvesting off. This spawn is the
+  // whole of that harvest on Claude, so it is the only place the switch bites.
+  if (!AUTO_MEMORY) return ""
   const raw = readStdin()
   const sid = extractSessionId(raw)
   if (!sid) return ""
@@ -1180,18 +1509,22 @@ function extractSession(): string {
 }
 
 // Dispatch. .claude-plugin/plugin.json wires exactly: session-start,
-// curate-prompt, user-prompt-expansion, pre-tool-nonbash, post-tool,
-// post-tool-nonbash, post-tool-batch, auto-feedback, subagent-start,
-// task-created, task-completed, post-compact, session-end, extract-session.
+// curate-prompt, user-prompt-expansion, post-tool, post-tool-nonbash,
+// post-tool-batch, auto-feedback, subagent-start, task-created,
+// task-completed, post-compact, session-end, extract-session.
 //
-// `ensure-akm` / `check-akm` / `user-feedback` / `pre-tool` are NOT reachable
-// from the manifest. They are retained deliberately as manual-diagnostic
-// entry points and as the entry points the test suite uses to exercise
-// checkAkmVersion() and recordUserFeedback() in isolation — both of which are
-// live code (checkAkmVersion() runs on every SessionStart; recordUserFeedback()
+// `ensure-akm` / `check-akm` / `user-feedback` are NOT reachable from the
+// manifest. They are retained deliberately as manual-diagnostic entry points
+// and as the entry points the test suite uses to exercise checkAkmVersion()
+// and recordUserFeedback() in isolation — both of which are live code
+// (checkAkmVersion() runs on every SessionStart; recordUserFeedback()
 // duplicates the feedback/memory-intent logging that curatePrompt() performs
 // inline). Do not add manifest wiring for them without re-reviewing that
 // duplication.
+//
+// `pre-tool` and `pre-tool-nonbash` are unwired for a different reason: both
+// once had handlers, both were deleted, and both survive here only as explicit
+// no-ops. See their cases below.
 async function main(): Promise<string> {
   switch (COMMAND) {
     case "ensure-akm":
@@ -1214,15 +1547,23 @@ async function main(): Promise<string> {
     case "user-prompt-expansion":
       return userPromptExpansion()
     case "pre-tool":
-      // Not manifest-wired (see above): PreToolUse registers only the
-      // Read/Write/Edit/Glob/Grep matchers, which run pre-tool-nonbash. Bash
-      // gating was removed in 0.8.0 — defer to the platform's permission
+      // Bash gating was removed in 0.8.0 — defer to the platform's permission
       // system (see claude/README.md "Locking down destructive commands").
       // Kept as an explicit no-op so an out-of-date user settings.json that
       // still calls it cannot block a tool or spam the unknown-command log.
       return ""
     case "pre-tool-nonbash":
-      return pretoolNonBash()
+      // The PreToolUse Read/Write/Edit/Glob/Grep matchers were dropped from
+      // the manifest: pretoolNonBash() wrote a `tool_ref_observed` event with
+      // only { tool, phase: "pre" }, and the PostToolUse handler writes that
+      // same event with strictly more fields (command, output preview, the
+      // real outcome status) plus the session-buffer lines. The pre pass also
+      // extracted refs with the whitespace-token splitter rather than the
+      // substring scan, so its refs were a subset of the post pass's modulo
+      // `.`/`:`-prefixed tokens the shared extractor rejects by design. Five
+      // hook processes per tool call bought nothing. Same no-op rationale as
+      // `pre-tool` above: a stale user settings.json must not block a tool.
+      return ""
     case "post-tool-nonbash":
       posttoolNonBash()
       return ""

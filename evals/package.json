@@ -12,7 +12,7 @@
     "tier2:context-budget": "bun tier2/runner.ts --metric context_budget",
     "tier2:feedback": "bun tier2/runner.ts --metric feedback",
     "tier3": "bun tier3/runner.ts",
-    "tier3:ab": "bun tier3/ab.ts",
+    "tier3:smoke": "bun tier3/runner.ts --no-judge --agent stub",
     "diff": "bun lib/cli-diff.ts",
     "baseline:update": "bun tier2/runner.ts --out tier2/baseline --no-fail"
   },

@@ -25,6 +25,26 @@
 //     release. There are no `vault:`/`wiki:` types in 0.9 — the fixtures
 //     that used them were repointed at roots that actually exist.
 //
+// A fixture is driven on success, on failure, or on both. "neither" defaults
+// to both (the skip must hold either way) and positive/negative to the one
+// matching their label; the optional `drive` field overrides that. `drive`
+// exists for the read-only-verb rule added in 0.9: a SUCCESSFUL
+// `akm show|search|curate` must emit nothing, while a FAILING one must still
+// emit negative, and that is two different truths about one fixture. The
+// read-only fixtures are therefore labeled "neither" and driven on success
+// only — their failure half is covered by the `akm show` failures in fb-004
+// and fb-005. Do not "fix" a read-only regression by re-labeling these.
+//
+// The two plugins are driven through different positive channels because they
+// HAVE different ones. Claude observes arbitrary Bash `akm <verb>` calls, so a
+// use-shaped verb (`agent`, `run`, `workflow start`) is a positive on the tool
+// path. Every OpenCode tool that yields a ref is read-only, so after the same
+// rule OpenCode's tool path can never produce a positive by construction: its
+// positive channel is the retrospective one, and that is what the OpenCode arm
+// drives for positive fixtures (observe the ref, then say "thanks, that
+// worked"). Both arms are still scored on the same emissions in the same call
+// log, and both must agree on every fixture.
+//
 // Refs throughout are AKM 0.9 concept IDs (`skills/code-review`), not the
 // pre-0.9 `type:slug` form (`skill:code-review`).
 
@@ -44,6 +64,14 @@ export type FeedbackFixture = {
   command?: string
   toolArgs?: Record<string, unknown>
   output: string
+  drive?: Array<"success" | "failure">
+  // OpenCode only: also deliver a "thanks, that worked" after observing the
+  // ref, so the fixture is scored on the retrospective channel and not just on
+  // the tool path. Implied for positive fixtures (that IS OpenCode's positive
+  // channel). Set it on skip-list fixtures, whose rule has to hold on BOTH
+  // channels — the two filters had drifted, and only the tool path excluded
+  // `lessons/`.
+  retrospective?: boolean
 }
 
 export type FeedbackOptions = {
@@ -56,6 +84,14 @@ function loadFixtures(p: string): FeedbackFixture[] {
     .split("\n")
     .filter(Boolean)
     .map((l) => JSON.parse(l) as FeedbackFixture)
+}
+
+// Which tool outcomes this fixture is driven with. Shared by both arms so the
+// two plugins are always asked the same question about the same fixture.
+function drivesFor(fixture: FeedbackFixture): Array<"success" | "failure"> {
+  if (fixture.drive?.length) return fixture.drive
+  if (fixture.label === "neither") return ["success", "failure"]
+  return [fixture.label === "positive" ? "success" : "failure"]
 }
 
 // AKM 0.9 ref grammar: [bundle//]conceptId[#fragment], where conceptId is the
@@ -120,10 +156,7 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
   for (const f of fixtures) {
     const sandbox = createSandbox({ sourceStash: opts.stashDir })
     try {
-      // For "neither", invoke both success and failure to verify the
-      // plugin skips both. For positive/negative, just the matching one.
-      const sentiments: Array<"success" | "failure"> = f.label === "neither" ? ["success", "failure"] : [f.label === "positive" ? "success" : "failure"]
-      for (const s of sentiments) {
+      for (const s of drivesFor(f)) {
         runClaudeHook(["auto-feedback", s], {
           input: JSON.stringify({
             tool: f.tool,
@@ -150,19 +183,35 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
     for (const f of fixtures) {
       const sandbox = createSandbox({ sourceStash: opts.stashDir })
       try {
-        const harness = await createOpenCodeHarness(sandbox.env)
-        const outputForLabel = (label: string) =>
-          label === "negative"
+        // Per-prompt curation is off for this metric: chat.message is used
+        // below only to deliver a retrospective confirmation, and the
+        // fire-and-forget `akm curate` it would otherwise schedule is unrelated
+        // background noise in the same call log.
+        const harness = await createOpenCodeHarness({ ...sandbox.env, AKM_AUTO_CURATE: "0" })
+        const outputForDrive = (drive: string) =>
+          drive === "failure"
             ? `{"ok":false,"error":"failure","ref":"${f.refs[0] ?? ""}"}`
             : f.output
-        const labels: Array<"positive" | "negative" | "neither"> = f.label === "neither" ? ["positive", "negative"] : [f.label]
-        for (const label of labels) {
+        for (const drive of drivesFor(f)) {
+          const sessionID = `fb-oc-${f.id}-${drive}`
           await harness.toolAfter({
-            sessionID: `fb-oc-${f.id}-${label}`,
+            sessionID,
             tool: f.tool.startsWith("akm_") ? f.tool : "akm_show",
             toolArgs: f.toolArgs ?? {},
-            output: outputForLabel(label),
+            output: outputForDrive(drive),
           })
+          // OpenCode's every ref-yielding tool is read-only, so a successful
+          // tool call is never a positive on its own (see the header). The
+          // channel that DOES credit an asset is the user confirming it
+          // afterwards, against the refs this session already observed.
+          // Skip-list fixtures opt in with `retrospective` so the roots that
+          // must never receive auto-feedback are measured on that channel too.
+          if (f.label === "positive" || f.retrospective) {
+            await harness.hooks["chat.message"](
+              { sessionID, messageID: `msg-${f.id}`, agent: "build" },
+              { parts: [{ type: "text", text: "thanks, that worked" }] },
+            )
+          }
         }
         // OpenCode's queueFeedback uses detached spawn — the akm child
         // runs async after toolAfter returns. Wait for the call log to
@@ -246,7 +295,8 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
     },
     notes: [
       `Both plugins measured by actual \`akm feedback\` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).`,
-      `n=${fixtures.length} synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/).`,
+      `n=${fixtures.length} synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/) and, for the success-only ones, for a read-only \`show\`/\`search\`/\`curate\` that succeeded.`,
+      `Positive fixtures are driven through each plugin's real positive channel: a use-shaped \`akm\` verb on Claude, a retrospective "thanks, that worked" on OpenCode, whose ref-yielding tools are all read-only.`,
     ],
   }
 }

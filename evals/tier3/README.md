@@ -22,9 +22,6 @@ fixed rubric.
   ~600-token rubric is below the model's minimum cacheable prefix.)
 - **`runner.ts`** — Loads scenarios, runs them, judges them, writes
   `eval-results/tier3-<ts>/tier3.{json,md}`.
-- **`ab.ts`** — Pairwise A/B between two git refs via `git worktree`.
-  Shuffles labels per trial, runs N=3 trials, reports candidate
-  win-rate with a Wilson 95% confidence interval.
 
 ## Quick start
 
@@ -43,10 +40,6 @@ bun run tier3 -- --scenarios "curate-skill-*"
 
 # Cap spend
 bun run tier3 -- --budget 1
-
-# Pairwise A/B between two git refs
-bun run tier3:ab -- main HEAD --trials 3 --budget 5
-bun run tier3:ab -- v0.5.0 v0.6.0 --scenarios "curate-*" --plugin claude
 ```
 
 ## Scenario YAML format
@@ -106,26 +99,10 @@ consumers can't accidentally treat smoke runs as effectiveness data.
 ## Cost control
 
 - `--budget USD` — hard cap on judge spend; runner aborts when reached.
-  Default: $5 for `runner.ts`, $10 for `ab.ts`.
+  Default: $5.
 - Verdict cache (`tier3/.verdict-cache/`) — keyed on
   `(scenario.id, plugin, sha256(transcript))`. Re-running the same
   candidate is free.
-
-## Pairwise A/B
-
-The A/B tool uses `git worktree` to materialize two refs in temp
-directories, then runs each scenario in both worktrees. The worktrees'
-own eval framework (`evals/tier3/harness/...`) is loaded — so the A/B
-requires both refs to ship this framework.
-
-For each (scenario, plugin) pair, N=3 trials are run with shuffled
-labels (the judge sees "A vs B" without knowing which is baseline).
-After mapping back, candidate win-rate is reported with a Wilson 95%
-confidence interval.
-
-If a plugin and fixture change ship together, the A/B reflects both.
-For plugin-only deltas, port the candidate's fixture commit onto the
-baseline ref before running.
 
 ## Limits / future work
 
