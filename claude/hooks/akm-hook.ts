@@ -1351,10 +1351,16 @@ async function sessionStart(): Promise<string> {
   // A disabled leg resolves to "" without spawning at all: AKM_AUTO_HINTS=0 /
   // AKM_AUTO_CURATE=0 have to mean "no subprocess", not "spawn it and throw the
   // result away".
+  //
+  // #89: gatherCwdContext() is empty when the cwd has none of its indicator
+  // files (a monorepo root keeping package.json in subdirectories, a bare
+  // scratch dir). `akm curate ""` exits 2 with MISSING_REQUIRED_ARGUMENT, so an
+  // empty context is a leg that cannot succeed — skip it for the same reason a
+  // disabled leg is skipped, rather than logging an akm_failed per session.
   const cwdContext = gatherCwdContext()
   const [hintsRaw, curatedRaw, pendingRaw, activeWorkflowRaw] = await Promise.all([
     AUTO_HINTS ? akmRunAsync(["--format", "text", "-q", "hints"]) : Promise.resolve(""),
-    AUTO_CURATE
+    AUTO_CURATE && cwdContext
       ? akmRunAsync([
           "--shape",
           "agent",
