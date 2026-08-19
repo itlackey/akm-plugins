@@ -89,7 +89,7 @@ function permissionBits(filePath: string) {
   return statSync(filePath).mode & 0o777
 }
 
-function runHook(args: string[], options?: { input?: string; env?: Record<string, string> }) {
+function runHook(args: string[], options?: { input?: string; env?: Record<string, string>; cwd?: string }) {
   let stdin: "ignore" | Blob = "ignore"
 
   if (options?.input !== undefined) {
@@ -110,7 +110,7 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
     ),
   )
   const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
-    cwd: repoRoot,
+    cwd: options?.cwd ?? repoRoot,
     env: {
       ...baseEnv,
       ...options?.env,
@@ -786,6 +786,66 @@ exit 0
     expect(invocations).not.toContain("--for-agent")
     expect(invocations).not.toContain("--detail agent")
     expect(invocations).not.toContain("--run sess-start-1")
+  })
+
+  it("session-start skips curate entirely when the cwd yields no context (#89)", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const emptyCwd = path.join(tempDir, "monorepo-root")
+    const invokeLog = path.join(tempDir, "akm-invocations.log")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    // No package.json / README.md / Makefile / .github/workflows here, so
+    // gatherCwdContext() returns "" — the monorepo-root case from #89.
+    mkdirSync(emptyCwd, { recursive: true })
+    const quotedLog = shellQuote(invokeLog)
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+case "$1" in
+  --version) echo "akm 0.9.0"; exit 0 ;;
+esac
+for arg in "$@"; do
+  case "$arg" in
+    hints) echo "# Stash hints"; exit 0 ;;
+    index) exit 0 ;;
+    curate) echo "should-not-appear"; exit 0 ;;
+  esac
+done
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    const stdout = runHook(["session-start"], {
+      cwd: emptyCwd,
+      input: JSON.stringify({ session_id: "sess-empty-ctx" }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+
+    // The curate leg is not spawned at all — not spawned with an empty query.
+    const invocations = readFileSync(invokeLog, "utf8")
+    expect(invocations).toContain("hints")
+    expect(invocations).not.toContain("curate")
+    for (const line of readLogLines(invokeLog)) {
+      expect(line).not.toMatch(/(^| )curate( |$)/)
+    }
+
+    const payload = JSON.parse(stdout.trim())
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("should-not-appear")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("AKM stash curation written to")
+    // ...and no akm_failed line is logged for the session-start curate call.
+    const sessionLog = path.join(stateDir, "akm-claude", "session.log")
+    if (existsSync(sessionLog)) {
+      expect(readFileSync(sessionLog, "utf8")).not.toContain("akm_failed\tsession-start")
+    }
   })
 
   it("session-start respects AKM_CONTEXT_BUDGET_CHARS", () => {
