@@ -114,7 +114,6 @@ The `run` dimension is the Claude session ID and has no environment variable; it
 | --- | --- | --- |
 | `AKM_CURATE_LIMIT` | `5` | Maximum curated results requested per prompt or session. |
 | `AKM_CURATE_TIMEOUT` | `8` | Timeout in seconds for hook AKM calls. The session-start `akm --version` probe uses a fixed, much tighter 3-second cap instead. |
-| `AKM_INDEX_TIMEOUT` | `60` | Timeout in seconds for the `SessionEnd` `akm index` refresh only. It runs once, with nothing waiting on it, so a large stash gets far more room than a per-turn retrieval. |
 | `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum length of the text a hook injects into the model's context. Curated results are written to a file and the hook injects a pointer to it, so this budget governs the injected pointer text, not the size of the curation file. The user-visible `systemMessage` channel is not subject to it. |
 | `AKM_PLUGIN_MAX_LOG_BYTES` | `1048576` | Size cap for each append-only state file. Past the cap the newest half is retained. |
 | `AKM_PLUGIN_QUALITY_TTL_MS` | `86400000` | Freshness window for the cached per-concept quality classification. Past it the `akm show` probe re-runs, so a `proposed` asset later promoted to `curated` stops being misclassified. |
@@ -140,6 +139,7 @@ Hooks never write diagnostics to stderr. The few failures only you can fix — A
 | --- | --- |
 | `session.log` | Hook lifecycle: AKM readiness, version mismatches, subprocess failures, session-end extraction attempts. |
 | `extract.log` | Output of the detached `akm proposal extract` run at session end. Check here first if durable memories never appear — a fresh install without a configured LLM profile logs `INVALID_CONFIG_FILE`, which `akm setup` resolves. You should not have to go looking: when the newest run in this file failed, the next session start reports it and prints this file's absolute path. |
+| `index.log` | Output of the detached `akm index` refresh run at session end. Check here if search results go stale. |
 | `feedback.log` / `memory.log` | Automatic feedback decisions and observed concept IDs. |
 | `events.jsonl` | Structured, redacted lifecycle events. |
 

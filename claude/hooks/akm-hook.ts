@@ -34,6 +34,9 @@ const MEMORY_LOG = path.join(STATE_DIR, "memory.log")
 // so a failing harvest (e.g. no LLM profile configured -> INVALID_CONFIG_FILE)
 // leaves a trace instead of vanishing into stdio: "ignore". See extractSession().
 const EXTRACT_LOG = path.join(STATE_DIR, "extract.log")
+// SessionEnd's `akm index` is detached for the same reason and lands here for
+// the same reason — see runIndexOnSessionEnd().
+const INDEX_LOG = path.join(STATE_DIR, "index.log")
 const EVENT_LOG = getEventLogPath("claude-code")
 const QUALITY_CACHE = path.join(STATE_DIR, "quality-cache.tsv")
 // `?? pluginOption(...)` here and below reads the matching plugin.json
@@ -43,9 +46,6 @@ const CURATE_LIMIT = Number(process.env.AKM_CURATE_LIMIT ?? pluginOption("CURATE
 // `timeout --preserve-status <n> …` argv; the caps are applied by spawnSync /
 // Bun.spawn directly now, so it is the number it always meant to be.
 const CURATE_TIMEOUT = Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8
-// Seconds. SessionEnd's `akm index` is the one spawn that is allowed to be
-// slow — see runIndexOnSessionEnd().
-const INDEX_TIMEOUT = Number(process.env.AKM_INDEX_TIMEOUT ?? "60") || 60
 // `akm --version` is a local print with no stash, embedding or LLM work behind
 // it, and it is the FIRST thing SessionStart runs. It gets its own much tighter
 // cap so a wedged binary cannot spend the whole CURATE_TIMEOUT budget before a
@@ -920,15 +920,56 @@ function refQuality(ref: string): string {
   return resolved
 }
 
+/**
+ * Detached + unref'd, like sessionStart()'s reindex and extractSession(). It
+ * used to be a blocking akmRunChecked() with its own large timeout, on the
+ * reasoning that nothing waits on a SessionEnd reindex — but in headless mode
+ * (`claude -p`) the harness tears the hook process down as soon as it returns,
+ * so the reindex was killed mid-run (the half-built index the old comment
+ * worried about) and the process died before it could log the failure.
+ *
+ * The child's stdout/stderr go to STATE_DIR/index.log rather than into
+ * stdio: "ignore", so a reindex that fails after the parent is gone still
+ * leaves a trace; the spawn attempt itself is recorded in session.log.
+ */
 function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   if (!INDEX_ON_SESSION_END || !akmAvailable()) return
-  // Its own, much larger cap. Every other spawn here is a per-turn retrieval
-  // where CURATE_TIMEOUT is the right budget; a full reindex of a large stash
-  // is neither, and it runs once, at SessionEnd, where nothing is waiting on
-  // it. Capping it at CURATE_TIMEOUT would SIGTERM a reindex that used to be
-  // uncapped on macOS (no `timeout(1)`) and leave the index half-built.
-  const result = akmRunChecked(["index"], undefined, INDEX_TIMEOUT * 1000)
-  if (!result.ok) appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(result.stderr))
+  const akm = resolveAkmCommandSpec()
+  if (!akm) return
+
+  // Header line first: it rotates the log, timestamps the attempt, and gives
+  // the child's untimestamped output something to be attributed to.
+  appendLog(INDEX_LOG, "akm_index", reason, sid, ref)
+  chmodSafe(INDEX_LOG, 0o600)
+  let logFd: number | undefined
+  try {
+    // The mode argument applies only if appendLog() above could not create the
+    // file; it keeps the owner-only posture in that fallback too.
+    logFd = openSync(INDEX_LOG, "a", 0o600)
+  } catch {
+    // Fall back to a discarding child rather than skipping the reindex.
+    logFd = undefined
+  }
+
+  try {
+    const child = spawn(akm.command, [...akm.argsPrefix, "index"], {
+      detached: true,
+      stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
+    })
+    child.unref()
+    appendLog(SESSION_LOG, "index_spawned", reason, sid, ref, logFd === undefined ? "unlogged" : INDEX_LOG)
+  } catch (error: unknown) {
+    // Best-effort: a failed spawn must never block session close. It is
+    // recorded, not swallowed.
+    appendLog(SESSION_LOG, "akm_index_failed", reason, sid, ref, sanitize(error instanceof Error ? error.message : String(error)))
+  } finally {
+    // The child dup'd the descriptor at spawn time; the parent must not leak it.
+    if (logFd !== undefined) {
+      try {
+        closeSync(logFd)
+      } catch {}
+    }
+  }
 }
 
 // Enough of extract.log to hold the newest `proposal_extract` block; the file
