@@ -1195,7 +1195,7 @@ exit 0
     expect(sessionLog.some((line) => line.includes("runtime_error\tunknown_command\tnot-a-real-command"))).toBe(true)
   })
 
-  it("session-end runs akm index and no longer writes a session_checkpoint memory", () => {
+  it("session-end runs akm index and no longer writes a session_checkpoint memory", async () => {
     // Meta-review 03-R1/06-M1: the SessionEnd captureMemory() write (an
     // akm remember --force with no judge/confidence/schema gate) was
     // deleted. SessionEnd now only runs `akm index` directly.
@@ -1227,8 +1227,12 @@ exit 0
     })
 
     expect(stdout.trim()).toBe("")
-    const commands = readFileSync(commandLog, "utf8").trim().split("\n").filter(Boolean)
-    expect(commands.some((line) => line === "index")).toBe(true)
+    // The reindex is detached (issue #90), so the fake CLI writes after the
+    // hook has already returned.
+    const commands = await waitFor(() => {
+      const lines = readFileSync(commandLog, "utf8").trim().split("\n").filter(Boolean)
+      return lines.some((line) => line === "index") ? lines : undefined
+    })
     expect(commands.some((line) => line.includes("remember"))).toBe(false)
   })
 
@@ -1263,7 +1267,7 @@ exit 0
     expect(existsSync(commandLog)).toBe(false)
   })
 
-  it("session-end logs akm index failures without throwing", () => {
+  it("session-end records the spawn and captures the child's output in index.log", async () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
@@ -1274,6 +1278,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 if [ "$1" = "index" ]; then
+  printf 'stash is locked\\n' >&2
   exit 1
 fi
 exit 0
@@ -1291,8 +1296,67 @@ exit 0
       },
     })
 
+    const indexLogPath = path.join(stateDir, "akm-claude/index.log")
+    // The attempt is recorded synchronously, in both logs.
     const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("\takm_index_failed\tsession-end\tsess-end-idx-fail"))).toBe(true)
+    expect(sessionLog.some((line) => line.includes("\tindex_spawned\tsession-end\tsess-end-idx-fail"))).toBe(true)
+    expect(readFileSync(indexLogPath, "utf8")).toContain("akm_index\tsession-end\tsess-end-idx-fail")
+
+    // ...and the detached child's failure output lands in the same file, which
+    // is the trace that used to be lost when the hook was killed mid-reindex.
+    const body = await waitFor(() => {
+      const text = readFileSync(indexLogPath, "utf8")
+      return text.includes("stash is locked") ? text : undefined
+    })
+    expect(body).toContain("stash is locked")
+
+    // index.log carries the same owner-only posture as every other state file.
+    expect(permissionBits(indexLogPath)).toBe(0o600)
+  })
+
+  it("session-end does not block on the reindex (issue #90)", async () => {
+    // Headless teardown (`claude -p`) kills the hook process as soon as it
+    // returns, so a blocking `akm index` was cancelled mid-run and its failure
+    // never reached session.log. The hook must return while the child is still
+    // working.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const doneMarker = path.join(tempDir, "index-done")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+
+    const quotedMarker = shellQuote(doneMarker)
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+if [ "$1" = "index" ]; then
+  sleep 3
+  : > ${quotedMarker}
+fi
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    const startedAt = Date.now()
+    const stdout = runHook(["session-end"], {
+      input: JSON.stringify({ session_id: "sess-end-idx-detached" }),
+      env: {
+        AKM_INDEX_ON_SESSION_END: "1",
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+      },
+    })
+    const elapsed = Date.now() - startedAt
+
+    expect(stdout.trim()).toBe("")
+    // A blocking akmRunChecked() would have waited out the full 3s sleep.
+    expect(elapsed).toBeLessThan(3000)
+    expect(existsSync(doneMarker)).toBe(false)
+    // The child outlives the hook and finishes on its own.
+    await waitFor(() => (existsSync(doneMarker) ? true : undefined))
   })
 
   it("derives a memory ref from akm remember --name when output omits it", () => {
