@@ -2,7 +2,7 @@
   "name": "akm",
   "displayName": "AKM",
   "description": "Search, show, and curate AKM concepts, record feedback, and remember durable knowledge, with lifecycle hooks that load relevant context and learn from asset usage.",
-  "version": "0.9.202808211043",
+  "version": "0.9.202808220049",
   "author": {
     "name": "itlackey",
     "url": "https://github.com/itlackey"
