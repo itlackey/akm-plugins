@@ -395,8 +395,13 @@ exit 0
     )
     chmodSync(path.join(binDir, "akm"), 0o755)
 
+    // The transcript must exist on disk or the no-transcript guard skips the
+    // spawn before akm is ever invoked.
+    const transcriptPath = path.join(tempDir, "sess-extract-log.jsonl")
+    writeFileSync(transcriptPath, '{"type":"user"}\n')
+
     const stdout = runHook(["extract-session"], {
-      input: JSON.stringify({ session_id: "sess-extract-log", reason: "other" }),
+      input: JSON.stringify({ session_id: "sess-extract-log", reason: "other", transcript_path: transcriptPath }),
       env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir },
     })
 
@@ -419,6 +424,72 @@ exit 0
 
     // extract.log carries the same owner-only posture as every other state file.
     expect(permissionBits(extractLogPath)).toBe(0o600)
+  })
+
+  it("extract-session skips the spawn when the session left no transcript anywhere", () => {
+    // Ephemeral sessions (background/utility sessions that end without ever
+    // persisting a turn) fire SessionEnd with no transcript on disk. Spawning
+    // for them always fails with "session not found for harness claude-code",
+    // and that ok:false block used to trip the SessionStart failure warning.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${JSON.stringify(callLog)}
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+    const env = { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir }
+
+    // No transcript_path at all, and a transcript_path that does not exist:
+    // both must skip without spawning akm or writing an extract.log header.
+    expect(runHook(["extract-session"], { input: JSON.stringify({ session_id: "sess-ephemeral", reason: "other" }), env })).toBe("")
+    expect(
+      runHook(["extract-session"], {
+        input: JSON.stringify({
+          session_id: "sess-ephemeral",
+          reason: "other",
+          transcript_path: path.join(tempDir, "missing.jsonl"),
+        }),
+        env,
+      }),
+    ).toBe("")
+
+    expect(existsSync(callLog)).toBe(false)
+    expect(existsSync(path.join(stateDir, "akm-claude/extract.log"))).toBe(false)
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("extract_skipped_no_transcript\tsess-ephemeral"))).toBe(true)
+    expect(sessionLog.some((line) => line.includes("extract_spawned"))).toBe(false)
+  })
+
+  it("extract-session still spawns when only the plugin's session buffer exists", () => {
+    // The session buffer under STATE_DIR/sessions is the other transcript
+    // source `akm proposal extract` reads; its presence alone must keep the
+    // harvest alive even when the harness payload names no transcript.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(path.join(stateDir, "akm-claude/sessions"), { recursive: true })
+    writeFileSync(path.join(stateDir, "akm-claude/sessions/sess-buffered.md"), "## note\nbody\n")
+    writeFileSync(path.join(binDir, "akm"), "#!/usr/bin/env sh\nexit 0\n")
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    expect(
+      runHook(["extract-session"], {
+        input: JSON.stringify({ session_id: "sess-buffered", reason: "other" }),
+        env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir },
+      }),
+    ).toBe("")
+
+    const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
+    expect(sessionLog.some((line) => line.includes("extract_spawned\tsess-buffered"))).toBe(true)
   })
 
   it("records user feedback and memory intent from prompt submissions", () => {
@@ -2367,6 +2438,22 @@ exit 0
       expect(context).toContain("INVALID_CONFIG_FILE")
       // It is the user, not the model, who can configure an LLM profile.
       expect(payload.systemMessage).toContain("memory extraction failed")
+    })
+
+    it("stays quiet when the newest failure is just a session with no transcript", () => {
+      // "session <id> not found for harness …" is a benign skip (an ephemeral
+      // session that never persisted a transcript), not a broken install.
+      // Warning on it sent users chasing a phantom LLM-profile problem.
+      const { payload } = runSessionStartWithExtractLog(
+        [
+          "2026-01-02T00:00:00Z\tproposal_extract\tsess-ephemeral",
+          '{"ok":false,"warnings":["session sess-ephemeral not found for harness claude-code"]}',
+          "",
+        ].join("\n"),
+      )
+
+      expect(payload.hookSpecificOutput.additionalContext).not.toContain("memory extraction failed")
+      expect(payload.systemMessage).toBeUndefined()
     })
 
     it("stays quiet when the newest extraction succeeded", () => {
