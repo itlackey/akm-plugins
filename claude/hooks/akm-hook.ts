@@ -1005,6 +1005,12 @@ function lastExtractFailureWarning(): string {
     // field anywhere — including inside a proposal body echoed into the log —
     // and warned the user that memory extraction had failed when it had not.
     if (!/"ok"\s*:\s*false/.test(block)) return ""
+    // "session <id> not found for harness …" is a benign skip, not a broken
+    // install: it means SessionEnd fired for a session with no transcript
+    // (extractSession() now guards against spawning at all in that case, but
+    // pre-guard blocks persist in the log). Warning on it sent users chasing
+    // a phantom LLM-profile problem.
+    if (/not found for harness/.test(block)) return ""
     return `The last AKM session-end memory extraction failed — durable memories were not harvested. See \`${EXTRACT_LOG}\` for the error (a fresh install without a configured LLM profile logs INVALID_CONFIG_FILE; \`akm setup\` configures one).`
   } catch {
     return ""
@@ -1510,8 +1516,24 @@ function extractSession(): string {
   const raw = readStdin()
   const sid = extractSessionId(raw)
   if (!sid) return ""
-  const reason = safeJsonParse<Record<string, unknown>>(raw)?.reason
+  const parsed = safeJsonParse<Record<string, unknown>>(raw) ?? {}
+  const reason = parsed.reason
   if (reason === "clear" || reason === "resume") return ""
+  // Ephemeral sessions (background/utility sessions that end without ever
+  // persisting a turn) fire SessionEnd with no transcript on disk. Spawning
+  // for them is guaranteed to fail — `akm proposal extract` answers
+  // "session not found for harness claude-code" — and that ok:false block
+  // then trips lastExtractFailureWarning() on every subsequent SessionStart.
+  // Only spawn when at least one of the two transcript sources akm reads
+  // actually exists: the harness transcript named in the hook payload, or
+  // this plugin's own session buffer.
+  const transcriptPath = typeof parsed.transcript_path === "string" ? parsed.transcript_path : ""
+  const hasTranscript = transcriptPath !== "" && existsSync(transcriptPath)
+  const hasBuffer = existsSync(path.join(SESSIONS_DIR, `${sid}.md`))
+  if (!hasTranscript && !hasBuffer) {
+    appendLog(SESSION_LOG, "extract_skipped_no_transcript", sid, transcriptPath)
+    return ""
+  }
   const akm = resolveAkmCommandSpec()
   if (!akm) return ""
 
