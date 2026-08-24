@@ -9,7 +9,7 @@
       "name": "akm",
       "source": "./claude",
       "description": "Search, show, and curate AKM concepts, record feedback, and remember durable knowledge, with lifecycle hooks that load relevant context and learn from asset usage.",
-      "version": "0.9.202808220049"
+      "version": "0.9.1202608242057"
     }
   ]
 }
