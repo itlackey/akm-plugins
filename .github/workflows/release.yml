@@ -3,8 +3,8 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version to release (e.g. 1.2.3 or 1.2.3-beta.1). Bumps all packages, publishes opencode to npm, and creates a GitHub release."
+      akm_version:
+        description: "The akm CLI version these plugins target (e.g. 0.9.1). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp."
         required: true
         type: string
 
@@ -51,6 +51,7 @@ jobs:
     permissions:
       contents: write
     outputs:
+      version: ${{ steps.derive.outputs.version }}
       tag: ${{ steps.tag.outputs.tag }}
       tag_exists: ${{ steps.tag.outputs.tag_exists }}
     steps:
@@ -62,21 +63,51 @@ jobs:
         with:
           node-version: 24
 
-      # Fail before anything is written. The steps below stamp four manifests,
-      # commit, and push a tag; npm is the first thing that would reject a bad
-      # version, and by then the tag already exists. Two rules are checked:
-      # the version must be plain semver (a four-component string such as
-      # 0.9.0.20260811.1 is not, and the registry refuses it), and its
-      # MAJOR.MINOR must match the akm line the plugins target — see the
-      # versioning policy in tests/version-policy.test.ts.
+      # Derive the release version, then fail before anything is written.
+      #
+      # The operator supplies only the akm CLI version these plugins target;
+      # the workflow appends a UTC timestamp. That is deliberate: the two
+      # releases before this change were typed by hand as 0.9.202808211043 and
+      # 0.9.202808220049, and BOTH carry a typo'd year (2028, not 2026). npm
+      # compares PATCH numerically, so a later, correctly-dated hand-typed
+      # release would have sorted BELOW them and silently never become
+      # `latest`. Removing the human from the timestamp removes that whole
+      # failure class.
+      #
+      # Shape: <akm_version><yyyymmddhhmm>, e.g. akm 0.9.1 at 2026-08-24 20:12
+      # UTC -> 0.9.1202608242012, i.e. PATCH = 1202608242012. Monotonic in the
+      # two ways that matter: within one akm patch the timestamp increases, and
+      # a bump in akm's patch increases the numeric prefix. It also clears the
+      # typo'd 202808* patches already published.
+      - name: Derive release version
+        id: derive
+        env:
+          AKM_VERSION: ${{ inputs.akm_version }}
+        run: |
+          AKM_VERSION="$(echo "$AKM_VERSION" | tr -d '[:space:]')"
+          TIMESTAMP="$(date -u +%Y%m%d%H%M)"
+          VERSION="${AKM_VERSION}${TIMESTAMP}"
+          echo "akm_version=$AKM_VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Targeting akm $AKM_VERSION; releasing plugins as $VERSION"
+
+      # Three rules, all checked before the tag exists (npm would otherwise be
+      # the first thing to reject a bad version, by which point the tag is
+      # already pushed): the supplied akm version must be plain semver, its
+      # MAJOR.MINOR must match the akm line the plugins target (see
+      # tests/version-policy.test.ts), and the derived version must sort ABOVE
+      # whatever npm currently calls `latest`.
       - name: Validate release version
         env:
-          VERSION: ${{ inputs.version }}
+          AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
+          VERSION: ${{ steps.derive.outputs.version }}
         run: |
           node <<'EOF'
           const fs = require('fs')
+          const { execFileSync } = require('child_process')
 
-          const version = process.env.VERSION.trim()
+          const akmVersion = process.env.AKM_VERSION
+          const version = process.env.VERSION
           const source = fs.readFileSync('claude/shared/akm-version.ts', 'utf8')
           const range = /AKM_VERSION_RANGE\s*=\s*"([^"]+)"/.exec(source)?.[1]
           if (!range) {
@@ -85,10 +116,16 @@ jobs:
           }
 
           const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+          const parsedAkm = SEMVER.exec(akmVersion)
+          if (!parsedAkm) {
+            console.error(`akm_version "${akmVersion}" is not valid semver (MAJOR.MINOR.PATCH).`)
+            console.error('Supply the akm CLI version these plugins target, e.g. 0.9.1 -- the workflow appends the timestamp.')
+            process.exit(1)
+          }
+
           const parsed = SEMVER.exec(version)
           if (!parsed) {
-            console.error(`Version "${version}" is not valid semver (MAJOR.MINOR.PATCH[-prerelease][+build]).`)
-            console.error('npm rejects anything else on publish, and this job tags before it publishes.')
+            console.error(`Derived version "${version}" is not valid semver. npm rejects anything else on publish, and this job tags before it publishes.`)
             process.exit(1)
           }
 
@@ -99,11 +136,40 @@ jobs:
           }
 
           const want = `${floor[1]}.${floor[2]}`
-          const got = `${parsed[1]}.${parsed[2]}`
+          const got = `${parsedAkm[1]}.${parsedAkm[2]}`
           if (got !== want) {
-            console.error(`Version "${version}" is on the ${got} line but the plugins target akm ${range} (the ${want} line).`)
-            console.error(`Release a ${want}.x version, or move AKM_VERSION_RANGE first if the plugins now target a new akm minor.`)
+            console.error(`akm_version "${akmVersion}" is on the ${got} line but the plugins target akm ${range} (the ${want} line).`)
+            console.error(`Release against a ${want}.x akm version, or move AKM_VERSION_RANGE first if the plugins now target a new akm minor.`)
             process.exit(1)
+          }
+
+          // Monotonicity guard. This is the check the hand-typed scheme never
+          // had: publishing a version that sorts below `latest` succeeds on npm
+          // and silently leaves `latest` pointing at the OLDER release, so every
+          // consumer keeps installing the previous build.
+          let published = ''
+          try {
+            published = execFileSync('npm', ['view', 'akm-opencode', 'version'], { encoding: 'utf8' }).trim()
+          } catch {
+            console.log('No published akm-opencode version to compare against; skipping the monotonicity check.')
+          }
+          if (published) {
+            const prev = SEMVER.exec(published)
+            if (!prev) {
+              console.error(`Published version "${published}" is not plain semver; cannot compare. Investigate before releasing.`)
+              process.exit(1)
+            }
+            const ordered = [parsed, prev].map((m) => [Number(m[1]), Number(m[2]), Number(m[3])])
+            const [next, current] = ordered
+            const higher = next[0] !== current[0] ? next[0] > current[0]
+              : next[1] !== current[1] ? next[1] > current[1]
+              : next[2] > current[2]
+            if (!higher) {
+              console.error(`Derived version "${version}" does NOT sort above the published latest "${published}".`)
+              console.error('npm would accept the publish and leave `latest` on the older release. Refusing.')
+              process.exit(1)
+            }
+            console.log(`${version} sorts above the published latest ${published}.`)
           }
 
           console.log(`Version ${version} is valid semver on the ${got} line, matching akm ${range}.`)
@@ -111,7 +177,7 @@ jobs:
 
       - name: Bump versions
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ steps.derive.outputs.version }}"
           VERSION="$VERSION" node <<'EOF'
           const fs = require('fs')
 
@@ -139,19 +205,19 @@ jobs:
           git add claude/package.json opencode/package.json claude/.claude-plugin/plugin.json .claude-plugin/marketplace.json
 
           if ! git diff --cached --quiet; then
-            git commit -m "chore: bump version to ${{ inputs.version }}"
+            git commit -m "chore: bump version to ${{ steps.derive.outputs.version }}"
             git push
           fi
 
-          if git ls-remote --exit-code --tags origin "refs/tags/v${{ inputs.version }}" >/dev/null; then
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ steps.derive.outputs.version }}" >/dev/null; then
             echo "tag_exists=true" >> "$GITHUB_OUTPUT"
           else
-            git tag "v${{ inputs.version }}"
-            git push origin "v${{ inputs.version }}"
+            git tag "v${{ steps.derive.outputs.version }}"
+            git push origin "v${{ steps.derive.outputs.version }}"
             echo "tag_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-          echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${{ steps.derive.outputs.version }}" >> "$GITHUB_OUTPUT"
 
   publish-opencode:
     needs: version
@@ -186,7 +252,7 @@ jobs:
       - name: Derive npm publish args
         id: publish_args
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           PUBLISH_ARGS="--provenance --access public"
           NPM_TAG=$(VERSION="$VERSION" node -p "const version = process.env.VERSION; const prerelease = version.match(/^\d+\.\d+\.\d+-([0-9A-Za-z.-]+)$/)?.[1] ?? ''; if (!prerelease) { '' } else if (/^(beta|rc)(?:[.-]?\d.*)?$/i.test(prerelease)) { 'next' } else { prerelease.split(/[.-]/)[0] }")

@@ -92,6 +92,50 @@ describe("version policy", () => {
     expect(minorLine("0.10.0")).not.toBe(minorLine(floorPatch))
   })
 
+  test("the release workflow derives the version instead of accepting a typed one", () => {
+    // The release version is <akm_version><UTC yyyymmddhhmm>, e.g. akm 0.9.1
+    // released at 2026-08-24 20:12 UTC -> 0.9.1202608242012.
+    //
+    // This is enforced rather than conventional because the hand-typed scheme
+    // it replaced shipped two releases with a typo'd YEAR -- 0.9.202808211043
+    // and 0.9.202808220049 are both stamped 2028, not 2026. npm compares PATCH
+    // numerically, so the NEXT correctly-dated hand-typed release would have
+    // sorted BELOW them: the publish succeeds, `latest` stays on the older
+    // build, and every consumer silently keeps installing it. Deriving the
+    // timestamp in CI removes the typo, and the monotonicity check catches any
+    // other way of sorting backwards.
+    const workflow = readText(".github/workflows/release.yml")
+
+    // The operator supplies the akm line, never the timestamp.
+    expect(workflow).toContain("akm_version:")
+    expect(workflow).not.toContain("inputs.version")
+    expect(workflow).toContain("date -u +%Y%m%d%H%M")
+    expect(workflow).toContain('VERSION="${AKM_VERSION}${TIMESTAMP}"')
+
+    // ...and a publish that would leave `latest` pointing backwards is refused.
+    expect(workflow).toContain("does NOT sort above the published latest")
+  })
+
+  test("the derived version shape stays on the akm minor line and sorts forward", () => {
+    // Pure arithmetic on the scheme, so a future change to the shape has to
+    // face these cases rather than discovering them on npm.
+    const derive = (akm: string, stamp: string): string => `${akm}${stamp}`
+    const patchOf = (version: string): number => Number(valid(version)!.split(".")[2])
+
+    const floorLine = minorLine(rangeFloor(AKM_VERSION_RANGE))
+    expect(minorLine(derive("0.9.1", "202608242012"))).toBe(floorLine)
+
+    // The two typo'd releases already on npm must be cleared by the scheme.
+    const published = patchOf("0.9.202808220049")
+    expect(patchOf(derive("0.9.1", "202608242012"))).toBeGreaterThan(published)
+
+    // Monotonic within one akm patch, across an akm patch bump (even with an
+    // earlier clock), and across a two-digit akm patch.
+    expect(patchOf(derive("0.9.1", "202608242013"))).toBeGreaterThan(patchOf(derive("0.9.1", "202608242012")))
+    expect(patchOf(derive("0.9.2", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.1", "202612312359")))
+    expect(patchOf(derive("0.9.10", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.2", "202612312359")))
+  })
+
   test("every install-ref copy restates AKM_VERSION_RANGE exactly", () => {
     // Three hand-maintained copies of the range live outside the constant.
     // They are what a user is told to install when the version gate fails, so a
