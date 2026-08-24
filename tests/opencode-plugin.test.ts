@@ -156,6 +156,17 @@ describe("akm-opencode plugin", () => {
       ])
     })
 
+    it("leads akm_curate's description with the trigger, not the mechanism", async () => {
+      // Described as natural-language asset discovery, akm_curate lost to
+      // built-in read/glob/skill on edit-shaped tasks — five of seven screened
+      // models made zero akm_* calls with curation available (#95).
+      const hooks = await AkmPlugin(createPluginInput())
+      const description = (hooks.tool!.akm_curate as { description: string }).description
+
+      expect(description).toMatch(/^Reach for this BEFORE writing or editing/)
+      expect(description).toContain("already present in the workspace")
+    })
+
     it("keeps lifecycle hooks alongside the reduced tool surface", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       expect(hooks.event).toBeDefined()
@@ -356,6 +367,48 @@ describe("akm-opencode plugin", () => {
 
       expect(first.system.join("\n")).toContain("# AKM is available in this session")
       expect(second.system.join("\n")).toContain("# AKM is available in this session")
+    })
+
+    it("triggers on editing an existing file, not only on writing from scratch", async () => {
+      // The old trigger read "Before writing anything from scratch", which
+      // literally excludes edit-shaped tasks — measured at 0/24 and 3/57
+      // engagement versus 48%/38% on create-shaped tasks (#94).
+      const hooks = await AkmPlugin(createPluginInput())
+      const output: { system: string[] } = { system: [] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "edit-trigger-1" } as any, output as any)
+      const injected = output.system.join("\n")
+
+      expect(injected).toContain("# AKM is available in this session")
+      expect(injected).toContain("editing")
+      expect(injected).toMatch(/not certain of/)
+      expect(injected).toMatch(/already being present in the workspace is not evidence/)
+      expect(injected).not.toContain("from scratch")
+    })
+
+    it("contributes exactly one system entry, with the curated pointer leading", async () => {
+      // OpenCode maps each `system` entry to a separate system message, and
+      // templates requiring a single leading system message answer HTTP 500
+      // ("System message must be at the beginning") — plugin arm only (#96).
+      mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
+        if (args?.[0] === "--version") return "akm 0.9.0\n"
+        if (args?.includes("hints")) return "stash-authored hint text"
+        if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "single-system-1" } } } as any)
+      const output: { system: string[] } = { system: [] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "single-system-1" } as any, output as any)
+
+      // Multiple blocks are live for this session (curated pointer + doctrine
+      // + hints), and they must still arrive as one entry.
+      expect(output.system).toHaveLength(1)
+      expect(output.system[0]).toContain("AKM stash curation written to")
+      expect(output.system[0]).toContain("# AKM is available in this session")
+      expect(output.system[0]).toContain("stash-authored hint text")
+      expect(output.system[0]!.indexOf("AKM stash curation written to")).toBeLessThan(
+        output.system[0]!.indexOf("# AKM is available in this session"),
+      )
     })
 
     it("keeps the curated pointer when a large hints payload overruns the context budget", async () => {
