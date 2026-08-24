@@ -129,7 +129,7 @@ const AKM_WORKFLOW_INSTRUCTION = [
   "",
   "Use AKM as a reusable knowledge and workflow stash.",
   "",
-  "Before writing from scratch:",
+  "Before writing or editing anything whose exact syntax or keys you are not certain of (a file already in the workspace included):",
   "1. Use `akm_curate` with a query that includes the current project name/domain (primary discovery). Fall back to `akm_search` only when you already know an asset exists and need its exact ref.",
   "2. Use `akm_show <ref>` before relying on an asset.",
   "3. Record `akm_feedback` after the result is known.",
@@ -971,10 +971,19 @@ function extractAkmRefsFromAllArgs(args: Record<string, unknown>): string[] {
   return [...refs]
 }
 
+// The trigger sentence used to read "Before writing anything from scratch",
+// which literally excludes the largest class of tasks retrieval helps with:
+// editing a file whose conventions the model does not know. Measured across
+// 138 Harbor A/B trials (issue #94), engagement on edit-shaped tasks was
+// 0/24 (eval) and 3/57 (train) versus 48% and 38% on create-shaped tasks from
+// the same families — three edit tasks scored 0.00 on BOTH arms because the
+// model invented keys for a file it had just read. A visible file makes a task
+// look self-sufficient, so the trigger has to say outright that seeing a file
+// is not knowing its schema.
 const AKM_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
-  "You have an AKM stash on this machine. Before writing anything from scratch, call `akm_curate` with a task description to find relevant assets with LLM-reranked relevance scores.",
+  "You have an AKM stash on this machine. Before writing **or editing** a config file, manifest, schema, or command for any tool, format, or API whose exact syntax or keys you are not certain of, call `akm_curate` with a task description to find relevant assets with LLM-reranked relevance scores. A file already being present in the workspace is not evidence that you know its schema — the values may be given to you while the key names and nesting are not, so check the stash for that format's conventions before you edit it.",
   "",
   "**Choosing the right lookup command:**",
   "",
@@ -2045,7 +2054,17 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
           !proposalSummary.unsupported && proposalSummary.count > 0 ? formatPendingProposalContext(proposalSummary.count) : "",
         ]
-        output.system.push(...applyContextBudget(blocks))
+        // ONE entry, not N. OpenCode maps each `system` entry to its own system
+        // message, and chat templates that require a single leading system
+        // message reject the request outright — "Jinja Exception: System
+        // message must be at the beginning", surfacing as an opaque provider
+        // HTTP 500 that hits only sessions with the plugin installed (#96;
+        // reproduced with a bare two-system-message request on
+        // qwen3.6-35b-a3b and devstral-small-2-2512, no akm involved).
+        // Budgeting is unchanged and still happens per block, so joining can
+        // only re-seam blocks applyContextBudget already kept.
+        const budgeted = applyContextBudget(blocks)
+        if (budgeted.length > 0) output.system.push(budgeted.join("\n\n"))
       } catch (error: unknown) {
         await logHookFailure(logClient, "experimental.chat.system.transform", error)
       }
@@ -2120,7 +2139,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
               }
             })()
           } else {
-            const hint = "Need more AKM context? Use `akm_search` or `akm_curate` before writing from scratch."
+            const hint = "Need more AKM context? Use `akm_search` or `akm_curate` before writing or editing a file whose exact syntax you are not certain of."
             writeStructuredEvent({
               event: "prompt_recall",
               sessionId: input.sessionID,
@@ -2469,7 +2488,14 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         },
       }),
       akm_curate: tool({
-        description: "PRIMARY discovery entry point for the stash: describe the task in natural language and this returns the top matches as a ranked list. Pass a hit's ref to akm_show before relying on it, then record akm_feedback once the result is known.",
+        // Led with the mechanism ("describe the task in natural language and
+        // this returns the top matches"), which reads as project/asset
+        // discovery and lost to built-in read/glob/skill on edit-shaped tasks:
+        // across seven models screened on one akm-relevant task, five made
+        // zero akm_* calls while curation was demonstrably available (#95).
+        // Leading with the decision — when to reach for this instead of just
+        // reading the file — is what it has to win on.
+        description: "Reach for this BEFORE writing or editing a config file, manifest, schema, or command for any tool, format, or API whose exact syntax or keys you are not certain of — including a file already present in the workspace, since having read a file does not mean you know its schema. PRIMARY discovery entry point for the stash: describe the task in natural language and this returns the top matches as a ranked list. Pass a hit's ref to akm_show before relying on it, then record akm_feedback once the result is known.",
         args: {
           query: tool.schema.string().describe("Task, topic, or natural-language description of what you want to do."),
           type: tool.schema.enum(ASSET_TYPES as unknown as [string, ...string[]]).optional().describe("Optional asset type filter."),
