@@ -67,14 +67,38 @@ const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIM
 // delta was -0.011 on the 29 tasks where no akm_* tool was called and +0.561 on
 // the 19 where one was. Injected context is worth approximately zero; a tool
 // call is worth everything. So this is the first akm behaviour that removes the
-// wrong action instead of adding an argument for the right one: when a file
-// declares a format the stash documents and that asset has not been opened this
-// session, the first edit/write to it throws, and the model receives the gate
-// message as the edit tool's error result.
-type GateMode = "off" | "observe" | "enforce"
+// wrong action instead of adding an argument for the right one: when a file the
+// session READ declares a format the stash documents and that asset has not
+// been opened this session, the first edit/write to it throws, and the model
+// receives the gate message as the edit tool's error result. Under the shipped
+// default (`observe`) that last step is recorded and not taken — see
+// resolveWriteGateMode().
+// "invalid" is a resolved state of the setting, not a mode anyone can ask for:
+// it is what an unrecognized AKM_WRITE_GATE value becomes so the misconfiguration
+// travels all the way into the ledger instead of dissolving into a default.
+type GateMode = "off" | "observe" | "enforce" | "invalid"
+// The raw value that failed to resolve, kept only so the once-per-process warn
+// below can quote what the operator actually typed.
+let writeGateInvalidValue: string | undefined
 function resolveWriteGateMode(raw: string | undefined): GateMode {
-  const v = (raw ?? "enforce").toLowerCase()
-  return v === "0" || v === "off" ? "off" : v === "observe" ? "observe" : "enforce"
+  writeGateInvalidValue = undefined
+  const v = (raw ?? "").trim().toLowerCase()
+  // Unset ships as `observe`: ledger-only, no behaviour change. #99 measured
+  // the problem; it did not measure this gate's effect on reward, and the
+  // promotion to `enforce` is a decision a train-slice histogram of `write_gate`
+  // reasons has to justify. Defaulting to `enforce` would have inverted the
+  // agreed rollout by making stage 2 the thing that ships.
+  if (!v) return "observe"
+  if (v === "off" || v === "0") return "off"
+  if (v === "observe") return "observe"
+  if (v === "enforce" || v === "1") return "enforce"
+  // Never silently fall back to a default. A typo here (`enfroce`, `on`, `true`)
+  // would otherwise produce a histogram in a mode nobody chose, which is the
+  // failure this whole feature's ledger exists to make impossible. Same
+  // treatment as apply_patch below — one loud warning per process plus a typed
+  // skip on every watched call — and it refuses to run rather than guessing.
+  writeGateInvalidValue = raw
+  return "invalid"
 }
 // `let`, not `const`, only so __resetWriteGateForTests() can re-read the env the
 // way __resetResolvedAkmForTests() re-resolves the CLI: one process runs every
@@ -88,6 +112,14 @@ const WRITE_GATE_DESC_CHARS = 240
 const WRITE_GATE_MESSAGE_CHARS = 600
 const WRITE_GATE_SESSION_PATH_CAP = 64
 const WRITE_GATE_IDENTITY_CACHE_CAP = 256
+// A negative resolution is a statement about the stash at one instant, and the
+// stash changes under a live session — `akm import`, `akm clone`, a sync that
+// lands the very asset the gate would have pointed at. The first version cached
+// "no" for the life of the process, which outlives many sessions, so a token
+// that started resolving five minutes later could never resolve again. Positive
+// resolutions stay permanent: an asset that exists keeps existing, and a
+// drifted one-line description is not worth re-running a search for.
+const WRITE_GATE_NEGATIVE_TTL_MS = 5 * 60 * 1000
 // Exactly the opencode 1.18 write-path tool ids, verified against the installed
 // binary's tool schemas: edit -> {filePath, oldString, newString},
 // write -> {content, filePath}, apply_patch -> {patchText}. `patch` and
@@ -995,6 +1027,15 @@ function extractToolRefs(
         if (hit && typeof hit === "object") addMatches((hit as Record<string, unknown>).ref)
       }
     }
+    // akmCurate returns { query, summary, items } — not `hits` — so without this
+    // branch a curate call yields no refs at all and nothing downstream (the
+    // #99 already-shown credit, tool_observation, the feedback buffer) can see
+    // what the model was handed.
+    if (Array.isArray(o.items)) {
+      for (const item of o.items) {
+        if (item && typeof item === "object") addMatches((item as Record<string, unknown>).ref)
+      }
+    }
     if (toolName === "akm_remember" && typeof o.ref === "string") addMatches(o.ref)
   }
 
@@ -1016,22 +1057,56 @@ function extractAkmRefsFromAllArgs(args: Record<string, unknown>): string[] {
 }
 
 // --- write gate: state (#99) ------------------------------------------------
-// Per-session, keyed by OpenCode sessionID exactly like sessionHints et al, and
-// torn down in clearSessionState() — the file's single teardown point.
-const sessionFileIdentity = new Map<string, Map<string, string[]>>()
+// The three maps below are per-session, keyed by OpenCode sessionID exactly like
+// sessionHints et al, and torn down in clearSessionState() — the file's single
+// teardown point.
+
+// What a `read` told us about one file. Recorded even when it declared NOTHING,
+// because "read it, no declaration" and "never read it" are different answers
+// and the gate has to be able to say which one it is.
+type FileObservation = {
+  tokens: string[]
+  // False when the read output did not carry the envelope this module parses —
+  // see readOutputRecognized(). Only consulted when `tokens` is empty.
+  recognized: boolean
+}
+const sessionFileIdentity = new Map<string, Map<string, FileObservation>>()
 const sessionGateLatched = new Map<string, Set<string>>()
 const sessionShownRefs = new Map<string, Set<string>>()
 
 type Resolution =
+  // `cause` splits the two answers the first version collapsed into one word:
+  // the search returned NOTHING for this token (the stash has no such asset, or
+  // the index is stale/empty) versus it returned hits and none of them matched
+  // the token verbatim (the ranker generated candidates, the classifier
+  // rejected them all). Those are a coverage problem and a precision problem
+  // respectively, and a histogram that cannot separate them cannot be acted on.
   | { status: "resolved"; ref: string; description: string }
-  | { status: "none" }
+  | { status: "none"; cause: "no-search-hits" | "no-verbatim-match" }
   | { status: "error"; reason: "search-timeout" | "search-error" }
 
 // Process-wide, not per-session: a format token resolves to the same asset for
 // every session in the process, and caching the NEGATIVE and ERROR answers too
-// is what keeps a miss at one query per process instead of one per edit.
-const identityCache = new Map<string, Resolution>()
+// is what keeps a miss at one query per process instead of one per edit. The
+// negative and error entries expire (WRITE_GATE_NEGATIVE_TTL_MS); a resolved
+// one never does.
+type CacheEntry = { resolution: Resolution; expiresAt: number }
+const identityCache = new Map<string, CacheEntry>()
 const identityInflight = new Map<string, Promise<Resolution>>()
+
+// The ONLY read path into identityCache. Expiry is evaluated on read rather
+// than on a timer so nothing has to hold the process open, and the entry is
+// deleted on the way out so the next `read` of a file declaring that token
+// re-warms it.
+function cachedResolution(token: string): Resolution | undefined {
+  const entry = identityCache.get(token)
+  if (!entry) return undefined
+  if (entry.expiresAt <= Date.now()) {
+    identityCache.delete(token)
+    return undefined
+  }
+  return entry.resolution
+}
 
 // Inert-latch bookkeeping. Without it this feature can ship completely dead —
 // every ledger event still looks healthy, because "no event" is exactly what a
@@ -1040,16 +1115,27 @@ let gateEverActed = false
 let gateWatchedInvocations = 0
 let gateInertWarned = false
 let applyPatchWarned = false
+let writeGateModeWarned = false
 const gateSkipReasons = new Map<string, number>()
 
 type GateReason =
   | "disabled"
+  | "invalid-mode"
   | "akm-unresolved"
   | "apply-patch-unsupported"
   | "no-file-path"
+  | "create-not-edit"
   | "latched"
+  // The three causes the single `no-identity` used to conflate, in the order
+  // the gate can tell them apart: the session never read this file / it read it
+  // and our parser did not recognize the output / it read it and the file
+  // declares no format authority. Only the last one is the correct-at-zero
+  // real-tool cell; the middle one is the parse bug stage 1 exists to catch.
+  | "file-not-read"
+  | "read-output-unrecognized"
   | "no-identity"
   | "resolution-pending"
+  | "no-search-hits"
   | "no-exact-match"
   | "search-timeout"
   | "search-error"
@@ -1075,46 +1161,77 @@ function __resetWriteGateForTests(): void {
   gateWatchedInvocations = 0
   gateInertWarned = false
   applyPatchWarned = false
+  writeGateModeWarned = false
 }
 
 // --- write gate: pure functions (#99) ---------------------------------------
 
-// Kubernetes' own built-in API groups plus the two generic schema hosts and the
-// interpreter names. Every one of these identifies a format the model already
-// knows, so letting them through would spend a blocked edit on nothing. This is
-// a public, principled exclusion list, not a fit to any benchmark corpus.
-// `json-schema` / `schemastore` appear alongside their `.org` forms because the
-// URL reduction below strips the TLD before the stoplist is consulted.
+// Kubernetes' own built-in API groups, the two generic schema hosts, and the
+// code-hosting/CDN labels that serve OTHER people's schemas. Every one of these
+// identifies a format the model already knows or a host that is not an
+// authority at all, so letting them through would spend a blocked edit on
+// nothing. This is a public, principled exclusion list, not a fit to any
+// benchmark corpus. `json-schema` / `schemastore` appear alongside their `.org`
+// forms because the URL reduction below strips the TLD before the stoplist is
+// consulted; the hosting labels are the residual guard for the case where BOTH
+// halves of a schema URL are generic (`.../schema.json` on raw.githubusercontent
+// .com), which names nothing and must therefore yield nothing.
 const WRITE_GATE_IDENTITY_STOPLIST = new Set([
   "core", "apps", "batch", "policy", "rbac", "networking", "storage", "node", "events", "discovery",
   "json-schema.org", "json-schema", "schemastore.org", "schemastore",
-  "sh", "bash", "zsh", "python", "python3", "node", "ruby", "perl", "deno", "bun",
+  "githubusercontent", "github", "gitlab", "bitbucket", "sourceforge",
+  "jsdelivr", "unpkg", "amazonaws", "cloudfront", "googleapis",
+])
+
+// Schema-document filenames that name the file's ROLE for its publisher rather
+// than the format it describes. When the path stem is one of these the domain
+// is the more specific half of the URL, which is the only case the host label
+// is read at all.
+const WRITE_GATE_GENERIC_SCHEMA_STEMS = new Set([
+  "schema", "schemas", "config", "configuration", "settings", "index", "main", "default",
 ])
 
 const WRITE_GATE_TOKEN_RE = /^[a-z0-9][a-z0-9._-]{2,63}$/
 const WRITE_GATE_VERSION_RE = /^v\d+$/
 
-// Reduce a $schema value to one identity token: for a URL the registrable host
-// label minus its TLD (https://opencode.ai/config.json -> "opencode"), for a
-// path the filename stem (./schemas/inkwell.schema.json -> "inkwell").
+/**
+ * Reduce a $schema value to the ONE token that identifies the schema itself.
+ *
+ * #99 review: the first version read the registrable host label FIRST, so a
+ * compose file carrying
+ * `# yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json`
+ * reduced to `githubusercontent` — a CDN, not a schema authority, and nonsense
+ * as a stash query. The rule this module states is "a file that names its own
+ * schema AUTHORITY is telling you where to look", so read the most specific
+ * self-naming part first: the schema DOCUMENT's own name
+ * (compose-spec.json -> `compose-spec`, ./schemas/inkwell.schema.json ->
+ * `inkwell`), and fall back to the publishing DOMAIN only when the document
+ * name is generic and therefore names nothing
+ * (https://opencode.ai/config.json -> `opencode`). Generic on both halves
+ * reduces to nothing at all, which is the honest answer.
+ */
 function reduceSchemaReference(raw: string): string | undefined {
   const value = raw.replace(/^["']|["'],?$/g, "").trim()
   if (!value) return undefined
-  const urlMatch = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i.exec(value)
-  if (urlMatch) {
-    const host = urlMatch[1]!.split("@").pop()!.split(":")[0]!
-    const labels = host.split(".").filter(Boolean)
-    if (labels.length === 0) return undefined
-    return labels.length >= 2 ? labels[labels.length - 2] : labels[0]
-  }
-  const base = value.split(/[?#]/)[0]!.split("/").pop() ?? ""
-  const stem = base.split(".")[0]
-  return stem || undefined
+  const urlMatch = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)([^?#]*)/i.exec(value)
+  const pathPart = urlMatch ? urlMatch[2]! : value.split(/[?#]/)[0]!
+  const base = pathPart.split("/").filter(Boolean).pop() ?? ""
+  const stem = (base.split(".")[0] ?? "").toLowerCase()
+  if (stem && !WRITE_GATE_GENERIC_SCHEMA_STEMS.has(stem)) return stem
+  if (!urlMatch) return undefined
+  const host = urlMatch[1]!.split("@").pop()!.split(":")[0]!
+  const labels = host.split(".").filter(Boolean)
+  if (labels.length === 0) return undefined
+  return labels.length >= 2 ? labels[labels.length - 2] : labels[0]
 }
 
 /**
  * Extract the format-identity tokens a file DECLARES ABOUT ITSELF from the head
  * of its content.
+ *
+ * Exactly four extractors, one per way a file can name the authority for its
+ * OWN format: an `apiVersion:` namespace, a `# yaml-language-server: $schema=`
+ * pragma, a `$schema` key, and an XML root namespace.
  *
  * The exclusion below is the load-bearing half of this function. Filename and
  * extension conventions (docker-compose.yml, Dockerfile, *.tf) and
@@ -1177,17 +1294,16 @@ function extractFormatIdentity(head: string): string[] {
       }
     }
 
-    const tomlTool = /^\s*\[tool\.([A-Za-z0-9._-]+)/.exec(line)
-    if (tomlTool) {
-      raw.push(tomlTool[1]!)
-      continue
-    }
-
-    const shebang = /^#!\/usr\/bin\/env\s+([A-Za-z0-9._-]+)/.exec(line)
-    if (shebang) {
-      raw.push(shebang[1]!)
-      continue
-    }
+    // DROPPED, #99 review: `[tool.<name>]` in pyproject.toml and a
+    // `#!/usr/bin/env <interp>` shebang were extractors here and neither one is
+    // a schema authority. `[tool.ruff]` names a TOOL that reads a section of a
+    // file whose format is PEP 518's, and `tsx` names an INTERPRETER, not the
+    // format of the script it runs. Both violated the rule this function is
+    // built on — a file that names its own schema authority is telling you
+    // where to look — so the rule and the code now agree instead of the rule
+    // being aspirational. The four that remain (apiVersion, a
+    // yaml-language-server pragma, a `$schema` key, an XML root namespace) each
+    // name the authority for the WHOLE file.
   }
 
   const out: string[] = []
@@ -1201,6 +1317,25 @@ function extractFormatIdentity(head: string): string[] {
     if (out.length === 3) break
   }
   return out
+}
+
+/**
+ * Did this `read` result carry the envelope extractFormatIdentity() is written
+ * against?
+ *
+ * #99 review: the ledger reason `no-identity` conflated three different things,
+ * and one of them was the bug stage 1 exists to catch. "The session never read
+ * this file", "the file declares no format authority" (the real/known-tool
+ * cell, correct at zero) and "our parser did not recognize what `read`
+ * returned" all produced the same word, so the histogram could not tell a
+ * correct zero from a broken parse — the exact failure mode where every other
+ * signal still looks healthy. This is the third cause, made checkable: opencode
+ * 1.18 `read` returns `<path>…</path>\n<type>file</type>\n<content>\n1: …`,
+ * so an output with no `<content>` marker is one this parser was not written
+ * for, whatever else it may be.
+ */
+function readOutputRecognized(head: unknown): boolean {
+  return typeof head === "string" && head.includes("<content>")
 }
 
 /**
@@ -1262,7 +1397,10 @@ function rememberResolution(token: string, resolution: Resolution): Resolution {
     const oldest = identityCache.keys().next()
     if (!oldest.done) identityCache.delete(oldest.value)
   }
-  identityCache.set(token, resolution)
+  identityCache.set(token, {
+    resolution,
+    expiresAt: resolution.status === "resolved" ? Number.POSITIVE_INFINITY : Date.now() + WRITE_GATE_NEGATIVE_TTL_MS,
+  })
   return resolution
 }
 
@@ -1289,7 +1427,7 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T | typeof
  * model round-trip. Never rejects.
  */
 async function resolveIdentity(client: LogCapableClient, token: string): Promise<Resolution> {
-  const cached = identityCache.get(token)
+  const cached = cachedResolution(token)
   if (cached) return cached
   const inflight = identityInflight.get(token)
   if (inflight) return inflight
@@ -1312,7 +1450,7 @@ async function resolveIdentity(client: LogCapableClient, token: string): Promise
           description: typeof hit.description === "string" ? hit.description : "",
         })
       }
-      return rememberResolution(token, { status: "none" })
+      return rememberResolution(token, { status: "none", cause: hits.length === 0 ? "no-search-hits" : "no-verbatim-match" })
     } catch (error: unknown) {
       void writePluginLog(client, "warn", "AKM write gate resolution failed", {
         subsystem: "write-gate",
@@ -1327,7 +1465,7 @@ async function resolveIdentity(client: LogCapableClient, token: string): Promise
   // Only register as in-flight if it is actually still in flight: a synchronous
   // throw from akmSearch settles `pending` before this line runs, and parking a
   // settled promise here would leave a Map entry nothing ever clears.
-  if (!identityCache.has(token)) identityInflight.set(token, pending)
+  if (!cachedResolution(token)) identityInflight.set(token, pending)
   return pending
 }
 
@@ -1337,14 +1475,18 @@ function resolveGatePath(directory: string | undefined, filePath: string): strin
   return path.resolve(directory ?? process.cwd(), filePath)
 }
 
-function noteFileIdentity(sessionID: string | undefined, absPath: string, tokens: string[]): void {
-  if (!sessionID || tokens.length === 0) return
-  const perFile = sessionFileIdentity.get(sessionID) ?? new Map<string, string[]>()
+// Records the observation even when it found no tokens: an entry here is the
+// evidence that this session SAW this file's pre-existing content, which is what
+// the gate's create/edit distinction turns on, and the empty-token case is also
+// what separates "declares nothing" from "never read".
+function noteFileIdentity(sessionID: string | undefined, absPath: string, observation: FileObservation): void {
+  if (!sessionID) return
+  const perFile = sessionFileIdentity.get(sessionID) ?? new Map<string, FileObservation>()
   if (!perFile.has(absPath) && perFile.size >= WRITE_GATE_SESSION_PATH_CAP) {
     const oldest = perFile.keys().next()
     if (!oldest.done) perFile.delete(oldest.value)
   }
-  perFile.set(absPath, tokens)
+  perFile.set(absPath, observation)
   sessionFileIdentity.set(sessionID, perFile)
 }
 
@@ -1372,10 +1514,17 @@ function latchGate(sessionID: string, absPath: string): void {
 }
 
 /**
- * Record identity declared by a file the session just read (or wrote), and warm
- * the resolution for any token we have not seen. Fire-and-forget: the search
- * must never sit on a tool's return path. The write side is warmed too, so the
- * "read the file I just created, then edit it" shape is covered as well.
+ * Record what a file the session just READ declares about its own format, and
+ * warm the resolution for any token we have not seen. Fire-and-forget: the
+ * search must never sit on a tool's return path.
+ *
+ * `read` is the only caller. #99 review: `write` output used to be an identity
+ * source too, on the "write a file, then edit it" argument, and that is exactly
+ * the write-then-revise CREATE trajectory — crediting it made a file the
+ * session had just invented indistinguishable from one that already existed,
+ * and put the gate inside the fictional-create (96%) and real-create (29%)
+ * cells. Movement there could then no longer be read as noise, confounding
+ * attribution across three of the four cells this change is measured through.
  */
 function observeFileIdentity(
   client: LogCapableClient,
@@ -1386,10 +1535,12 @@ function observeFileIdentity(
 ): void {
   if (typeof filePath !== "string" || !filePath) return
   const tokens = extractFormatIdentity(typeof head === "string" ? head : "")
-  if (tokens.length === 0) return
-  noteFileIdentity(sessionID, resolveGatePath(directory, filePath), tokens)
+  noteFileIdentity(sessionID, resolveGatePath(directory, filePath), {
+    tokens,
+    recognized: readOutputRecognized(head),
+  })
   for (const token of tokens) {
-    if (identityCache.has(token) || identityInflight.has(token)) continue
+    if (cachedResolution(token) || identityInflight.has(token)) continue
     void (async () => {
       try {
         await resolveIdentity(client, token)
@@ -1443,6 +1594,23 @@ async function gateDecision(
     : undefined
   const args = (output?.args ?? {}) as Record<string, unknown>
 
+  // Checked before "off" so a misconfiguration is never reported as a
+  // deliberate kill switch. resolveWriteGateMode() refuses to guess; this is
+  // where the refusal becomes visible on every watched call.
+  if (AKM_WRITE_GATE === "invalid") {
+    if (!writeGateModeWarned) {
+      writeGateModeWarned = true
+      void writePluginLog(client, "error", "AKM write gate disabled: unrecognized AKM_WRITE_GATE value", {
+        subsystem: "write-gate",
+        sessionID: input.sessionID,
+        value: writeGateInvalidValue,
+        expected: "off | observe | enforce",
+        reason: "an unrecognized value is a configuration error, not a request for the default mode",
+      })
+    }
+    emitWriteGate(input, directory, undefined, "invalid-mode", "skipped")
+    return null
+  }
   if (AKM_WRITE_GATE === "off") {
     emitWriteGate(input, directory, undefined, "disabled", "skipped")
     return null
@@ -1481,30 +1649,68 @@ async function gateDecision(
   }
   const absPath = resolveGatePath(directory, args.filePath)
 
+  // #99 review: the create cells have to be insulated, and the discriminator
+  // has to come from what these tools actually hand the hook.
+  //
+  //   edit  -> { filePath, oldString, newString }. `oldString` is a claim about
+  //            text that must ALREADY be in the file. opencode 1.18 rejects an
+  //            empty one outright on an existing file ("oldString cannot be
+  //            empty when editing an existing file. Provide the exact text to
+  //            replace, or use write for an intentional full-file replacement")
+  //            and treats it as create-this-file otherwise. The inputs alone
+  //            discriminate, so read them.
+  //   write -> { filePath, content }. Byte-identical for a create and for a
+  //            full overwrite; nothing in the inputs says whether the path
+  //            existed a moment ago. The inputs CANNOT discriminate here.
+  //
+  // So the rule that holds for BOTH is not an input test but an evidence test,
+  // applied below: gate only where this session has already observed the file's
+  // pre-existing content, i.e. a `read` recorded an observation for this path.
+  // A file the session invented has no read record, so a create-shaped `write`
+  // and every later `edit` of it both fall through to `file-not-read`. The
+  // oldString check is the extra, input-level create signal that `edit` — and
+  // only `edit` — actually offers.
+  if (input.tool === "edit" && typeof args.oldString === "string" && args.oldString === "") {
+    emitWriteGate(input, directory, absPath, "create-not-edit", "skipped")
+    return null
+  }
+
   if (sessionGateLatched.get(input.sessionID)?.has(absPath)) {
     emitWriteGate(input, directory, absPath, "latched", "skipped")
     return null
   }
 
-  const tokens = sessionFileIdentity.get(input.sessionID)?.get(absPath) ?? []
+  const observed = sessionFileIdentity.get(input.sessionID)?.get(absPath)
+  if (!observed) {
+    // Creates land here, and so does an edit to a file the model never opened.
+    // Zero cost, no I/O.
+    emitWriteGate(input, directory, absPath, "file-not-read", "skipped")
+    return null
+  }
+  const tokens = observed.tokens
   if (tokens.length === 0) {
-    // The whole real/known-tool cell lands here: no identity declaration, zero
-    // cost, no I/O.
-    emitWriteGate(input, directory, absPath, "no-identity", "skipped")
+    // The whole real/known-tool cell lands on `no-identity` — the file declares
+    // no authority and that zero is correct. `read-output-unrecognized` is the
+    // other thing that used to hide in that word: the read output was not the
+    // shape this module parses, so the extractor could not have worked and a
+    // clean-looking ledger would have been a lie.
+    emitWriteGate(input, directory, absPath, observed.recognized ? "no-identity" : "read-output-unrecognized", "skipped")
     return null
   }
 
   let resolved: { token: string; resolution: Extract<Resolution, { status: "resolved" }> } | undefined
-  let sawNone = false
+  let noneCause: "no-search-hits" | "no-verbatim-match" | undefined
   let errorReason: "search-timeout" | "search-error" | undefined
   let pendingToken: string | undefined
   for (const token of tokens) {
-    const cached = identityCache.get(token)
+    const cached = cachedResolution(token)
     if (cached?.status === "resolved") {
       resolved = { token, resolution: cached }
       break
     }
-    if (cached?.status === "none") { sawNone = true; continue }
+    // A verbatim miss is the more specific answer, so it wins the report when a
+    // file declares several tokens and they miss for different reasons.
+    if (cached?.status === "none") { noneCause = cached.cause === "no-verbatim-match" ? "no-verbatim-match" : noneCause ?? cached.cause; continue }
     if (cached?.status === "error") { errorReason = cached.reason; continue }
     if (identityInflight.has(token)) pendingToken ??= token
   }
@@ -1517,14 +1723,17 @@ async function gateDecision(
     if (inflight) {
       const raced = await raceWithTimeout(inflight, WRITE_GATE_INFLIGHT_WAIT_MS)
       if (raced !== WRITE_GATE_TIMEOUT && raced.status === "resolved") resolved = { token: pendingToken, resolution: raced }
-      else if (raced !== WRITE_GATE_TIMEOUT && raced.status === "none") sawNone = true
+      else if (raced !== WRITE_GATE_TIMEOUT && raced.status === "none") noneCause = raced.cause === "no-verbatim-match" ? "no-verbatim-match" : noneCause ?? raced.cause
       else if (raced !== WRITE_GATE_TIMEOUT && raced.status === "error") errorReason = raced.reason
     }
   }
 
   if (!resolved) {
-    if (sawNone) {
-      emitWriteGate(input, directory, absPath, "no-exact-match", "skipped")
+    if (noneCause) {
+      // "the search returned nothing" and "it returned hits and none matched
+      // verbatim" are a coverage problem and a precision problem. One word for
+      // both told the rollout nothing about which one to fix.
+      emitWriteGate(input, directory, absPath, noneCause === "no-search-hits" ? "no-search-hits" : "no-exact-match", "skipped")
     } else if (errorReason) {
       emitWriteGate(input, directory, absPath, errorReason, "failed")
     } else {
@@ -1564,8 +1773,9 @@ async function gateDecision(
 // this the feature can ship dead and nobody notices.
 function warnIfWriteGateInert(client: LogCapableClient): void {
   // Not a warning when the operator turned the gate off — "never acted" is the
-  // requested behaviour there, not a symptom.
-  if (AKM_WRITE_GATE === "off") return
+  // requested behaviour there, not a symptom. Nor on `invalid`, which already
+  // produced its own, louder error; a second warning would just bury it.
+  if (AKM_WRITE_GATE === "off" || AKM_WRITE_GATE === "invalid") return
   if (gateInertWarned || gateEverActed || gateWatchedInvocations === 0) return
   gateInertWarned = true
   void writePluginLog(client, "warn", "AKM write gate never acted", {
@@ -2935,12 +3145,11 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if (input.tool === "read") {
           observeFileIdentity(logClient, input.sessionID, directory, (input.args as Record<string, unknown>)?.filePath, output.output)
         }
-        // Cover "write a file, then edit it": the write's own content declares
-        // the format even though nothing read it. The write itself is not gated
-        // off this — a cold write has no recorded identity yet.
-        if (input.tool === "write") {
-          observeFileIdentity(logClient, input.sessionID, directory, (input.args as Record<string, unknown>)?.filePath, (input.args as Record<string, unknown>)?.content)
-        }
+        // `write` is deliberately NOT an identity source. It used to be, on a
+        // "write a file, then edit it" argument, and that shape is a CREATE: the
+        // content the model would be gated on is content it just invented, so
+        // the gate would have reached into the two create cells (#99 review).
+        // See observeFileIdentity() for the full reasoning.
 
         if (!isAkmTool) return
 
@@ -2976,7 +3185,15 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // #99: a ref the model has already opened must never buy it a blocked
         // edit. Without this the compliant model gets re-blocked for doing
         // exactly what the gate asked.
-        if (input.tool === "akm_show") noteShownRefs(input.sessionID, toolRefs)
+        //
+        // akm_curate counts as well as akm_show (#99 review). Curate is the
+        // PRIMARY lookup command this plugin's own guidance tells the model to
+        // reach for, and its result carries the ref and the one-line
+        // description the gate message would have handed over — a model that
+        // curated has already done the lookup. Crediting only akm_show made the
+        // gate fire on the compliant create-shaped trajectory, which is one of
+        // the cells whose movement has to stay readable as noise.
+        if (input.tool === "akm_show" || input.tool === "akm_curate") noteShownRefs(input.sessionID, toolRefs)
         noteRecentRefs(input.sessionID, toolRefs)
         writeStructuredEvent({
           event: "tool_observation",

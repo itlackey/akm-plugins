@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test"
+import { beforeEach, describe, expect, it, mock, setSystemTime } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -766,6 +766,27 @@ describe("akm-opencode plugin", () => {
       "</content>",
     ].join("\n")
 
+    // A file that declares nothing about its own format, in the same envelope.
+    // The must-not-raise cell: the model knows docker compose.
+    const READ_COMPOSE_YAML = [
+      "<path>/app/docker-compose.yml</path>",
+      "<type>file</type>",
+      "<content>",
+      "1: services:",
+      "2:   web:",
+      "3:     image: library/nginx:1.27",
+      "</content>",
+    ].join("\n")
+
+    // The gate no longer defaults to `enforce` (#99 review: stage 1 of the
+    // rollout is ledger-only), so a test that wants blocking has to ask for it
+    // by name. Passing undefined exercises the shipped default.
+    function useMode(mode: string | undefined) {
+      if (mode === undefined) delete process.env.AKM_WRITE_GATE
+      else process.env.AKM_WRITE_GATE = mode
+      AkmPlugin.__resetWriteGateForTests()
+    }
+
     function clearEventLog() {
       // The plugin creates the state dir lazily on its first event, so a
       // filtered run (`bun test -t …`) can reach here before it exists.
@@ -858,6 +879,41 @@ describe("akm-opencode plugin", () => {
       expect(AkmPlugin.__extractFormatIdentity("")).toEqual([])
     })
 
+    it("does not treat a [tool.<name>] section or a shebang as a schema authority", () => {
+      // #99 review, decision 4: these were extractors and neither one is a
+      // schema authority. `[tool.ruff]` names a TOOL that reads one section of a
+      // file whose format is PEP 518's, and `#!/usr/bin/env tsx` names an
+      // INTERPRETER, not the format of the script it runs. The design's own rule
+      // — a file that names its own schema authority is telling you where to
+      // look — and the code now agree instead of the rule being aspirational.
+      expect(AkmPlugin.__extractFormatIdentity("[tool.ruff]\nline-length = 100\n")).toEqual([])
+      expect(AkmPlugin.__extractFormatIdentity("#!/usr/bin/env tsx\nconsole.log(1)\n")).toEqual([])
+    })
+
+    it("reduces a schema URL to the schema's own identity, never a hosting label", () => {
+      // #99 review, decision 4: the reduction read the registrable host label
+      // FIRST, so a real compose file reduced to `githubusercontent` — a CDN,
+      // not an authority, and nonsense as a stash query. Most specific half
+      // first: the schema DOCUMENT's own name, then the publishing DOMAIN only
+      // when the document name is generic and therefore names nothing.
+      const compose = [
+        "<path>/app/compose.yaml</path>",
+        "<type>file</type>",
+        "<content>",
+        "1: # yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json",
+        "2: services:",
+        "</content>",
+      ].join("\n")
+      expect(AkmPlugin.__extractFormatIdentity(compose)).toEqual(["compose-spec"])
+      // Generic document name: the domain is the specific half here.
+      expect(AkmPlugin.__extractFormatIdentity('{\n  "$schema": "https://opencode.ai/config.json"\n}')).toEqual(["opencode"])
+      // Generic on BOTH halves names nothing, so it must yield nothing rather
+      // than a hostname fragment.
+      expect(AkmPlugin.__extractFormatIdentity('{\n  "$schema": "https://raw.githubusercontent.com/acme/x/main/schema.json"\n}')).toEqual([])
+      // A local schema path still reduces off its own stem.
+      expect(AkmPlugin.__extractFormatIdentity('{\n  "$schema": "./schemas/inkwell.schema.json"\n}')).toEqual(["inkwell"])
+    })
+
     it("ignores namespaced values that sit in non-identity keys", () => {
       // `model: opencode/bigpickle` and `image: worker:v3.0.1` look like format
       // declarations to a loose regex and are not. Anchoring on the six identity
@@ -937,6 +993,7 @@ describe("akm-opencode plugin", () => {
       // returned, so the model can always get its edit through by repeating it.
       // A latch conditioned on compliance would be a livelock, which is a worse
       // failure than the one this fixes.
+      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-release")
@@ -952,6 +1009,7 @@ describe("akm-opencode plugin", () => {
       // inside that wrapper resolves instead of rejecting: the gate never fires
       // and the ledger stays clean. That is the defect this file's own
       // convention would otherwise have caused.
+      useMode("enforce")
       stubInkwellHit()
       const client = createMockClient()
       const hooks = await AkmPlugin(createPluginInput(client))
@@ -982,6 +1040,7 @@ describe("akm-opencode plugin", () => {
     it("does not re-block a model that already opened the asset", async () => {
       // Re-blocking the compliant model for doing exactly what the gate asked
       // is the one behaviour that would make this feature indefensible.
+      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-shown")
@@ -993,6 +1052,179 @@ describe("akm-opencode plugin", () => {
 
       await expect(hooks["tool.execute.before"]!(beforeInput("gate-shown"), beforeOutput())).resolves.toBeUndefined()
       expect(gateReasons()).toEqual(["already-shown"])
+    })
+
+    it("ships in observe, not enforce, when AKM_WRITE_GATE is unset", async () => {
+      // #99 review, decision 2: shipping the default as `enforce` inverts the
+      // agreed rollout — it makes stage 2 the thing that lands. #99 measured the
+      // problem, not this gate's effect on reward, so the shipped default is
+      // ledger-only until a train-slice histogram of write_gate reasons argues
+      // for promotion. Everything runs, the would-fire count is recorded, and
+      // nothing is blocked.
+      useMode(undefined)
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await readServiceYaml(hooks, "gate-default")
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-default"), beforeOutput())).resolves.toBeUndefined()
+      expect(gateReasons()).toEqual(["observe"])
+    })
+
+    it("refuses to run on an unrecognized AKM_WRITE_GATE value, and says so", async () => {
+      // #99 review: a typo'd value silently becoming the default produces a
+      // histogram in a mode nobody chose — the exact class of quiet wrongness
+      // this feature's ledger exists to make impossible. One loud error per
+      // process quoting what was typed, plus a typed skip on every call.
+      useMode("enfroce")
+      const client = createMockClient()
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput(client))
+      await readServiceYaml(hooks, "gate-typo")
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-typo"), beforeOutput())).resolves.toBeUndefined()
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-typo"), beforeOutput())).resolves.toBeUndefined()
+      await settle(10)
+
+      expect(gateReasons()).toEqual(["invalid-mode", "invalid-mode"])
+      const errors = client.app.log.mock.calls.filter(([call]: any[]) =>
+        call?.body?.message === "AKM write gate disabled: unrecognized AKM_WRITE_GATE value")
+      expect(errors).toHaveLength(1)
+      expect(errors[0]![0].body.extra.value).toBe("enfroce")
+
+      // And exactly one complaint: the "never acted" inert warning is correct
+      // here — the gate refused on purpose — so it must not fire and bury the
+      // error that actually explains why.
+      await hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "gate-typo" } } } as any)
+      await settle(10)
+      expect(client.app.log.mock.calls.filter(([call]: any[]) =>
+        call?.body?.message === "AKM write gate never acted")).toHaveLength(0)
+    })
+
+    it("never gates a file this session created rather than read", async () => {
+      // #99 review, decision 3. `write` used to record identity too, on a "write
+      // a file, then edit it" argument — but that shape IS the create cell: the
+      // content being gated on is content the model just invented. Crediting it
+      // put the gate inside the fictional-create (96%) and real-create (29%)
+      // cells, so movement there could no longer be read as noise and
+      // attribution was confounded across three of the four measurement cells.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["tool.execute.after"](
+        {
+          tool: "write",
+          sessionID: "gate-create",
+          callID: "call-write",
+          args: { filePath: "/app/service.yaml", content: "apiVersion: inkwell/v2\nkind: Service\n" },
+          directory: "/tmp/project",
+        },
+        { output: "", title: "write" },
+      )
+      await settle(25)
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-create"), beforeOutput())).resolves.toBeUndefined()
+      expect(gateReasons()).toEqual(["file-not-read"])
+    })
+
+    it("treats an edit with an empty oldString as a create, not an edit", async () => {
+      // The input-level half of the same distinction. `write` hands the hook
+      // {filePath, content}, which is byte-identical for a create and a full
+      // overwrite — the inputs cannot discriminate, which is why the load-bearing
+      // rule is the read-evidence test above. `edit` hands over
+      // {filePath, oldString, newString}, and opencode 1.18 rejects an empty
+      // oldString on an existing file outright ("oldString cannot be empty when
+      // editing an existing file"), so an empty one is a create by construction.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await readServiceYaml(hooks, "gate-create-edit")
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(
+        beforeInput("gate-create-edit"),
+        beforeOutput({ filePath: "/app/service.yaml", oldString: "", newString: "apiVersion: inkwell/v2\n" }),
+      )).resolves.toBeUndefined()
+      expect(gateReasons()).toEqual(["create-not-edit"])
+    })
+
+    it("credits akm_curate, not only akm_show, as having done the lookup", async () => {
+      // #99 review, decision 3. akm_curate is the PRIMARY lookup command this
+      // plugin's own guidance points the model at, and its result already
+      // carries the ref and the one-line description the gate message would have
+      // handed over. Blocking a model that curated is blocking it for complying.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await readServiceYaml(hooks, "gate-curated")
+      await hooks["tool.execute.after"](
+        { tool: "akm_curate", sessionID: "gate-curated", callID: "call-curate", args: { query: "inkwell scaling" }, directory: "/tmp/project" },
+        {
+          output: JSON.stringify({
+            query: "inkwell scaling",
+            summary: "Selected 1 curated result: skills/inkwell.",
+            items: [{ type: "skill", ref: "skills/inkwell", description: INKWELL_DESCRIPTION }],
+          }),
+          title: "akm_curate",
+        },
+      )
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-curated"), beforeOutput())).resolves.toBeUndefined()
+      expect(gateReasons()).toEqual(["already-shown"])
+    })
+
+    it("splits the three causes the single no-identity reason used to hide", async () => {
+      // #99 review: `no-identity` meant "never read it", "our parser did not
+      // recognize what read returned", and "the file declares nothing" all at
+      // once. Only the last is the real/known-tool cell that is CORRECT at zero;
+      // the middle one is the read-output parse bug stage 1 exists to catch, and
+      // it is indistinguishable from a healthy ledger while they share a word.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+
+      await hooks["tool.execute.before"]!(beforeInput("split-never"), beforeOutput())
+
+      // Read output with no <content> envelope: whatever it is, it is not the
+      // shape extractFormatIdentity is written against.
+      await readServiceYaml(hooks, "split-unparsed", "services:\n  web:\n    image: library/nginx:1.27\n")
+      await hooks["tool.execute.before"]!(beforeInput("split-unparsed"), beforeOutput())
+
+      await readServiceYaml(hooks, "split-silent", READ_COMPOSE_YAML)
+      await hooks["tool.execute.before"]!(beforeInput("split-silent"), beforeOutput())
+
+      expect(gateReasons()).toEqual(["file-not-read", "read-output-unrecognized", "no-identity"])
+    })
+
+    it("expires a negative resolution instead of pinning it for the life of the process", async () => {
+      // #99 review: the stash changes under a live session — akm import, akm
+      // clone, a sync that lands the very asset the gate would have pointed at.
+      // A permanent process-wide negative meant a token that started resolving
+      // five minutes later could never resolve again, for every session in that
+      // process. Positive answers stay permanent; an asset that exists keeps
+      // existing.
+      const inkwellSearches = () =>
+        mockAkmSearch.mock.calls.filter(([arg]: any[]) => arg?.query === "inkwell").length
+      stubSearch([])
+      const hooks = await AkmPlugin(createPluginInput())
+
+      await readServiceYaml(hooks, "ttl-first")
+      expect(inkwellSearches()).toBe(1)
+      // Still inside the window: the cached "no" is reused, which is the point
+      // of caching it at all.
+      await readServiceYaml(hooks, "ttl-second")
+      expect(inkwellSearches()).toBe(1)
+
+      setSystemTime(new Date(Date.now() + 6 * 60 * 1000))
+      try {
+        await readServiceYaml(hooks, "ttl-third")
+        expect(inkwellSearches()).toBe(2)
+      } finally {
+        setSystemTime()
+      }
     })
 
     it("watches exactly the opencode write-path tool ids", async () => {
@@ -1051,6 +1283,16 @@ describe("akm-opencode plugin", () => {
           },
         },
         {
+          reason: "invalid-mode",
+          status: "skipped",
+          run: async () => {
+            process.env.AKM_WRITE_GATE = "enfroce"
+            AkmPlugin.__resetWriteGateForTests()
+            const hooks = await AkmPlugin(createPluginInput())
+            await hooks["tool.execute.before"]!(beforeInput("led-invalid"), beforeOutput())
+          },
+        },
+        {
           reason: "akm-unresolved",
           status: "skipped",
           run: async () => {
@@ -1079,10 +1321,38 @@ describe("akm-opencode plugin", () => {
           },
         },
         {
+          reason: "create-not-edit",
+          status: "skipped",
+          run: async () => {
+            const hooks = await AkmPlugin(createPluginInput())
+            await hooks["tool.execute.before"]!(beforeInput("led-create"), beforeOutput({ filePath: "/app/new.yaml", oldString: "", newString: "x" }))
+          },
+        },
+        {
+          reason: "file-not-read",
+          status: "skipped",
+          run: async () => {
+            const hooks = await AkmPlugin(createPluginInput())
+            await hooks["tool.execute.before"]!(beforeInput("led-noread"), beforeOutput())
+          },
+        },
+        {
+          reason: "read-output-unrecognized",
+          status: "skipped",
+          run: async () => {
+            const hooks = await AkmPlugin(createPluginInput())
+            await readServiceYaml(hooks, "led-unparsed", "services:\n  web:\n    image: library/nginx:1.27\n")
+            clearEventLog()
+            await hooks["tool.execute.before"]!(beforeInput("led-unparsed"), beforeOutput())
+          },
+        },
+        {
           reason: "no-identity",
           status: "skipped",
           run: async () => {
             const hooks = await AkmPlugin(createPluginInput())
+            await readServiceYaml(hooks, "led-noid", READ_COMPOSE_YAML)
+            clearEventLog()
             await hooks["tool.execute.before"]!(beforeInput("led-noid"), beforeOutput())
           },
         },
@@ -1096,6 +1366,17 @@ describe("akm-opencode plugin", () => {
             AkmPlugin.__resetWriteGateForTests()
             clearEventLog()
             await hooks["tool.execute.before"]!(beforeInput("led-pending"), beforeOutput())
+          },
+        },
+        {
+          reason: "no-search-hits",
+          status: "skipped",
+          run: async () => {
+            stubSearch([])
+            const hooks = await AkmPlugin(createPluginInput())
+            await readServiceYaml(hooks, "led-nohits")
+            clearEventLog()
+            await hooks["tool.execute.before"]!(beforeInput("led-nohits"), beforeOutput())
           },
         },
         {
@@ -1163,6 +1444,8 @@ describe("akm-opencode plugin", () => {
           reason: "fired",
           status: "ok",
           run: async () => {
+            process.env.AKM_WRITE_GATE = "enforce"
+            AkmPlugin.__resetWriteGateForTests()
             stubInkwellHit()
             const hooks = await AkmPlugin(createPluginInput())
             await readServiceYaml(hooks, "led-fired")
@@ -1174,6 +1457,8 @@ describe("akm-opencode plugin", () => {
           reason: "latched",
           status: "skipped",
           run: async () => {
+            process.env.AKM_WRITE_GATE = "enforce"
+            AkmPlugin.__resetWriteGateForTests()
             stubInkwellHit()
             const hooks = await AkmPlugin(createPluginInput())
             await readServiceYaml(hooks, "led-latched")
@@ -1262,9 +1547,9 @@ describe("akm-opencode plugin", () => {
       clearEventLog()
 
       // No identity, no latch, no shown ref: a fresh session with the same id
-      // starts from nothing, which reads as `no-identity` here.
+      // starts from nothing, which reads as `file-not-read` here.
       await expect(hooks["tool.execute.before"]!(beforeInput("gate-teardown"), beforeOutput())).resolves.toBeUndefined()
-      expect(gateReasons()).toEqual(["no-identity"])
+      expect(gateReasons()).toEqual(["file-not-read"])
     })
 
     it("waits only on an already-running resolve, never starting one on the blocking path", async () => {
@@ -1300,7 +1585,7 @@ describe("akm-opencode plugin", () => {
       const warns = client.app.log.mock.calls.filter(([call]: any[]) =>
         call?.body?.message === "AKM write gate never acted")
       expect(warns).toHaveLength(1)
-      expect(warns[0]![0].body.extra.skipReasons).toEqual({ "no-identity": 1 })
+      expect(warns[0]![0].body.extra.skipReasons).toEqual({ "file-not-read": 1 })
     })
   })
 })
