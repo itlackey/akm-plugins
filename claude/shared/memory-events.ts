@@ -25,6 +25,10 @@ export type AkmMemoryEventType =
   | "subagent_started"
   | "post_compact_summary"
   | "feedback_recorded"
+  // The opencode write gate (#99) emits exactly one of these per watched
+  // write-tool invocation, with a named reason in `input.reason`. One name, not
+  // two: fire and skip are the same event with different outcome.status.
+  | "write_gate"
 
 export type AkmMemoryEvent = {
   version: 1
