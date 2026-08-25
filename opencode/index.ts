@@ -1077,12 +1077,18 @@ const sessionShownRefs = new Map<string, Set<string>>()
 type Resolution =
   // `cause` splits the two answers the first version collapsed into one word:
   // the search returned NOTHING for this token (the stash has no such asset, or
-  // the index is stale/empty) versus it returned hits and none of them matched
-  // the token verbatim (the ranker generated candidates, the classifier
-  // rejected them all). Those are a coverage problem and a precision problem
-  // respectively, and a histogram that cannot separate them cannot be acted on.
+  // the index is stale/empty) versus it returned hits and none of them DECLARED
+  // the format (the ranker generated candidates, the classifier rejected them
+  // all). Those are a coverage problem and a precision problem respectively, and
+  // a histogram that cannot separate them cannot be acted on.
+  //
+  // #99 review, blocker A: while hyphenated and dotted tokens were structurally
+  // unmatchable, every one of them landed in the precision bucket — so the
+  // highest-volume bucket of the stage-1 histogram was mis-labelled, and that
+  // histogram is the instrument the promote-to-enforce decision reads. The
+  // matcher is fixed; the bucket is renamed to say what it now means.
   | { status: "resolved"; ref: string; description: string }
-  | { status: "none"; cause: "no-search-hits" | "no-verbatim-match" }
+  | { status: "none"; cause: "no-search-hits" | "no-declaration" }
   | { status: "error"; reason: "search-timeout" | "search-error" }
 
 // Process-wide, not per-session: a format token resolves to the same asset for
@@ -1136,7 +1142,12 @@ type GateReason =
   | "no-identity"
   | "resolution-pending"
   | "no-search-hits"
-  | "no-exact-match"
+  // "hits came back and not one of them DECLARED the format". Named for what it
+  // now means: while hyphenated/dotted tokens were unmatchable this bucket also
+  // collected every structurally-dead token, so the busiest bar of the stage-1
+  // histogram measured a matcher bug rather than a precision result (#99 review,
+  // blocker A).
+  | "no-declaring-asset"
   | "search-timeout"
   | "search-error"
   | "already-shown"
@@ -1162,6 +1173,7 @@ function __resetWriteGateForTests(): void {
   gateInertWarned = false
   applyPatchWarned = false
   writeGateModeWarned = false
+  gateLedgerWriteWarned = false
 }
 
 // --- write gate: pure functions (#99) ---------------------------------------
@@ -1191,8 +1203,33 @@ const WRITE_GATE_GENERIC_SCHEMA_STEMS = new Set([
   "schema", "schemas", "config", "configuration", "settings", "index", "main", "default",
 ])
 
-const WRITE_GATE_TOKEN_RE = /^[a-z0-9][a-z0-9._-]{2,63}$/
-const WRITE_GATE_VERSION_RE = /^v\d+$/
+// A file that DOCUMENTS a format is not a file IN that format.
+//
+// #99 review: extractFormatIdentity() scanned the first 4KB of ANY file with no
+// type restriction, so a README quoting `apiVersion: inkwell/v2` in an example
+// declared inkwell — and the gate then told the user, about their README, that
+// "this file declares inkwell". Wrong file, false assertion, blocked edit.
+// Excluded by extension because that is exactly where the quoting happens: an
+// example lives in a doc, and a doc is named like one. Deliberately NOT
+// code-fence tracking — fences are a markdown construct, so excluding the
+// markdown subsumes it, and a second mechanism for the same case is a second
+// thing to keep correct.
+const WRITE_GATE_PROSE_EXTENSIONS = new Set([
+  ".md", ".markdown", ".mdx", ".rst", ".txt", ".adoc", ".asciidoc",
+])
+
+// `/` is permitted because the apiVersion extractor emits the WHOLE declared
+// string (`inkwell/v2`) as its most specific key. The classifier compares whole
+// normalized fields, so a slashed or dotted key is matchable; it is only the
+// old segment-splitting matcher that made them structurally dead (#99 review,
+// blocker A).
+const WRITE_GATE_TOKEN_RE = /^[a-z0-9][a-z0-9._/-]{2,63}$/
+
+// A number is not a format identity. `v1` was the only shape this caught, which
+// is why the XML root-namespace extractor emitted `4.0.0` for a maven pom and
+// `2003` for an msbuild project — a version and a year, offered to the user as
+// the name of their file's format (#99 review, blocker B).
+const WRITE_GATE_VERSION_RE = /^v?\d+(\.\d+)*$/
 
 /**
  * Reduce a $schema value to the ONE token that identifies the schema itself.
@@ -1244,8 +1281,11 @@ function reduceSchemaReference(raw: string): string | undefined {
  * telling you where to look; a file identified only by a well-known filename is
  * one the model already knows.
  */
-function extractFormatIdentity(head: string): string[] {
+function extractFormatIdentity(head: string, filePath?: string): string[] {
   if (typeof head !== "string" || !head) return []
+  // See WRITE_GATE_PROSE_EXTENSIONS: prose describes formats, it does not
+  // declare one.
+  if (typeof filePath === "string" && WRITE_GATE_PROSE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return []
   // opencode's `read` wraps file bodies as
   // `<path>…</path>\n<type>file</type>\n<content>\n1: …` (verified against the
   // installed 1.18 binary), so scan only past <content> when present.
@@ -1259,15 +1299,27 @@ function extractFormatIdentity(head: string): string[] {
     // logs. Guarded by a dedicated test against a captured trajectory string.
     const line = rawLine.replace(/^\s*\d+:\s?/, "")
 
-    const apiVersion = /^\s*apiVersion:\s*["']?([A-Za-z0-9._-]+)\/[A-Za-z0-9._-]+/.exec(line)
+    const apiVersion = /^\s*apiVersion:\s*["']?([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)/.exec(line)
     if (apiVersion) {
       const namespace = apiVersion[1]!
+      // Stoplisted on the NAMESPACE, before the keys are built. `apps` is on the
+      // list but `apps/v1` is not, so checking only the finished tokens would
+      // let Kubernetes' own API groups straight back in through the specific
+      // key.
+      if (WRITE_GATE_IDENTITY_STOPLIST.has(namespace.toLowerCase())) continue
+      // Most specific FIRST, and never reduced ahead of the search: `inkwell/v2`
+      // is what the file actually declares, `inkwell` is the fallback, and
+      // gateDecision takes the first key that resolves.
+      //
+      // The old first-dot-label push (platform.acme.com -> `platform`) is gone.
+      // It existed only because the segment-splitting matcher could never match
+      // a dotted token; the classifier now compares whole normalized fields, so
+      // `platform.acme.com` is matchable directly and the lossy reduction has no
+      // job left. Keeping it would keep manufacturing generic English words —
+      // `platform`, `monitoring`, `networking` — and offering them to the user
+      // as the name of their file's format (#99 review, blockers A and C).
+      raw.push(`${namespace}/${apiVersion[2]!}`)
       raw.push(namespace)
-      // Real CRDs namespace by domain (platform.acme.com/v1). The whole-segment
-      // matcher below can never match a dotted token, so emit the first label
-      // too or vendor CRDs — precisely the class a private stash exists for —
-      // would be unreachable.
-      if (namespace.includes(".")) raw.push(namespace.split(".")[0]!)
       continue
     }
 
@@ -1283,13 +1335,27 @@ function extractFormatIdentity(head: string): string[] {
       continue
     }
 
-    // XML root only: the xmlns has to sit on an element, not in prose.
+    // XML root only, and only the DEFAULT namespace, and only through the same
+    // reduction every other extractor uses.
+    //
+    // #99 review, blocker B: this extractor took the LAST path segment of the
+    // namespace URI raw. Probed against real files that produced `4.0.0` for a
+    // maven pom, `2003` for an msbuild project and `android` for an Android
+    // layout — a version, a year and an operating system, each offered to the
+    // user as the name of their file's format. Two fixes, both structural:
+    //   - `xmlns:foo=` is a PREFIX binding for a vocabulary the document
+    //     BORROWS (an Android layout borrows the android namespace; its own
+    //     format is the layout schema). Only a default `xmlns=` names the
+    //     document's own format, so only that one is read. This is what kills
+    //     `android`, and it kills it by meaning rather than by denylist.
+    //   - the URI goes through reduceSchemaReference(), so the version-shaped
+    //     stems fall to WRITE_GATE_VERSION_RE instead of being pushed verbatim.
+    //     A pom therefore declares NOTHING, which is the honest answer: nothing
+    //     in that URI names the format in a way a stash query could use.
     if (/^\s*<[A-Za-z_]/.test(line)) {
-      const xmlns = /xmlns(?::\w+)?\s*=\s*["']([^"']+)["']/.exec(line)
+      const xmlns = /(?:^|\s)xmlns\s*=\s*["']([^"']+)["']/.exec(line)
       if (xmlns) {
-        const segments = xmlns[1]!.split("/").filter(Boolean)
-        const last = segments[segments.length - 1]
-        if (last) raw.push(last)
+        raw.push(reduceSchemaReference(xmlns[1]!) ?? "")
         continue
       }
     }
@@ -1339,27 +1405,71 @@ function readOutputRecognized(head: unknown): boolean {
 }
 
 /**
+ * Normalize an identity field the way akm's own indexer normalizes a tag:
+ * hyphen/underscore to space, case folded, whitespace collapsed — and `/` and
+ * `.` preserved verbatim. Preserving those two is the whole of the blocker-A
+ * fix: the previous matcher split fields on /[^a-z0-9]+/ and compared segments,
+ * so a needle containing `/` or `.` could never equal any segment and a needle
+ * containing `-` could never equal one either. `compose-spec` — the single
+ * largest product of reduceSchemaReference(), the decision-4 headline fix — was
+ * therefore unmatchable against an asset literally named `compose-spec`.
+ */
+function normalizeIdentityField(value: string): string {
+  return value.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim()
+}
+
+function identityWords(value: string): string[] {
+  return value.toLowerCase().match(/[a-z0-9]+/g) ?? []
+}
+
+/**
  * The classifier, deliberately separate from the ranker.
  *
  * akmSearch is a candidate GENERATOR: it will happily return `signwell-automation`
  * for the query "inkwell" with a high score, because that is what a relevance
  * ranker is for. Blocking an edit on that would be a false positive that costs a
- * real user a real round-trip, so the decision to block is made here, on exact
- * whole-segment equality only. Never reads hit.score and never reads
- * hit.description — a description branch is how "the inkwell format" in prose
- * would smuggle a fuzzy match back in.
+ * real user a real round-trip, so the decision to block is made here.
+ *
+ * The rule is DECLARATION, not mention: a hit authorizes the gate only when the
+ * asset itself claims to be the format — its whole normalized `name` equals the
+ * whole normalized key, or one of its tags does AND that tag was authored rather
+ * than synthesized from the title slug.
+ *
+ * #99 review, blocker C: the previous rule was word-membership across
+ * ref/name/tags, and akm SYNTHESIZES tags from the title slug when frontmatter
+ * supplies none — `knowledge/presence-svg-animation-complexity` carries
+ * ["presence","svg","animation","complexity"] with no `tags:` of its own. So
+ * "does a top-5 asset carry this word as a tag" degenerated into "does its title
+ * contain this word", which is the fuzzy match this function's contract says it
+ * excludes. Measured against a real 23k-entry stash, that rule fired on 15 of 34
+ * single-word tokens real files produce, every one of them wrong, and the gate
+ * then asserted to the user that their stash documents a format it does not.
+ *
+ * Never reads hit.score, hit.description or hit.ref. Score is the ranker's
+ * output and reading it re-couples the two. A description branch is how "the
+ * inkwell format" in prose smuggles a fuzzy match back in. `ref` is a PATH: its
+ * interior segments are containers the author chose for filing, so
+ * `.../docker-homelab/references/networking` would authorize the gate for every
+ * file declaring `networking.k8s.io/v1`. The ref is still what the gate message
+ * cites — it is just not evidence.
  */
-function matchesTokenVerbatim(token: string, hit: { ref?: string; name?: string; tags?: string[] }): boolean {
-  const needle = token.toLowerCase()
-  if (!needle) return false
-  const fields: unknown[] = [hit?.ref, hit?.name, ...(Array.isArray(hit?.tags) ? hit.tags : [])]
-  for (const field of fields) {
-    if (typeof field !== "string") continue
-    for (const segment of field.toLowerCase().split(/[^a-z0-9]+/)) {
-      if (segment && segment === needle) return true
-    }
+function assetDeclaresFormat(key: string, hit: { name?: string; tags?: string[] }): "name" | "tag" | null {
+  const needle = typeof key === "string" ? normalizeIdentityField(key) : ""
+  if (!needle) return null
+  const name = typeof hit?.name === "string" ? hit.name : ""
+  if (name && normalizeIdentityField(name) === needle) return "name"
+  const nameWords = new Set(identityWords(name))
+  for (const tag of Array.isArray(hit?.tags) ? hit.tags : []) {
+    if (typeof tag !== "string") continue
+    if (normalizeIdentityField(tag) !== needle) continue
+    // A tag whose every word already appears in the asset's own name says
+    // nothing the name did not: that is the shape a slug-derived tag takes. An
+    // authored tag carries something the slug could not — `inkwell/v2` on an
+    // asset named `inkwell` contributes `v2`, so it survives.
+    if (identityWords(tag).every((word) => nameWords.has(word))) continue
+    return "tag"
   }
-  return false
+  return null
 }
 
 /**
@@ -1435,13 +1545,19 @@ async function resolveIdentity(client: LogCapableClient, token: string): Promise
   const pending = (async (): Promise<Resolution> => {
     try {
       const raced = await raceWithTimeout(
-        Promise.resolve(akmSearch({ query: token, limit: 5, source: "local" })),
+        // skipLogging: this search is the PLUGIN's, not the model's. Without the
+        // flag the gate writes akm_search usage events on every read, feeding
+        // akm's own utility scores and feedback ranking from a search the model
+        // never made — and doing it on the treatment arm only, which is exactly
+        // the contamination an observe-mode stage-1 rollout exists to avoid. The
+        // model-initiated akm_search tool path deliberately keeps logging.
+        Promise.resolve(akmSearch({ query: token, limit: 5, source: "local", skipLogging: true })),
         WRITE_GATE_RESOLVE_TIMEOUT_MS,
       )
       if (raced === WRITE_GATE_TIMEOUT) return rememberResolution(token, { status: "error", reason: "search-timeout" })
       const hits = Array.isArray((raced as SearchResponse | undefined)?.hits) ? (raced as SearchResponse).hits! : []
       for (const hit of hits) {
-        if (!matchesTokenVerbatim(token, hit as { ref?: string; name?: string; tags?: string[] })) continue
+        if (!assetDeclaresFormat(token, hit as { name?: string; tags?: string[] })) continue
         const ref = typeof hit.ref === "string" ? hit.ref : ""
         if (!ref) continue
         return rememberResolution(token, {
@@ -1450,7 +1566,7 @@ async function resolveIdentity(client: LogCapableClient, token: string): Promise
           description: typeof hit.description === "string" ? hit.description : "",
         })
       }
-      return rememberResolution(token, { status: "none", cause: hits.length === 0 ? "no-search-hits" : "no-verbatim-match" })
+      return rememberResolution(token, { status: "none", cause: hits.length === 0 ? "no-search-hits" : "no-declaration" })
     } catch (error: unknown) {
       void writePluginLog(client, "warn", "AKM write gate resolution failed", {
         subsystem: "write-gate",
@@ -1534,7 +1650,7 @@ function observeFileIdentity(
   head: unknown,
 ): void {
   if (typeof filePath !== "string" || !filePath) return
-  const tokens = extractFormatIdentity(typeof head === "string" ? head : "")
+  const tokens = extractFormatIdentity(typeof head === "string" ? head : "", filePath)
   noteFileIdentity(sessionID, resolveGatePath(directory, filePath), {
     tokens,
     recognized: readOutputRecognized(head),
@@ -1554,22 +1670,50 @@ function observeFileIdentity(
 
 // --- write gate: decision (#99) ---------------------------------------------
 
+// One loud complaint per process when the ledger itself cannot be written.
+//
+// #99 review: this is the one subsystem whose entire purpose IS the ledger, and
+// appendMemoryEvent() returns {ok:false} rather than throwing — so a read-only
+// state dir, a full disk or a bad mode produced an EMPTY histogram, which is
+// byte-for-byte what "the gate never fired" looks like. The promote-to-enforce
+// decision would then be made against a file nothing ever reached. Once per
+// process, matching this file's existing convention for structural faults
+// (applyPatchWarned, writeGateModeWarned): the condition is persistent, so
+// repeating it on every write would bury everything else in the log.
+let gateLedgerWriteWarned = false
+
 function emitWriteGate(
+  client: LogCapableClient,
   input: { tool: string; sessionID?: string; callID?: string },
   directory: string | undefined,
   filePath: string | undefined,
   reason: GateReason,
   status: "ok" | "skipped" | "failed",
   refs?: string[],
+  // The KEY that resolved, on the paths where one did. The key ladder tries
+  // `inkwell/v2` before `inkwell`, so without this an analyst reading the
+  // histogram cannot tell a specific declaration from a bare-namespace
+  // fallback — and that is the difference between a strong hit and a coincidence.
+  token?: string,
 ): void {
   if (status !== "ok") gateSkipReasons.set(reason, (gateSkipReasons.get(reason) ?? 0) + 1)
-  writeStructuredEvent({
+  const written = writeStructuredEvent({
     event: "write_gate",
     sessionId: input.sessionID,
     scope: buildEventScope(input.sessionID, directory, input.tool),
-    input: { tool: input.tool, callID: input.callID, reason, mode: AKM_WRITE_GATE, filePath },
+    input: { tool: input.tool, callID: input.callID, reason, mode: AKM_WRITE_GATE, filePath, token },
     refs,
     outcome: { status },
+  })
+  if (written.ok || gateLedgerWriteWarned) return
+  gateLedgerWriteWarned = true
+  void writePluginLog(client, "error", "AKM write gate ledger write failed", {
+    subsystem: "write-gate",
+    sessionID: input.sessionID,
+    reason,
+    path: OPENCODE_EVENT_LOG,
+    error: written.error,
+    consequence: "write_gate events are being dropped; an empty stage-1 histogram is indistinguishable from a gate that never fired",
   })
 }
 
@@ -1608,18 +1752,18 @@ async function gateDecision(
         reason: "an unrecognized value is a configuration error, not a request for the default mode",
       })
     }
-    emitWriteGate(input, directory, undefined, "invalid-mode", "skipped")
+    emitWriteGate(client, input, directory, undefined, "invalid-mode", "skipped")
     return null
   }
   if (AKM_WRITE_GATE === "off") {
-    emitWriteGate(input, directory, undefined, "disabled", "skipped")
+    emitWriteGate(client, input, directory, undefined, "disabled", "skipped")
     return null
   }
   // A plugin that cannot reach the stash must never block an edit. This is the
   // single most important self-disable: akm missing or the wrong version is a
   // normal state on a fresh machine, and a blocked edit there is pure cost.
   if (akmResolutionFailed) {
-    emitWriteGate(input, directory, undefined, "akm-unresolved", "skipped")
+    emitWriteGate(client, input, directory, undefined, "akm-unresolved", "skipped")
     return null
   }
   // apply_patch carries `patchText` and no `filePath`, so the gate is
@@ -1637,14 +1781,14 @@ async function gateDecision(
         reason: "apply_patch carries patchText and no filePath; the gate cannot resolve a target file",
       })
     }
-    emitWriteGate(input, directory, undefined, "apply-patch-unsupported", "skipped")
+    emitWriteGate(client, input, directory, undefined, "apply-patch-unsupported", "skipped")
     return null
   }
   // `filePath` (not `path`) on edit/write/read — confirmed against the
   // installed opencode 1.18 tool schemas. A `path`-only args object must
   // produce this typed reason, not a crash and not a silent return.
   if (typeof args.filePath !== "string" || !args.filePath) {
-    emitWriteGate(input, directory, undefined, "no-file-path", "skipped")
+    emitWriteGate(client, input, directory, undefined, "no-file-path", "skipped")
     return null
   }
   const absPath = resolveGatePath(directory, args.filePath)
@@ -1671,12 +1815,12 @@ async function gateDecision(
   // oldString check is the extra, input-level create signal that `edit` — and
   // only `edit` — actually offers.
   if (input.tool === "edit" && typeof args.oldString === "string" && args.oldString === "") {
-    emitWriteGate(input, directory, absPath, "create-not-edit", "skipped")
+    emitWriteGate(client, input, directory, absPath, "create-not-edit", "skipped")
     return null
   }
 
   if (sessionGateLatched.get(input.sessionID)?.has(absPath)) {
-    emitWriteGate(input, directory, absPath, "latched", "skipped")
+    emitWriteGate(client, input, directory, absPath, "latched", "skipped")
     return null
   }
 
@@ -1684,7 +1828,7 @@ async function gateDecision(
   if (!observed) {
     // Creates land here, and so does an edit to a file the model never opened.
     // Zero cost, no I/O.
-    emitWriteGate(input, directory, absPath, "file-not-read", "skipped")
+    emitWriteGate(client, input, directory, absPath, "file-not-read", "skipped")
     return null
   }
   const tokens = observed.tokens
@@ -1694,12 +1838,12 @@ async function gateDecision(
     // other thing that used to hide in that word: the read output was not the
     // shape this module parses, so the extractor could not have worked and a
     // clean-looking ledger would have been a lie.
-    emitWriteGate(input, directory, absPath, observed.recognized ? "no-identity" : "read-output-unrecognized", "skipped")
+    emitWriteGate(client, input, directory, absPath, observed.recognized ? "no-identity" : "read-output-unrecognized", "skipped")
     return null
   }
 
   let resolved: { token: string; resolution: Extract<Resolution, { status: "resolved" }> } | undefined
-  let noneCause: "no-search-hits" | "no-verbatim-match" | undefined
+  let noneCause: "no-search-hits" | "no-declaration" | undefined
   let errorReason: "search-timeout" | "search-error" | undefined
   let pendingToken: string | undefined
   for (const token of tokens) {
@@ -1708,9 +1852,10 @@ async function gateDecision(
       resolved = { token, resolution: cached }
       break
     }
-    // A verbatim miss is the more specific answer, so it wins the report when a
-    // file declares several tokens and they miss for different reasons.
-    if (cached?.status === "none") { noneCause = cached.cause === "no-verbatim-match" ? "no-verbatim-match" : noneCause ?? cached.cause; continue }
+    // "hits came back, none declared it" is the more specific answer, so it wins
+    // the report when a file declares several keys that miss for different
+    // reasons.
+    if (cached?.status === "none") { noneCause = cached.cause === "no-declaration" ? "no-declaration" : noneCause ?? cached.cause; continue }
     if (cached?.status === "error") { errorReason = cached.reason; continue }
     if (identityInflight.has(token)) pendingToken ??= token
   }
@@ -1723,27 +1868,27 @@ async function gateDecision(
     if (inflight) {
       const raced = await raceWithTimeout(inflight, WRITE_GATE_INFLIGHT_WAIT_MS)
       if (raced !== WRITE_GATE_TIMEOUT && raced.status === "resolved") resolved = { token: pendingToken, resolution: raced }
-      else if (raced !== WRITE_GATE_TIMEOUT && raced.status === "none") noneCause = raced.cause === "no-verbatim-match" ? "no-verbatim-match" : noneCause ?? raced.cause
+      else if (raced !== WRITE_GATE_TIMEOUT && raced.status === "none") noneCause = raced.cause === "no-declaration" ? "no-declaration" : noneCause ?? raced.cause
       else if (raced !== WRITE_GATE_TIMEOUT && raced.status === "error") errorReason = raced.reason
     }
   }
 
   if (!resolved) {
     if (noneCause) {
-      // "the search returned nothing" and "it returned hits and none matched
-      // verbatim" are a coverage problem and a precision problem. One word for
-      // both told the rollout nothing about which one to fix.
-      emitWriteGate(input, directory, absPath, noneCause === "no-search-hits" ? "no-search-hits" : "no-exact-match", "skipped")
+      // "the search returned nothing" and "it returned hits and none of them
+      // declared the format" are a coverage problem and a precision problem. One
+      // word for both told the rollout nothing about which one to fix.
+      emitWriteGate(client, input, directory, absPath, noneCause === "no-search-hits" ? "no-search-hits" : "no-declaring-asset", "skipped")
     } else if (errorReason) {
-      emitWriteGate(input, directory, absPath, errorReason, "failed")
+      emitWriteGate(client, input, directory, absPath, errorReason, "failed")
     } else {
-      emitWriteGate(input, directory, absPath, "resolution-pending", "skipped")
+      emitWriteGate(client, input, directory, absPath, "resolution-pending", "skipped")
     }
     return null
   }
 
   if (sessionShownRefs.get(input.sessionID)?.has(resolved.resolution.ref)) {
-    emitWriteGate(input, directory, absPath, "already-shown", "skipped", [resolved.resolution.ref])
+    emitWriteGate(client, input, directory, absPath, "already-shown", "skipped", [resolved.resolution.ref], resolved.token)
     return null
   }
 
@@ -1755,10 +1900,10 @@ async function gateDecision(
   if (AKM_WRITE_GATE === "observe") {
     // Stage 1 of the rollout: everything runs, nothing is blocked, and the
     // would-fire count is readable off the ledger before an eval slice is spent.
-    emitWriteGate(input, directory, absPath, "observe", "ok", [resolved.resolution.ref])
+    emitWriteGate(client, input, directory, absPath, "observe", "ok", [resolved.resolution.ref], resolved.token)
     return null
   }
-  emitWriteGate(input, directory, absPath, "fired", "ok", [resolved.resolution.ref])
+  emitWriteGate(client, input, directory, absPath, "fired", "ok", [resolved.resolution.ref], resolved.token)
   return {
     filePath: args.filePath,
     token: resolved.token,
@@ -3193,7 +3338,18 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // curated has already done the lookup. Crediting only akm_show made the
         // gate fire on the compliant create-shaped trajectory, which is one of
         // the cells whose movement has to stay readable as noise.
-        if (input.tool === "akm_show" || input.tool === "akm_curate") noteShownRefs(input.sessionID, toolRefs)
+        //
+        // ...and only when the lookup SUCCEEDED. extractToolRefs() reads
+        // `args.ref` as well as the output, so an akm_show for a ref that does
+        // not exist — `{ok:false,error:"not found"}` — used to credit the model
+        // with having opened it. That put a row in the ledger asserting an
+        // outcome that did not happen, and it is precisely the row an analyst
+        // reads as "the model complied" (#99 review). classifyToolFeedback()
+        // already types a failed akm call as negative; reuse it rather than
+        // inventing a second notion of failure.
+        if ((input.tool === "akm_show" || input.tool === "akm_curate") && feedback !== "negative") {
+          noteShownRefs(input.sessionID, toolRefs)
+        }
         noteRecentRefs(input.sessionID, toolRefs)
         writeStructuredEvent({
           event: "tool_observation",
@@ -3447,7 +3603,7 @@ export const AkmPlugin = Object.assign(akmPlugin, {
   __curatedDirForTests,
   __resetWriteGateForTests,
   __extractFormatIdentity: extractFormatIdentity,
-  __matchesTokenVerbatim: matchesTokenVerbatim,
+  __assetDeclaresFormat: assetDeclaresFormat,
   __formatGateMessage: formatGateMessage,
   __watchedWriteTools: WATCHED_WRITE_TOOLS,
 })

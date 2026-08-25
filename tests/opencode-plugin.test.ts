@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock, setSystemTime } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { PluginInput } from "@opencode-ai/plugin"
@@ -855,7 +855,10 @@ describe("akm-opencode plugin", () => {
       // EVERY line with its number, so dropping the strip returns [] for every
       // file in the world — no token, no event, no gate, and a completely clean
       // log. That is the cheapest way this design ships plausibly inert.
-      expect(AkmPlugin.__extractFormatIdentity(READ_SERVICE_YAML)).toEqual(["inkwell"])
+      // Most specific FIRST: `inkwell/v2` is what the file literally declares
+      // and `inkwell` is the fallback. gateDecision takes the first key that
+      // resolves, so the order is load-bearing (#99 review, blockers A and C).
+      expect(AkmPlugin.__extractFormatIdentity(READ_SERVICE_YAML)).toEqual(["inkwell/v2", "inkwell"])
     })
 
     it("extracts nothing from a compose file or an empty file", () => {
@@ -922,46 +925,174 @@ describe("akm-opencode plugin", () => {
       expect(AkmPlugin.__extractFormatIdentity("image: worker:v3.0.1\n")).toEqual([])
     })
 
-    it("stoplists Kubernetes' own API groups and keeps vendor CRD namespaces", () => {
+    it("stoplists Kubernetes' own API groups and never reduces a CRD to a bare English word", () => {
       // `apps/v1` is a format in the model's weights; spending a blocked edit on
-      // it is pure cost. `platform.acme.com/v1` is exactly the vendor-namespaced
-      // internal CRD a private stash exists to cover, and the first dot-label is
-      // emitted because matchesTokenVerbatim splits on non-alphanumerics and can
-      // therefore never match a dotted token.
+      // it is pure cost. The stoplist is checked on the NAMESPACE before the
+      // keys are built — `apps` is on the list, `apps/v1` is not — so a
+      // finished-token-only check would let the whole group back in through the
+      // specific key.
       expect(AkmPlugin.__extractFormatIdentity("apiVersion: apps/v1\nkind: Deployment\n")).toEqual([])
+      // `platform.acme.com/v1` is exactly the vendor-namespaced internal CRD a
+      // private stash exists to cover. The old code also pushed the first
+      // dot-label, `platform`, purely to work around a matcher that could not
+      // compare a dotted token. That lossy reduction is gone: the classifier now
+      // compares whole normalized fields, and `platform` / `monitoring` /
+      // `networking` as format identities were the largest single source of the
+      // measured real-stash false fires (#99 review, blockers A and C).
       expect(AkmPlugin.__extractFormatIdentity("apiVersion: platform.acme.com/v1\nkind: Widget\n"))
-        .toEqual(["platform.acme.com", "platform"])
+        .toEqual(["platform.acme.com/v1", "platform.acme.com"])
+    })
+
+    it("reads only a DEFAULT XML namespace, and never a version, a year or a borrowed vocabulary", () => {
+      // #99 review, blocker B. This extractor shipped with no test at all —
+      // replacing its guard with `if (false)` left 265 pass / 0 fail — and took
+      // the LAST path segment of the namespace URI raw, with no reduction, no
+      // generic-word check and a version filter that matched neither `4.0.0` nor
+      // `2003`. Probed against real files it produced a version number, a year
+      // and an operating system, each offered to the user as the name of their
+      // file's format.
+      expect(AkmPlugin.__extractFormatIdentity('<project xmlns="http://maven.apache.org/POM/4.0.0">')).toEqual([])
+      expect(AkmPlugin.__extractFormatIdentity('<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">')).toEqual([])
+      // `xmlns:android` binds a vocabulary the document BORROWS; the document's
+      // own format is not what a prefixed declaration names. Killed by meaning,
+      // not by a denylist entry.
+      expect(AkmPlugin.__extractFormatIdentity('<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android">')).toEqual([])
+      // The genuine case still works: a default namespace, reduced exactly like
+      // every other extractor's URL.
+      expect(AkmPlugin.__extractFormatIdentity('<svg xmlns="http://www.w3.org/2000/svg" width="10">')).toEqual(["svg"])
+      // And "reduced exactly like every other extractor's URL" means the generic
+      // stems get the same treatment they get everywhere else: `.../ns/schema`
+      // names nothing, so the publishing domain is the specific half. Taking the
+      // last path segment raw would have offered the user the word `schema` as
+      // the name of their file's format.
+      expect(AkmPlugin.__extractFormatIdentity('<root xmlns="http://acme.com/ns/schema">')).toEqual(["acme"])
+    })
+
+    it("does not read a file that DOCUMENTS a format as a file written in it", () => {
+      // #99 review: extractFormatIdentity() scanned the head of ANY file with no
+      // type restriction, so a README quoting `apiVersion: inkwell/v2` in an
+      // example declared inkwell — and the gate then told the user, about their
+      // README, that "this file declares inkwell". Wrong file, false assertion,
+      // blocked edit.
+      expect(AkmPlugin.__extractFormatIdentity(READ_SERVICE_YAML, "/repo/README.md")).toEqual([])
+      expect(AkmPlugin.__extractFormatIdentity(READ_SERVICE_YAML, "/repo/docs/service.rst")).toEqual([])
+      // The path is only ever an exclusion. Absent or non-prose, extraction is
+      // unchanged.
+      expect(AkmPlugin.__extractFormatIdentity(READ_SERVICE_YAML, "/repo/app/service.yaml")).toEqual(["inkwell/v2", "inkwell"])
     })
 
     // --- classifier ---------------------------------------------------------
 
-    it("matches a format token only on a whole ref/name/tag segment", () => {
+    it("authorizes the gate only on a whole-field name or tag, never a substring", () => {
       // The real-stash false positive: `inkwell` ranks `signwell-automation`
       // highly because that is what a relevance ranker does. The ranker is a
       // candidate generator; this is the classifier. Substring matching here
       // would block a user's edit and point them at the wrong asset.
-      expect(AkmPlugin.__matchesTokenVerbatim("inkwell", {
-        ref: "composio-skills/signwell-automation",
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell", {
         name: "SignWell automation",
         tags: ["signwell"],
-      })).toBe(false)
-      expect(AkmPlugin.__matchesTokenVerbatim("inkwell", { ref: "skills/inkwell", tags: ["inkwell"] })).toBe(true)
-      // Whole segment, not substring: a short token like `ink` must not claim
-      // `skills/inkwell`. Substring matching is the shape a "close enough"
-      // rewrite of this function naturally takes.
-      expect(AkmPlugin.__matchesTokenVerbatim("ink", { ref: "skills/inkwell", tags: ["inkwell"] })).toBe(false)
+      })).toBeNull()
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell", { name: "inkwell", tags: [] })).toBe("name")
+      // Whole field, not substring: a short token like `ink` must not claim
+      // `inkwell`. Substring matching is the shape a "close enough" rewrite of
+      // this function naturally takes.
+      expect(AkmPlugin.__assetDeclaresFormat("ink", { name: "inkwell", tags: ["inkwell"] })).toBeNull()
     })
 
-    it("ignores hit score and description when classifying", () => {
+    it("matches a hyphenated or dotted key against the asset that is named for it", () => {
+      // #99 review, blocker A. The old matcher split every field on
+      // /[^a-z0-9]+/ and compared the SEGMENTS, so a needle containing `-`, `.`
+      // or `/` could never equal one. `compose-spec` — the single largest
+      // product of reduceSchemaReference(), which was itself the decision-4
+      // headline fix — returned false against an asset literally named
+      // `compose-spec`, so that fix shipped dead on arrival. Worse, every dead
+      // token then landed in the ledger bucket that means "hits came back and
+      // none of them qualified", mis-labelling the busiest bar of the stage-1
+      // histogram the promote-to-enforce decision reads.
+      //
+      // Normalizing instead of splitting is what fixes it: `-`/`_` fold to
+      // spaces (which is what akm's own indexer does to a tag) while `.` and `/`
+      // are preserved, so the whole key stays comparable.
+      expect(AkmPlugin.__assetDeclaresFormat("compose-spec", { name: "compose-spec", tags: [] })).toBe("name")
+      expect(AkmPlugin.__assetDeclaresFormat("compose-spec", { name: "Compose Spec", tags: [] })).toBe("name")
+      expect(AkmPlugin.__assetDeclaresFormat("cert-manager", { name: "cert-manager", tags: [] })).toBe("name")
+      expect(AkmPlugin.__assetDeclaresFormat("renovate-schema", { name: "renovate_schema", tags: [] })).toBe("name")
+      expect(AkmPlugin.__assetDeclaresFormat("platform.acme.com", { name: "platform.acme.com", tags: [] })).toBe("name")
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell/v2", { name: "x", tags: ["inkwell/v2"] })).toBe("tag")
+    })
+
+    it("counts an authored tag as a declaration and a slug-derived one as nothing", () => {
+      // #99 review, blocker C, the mechanism. akm SYNTHESIZES tags from the
+      // title slug when frontmatter supplies none — `presence-svg-animation-
+      // complexity` carries ["presence","svg","animation","complexity"] with no
+      // `tags:` of its own — so "does a top-5 asset carry this word as a tag"
+      // degenerated into "does its title contain this word", the fuzzy match
+      // this classifier's contract says it excludes. A tag whose every word is
+      // already in the asset's own name says nothing the name did not.
+      const authored = { name: "inkwell", tags: ["inkwell", "inkwell/v2", "service configuration"] }
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell/v2", authored)).toBe("tag")
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell", authored)).toBe("name")
+
+      expect(AkmPlugin.__assetDeclaresFormat("svg", {
+        name: "presence-svg-animation-complexity",
+        tags: ["presence", "svg", "animation", "complexity"],
+      })).toBeNull()
+      // Whole field, so a compound tag is not a match for one of its words.
+      expect(AkmPlugin.__assetDeclaresFormat("openapi", {
+        name: "openpalm-assistant-client-sendmessage-signature.derived",
+        tags: ["openapi api", "signature"],
+      })).toBeNull()
+    })
+
+    it("declares nothing for any of the hit shapes that produced the measured false fires", () => {
+      // Synthetic, public and reproducible without anyone's private stash. A
+      // sweep of 34 single-word tokens the four surviving extractors really
+      // produce, resolved through real search against a real 23k-entry stash,
+      // fired 15 times under the old rule and every one was wrong — `svg` ->
+      // presence-svg-animation-complexity, `tsconfig` -> a knowledge doc whose
+      // content is "the codebase lacks paths entries in tsconfig.json" (a
+      // PROJECT FACT, not the format), `platform` -> add-platform-context.js.
+      //
+      // The defect is structural, so it is testable structurally: these are the
+      // four positions a format word occupies in a title that is ABOUT something
+      // else, plus the slug-derived tags akm then synthesizes from that title.
+      // Every one is a mention. None is a declaration.
+      const words = ["svg", "tsconfig", "monitoring", "platform", "openapi", "serving", "opencode", "compose-spec"]
+      const titles = (word: string) => [
+        `${word}-path-aliases-absence`,
+        `presence-${word}-animation-complexity`,
+        `sveltekit-frontend-${word}`,
+        `add-${word}-context`,
+      ]
+      for (const word of words) {
+        for (const name of titles(word)) {
+          const hit = { name, tags: name.split("-") }
+          expect({ word, name, declares: AkmPlugin.__assetDeclaresFormat(word, hit) })
+            .toEqual({ word, name, declares: null })
+        }
+      }
+    })
+
+    it("ignores hit score, description and ref when classifying", () => {
       // A description branch is how a fuzzy match smuggles itself back in: the
       // prose "the inkwell format" is not evidence that this asset IS the
-      // inkwell format.
-      expect(AkmPlugin.__matchesTokenVerbatim("inkwell", {
+      // inkwell format. `ref` is excluded for a sharper reason — it is a PATH,
+      // and its interior segments are containers the author chose for filing, so
+      // reading it authorizes the gate for every file declaring
+      // `networking.k8s.io/v1` on the strength of a `references/networking`
+      // folder. The ref is still what the gate message cites; it is just not
+      // evidence.
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell", {
         ref: "knowledge/formats-overview",
         name: "Formats overview",
         score: 0.99,
         description: "the inkwell format",
-      } as any)).toBe(false)
+      } as any)).toBeNull()
+      expect(AkmPlugin.__assetDeclaresFormat("networking", {
+        ref: "knowledge/skills/system-ops/docker-homelab/references/networking",
+        name: "docker homelab networking notes",
+        tags: ["docker", "homelab"],
+      } as any)).toBeNull()
     })
 
     // --- message ------------------------------------------------------------
@@ -1380,7 +1511,7 @@ describe("akm-opencode plugin", () => {
           },
         },
         {
-          reason: "no-exact-match",
+          reason: "no-declaring-asset",
           status: "skipped",
           run: async () => {
             stubSearch([{ type: "skill", ref: "composio-skills/signwell-automation", name: "SignWell automation", tags: ["signwell"] }])
@@ -1570,6 +1701,192 @@ describe("akm-opencode plugin", () => {
 
       expect(gateReasons()).toEqual(["resolution-pending"])
       expect(elapsed).toBeLessThan(50)
+    })
+
+    it("fires on the most specific key the file declares, and records which one", async () => {
+      // The recall half of the precision rule, and the trap Design 1 names: a
+      // rule whose whole job is to say "no" more often ships invisibly inert if
+      // it says no to everything — clean logs, no gate, a ledger full of
+      // legitimate-looking misses. Only positive tests catch that, so there are
+      // two, one per declaration clause.
+      //
+      // This one is the AUTHORED-TAG clause on the SPECIFIC key: `inkwell/v2` is
+      // what the file literally declares, it is tried before the bare
+      // namespace, and the asset carries it as a hand-written frontmatter tag
+      // (its words are not all in the asset's own name, which is what separates
+      // an authored tag from one akm synthesized off the title slug).
+      useMode("enforce")
+      stubSearch([{
+        type: "skill",
+        ref: "skills/inkwell",
+        name: "inkwell",
+        tags: ["inkwell", "inkwell/v2", "service configuration"],
+        description: INKWELL_DESCRIPTION,
+      }])
+      const hooks = await AkmPlugin(createPluginInput())
+      await readServiceYaml(hooks, "gate-ladder")
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-ladder"), beforeOutput())).rejects.toThrow(/inkwell\/v2/)
+      expect(gateReasons()).toEqual(["fired"])
+      // The key that resolved is on the event. Without it an analyst reading the
+      // stage-1 histogram cannot tell a specific declaration from a
+      // bare-namespace fallback, which is the difference between a strong hit
+      // and a coincidence.
+      expect(writeGateEvents()[0]!.input?.token).toBe("inkwell/v2")
+    })
+
+    it("falls back to the bare namespace key when only the asset's name declares it", async () => {
+      // The second declaration clause, and the reason the benchmark signal is
+      // not hostage to one fixture tag: strip `inkwell/v2` from the asset's
+      // frontmatter and the gate still fires, now because the asset's whole name
+      // IS the format. Two independent clauses carry the 7 inkwell trajectories.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await readServiceYaml(hooks, "gate-fallback")
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-fallback"), beforeOutput())).rejects.toThrow(/^AKM:/)
+      expect(gateReasons()).toEqual(["fired"])
+      expect(writeGateEvents()[0]!.input?.token).toBe("inkwell")
+    })
+
+    it("gates on a hyphenated token end to end, not merely in the matcher", async () => {
+      // #99 review, blocker A, as the user would have met it. reduceSchemaReference()
+      // is the largest producer of hyphenated tokens and the old classifier
+      // could not match one, so the decision-4 headline fix was dead from the
+      // moment it shipped: `compose-spec` resolved to nothing no matter what the
+      // stash contained. This drives the whole path — read, extract, search,
+      // classify, gate — because the unit-level matcher test alone would still
+      // pass if the token never reached the classifier.
+      useMode("enforce")
+      stubSearch([{
+        type: "knowledge",
+        ref: "knowledge/compose-spec",
+        name: "compose-spec",
+        // Slug-derived, so this tag is discounted; the whole NAME is what
+        // declares the format here.
+        tags: ["compose", "spec"],
+        description: "compose-spec top-level keys and their exact value types",
+      }])
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["tool.execute.after"](
+        { tool: "read", sessionID: "gate-hyphen", callID: "call-read", args: { filePath: "/app/compose.yaml" }, directory: "/tmp/project" },
+        {
+          output: [
+            "<path>/app/compose.yaml</path>",
+            "<type>file</type>",
+            "<content>",
+            "1: # yaml-language-server: $schema=https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json",
+            "2: services:",
+            "</content>",
+          ].join("\n"),
+          title: "read",
+        },
+      )
+      await settle(25)
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(
+        beforeInput("gate-hyphen"),
+        beforeOutput({ filePath: "/app/compose.yaml", oldString: "a", newString: "b" }),
+      )).rejects.toThrow(/compose-spec/)
+      expect(gateReasons()).toEqual(["fired"])
+      expect(writeGateEvents()[0]!.input?.token).toBe("compose-spec")
+    })
+
+    it("keeps the gate's own search out of akm's usage log, and the model's search in it", async () => {
+      // #99 review: `observe` is supposed to be ledger-only, and the gate's
+      // internal search wrote akm_search usage events on every read — feeding
+      // akm's own utility scores and feedback ranking from a search the MODEL
+      // NEVER MADE, on the treatment arm only. That is the contamination the
+      // observe-first rollout exists to avoid.
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      mockAkmSearch.mockClear()
+      await readServiceYaml(hooks, "gate-skiplog")
+
+      expect(mockAkmSearch.mock.calls.length).toBeGreaterThan(0)
+      for (const [arg] of mockAkmSearch.mock.calls as any[]) expect(arg.skipLogging).toBe(true)
+
+      // And the other half: the model-initiated tool path is a real search the
+      // model really made, so it must keep logging. Suppressing it here would be
+      // the same defect with the sign flipped.
+      mockAkmSearch.mockClear()
+      await hooks.tool!.akm_search.execute({ query: "inkwell", source: "local" } as any, createToolContext())
+      expect(mockAkmSearch.mock.calls.length).toBe(1)
+      expect((mockAkmSearch.mock.calls[0] as any[])[0].skipLogging).toBeUndefined()
+    })
+
+    it("says so out loud when the ledger write itself fails", async () => {
+      // #99 review: this is the one subsystem whose entire purpose IS the
+      // ledger, and appendMemoryEvent() reports failure by RETURNING
+      // {ok:false} rather than throwing — so a read-only state dir or a full
+      // disk produced an EMPTY histogram, which is byte-for-byte what "the gate
+      // never fired" looks like. The promote-to-enforce decision would then be
+      // made against a file nothing ever reached.
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput(client))
+      // A directory where the log file goes: appendFileSync fails with EISDIR,
+      // which is the real fault's shape without needing to break permissions.
+      rmSync(eventLogPath, { force: true })
+      mkdirSync(eventLogPath, { recursive: true })
+      try {
+        await hooks["tool.execute.before"]!(beforeInput("gate-ledger"), beforeOutput())
+        await hooks["tool.execute.before"]!(beforeInput("gate-ledger"), beforeOutput())
+        await settle(10)
+      } finally {
+        rmSync(eventLogPath, { recursive: true, force: true })
+        writeFileSync(eventLogPath, "")
+      }
+
+      const errors = client.app.log.mock.calls.filter(([call]: any[]) =>
+        call?.body?.message === "AKM write gate ledger write failed")
+      // Once per process: the condition is persistent, so one complaint, not one
+      // per dropped event.
+      expect(errors).toHaveLength(1)
+      expect(errors[0]![0].body.level).toBe("error")
+    })
+
+    it("does not credit `already-shown` to a lookup that failed", async () => {
+      // #99 review: extractToolRefs() reads `args.ref` as well as the output, so
+      // an akm_show for a ref that does not exist credited the model with having
+      // opened it. That writes a ledger row asserting an outcome that did not
+      // happen — and it is precisely the row an analyst reads as "the model
+      // complied".
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await readServiceYaml(hooks, "gate-failed-show")
+      await hooks["tool.execute.after"](
+        { tool: "akm_show", sessionID: "gate-failed-show", callID: "call-show", args: { ref: "skills/inkwell" }, directory: "/tmp/project" },
+        { output: JSON.stringify({ ok: false, error: "not found: skills/inkwell" }), title: "akm_show" },
+      )
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-failed-show"), beforeOutput())).rejects.toThrow(/^AKM:/)
+      expect(gateReasons()).toEqual(["fired"])
+    })
+
+    it("never gates a prose file that merely quotes a format declaration", async () => {
+      // The end-to-end half of the documents-vs-declares split: the same bytes
+      // that declare inkwell in service.yaml declare nothing in README.md.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["tool.execute.after"](
+        { tool: "read", sessionID: "gate-doc", callID: "call-read", args: { filePath: "/app/README.md" }, directory: "/tmp/project" },
+        { output: READ_SERVICE_YAML, title: "read" },
+      )
+      await settle(25)
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(
+        beforeInput("gate-doc"),
+        beforeOutput({ filePath: "/app/README.md", oldString: "a", newString: "b" }),
+      )).resolves.toBeUndefined()
+      expect(gateReasons()).toEqual(["no-identity"])
     })
 
     it("says so out loud when watched writes happened and the gate never acted", async () => {
