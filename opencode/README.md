@@ -36,11 +36,12 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 | `session.updated` | Backfills hints and the workflow summary for a session the plugin has not prepared yet. It does not re-run session-created work. |
 | `chat.message` | Records feedback or memory intent and can schedule non-blocking curation for a substantive prompt. The curate is fire-and-forget: its result is injected on a later turn rather than delaying this one. |
 | `experimental.chat.system.transform` | Injects the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. |
-| `tool.execute.after` | Tracks concepts used by AKM tools, records deduplicated feedback, and checkpoints session observations. |
+| `tool.execute.before` | The format-declaration write gate (`AKM_WRITE_GATE`). Blocks the first `edit`/`write` to a file that declares a format your stash documents and hands the model the ref to read. Once per file per session, released unconditionally on the retry. |
+| `tool.execute.after` | Tracks concepts used by AKM tools, records deduplicated feedback, and checkpoints session observations. It also records what a `read` (or `write`) file declares about its own format, which is what the write gate above keys on. |
 | `shell.env` | Exposes `AKM_PROJECT`, `AKM_PLUGIN_VERSION`, and the resolved `AKM_BUNDLE_DIR` to shell tools. |
 | `session.idle` | Runs interval-gated memory extraction (`AKM_AUTO_MEMORY=0` disables it). Fires after every turn, so it is rate-limited. |
 | `session.compacted` | Records a post-compaction event. |
-| `session.deleted` | Refreshes the local AKM index, then drops all per-session state and the temporary curation file. |
+| `session.deleted` | Refreshes the local AKM index, warns once if the write gate saw write-path tool calls but never acted on any, then drops all per-session state and the temporary curation file. |
 
 The session observation buffer that retrospective feedback reads from survives every non-terminal event: it is bounded by `AKM_SESSION_BUFFER_MAX_ENTRIES` and dropped only on `session.deleted`. Discarding it at `session.idle` would empty it between turns, so "thanks, that worked" would credit nothing in exactly the sessions that used the most assets.
 
@@ -70,6 +71,7 @@ Every kill switch below is opt-out and reads the same way: only the literal `0` 
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip the per-session `akm hints` call. The missing-bundle warning is deliberately not gated on this: it explains why the stash is empty in the first place. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic memory harvesting — the interval-gated `akm proposal extract` on `session.idle`, which is the whole of that harvest here. The Claude plugin honours the same variable for its `SessionEnd` extract, so one setting covers both harnesses. |
 | `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the `akm index` refresh. It runs only on `session.deleted` — never on `session.idle`, which fires after every turn. |
+| `AKM_WRITE_GATE` | `enforce` | The format-declaration write gate (#99). When a file the session read declares a format your stash documents — an `apiVersion:`, a `$schema`, a `[tool.<name>]` header — and that asset has not been opened this session, the FIRST `edit`/`write` to that file is blocked once and the model is told which ref to read. Set to `observe` to record what would have fired without blocking anything, or `off`/`0` to disable it. It self-disables when the AKM CLI does not resolve, and it is inert on `apply_patch` (which carries no file path) — that case logs one warning per process rather than failing quietly. |
 
 ### Scope
 
