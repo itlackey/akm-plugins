@@ -467,12 +467,15 @@ function clearSessionState(sessionID: string): void {
   sessionLastExtractAt.delete(sessionID)
   pendingProposalSummaryCache.delete(sessionID)
   retrospectiveState.delete(sessionID)
-  // #99 write gate: three more session-keyed maps, torn down here for the same
+  // #99 write gate: four more session-keyed maps, torn down here for the same
   // reason as the rest — a re-created session must not inherit a stale latch
-  // (which would silently disable the gate) or a stale file identity.
+  // (which would silently disable the gate) or a stale file identity, and must
+  // not inherit a create record either: a NEW session editing that same path is
+  // editing a file it did not write.
   sessionFileIdentity.delete(sessionID)
   sessionGateLatched.delete(sessionID)
   sessionShownRefs.delete(sessionID)
+  sessionCreatedPaths.delete(sessionID)
 }
 
 // Test-only: expose the curated tmp-file directory so tests can assert file
@@ -1057,7 +1060,7 @@ function extractAkmRefsFromAllArgs(args: Record<string, unknown>): string[] {
 }
 
 // --- write gate: state (#99) ------------------------------------------------
-// The three maps below are per-session, keyed by OpenCode sessionID exactly like
+// The four maps below are per-session, keyed by OpenCode sessionID exactly like
 // sessionHints et al, and torn down in clearSessionState() — the file's single
 // teardown point.
 
@@ -1073,6 +1076,17 @@ type FileObservation = {
 const sessionFileIdentity = new Map<string, Map<string, FileObservation>>()
 const sessionGateLatched = new Map<string, Set<string>>()
 const sessionShownRefs = new Map<string, Set<string>>()
+
+// Paths this session CREATED. Permanent for the life of the session, and the
+// reason it has to be permanent is the whole of the #99 round-3 defect: the
+// previous insulation was "the gate only acts where a `read` observed the
+// file", which held right up until the model VERIFIED ITS OWN OUTPUT. Write
+// /app/service.yaml, read it back, fix it up — the read-back writes an
+// observation for a path this session invented, the gate re-arms, and the
+// blocked edit lands in the middle of the fictional-create (96%) and real-create
+// (29%) cells whose attribution the create/edit split exists to protect.
+// Reproduced end to end against enforce mode before this map existed.
+const sessionCreatedPaths = new Map<string, Set<string>>()
 
 type Resolution =
   // `cause` splits the two answers the first version collapsed into one word:
@@ -1131,6 +1145,14 @@ type GateReason =
   | "apply-patch-unsupported"
   | "no-file-path"
   | "create-not-edit"
+  // This session CREATED this path earlier in the session, so every later write
+  // to it — including one that follows a read-back of the model's own output —
+  // is create work, not an edit to pre-existing content. Deliberately its own
+  // word rather than folded into `file-not-read`: an analyst filtering the
+  // stage-1 histogram has to be able to prove the create cells are insulated,
+  // and "no read record" and "we watched this session invent the file" are
+  // different claims (#99 review round 3).
+  | "session-created"
   | "latched"
   // The three causes the single `no-identity` used to conflate, in the order
   // the gate can tell them apart: the session never read this file / it read it
@@ -1418,10 +1440,6 @@ function normalizeIdentityField(value: string): string {
   return value.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim()
 }
 
-function identityWords(value: string): string[] {
-  return value.toLowerCase().match(/[a-z0-9]+/g) ?? []
-}
-
 /**
  * The classifier, deliberately separate from the ranker.
  *
@@ -1431,45 +1449,44 @@ function identityWords(value: string): string[] {
  * real user a real round-trip, so the decision to block is made here.
  *
  * The rule is DECLARATION, not mention: a hit authorizes the gate only when the
- * asset itself claims to be the format — its whole normalized `name` equals the
- * whole normalized key, or one of its tags does AND that tag was authored rather
- * than synthesized from the title slug.
+ * asset's whole normalized `name` equals the whole normalized key. One field,
+ * one comparison, no second way in.
  *
- * #99 review, blocker C: the previous rule was word-membership across
+ * #99 review, blocker C: the rule before this one was word-membership across
  * ref/name/tags, and akm SYNTHESIZES tags from the title slug when frontmatter
  * supplies none — `knowledge/presence-svg-animation-complexity` carries
  * ["presence","svg","animation","complexity"] with no `tags:` of its own. So
  * "does a top-5 asset carry this word as a tag" degenerated into "does its title
  * contain this word", which is the fuzzy match this function's contract says it
  * excludes. Measured against a real 23k-entry stash, that rule fired on 15 of 34
- * single-word tokens real files produce, every one of them wrong, and the gate
- * then asserted to the user that their stash documents a format it does not.
+ * single-word tokens real files produce, every one of them wrong.
  *
- * Never reads hit.score, hit.description or hit.ref. Score is the ranker's
- * output and reading it re-couples the two. A description branch is how "the
+ * #99 review round 3: narrowing that to "an AUTHORED tag" was not enough, and
+ * for a reason the authored/synthesized split cannot reach — a hand-written tag
+ * is a TOPIC label, so an asset about jamstack storefronts genuinely carries
+ * `vercel`, and an asset about catalog import/export genuinely carries `xml`.
+ * Both tags are authored and neither is a claim to BE that format. Measured
+ * against the same real stash, the tag clause was the sole authorizer on every
+ * remaining false fire — `vercel`/`netlify` -> jamstack-storefront, `xml` -> two
+ * Salesforce/catalog assets, `jest` -> a mocking memory, `rollup` -> a bundling
+ * memory — so the clause is gone rather than narrowed again. The benchmark's own
+ * true positive does not need it: the key ladder emits `inkwell/v2` and then
+ * `inkwell`, and the fixture asset is NAMED `inkwell`, so it resolves on the
+ * fallback key (measured against harbor/stashes/inkwell, not argued).
+ *
+ * Never reads hit.score, hit.description, hit.tags or hit.ref. Score is the
+ * ranker's output and reading it re-couples the two. A description branch is how "the
  * inkwell format" in prose smuggles a fuzzy match back in. `ref` is a PATH: its
  * interior segments are containers the author chose for filing, so
  * `.../docker-homelab/references/networking` would authorize the gate for every
  * file declaring `networking.k8s.io/v1`. The ref is still what the gate message
  * cites — it is just not evidence.
  */
-function assetDeclaresFormat(key: string, hit: { name?: string; tags?: string[] }): "name" | "tag" | null {
+function assetDeclaresFormat(key: string, hit: { name?: string }): "name" | null {
   const needle = typeof key === "string" ? normalizeIdentityField(key) : ""
   if (!needle) return null
   const name = typeof hit?.name === "string" ? hit.name : ""
-  if (name && normalizeIdentityField(name) === needle) return "name"
-  const nameWords = new Set(identityWords(name))
-  for (const tag of Array.isArray(hit?.tags) ? hit.tags : []) {
-    if (typeof tag !== "string") continue
-    if (normalizeIdentityField(tag) !== needle) continue
-    // A tag whose every word already appears in the asset's own name says
-    // nothing the name did not: that is the shape a slug-derived tag takes. An
-    // authored tag carries something the slug could not — `inkwell/v2` on an
-    // asset named `inkwell` contributes `v2`, so it survives.
-    if (identityWords(tag).every((word) => nameWords.has(word))) continue
-    return "tag"
-  }
-  return null
+  return name && normalizeIdentityField(name) === needle ? "name" : null
 }
 
 /**
@@ -1557,7 +1574,7 @@ async function resolveIdentity(client: LogCapableClient, token: string): Promise
       if (raced === WRITE_GATE_TIMEOUT) return rememberResolution(token, { status: "error", reason: "search-timeout" })
       const hits = Array.isArray((raced as SearchResponse | undefined)?.hits) ? (raced as SearchResponse).hits! : []
       for (const hit of hits) {
-        if (!assetDeclaresFormat(token, hit as { name?: string; tags?: string[] })) continue
+        if (!assetDeclaresFormat(token, hit as { name?: string })) continue
         const ref = typeof hit.ref === "string" ? hit.ref : ""
         if (!ref) continue
         return rememberResolution(token, {
@@ -1619,6 +1636,35 @@ function noteShownRefs(sessionID: string | undefined, refs: string[]): void {
   sessionShownRefs.set(sessionID, shown)
 }
 
+/**
+ * Is this call the session AUTHORING content at `absPath` rather than editing
+ * content that was already there?
+ *
+ * Two shapes, and they are discriminated differently because the tools offer
+ * different evidence. `write` carries {filePath, content} and is byte-identical
+ * for a create and for a full overwrite, so the discriminator cannot be the
+ * inputs — it is `observed`: a write to a path this session never READ is a path
+ * whose pre-existing content this session never saw, so nothing it reads back
+ * afterwards can be anything but its own output. `edit` with an empty
+ * `oldString` is opencode 1.18's own create-this-file form (it is rejected
+ * outright on a file that already exists), which is input-level evidence and
+ * needs no read record at all.
+ */
+function isSessionCreate(tool: string, args: Record<string, unknown>, observed: FileObservation | undefined): boolean {
+  if (tool === "write") return !observed
+  return tool === "edit" && args.oldString === ""
+}
+
+function noteSessionCreated(sessionID: string, absPath: string): void {
+  const created = sessionCreatedPaths.get(sessionID) ?? new Set<string>()
+  if (!created.has(absPath) && created.size >= WRITE_GATE_SESSION_PATH_CAP) {
+    const oldest = created.values().next()
+    if (!oldest.done) created.delete(oldest.value)
+  }
+  created.add(absPath)
+  sessionCreatedPaths.set(sessionID, created)
+}
+
 function latchGate(sessionID: string, absPath: string): void {
   const latched = sessionGateLatched.get(sessionID) ?? new Set<string>()
   if (!latched.has(absPath) && latched.size >= WRITE_GATE_SESSION_PATH_CAP) {
@@ -1641,6 +1687,11 @@ function latchGate(sessionID: string, absPath: string): void {
  * and put the gate inside the fictional-create (96%) and real-create (29%)
  * cells. Movement there could then no longer be read as noise, confounding
  * attribution across three of the four cells this change is measured through.
+ *
+ * Round 3: an observation is still recorded for a path the session created —
+ * this function does not know, and should not have to know, which paths those
+ * are. The insulation lives at the decision instead (sessionCreatedPaths), which
+ * is what makes it survive the model reading back its own output.
  */
 function observeFileIdentity(
   client: LogCapableClient,
@@ -1807,15 +1858,28 @@ async function gateDecision(
   //            full overwrite; nothing in the inputs says whether the path
   //            existed a moment ago. The inputs CANNOT discriminate here.
   //
-  // So the rule that holds for BOTH is not an input test but an evidence test,
-  // applied below: gate only where this session has already observed the file's
-  // pre-existing content, i.e. a `read` recorded an observation for this path.
-  // A file the session invented has no read record, so a create-shaped `write`
-  // and every later `edit` of it both fall through to `file-not-read`. The
-  // oldString check is the extra, input-level create signal that `edit` — and
-  // only `edit` — actually offers.
+  // So the rule that holds for BOTH is not an input test but an evidence test:
+  // gate only where this session has already observed the file's PRE-EXISTING
+  // content. The oldString check is the extra, input-level create signal that
+  // `edit` — and only `edit` — actually offers.
+  //
+  // #99 review round 3: reading that evidence off the CURRENT call was not
+  // enough. "No read record for this path" is a fact about right now, and a
+  // model that verifies its own output erases it — write /app/service.yaml,
+  // read it back, then fix it up, and the read-back writes an observation for a
+  // path this session invented. Reproduced in enforce mode: BLOCKED, on a create.
+  // So the create is RECORDED when it happens and the record is what the gate
+  // consults from then on, for the rest of the session.
+  const observed = sessionFileIdentity.get(input.sessionID)?.get(absPath)
+  if (isSessionCreate(input.tool, args, observed)) noteSessionCreated(input.sessionID, absPath)
+
   if (input.tool === "edit" && typeof args.oldString === "string" && args.oldString === "") {
     emitWriteGate(client, input, directory, absPath, "create-not-edit", "skipped")
+    return null
+  }
+
+  if (sessionCreatedPaths.get(input.sessionID)?.has(absPath)) {
+    emitWriteGate(client, input, directory, absPath, "session-created", "skipped")
     return null
   }
 
@@ -1824,10 +1888,10 @@ async function gateDecision(
     return null
   }
 
-  const observed = sessionFileIdentity.get(input.sessionID)?.get(absPath)
   if (!observed) {
-    // Creates land here, and so does an edit to a file the model never opened.
-    // Zero cost, no I/O.
+    // An edit to a file this session never opened and never wrote — the model
+    // is editing from knowledge it got somewhere else. Creates no longer land
+    // here; they land on `session-created` above. Zero cost, no I/O.
     emitWriteGate(client, input, directory, absPath, "file-not-read", "skipped")
     return null
   }
@@ -3294,7 +3358,9 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // "write a file, then edit it" argument, and that shape is a CREATE: the
         // content the model would be gated on is content it just invented, so
         // the gate would have reached into the two create cells (#99 review).
-        // See observeFileIdentity() for the full reasoning.
+        // See observeFileIdentity() for the full reasoning. The create is
+        // instead RECORDED on the write's `tool.execute.before` pass, which the
+        // runtime always runs for a watched tool — see isSessionCreate().
 
         if (!isAkmTool) return
 

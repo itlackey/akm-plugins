@@ -1018,26 +1018,49 @@ describe("akm-opencode plugin", () => {
       expect(AkmPlugin.__assetDeclaresFormat("cert-manager", { name: "cert-manager", tags: [] })).toBe("name")
       expect(AkmPlugin.__assetDeclaresFormat("renovate-schema", { name: "renovate_schema", tags: [] })).toBe("name")
       expect(AkmPlugin.__assetDeclaresFormat("platform.acme.com", { name: "platform.acme.com", tags: [] })).toBe("name")
-      expect(AkmPlugin.__assetDeclaresFormat("inkwell/v2", { name: "x", tags: ["inkwell/v2"] })).toBe("tag")
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell/v2", { name: "inkwell/v2", tags: [] })).toBe("name")
     })
 
-    it("counts an authored tag as a declaration and a slug-derived one as nothing", () => {
-      // #99 review, blocker C, the mechanism. akm SYNTHESIZES tags from the
-      // title slug when frontmatter supplies none — `presence-svg-animation-
-      // complexity` carries ["presence","svg","animation","complexity"] with no
-      // `tags:` of its own — so "does a top-5 asset carry this word as a tag"
-      // degenerated into "does its title contain this word", the fuzzy match
-      // this classifier's contract says it excludes. A tag whose every word is
-      // already in the asset's own name says nothing the name did not.
-      const authored = { name: "inkwell", tags: ["inkwell", "inkwell/v2", "service configuration"] }
-      expect(AkmPlugin.__assetDeclaresFormat("inkwell/v2", authored)).toBe("tag")
-      expect(AkmPlugin.__assetDeclaresFormat("inkwell", authored)).toBe("name")
+    it("never lets a tag authorize the gate, hand-written or slug-derived", () => {
+      // #99 review round 3, the second HIGH defect. The rule before this one
+      // accepted a tag when the tag was AUTHORED rather than synthesized from
+      // the title slug, on the theory that a hand-written tag is a claim. It is
+      // not: a hand-written tag is a TOPIC label. Every shape below is real,
+      // lifted verbatim from a 23k-entry stash, and under the authored-tag rule
+      // every one of them AUTHORIZED A BLOCKED EDIT and told the user their
+      // stash documents a format it does not.
+      //
+      // These four were the entire remaining false-fire set. The asset is about
+      // the topic; it is not the format's documentation.
+      expect(AkmPlugin.__assetDeclaresFormat("vercel", {
+        name: "headless-modern/jamstack-storefront",
+        tags: ["jamstack", "next.js", "astro", "static generation", "ssg", "isr", "headless", "commerce", "vercel", "netlify", "modern"],
+      })).toBeNull()
+      expect(AkmPlugin.__assetDeclaresFormat("xml", {
+        name: "catalog-inventory/catalog-import-export",
+        tags: ["import", "export", "csv", "json", "xml", "bulk", "validation", "etl", "catalog", "inventory"],
+      })).toBeNull()
+      expect(AkmPlugin.__assetDeclaresFormat("jest", {
+        name: "mock-module-patterns-by-module.derived",
+        tags: ["testing", "mocking", "jest", "unit tests", "module patterns", "state management", "test strategy"],
+      })).toBeNull()
+      expect(AkmPlugin.__assetDeclaresFormat("rollup", {
+        name: "ui-build-self-contained-no-node-modules.derived",
+        tags: ["openpalm", "rollup", "adapter node", "self contained", "supply chain security", "electron bundling", "cli host installation"],
+      })).toBeNull()
 
+      // The benchmark fixture's own tags do not authorize it either — its NAME
+      // does, on the ladder's fallback key. This is the assertion that proves
+      // the precision fix is not being paid for out of the tag clause's recall.
+      const fixture = { name: "inkwell", tags: ["inkwell", "inkwell/v2", "service configuration", "scaling", "healthcheck", "limits"] }
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell/v2", fixture)).toBeNull()
+      expect(AkmPlugin.__assetDeclaresFormat("inkwell", fixture)).toBe("name")
+
+      // The slug-derived shapes blocker C found stay dead for the same reason.
       expect(AkmPlugin.__assetDeclaresFormat("svg", {
         name: "presence-svg-animation-complexity",
         tags: ["presence", "svg", "animation", "complexity"],
       })).toBeNull()
-      // Whole field, so a compound tag is not a match for one of its words.
       expect(AkmPlugin.__assetDeclaresFormat("openapi", {
         name: "openpalm-assistant-client-sendmessage-signature.derived",
         tags: ["openapi api", "signature"],
@@ -1233,6 +1256,19 @@ describe("akm-opencode plugin", () => {
         call?.body?.message === "AKM write gate never acted")).toHaveLength(0)
     })
 
+    // The two create hooks a real trajectory runs, in the order the runtime runs
+    // them. `tool.execute.before` fires for `write` too — it is a watched write
+    // tool — and a test that skips it is testing a trajectory that cannot happen.
+    async function createServiceYaml(hooks: any, sessionID: string) {
+      const args = { filePath: "/app/service.yaml", content: "apiVersion: inkwell/v2\nkind: Service\n" }
+      await hooks["tool.execute.before"]({ tool: "write", sessionID, callID: "call-write", directory: "/tmp/project" }, { args })
+      await hooks["tool.execute.after"](
+        { tool: "write", sessionID, callID: "call-write", args, directory: "/tmp/project" },
+        { output: "", title: "write" },
+      )
+      await settle(25)
+    }
+
     it("never gates a file this session created rather than read", async () => {
       // #99 review, decision 3. `write` used to record identity too, on a "write
       // a file, then edit it" argument — but that shape IS the create cell: the
@@ -1243,21 +1279,106 @@ describe("akm-opencode plugin", () => {
       useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
-      await hooks["tool.execute.after"](
-        {
-          tool: "write",
-          sessionID: "gate-create",
-          callID: "call-write",
-          args: { filePath: "/app/service.yaml", content: "apiVersion: inkwell/v2\nkind: Service\n" },
-          directory: "/tmp/project",
-        },
-        { output: "", title: "write" },
-      )
-      await settle(25)
+      await createServiceYaml(hooks, "gate-create")
       clearEventLog()
 
       await expect(hooks["tool.execute.before"]!(beforeInput("gate-create"), beforeOutput())).resolves.toBeUndefined()
-      expect(gateReasons()).toEqual(["file-not-read"])
+      expect(gateReasons()).toEqual(["session-created"])
+    })
+
+    it("keeps a created file insulated after the model reads its own output back", async () => {
+      // #99 review round 3, the first HIGH defect, reproduced against the
+      // shipped build before this test existed: write /app/service.yaml, read it
+      // back, edit it -> BLOCKED. Dropping `write` as an identity source
+      // insulated the create only until the model VERIFIED ITS OWN OUTPUT,
+      // because the insulation was "no read record for this path" and a
+      // read-back writes exactly that record. Nothing else about the trajectory
+      // changed, so the gate landed inside the fictional-create (96%) and
+      // real-create (29%) cells — which is the attribution the create/edit split
+      // exists to protect, and it is reachable in the benchmark:
+      // inkwell--new-service ships a workspace holding only README.md and asks
+      // the model to create service.yaml.
+      //
+      // The read-back is a REAL read envelope, so the extractor really does
+      // record inkwell/v2 for this path — the insulation has to survive that,
+      // not depend on the read failing to parse.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await createServiceYaml(hooks, "gate-create-readback")
+      await readServiceYaml(hooks, "gate-create-readback")
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-create-readback"), beforeOutput())).resolves.toBeUndefined()
+      // Named for what it is. `file-not-read` is a fact about the current call
+      // and says nothing about who authored the file; an analyst filtering the
+      // stage-1 histogram has to be able to prove the create cells are insulated,
+      // and only a reason that means "we watched this session invent this file"
+      // can carry that.
+      expect(gateReasons()).toEqual(["session-created"])
+    })
+
+    it("still gates an edit to a pre-existing file the session read but never wrote", async () => {
+      // The other side of the insulation, and the reason it is not just "never
+      // gate anything". Same session, same enforce mode, same stash — the only
+      // difference is that this session did not create the file. If the
+      // create-path bookkeeping ever widens to cover an ordinary edit, the gate
+      // goes silently inert and every ledger line still looks legitimate.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await readServiceYaml(hooks, "gate-preexisting")
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-preexisting"), beforeOutput())).rejects.toThrow(/^AKM:/)
+      expect(gateReasons()).toEqual(["fired"])
+    })
+
+    it("does not carry a create record past the end of its session", async () => {
+      // The create record is per-session and torn down with the rest of the
+      // session state. A record that outlived its session would disable the gate
+      // for that path forever, and a record shared ACROSS sessions would disable
+      // it for a session that never wrote the file — both are the gate going
+      // silently inert while every ledger line still looks legitimate.
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+
+      // A different session, same path: it did not write this file.
+      await createServiceYaml(hooks, "gate-create-session-a")
+      await readServiceYaml(hooks, "gate-create-session-b")
+      clearEventLog()
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-create-session-b"), beforeOutput())).rejects.toThrow(/^AKM:/)
+      expect(gateReasons()).toEqual(["fired"])
+
+      // The same session id, reused after teardown: also not the writer.
+      await hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "gate-create-session-a" } } } as any)
+      await settle(10)
+      await readServiceYaml(hooks, "gate-create-session-a")
+      clearEventLog()
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-create-session-a"), beforeOutput())).rejects.toThrow(/^AKM:/)
+      expect(gateReasons()).toEqual(["fired"])
+    })
+
+    it("insulates a file created by an edit with an empty oldString, read back afterwards", async () => {
+      // The other create door, and it has to be recorded for the same reason the
+      // `write` door does: opencode 1.18's `edit` treats an empty oldString as
+      // create-this-file, so a model can invent /app/service.yaml through `edit`,
+      // read it back to check itself, and edit it again. Without a create record
+      // the read-back re-arms the gate on that path exactly as it did for
+      // `write` (#99 review round 3).
+      useMode("enforce")
+      stubInkwellHit()
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["tool.execute.before"]!(
+        beforeInput("gate-create-edit-readback"),
+        beforeOutput({ filePath: "/app/service.yaml", oldString: "", newString: "apiVersion: inkwell/v2\n" }),
+      )
+      await readServiceYaml(hooks, "gate-create-edit-readback")
+      clearEventLog()
+
+      await expect(hooks["tool.execute.before"]!(beforeInput("gate-create-edit-readback"), beforeOutput())).resolves.toBeUndefined()
+      expect(gateReasons()).toEqual(["session-created"])
     })
 
     it("treats an edit with an empty oldString as a create, not an edit", async () => {
@@ -1708,21 +1829,23 @@ describe("akm-opencode plugin", () => {
       // rule whose whole job is to say "no" more often ships invisibly inert if
       // it says no to everything — clean logs, no gate, a ledger full of
       // legitimate-looking misses. Only positive tests catch that, so there are
-      // two, one per declaration clause.
+      // two, one per rung of the key ladder.
       //
-      // This one is the AUTHORED-TAG clause on the SPECIFIC key: `inkwell/v2` is
-      // what the file literally declares, it is tried before the bare
-      // namespace, and the asset carries it as a hand-written frontmatter tag
-      // (its words are not all in the asset's own name, which is what separates
-      // an authored tag from one akm synthesized off the title slug).
+      // This one is the SPECIFIC key. `inkwell/v2` is what the file literally
+      // declares and it is tried FIRST, so when the stash holds an asset whose
+      // whole name IS `inkwell/v2` the bare namespace is never reached. The
+      // search stub answers per query, because that is the only way the ladder's
+      // ORDER is observable: a stub that answers the same way for both keys
+      // passes whichever order the loop runs in.
       useMode("enforce")
-      stubSearch([{
-        type: "skill",
-        ref: "skills/inkwell",
-        name: "inkwell",
-        tags: ["inkwell", "inkwell/v2", "service configuration"],
-        description: INKWELL_DESCRIPTION,
-      }])
+      mockAkmSearch.mockImplementation(async (input: Record<string, unknown>) => ({
+        schemaVersion: 1,
+        bundleDir: "/tmp/akm-bundle",
+        source: "local",
+        hits: input.query === "inkwell/v2"
+          ? [{ type: "skill", ref: "skills/inkwell/v2", name: "inkwell/v2", description: INKWELL_DESCRIPTION }]
+          : [{ type: "skill", ref: "skills/inkwell", name: "inkwell", description: INKWELL_DESCRIPTION }],
+      }))
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-ladder")
       clearEventLog()
@@ -1734,13 +1857,16 @@ describe("akm-opencode plugin", () => {
       // bare-namespace fallback, which is the difference between a strong hit
       // and a coincidence.
       expect(writeGateEvents()[0]!.input?.token).toBe("inkwell/v2")
+      expect(writeGateEvents()[0]!.refs).toEqual(["skills/inkwell/v2"])
     })
 
     it("falls back to the bare namespace key when only the asset's name declares it", async () => {
-      // The second declaration clause, and the reason the benchmark signal is
-      // not hostage to one fixture tag: strip `inkwell/v2` from the asset's
-      // frontmatter and the gate still fires, now because the asset's whole name
-      // IS the format. Two independent clauses carry the 7 inkwell trajectories.
+      // The second rung, and the one the benchmark actually lands on. Measured
+      // against harbor/stashes/inkwell: the fixture asset is `skills/inkwell`,
+      // named `inkwell`, so the specific key `inkwell/v2` finds no asset NAMED
+      // for it and the ladder falls through to the bare namespace. This is the
+      // rung that carries all 7 inkwell service.yaml trajectories now that a tag
+      // can no longer authorize the gate (#99 review round 3).
       useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
