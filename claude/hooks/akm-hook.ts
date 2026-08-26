@@ -135,10 +135,15 @@ function tagRecalledContent(content: string): string {
   return `${RECALLED_CONTENT_PROVENANCE}${content}`
 }
 const SESSION_START_FOOTER = "The public plugin surface is limited to search, show, curate, feedback, and remember."
+// The trigger sentence used to read "Before writing anything from scratch",
+// which literally excludes the largest class of tasks retrieval helps with:
+// editing a file whose conventions the model does not know. The measurement
+// behind this wording (#94) is opencode-only; applying it here is a
+// same-defect inference, not a replicated Claude-surface result.
 const SESSION_START_HEADER = [
   "# AKM is available in this session",
   "",
-  'You have AKM bundles on this machine. Before writing anything from scratch, run `akm curate "<task>"` to find relevant concepts.',
+  'You have AKM bundles on this machine. Before writing **or editing** a config file, manifest, schema, or command for any tool, format, or API whose exact syntax or keys you are not certain of, run `akm curate "<task>"` to find relevant concepts. A file already being present in the workspace is not evidence that you know its schema — the values may be given to you while the key names and nesting are not, so check your bundles for that format\'s conventions before you edit it.',
   "",
   "**Choosing the right lookup command:**",
   "",

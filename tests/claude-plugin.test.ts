@@ -838,6 +838,12 @@ exit 0
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("SessionStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM is available")
+    // #97: the trigger must cover editing an existing file, not only writing
+    // from scratch, and must say that a visible file is not a known schema.
+    expect(payload.hookSpecificOutput.additionalContext).toContain("editing")
+    expect(payload.hookSpecificOutput.additionalContext).toMatch(/not certain of/)
+    expect(payload.hookSpecificOutput.additionalContext).toMatch(/already being present in the workspace is not evidence/)
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("from scratch")
     expect(payload.hookSpecificOutput.additionalContext).toContain("Stash hints")
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
     expect(payload.hookSpecificOutput.additionalContext).toContain("curated/session-sess-start-1.md")
