@@ -17,7 +17,7 @@ const eventLogPath = path.join(eventStateDir, "akm-opencode", "events.jsonl")
 const realChildProcess = await import("node:child_process")
 
 const mockExecFileSync = mock((_command: string, args?: string[]) => {
-  if (args?.[0] === "--version") return "akm 0.9.0\n"
+  if (args?.[0] === "--version") return "akm 0.9.2\n"
   if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
   return "mock output"
 })
@@ -102,7 +102,7 @@ describe("akm-opencode plugin", () => {
   beforeEach(() => {
     mockExecFileSync.mockClear()
     mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-      if (args?.[0] === "--version") return "akm 0.9.0\n"
+      if (args?.[0] === "--version") return "akm 0.9.2\n"
       if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
       return "mock output"
     })
@@ -369,6 +369,29 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("session context injection", () => {
+    it("reads pending proposals only from the AKM 0.9.2 proposal-list envelope", async () => {
+      mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
+        if (args?.[0] === "--version") return "akm 0.9.2\n"
+        if (args?.[0] === "proposal") return JSON.stringify({ hits: [{ id: "legacy" }] })
+        return ""
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+      const legacy: { system: string[] } = { system: [] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "proposal-envelope-legacy" } as any, legacy as any)
+      expect(legacy.system.join("\n")).not.toContain("# AKM pending proposals")
+
+      mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
+        if (args?.[0] === "--version") return "akm 0.9.2\n"
+        if (args?.[0] === "proposal") {
+          return JSON.stringify({ schemaVersion: 1, totalCount: 1, proposals: [{ id: "current" }] })
+        }
+        return ""
+      })
+      const current: { system: string[] } = { system: [] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "proposal-envelope-current" } as any, current as any)
+      expect(current.system.join("\n")).toContain("There is 1 pending AKM proposal.")
+    })
+
     it("pushes the AKM doctrine block on every system transform, not once per session", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const first: { system: string[] } = { system: [] }
@@ -405,7 +428,7 @@ describe("akm-opencode plugin", () => {
       // templates requiring a single leading system message answer HTTP 500
       // ("System message must be at the beginning") — plugin arm only (#96).
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.9.0\n"
+        if (args?.[0] === "--version") return "akm 0.9.2\n"
         if (args?.includes("hints")) return "stash-authored hint text"
         if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
         return "mock output"
@@ -418,10 +441,10 @@ describe("akm-opencode plugin", () => {
       // Multiple blocks are live for this session (curated pointer + doctrine
       // + hints), and they must still arrive as one entry.
       expect(output.system).toHaveLength(1)
-      expect(output.system[0]).toContain("AKM stash curation written to")
+      expect(output.system[0]).toContain("AKM bundle curation written to")
       expect(output.system[0]).toContain("# AKM is available in this session")
       expect(output.system[0]).toContain("stash-authored hint text")
-      expect(output.system[0]!.indexOf("AKM stash curation written to")).toBeLessThan(
+      expect(output.system[0]!.indexOf("AKM bundle curation written to")).toBeLessThan(
         output.system[0]!.indexOf("# AKM is available in this session"),
       )
     })
@@ -433,7 +456,7 @@ describe("akm-opencode plugin", () => {
       // array, a large hints output silently dropped the curated-stash pointer
       // — the plugin's actual deliverable — for the whole session.
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.9.0\n"
+        if (args?.[0] === "--version") return "akm 0.9.2\n"
         if (args?.includes("hints")) return "h".repeat(8000)
         if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
         return "mock output"
@@ -443,7 +466,7 @@ describe("akm-opencode plugin", () => {
       const output: { system: string[] } = { system: [] }
       await hooks["experimental.chat.system.transform"]!({ sessionID: "budget-starve-1" } as any, output as any)
 
-      expect(output.system.join("\n")).toContain("AKM stash curation written to")
+      expect(output.system.join("\n")).toContain("AKM bundle curation written to")
     })
 
     it("tags the curated file with the recalled-content provenance banner", async () => {
@@ -1726,7 +1749,7 @@ describe("akm-opencode plugin", () => {
         AkmPlugin.__resetResolvedAkmForTests()
         AkmPlugin.__resetWriteGateForTests()
         mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-          if (args?.[0] === "--version") return "akm 0.9.0\n"
+          if (args?.[0] === "--version") return "akm 0.9.2\n"
           if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
           return "mock output"
         })

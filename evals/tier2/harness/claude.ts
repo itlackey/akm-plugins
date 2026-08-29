@@ -54,7 +54,7 @@ export function runClaudeHook(
 const REF_RE =
   /(?<![A-Za-z0-9@._+/:=-])(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?(?![A-Za-z0-9@._+/#$=-])/g
 
-const CURATED_FILE_RE = /AKM stash curation written to `([^`]+)`/g
+const CURATED_FILE_RE = /AKM bundle curation written to `([^`]+)`/g
 
 function hydrateCuratedContext(context: string): string {
   let expanded = context

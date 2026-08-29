@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.0`. Both integrations expose exactly five public AKM surfaces:
+Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.2`. Both integrations expose exactly five public AKM surfaces:
 
 | Capability | OpenCode tool | Claude slash command |
 | --- | --- | --- |
@@ -50,11 +50,11 @@ Set `AKM_LOCAL_BUILD_CLI=/absolute/path/to/akm/dist/cli.js` to test either plugi
 
 The plugins keep **MAJOR.MINOR in sync with the AKM CLI line they target, and let PATCH diverge** inside that minor. While AKM is on `0.9.x`, the plugins release `0.9.0`, `0.9.1`, `0.9.2`, … independently of AKM's own patch number.
 
-The sync point is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts), which both plugins import. On a `0.x` version a caret range *is* a minor line — `^0.9.0` means `>=0.9.0 <0.10.0` — so that one constant already states which AKM line a release targets. Moving the plugins to a new AKM minor is a change to that constant, and the release then follows it.
+The sync point is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts), which both plugins import. On a `0.x` version a caret range remains inside a minor line — `^0.9.2` means `>=0.9.2 <0.10.0` — and its lower bound is the minimum CLI contract the plugins support.
 
 Patch divergence is deliberate: a plugin-only fix has to be shippable without waiting for an AKM release, which is impossible if the patch component is spent mirroring AKM's.
 
-Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A four-component string such as `0.9.0.20260811.1` is not semver and npm rejects it on publish. For dated snapshot builds use a prerelease of the *next* patch — `0.9.1-20260811.1`, which sorts above `0.9.0` and below `0.9.1` — rather than a prerelease of the current one, which would sort *below* the version already published. Note that no prerelease satisfies a stable range like `^0.9.0`, so snapshots reach users only through an explicit npm dist-tag.
+Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A four-component string such as `0.9.2.20260811.1` is not semver and npm rejects it on publish. For dated snapshot builds use a prerelease of the *next* patch — `0.9.3-20260811.1`, which sorts above `0.9.2` and below `0.9.3` — rather than a prerelease of the current one, which would sort *below* the version already published. Note that no prerelease satisfies a stable range like `^0.9.2`, so snapshots reach users only through an explicit npm dist-tag.
 
 Both rules are enforced, not conventional:
 

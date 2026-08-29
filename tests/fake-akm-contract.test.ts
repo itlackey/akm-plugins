@@ -19,14 +19,16 @@ import { installFakeAkm } from "../evals/lib/fake-akm"
 // silently bind to that mock when this file runs alongside it. Bun.spawnSync
 // is a separate, unmocked code path.
 //
-// PATH `akm` is not assumed to exist in every environment this test runs in;
-// we use the bundled binary at opencode/node_modules/.bin/akm (installed by
-// `bun install` in opencode/, which both tests.yml and evals.yml do before
-// running `bun test tests/`). When that binary isn't present — e.g. a
-// checkout that skipped `bun install` — the whole suite is skipped with a
-// clear reason rather than failing.
+// PATH `akm` is not assumed to exist in every environment this test runs in.
+// Prefer the normal package-manager shim, but also support the linked
+// akm-cli package used by release validation before npm has published the new
+// floor. The CLI is launched through the current Bun runtime so this contract
+// test needs no globally installed Node executable.
 const repoRoot = path.resolve(import.meta.dir, "..")
-const REAL_AKM = path.join(repoRoot, "opencode/node_modules/.bin/akm")
+const REAL_AKM = [
+  path.join(repoRoot, "opencode/node_modules/.bin/akm"),
+  path.join(repoRoot, "opencode/node_modules/akm-cli/dist/akm"),
+].find(existsSync) ?? path.join(repoRoot, "opencode/node_modules/.bin/akm")
 const akmAvailable = existsSync(REAL_AKM)
 
 if (!akmAvailable) {
@@ -80,7 +82,7 @@ function realAkmEnv(cwd: RealEnv): Record<string, string | undefined> {
 }
 
 function runReal(cwd: RealEnv, args: string[]): unknown {
-  const result = spawnSync(REAL_AKM, args, realAkmEnv(cwd))
+  const result = spawnSync(process.execPath, [REAL_AKM, ...args], realAkmEnv(cwd))
   if (result.exitCode !== 0) {
     throw new Error(`akm ${args.join(" ")} exited ${result.exitCode}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`)
   }
@@ -186,7 +188,7 @@ describe("fake-akm envelope contract", () => {
         "contract-test",
         "--dry-run",
       ]
-      const realRun = runRaw(REAL_AKM, args, realAkmEnv(real))
+      const realRun = runRaw(process.execPath, [REAL_AKM, ...args], realAkmEnv(real))
       const fakeRun = runRaw(fake.akmPath, args)
 
       // 1. Envelope goes to stderr; stdout stays empty.
@@ -232,7 +234,7 @@ function makeRealEnv(): RealEnv {
     root,
   }
   mkdirSync(env.AKM_BUNDLE_DIR, { recursive: true })
-  const init = spawnSync(REAL_AKM, ["bundle", "create", "--dir", env.AKM_BUNDLE_DIR, "--set-default"], realAkmEnv(env))
+  const init = spawnSync(process.execPath, [REAL_AKM, "bundle", "create", "--dir", env.AKM_BUNDLE_DIR, "--set-default"], realAkmEnv(env))
   if (init.exitCode !== 0) {
     throw new Error(`akm bundle create failed: exit ${init.exitCode}\nstdout: ${init.stdout}\nstderr: ${init.stderr}`)
   }

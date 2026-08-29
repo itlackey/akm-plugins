@@ -333,7 +333,7 @@ describe("Claude hook scripts", () => {
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 if [ "$1" = "--version" ]; then
-  echo "akm 0.9.0"
+  echo "akm 0.9.2"
   exit 0
 fi
 exit 0
@@ -350,7 +350,7 @@ exit 0
     })
 
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.9.0")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.9.2")
   })
 
   it("extract-session dispatches cleanly and returns no output (fire-and-forget)", () => {
@@ -374,19 +374,21 @@ exit 0
     // `akm proposal extract` is the ONLY remaining memory-harvest path (the
     // Stop / SubagentStop / PreCompact hooks were dropped from plugin.json in
     // 0.9.0), and on a fresh install with no LLM profile configured real akm
-    // answers with {"ok":false,...,"code":"INVALID_CONFIG_FILE"}. Under the old
+    // answers with {"ok":false,...,"code":"LLM_NOT_CONFIGURED"}. Under the old
     // stdio: "ignore" that failure left no trace anywhere.
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
 
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
 if [ "$1" = "proposal" ] && [ "$2" = "extract" ]; then
-  printf '{"ok":false,"code":"INVALID_CONFIG_FILE"}\\n'
+  printf '{"ok":false,"code":"LLM_NOT_CONFIGURED"}\\n'
   printf 'no LLM connection configured for extract\\n' >&2
   exit 1
 fi
@@ -417,10 +419,15 @@ exit 0
     // ...and the detached child's stdout AND stderr land in the same file.
     const body = await waitFor(() => {
       const text = readFileSync(extractLogPath, "utf8")
-      return text.includes("INVALID_CONFIG_FILE") && text.includes("no LLM connection") ? text : undefined
+      return text.includes("LLM_NOT_CONFIGURED") && text.includes("no LLM connection") ? text : undefined
     })
-    expect(body).toContain("INVALID_CONFIG_FILE")
+    expect(body).toContain("LLM_NOT_CONFIGURED")
     expect(body).toContain("no LLM connection configured for extract")
+    const invocation = await waitFor(() => {
+      const text = readFileSync(callLog, "utf8")
+      return text.includes("proposal extract") ? text : undefined
+    })
+    expect(invocation).toContain("proposal extract --type claude --session-id sess-extract-log")
 
     // extract.log carries the same owner-only posture as every other state file.
     expect(permissionBits(extractLogPath)).toBe(0o600)
@@ -429,7 +436,7 @@ exit 0
   it("extract-session skips the spawn when the session left no transcript anywhere", () => {
     // Ephemeral sessions (background/utility sessions that end without ever
     // persisting a turn) fire SessionEnd with no transcript on disk. Spawning
-    // for them always fails with "session not found for harness claude-code",
+    // for them always fails with "session not found for harness claude",
     // and that ok:false block used to trip the SessionStart failure warning.
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
@@ -566,13 +573,15 @@ exit 0
     // touch Agent tool_input or emit a permissionDecision for it, and the
     // `pre-tool-agent` subcommand (its only entry point) must no longer
     // exist as a live dispatch case.
-    function runPreToolAgent(model: string | null, options?: { env?: Record<string, string> }) {
-      const payload: Record<string, unknown> = { tool_input: model === null ? {} : { model } }
-      return runHook(["pre-tool-agent"], {
+  function runPreToolAgent(model: string | null, options?: { env?: Record<string, string> }) {
+    const stateDir = makeTempDir()
+    const payload: Record<string, unknown> = { tool_input: model === null ? {} : { model } }
+    return runHook(["pre-tool-agent"], {
         input: JSON.stringify(payload),
         env: {
           HOME: process.env.HOME ?? "/tmp",
           PATH: process.env.PATH ?? "/usr/bin:/bin",
+          AKM_PLUGIN_STATE_DIR: stateDir,
           ...options?.env,
         },
       })
@@ -715,7 +724,7 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM bundle curation written to")
     expect(payload.hookSpecificOutput.additionalContext).toContain("curated/prompt-sess-curate-2.md")
     // 07 hardening: the prompt-recall path also provenance-tags the recalled content.
     const curatedContent = readFileSync(
@@ -760,7 +769,7 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM bundle curation written to")
     expect(payload.hookSpecificOutput.additionalContext).toContain("curated/prompt-sess-curate-release-1.md")
   })
 
@@ -803,7 +812,7 @@ echo "[knowledge] should-not-appear"
     const quotedLog = shellQuote(invokeLog)
 
     // Fake akm: version/install, index no-op, hints + curated output.
-    // The version MUST satisfy the plugin's required range (^0.9.0)
+    // The version MUST satisfy the plugin's required range (^0.9.2)
     // so the new SessionStart consent gate treats akm as healthy and proceeds
     // with the normal injected-context flow.
     writeFileSync(
@@ -811,11 +820,11 @@ echo "[knowledge] should-not-appear"
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 0.9.0"; exit 0 ;;
+  --version) echo "akm 0.9.2"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
-    hints) echo "# Stash hints"; echo "akm search <query>"; exit 0 ;;
+    hints) echo "# Bundle hints"; echo "akm search <query>"; exit 0 ;;
     index) exit 0 ;;
     curate) echo "# curated"; echo "- skills/deploy"; exit 0 ;;
   esac
@@ -844,8 +853,8 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toMatch(/not certain of/)
     expect(payload.hookSpecificOutput.additionalContext).toMatch(/already being present in the workspace is not evidence/)
     expect(payload.hookSpecificOutput.additionalContext).not.toContain("from scratch")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("Stash hints")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("Bundle hints")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM bundle curation written to")
     expect(payload.hookSpecificOutput.additionalContext).toContain("curated/session-sess-start-1.md")
     // 07 hardening: the recalled/curated content is provenance-tagged so an
     // embedded directive cannot pose as a trusted instruction.
@@ -883,11 +892,11 @@ exit 0
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 0.9.0"; exit 0 ;;
+  --version) echo "akm 0.9.2"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
-    hints) echo "# Stash hints"; exit 0 ;;
+    hints) echo "# Bundle hints"; exit 0 ;;
     index) exit 0 ;;
     curate) echo "should-not-appear"; exit 0 ;;
   esac
@@ -917,7 +926,7 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.additionalContext).not.toContain("should-not-appear")
-    expect(payload.hookSpecificOutput.additionalContext).not.toContain("AKM stash curation written to")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("AKM bundle curation written to")
     // ...and no akm_failed line is logged for the session-start curate call.
     const sessionLog = path.join(stateDir, "akm-claude", "session.log")
     if (existsSync(sessionLog)) {
@@ -976,7 +985,7 @@ exit 0
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
     const feedbackLog = path.join(tempDir, "akm-feedback.log")
-    const bundleDir = makeBundle(tempDir, ["skills/code-review"])
+    const bundleDir = makeBundle(tempDir, ["workflows/code-review"])
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(feedbackLog)
@@ -1003,8 +1012,8 @@ exit 0
       input: JSON.stringify({
         session_id: "sess-auto-1",
         tool: "Bash",
-        input: { command: "akm workflow start skills/code-review" },
-        output: "{\"ref\":\"skills/code-review\"}",
+        input: { command: "akm workflow run workflows/code-review" },
+        output: "{\"workflowRef\":\"workflows/code-review\"}",
       }),
       env: {
         HOME: tempDir,
@@ -1015,7 +1024,7 @@ exit 0
     })
 
     const recorded = readFileSync(feedbackLog, "utf8")
-    expect(recorded).toContain("feedback skills/code-review --positive")
+    expect(recorded).toContain("feedback workflows/code-review --positive")
     expect(recorded).toContain("--reason")
   })
 
@@ -1067,7 +1076,7 @@ exit 0
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
-    const bundleDir = makeBundle(tempDir, ["skills/code-review"])
+    const bundleDir = makeBundle(tempDir, ["workflows/code-review"])
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
 
@@ -1076,7 +1085,7 @@ exit 0
       `#!/usr/bin/env sh
 case "$*" in
   *feedback*) exit 1 ;;
-  *show*) printf '{"ref":"skills/code-review","quality":"curated"}\\n'; exit 0 ;;
+  *show*) printf '{"ref":"workflows/code-review","quality":"curated"}\\n'; exit 0 ;;
 esac
 exit 0
 `,
@@ -1087,8 +1096,8 @@ exit 0
       input: JSON.stringify({
         session_id: "sess-auto-fail",
         tool: "Bash",
-        input: { command: "akm workflow start skills/code-review" },
-        output: "{\"ref\":\"skills/code-review\"}",
+        input: { command: "akm workflow run workflows/code-review" },
+        output: "{\"workflowRef\":\"workflows/code-review\"}",
       }),
       env: {
         HOME: tempDir,
@@ -1099,9 +1108,9 @@ exit 0
     })
 
     const feedbackLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
-    expect(feedbackLog.some((line) => line.includes("system\tfeedback_failed\tskills/code-review\tsuccess"))).toBe(true)
+    expect(feedbackLog.some((line) => line.includes("system\tfeedback_failed\tworkflows/code-review\tsuccess"))).toBe(true)
     const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("akm_failed\tauto-feedback") && line.includes("feedback skills/code-review"))).toBe(true)
+    expect(sessionLog.some((line) => line.includes("akm_failed\tauto-feedback") && line.includes("feedback workflows/code-review"))).toBe(true)
   })
 
   it("post-tool recognizes lesson concept IDs", () => {
@@ -1174,7 +1183,7 @@ exit 0
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
     const callLog = path.join(tempDir, "akm-calls.log")
-    const bundleDir = makeBundle(tempDir, ["skills/draft-rollback"])
+    const bundleDir = makeBundle(tempDir, ["workflows/draft-rollback"])
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(callLog)
@@ -1187,8 +1196,8 @@ exit 0
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$*" in
-  *show*skills/draft-rollback*)
-    echo '{"type":"skill","ref":"skills/draft-rollback","quality":"proposed"}'
+  *show*workflows/draft-rollback*)
+    echo '{"type":"workflow","ref":"workflows/draft-rollback","quality":"proposed"}'
     exit 0
     ;;
 esac
@@ -1200,8 +1209,8 @@ exit 0
     runHook(["auto-feedback", "success"], {
       input: JSON.stringify({
         tool: "Bash",
-        input: { command: "akm workflow start skills/draft-rollback" },
-        output: "{\"type\":\"skill\",\"ref\":\"skills/draft-rollback\",\"quality\":\"proposed\"}",
+        input: { command: "akm workflow run workflows/draft-rollback" },
+        output: "{\"type\":\"workflow\",\"ref\":\"workflows/draft-rollback\",\"quality\":\"proposed\"}",
       }),
       env: {
         HOME: tempDir,
@@ -1213,11 +1222,11 @@ exit 0
 
     const calls = readFileSync(callLog, "utf8")
     // The probe call must have happened, but no feedback call should follow.
-    expect(calls).toContain("show skills/draft-rollback")
-    expect(calls).not.toContain("feedback skills/draft-rollback")
+    expect(calls).toContain("show workflows/draft-rollback")
+    expect(calls).not.toContain("feedback workflows/draft-rollback")
 
     const skipLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
-    expect(skipLog.some((line) => line.includes("skip_proposed\tskills/draft-rollback"))).toBe(true)
+    expect(skipLog.some((line) => line.includes("skip_proposed\tworkflows/draft-rollback"))).toBe(true)
   })
 
   it("auto-feedback is a no-op when the command did not invoke akm", () => {
@@ -1462,7 +1471,7 @@ exit 0
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
     const feedbackLog = path.join(tempDir, "akm-feedback.log")
-    const bundleDir = makeBundle(tempDir, ["skills/deploy"])
+    const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(feedbackLog)
@@ -1481,8 +1490,8 @@ exit 0
       input: JSON.stringify({
         session_id: "sess-scope-1",
         tool: "Bash",
-        input: { command: "akm workflow start skills/deploy" },
-        output: "{\"ref\":\"skills/deploy\"}",
+        input: { command: "akm workflow run workflows/deploy" },
+        output: "{\"workflowRef\":\"workflows/deploy\"}",
       }),
       env: {
         HOME: tempDir,
@@ -1493,7 +1502,7 @@ exit 0
     })
 
     const recorded = readFileSync(feedbackLog, "utf8")
-    expect(recorded).toContain("feedback skills/deploy --positive")
+    expect(recorded).toContain("feedback workflows/deploy --positive")
     expect(recorded).not.toContain("--run sess-scope-1")
     const feedbackEvent = readEvents(stateDir).find((event) => event.event === "feedback_recorded")
     expect(feedbackEvent.scope.run).toBe("sess-scope-1")
@@ -1504,7 +1513,7 @@ exit 0
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
     const feedbackLog = path.join(tempDir, "akm-feedback.log")
-    const bundleDir = makeBundle(tempDir, ["skills/deploy"])
+    const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(feedbackLog)
@@ -1523,8 +1532,8 @@ exit 0
       input: JSON.stringify({
         session_id: "sess-scope-2",
         tool: "Bash",
-        input: { command: "akm workflow start skills/deploy" },
-        output: "{\"ref\":\"skills/deploy\"}",
+        input: { command: "akm workflow run workflows/deploy" },
+        output: "{\"workflowRef\":\"workflows/deploy\"}",
       }),
       env: {
         HOME: tempDir,
@@ -1556,7 +1565,7 @@ exit 0
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
     const feedbackLog = path.join(tempDir, "akm-feedback.log")
-    const bundleDir = makeBundle(tempDir, ["skills/deploy"])
+    const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(feedbackLog)
@@ -1575,8 +1584,8 @@ exit 0
       input: JSON.stringify({
         session_id: "sess-scope-3",
         tool: "Bash",
-        input: { command: "akm workflow start skills/deploy" },
-        output: "{\"ref\":\"skills/deploy\"}",
+        input: { command: "akm workflow run workflows/deploy" },
+        output: "{\"workflowRef\":\"workflows/deploy\"}",
       }),
       env: {
         HOME: tempDir,
@@ -1610,7 +1619,7 @@ exit 0
     for (const command of [
       "akm proposal accept p_123",
       "akm proposal revert p_abc",
-      "akm tasks add nightly --cron \"0 2 * * *\"",
+      "akm task add nightly --schedule \"0 2 * * *\" --command \"akm improve\"",
       "akm env create --from-file .env.dev",
       "akm remember OPENAI_API_KEY=sk-secret-value",
     ]) {
@@ -1785,7 +1794,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
-  echo '[{"ref":"workflows/release","runId":"run-1","state":"active"}]'
+  echo '{"runs":[{"workflowRef":"workflows/release","id":"run-1","status":"active"}],"shape":"workflow-list","schemaVersion":1}'
   exit 0
 fi
 exit 0
@@ -1823,7 +1832,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
-  echo '[{"workflowRef":"workflows/release","id":"run-1","status":"active","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"evilKey":"evilPayload"}}]'
+  echo '{"runs":[{"workflowRef":"workflows/release","id":"run-1","status":"active","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"evilKey":"evilPayload"}}],"shape":"workflow-list","schemaVersion":1}'
   exit 0
 fi
 exit 0
@@ -2183,11 +2192,11 @@ exit 0
         `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${shellQuote(callLog)}
 case "$1" in
-  --version) echo "akm 0.9.0"; exit 0 ;;
+  --version) echo "akm 0.9.2"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
-    hints) echo "# Stash hints"; exit 0 ;;
+    hints) echo "# Bundle hints"; exit 0 ;;
     curate) echo "# curated"; exit 0 ;;
   esac
 done
@@ -2242,7 +2251,7 @@ exit 0
         const binDir = path.join(tempDir, "bin")
         const stateDir = path.join(tempDir, "state")
         const callLog = path.join(tempDir, "akm-calls.log")
-        const bundleDir = makeBundle(tempDir, ["skills/deploy"])
+        const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
         mkdirSync(binDir, { recursive: true })
         mkdirSync(stateDir, { recursive: true })
         makeLoggingAkm(binDir, callLog)
@@ -2252,7 +2261,7 @@ exit 0
           input: JSON.stringify({
             session_id: "sess-option-bundle",
             tool_name: "Bash",
-            input: { command: "akm workflow start skills/deploy" },
+            input: { command: "akm workflow run workflows/deploy" },
             output: "started",
           }),
           env: {
@@ -2266,7 +2275,7 @@ exit 0
         const calls = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
         // The ref resolved (so feedback was submitted) and no `akm info` spawn
         // was needed to discover the bundle.
-        expect(calls).toContain("feedback skills/deploy --positive")
+        expect(calls).toContain("feedback workflows/deploy --positive")
         expect(calls).not.toContain("info")
       })
 
@@ -2284,7 +2293,7 @@ exit 0
         const binDir = path.join(tempDir, "bin")
         const stateDir = path.join(tempDir, "state")
         const callLog = path.join(tempDir, "akm-calls.log")
-        const bundleDir = makeBundle(tempDir, ["skills/deploy"])
+        const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
         mkdirSync(binDir, { recursive: true })
         mkdirSync(stateDir, { recursive: true })
         makeLoggingAkm(binDir, callLog)
@@ -2293,7 +2302,7 @@ exit 0
           input: JSON.stringify({
             session_id: "sess-option-feedback",
             tool_name: "Bash",
-            input: { command: "akm workflow start skills/deploy" },
+            input: { command: "akm workflow run workflows/deploy" },
             output: "started",
           }),
           env: {
@@ -2329,11 +2338,12 @@ exit 0
             },
           })
 
-          return existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+          const sessionLog = path.join(stateDir, "akm-claude", "session.log")
+          return existsSync(sessionLog) ? readFileSync(sessionLog, "utf8") : ""
         }
 
-        expect(runSessionEnd("false")).not.toContain("index")
-        expect(runSessionEnd("1")).toContain("index")
+        expect(runSessionEnd("false")).not.toContain("index_spawned")
+        expect(runSessionEnd("1")).toContain("index_spawned")
       })
     })
 
@@ -2341,14 +2351,14 @@ exit 0
       const { stdout, calls } = runSessionStart({ AKM_AUTO_HINTS: "0" })
       expect(calls).not.toContain("hints")
       expect(calls).toContain("curate")
-      expect(JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext).not.toContain("Stash hints")
+      expect(JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext).not.toContain("Bundle hints")
     })
 
     it("AKM_AUTO_CURATE=0 skips the session curate leg without spawning it", () => {
       const { stdout, calls } = runSessionStart({ AKM_AUTO_CURATE: "0" })
       expect(calls).not.toContain("curate")
       expect(calls).toContain("hints")
-      expect(JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext).toContain("Stash hints")
+      expect(JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext).toContain("Bundle hints")
     })
 
     it("AKM_AUTO_CURATE=0 still records the prompt and the memory intent", () => {
@@ -2411,7 +2421,7 @@ exit 0
       // while enabling it on OpenCode.
       const tempDir = makeTempDir()
       const binDir = path.join(tempDir, "bin")
-      const bundleDir = makeBundle(tempDir, ["skills/deploy"])
+      const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
       mkdirSync(binDir, { recursive: true })
 
       const submit = (flag: string) => {
@@ -2429,8 +2439,8 @@ exit 0
         runHook(["auto-feedback", "success"], {
           input: JSON.stringify({
             tool: "Bash",
-            input: { command: "akm workflow start skills/deploy" },
-            output: "{\"ref\":\"skills/deploy\"}",
+            input: { command: "akm workflow run workflows/deploy" },
+            output: "{\"workflowRef\":\"workflows/deploy\"}",
           }),
           env: {
             HOME: tempDir,
@@ -2443,8 +2453,8 @@ exit 0
         return existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
       }
 
-      expect(submit("true")).toContain("feedback skills/deploy --positive")
-      expect(submit("1")).toContain("feedback skills/deploy --positive")
+      expect(submit("true")).toContain("feedback workflows/deploy --positive")
+      expect(submit("1")).toContain("feedback workflows/deploy --positive")
       expect(submit("0")).toBe("")
     })
   })
@@ -2474,6 +2484,36 @@ exit 0
       return { payload: JSON.parse(stdout.trim()), stateDir }
     }
 
+    it("reads pending proposals only from the AKM 0.9.2 proposal-list envelope", () => {
+      const legacy = runSessionStartWith(
+        `#!/usr/bin/env sh
+case "$1" in
+  --version) echo "akm 0.9.2"; exit 0 ;;
+esac
+if [ "$1" = "--format" ] && [ "$4" = "proposal" ]; then
+  echo '{"hits":[{"id":"legacy"}]}'
+  exit 0
+fi
+exit 0
+`,
+      )
+      expect(legacy.payload.hookSpecificOutput.additionalContext).not.toContain("pending AKM proposal")
+
+      const current = runSessionStartWith(
+        `#!/usr/bin/env sh
+case "$1" in
+  --version) echo "akm 0.9.2"; exit 0 ;;
+esac
+if [ "$1" = "--format" ] && [ "$4" = "proposal" ]; then
+  echo '{"schemaVersion":1,"totalCount":1,"proposals":[{"id":"current"}]}'
+  exit 0
+fi
+exit 0
+`,
+      )
+      expect(current.payload.hookSpecificOutput.additionalContext).toContain("There is 1 pending AKM proposal.")
+    })
+
     it("injects active workflow runs as run ids and status only", () => {
       // The main session is the one that can run `akm workflow resume`; until
       // now only subagents were told a run was open. The reduction is shared
@@ -2482,10 +2522,10 @@ exit 0
       const { payload } = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.0"; exit 0 ;;
+  --version) echo "akm 0.9.2"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
-  echo '{"runs":[{"runId":"run-7","ref":"workflows/release","status":"active","currentStepId":"step-2","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"evilKey":"evilPayload"}}]}'
+  echo '{"runs":[{"id":"run-7","workflowRef":"workflows/release","status":"active","currentStepId":"step-2","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"evilKey":"evilPayload"}}],"shape":"workflow-list","schemaVersion":1}'
   exit 0
 fi
 exit 0
@@ -2505,7 +2545,7 @@ exit 0
       const { payload } = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.0"; exit 0 ;;
+  --version) echo "akm 0.9.2"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
   echo '{"runs":[]}'
@@ -2531,7 +2571,7 @@ exit 0
         path.join(binDir, "akm"),
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.0"; exit 0 ;;
+  --version) echo "akm 0.9.2"; exit 0 ;;
 esac
 exit 0
 `,
@@ -2557,7 +2597,7 @@ exit 0
           "2026-01-01T00:00:00Z\tproposal_extract\tsess-old",
           '{"ok":true,"proposals":1}',
           "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
-          '{"ok":false,"code":"INVALID_CONFIG_FILE"}',
+          '{"ok":false,"code":"LLM_NOT_CONFIGURED"}',
           "",
         ].join("\n"),
       )
@@ -2565,7 +2605,7 @@ exit 0
       const context = payload.hookSpecificOutput.additionalContext as string
       expect(context).toContain("memory extraction failed")
       expect(context).toContain(extractLogPath)
-      expect(context).toContain("INVALID_CONFIG_FILE")
+      expect(context).toContain("LLM_NOT_CONFIGURED")
       // It is the user, not the model, who can configure an LLM profile.
       expect(payload.systemMessage).toContain("memory extraction failed")
     })
@@ -2577,7 +2617,7 @@ exit 0
       const { payload } = runSessionStartWithExtractLog(
         [
           "2026-01-02T00:00:00Z\tproposal_extract\tsess-ephemeral",
-          '{"ok":false,"warnings":["session sess-ephemeral not found for harness claude-code"]}',
+          '{"ok":false,"warnings":["session sess-ephemeral not found for harness claude"]}',
           "",
         ].join("\n"),
       )
@@ -2590,7 +2630,7 @@ exit 0
       const { payload } = runSessionStartWithExtractLog(
         [
           "2026-01-01T00:00:00Z\tproposal_extract\tsess-old",
-          '{"ok":false,"code":"INVALID_CONFIG_FILE"}',
+          '{"ok":false,"code":"LLM_NOT_CONFIGURED"}',
           "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
           '{"ok":true,"proposals":2}',
           "",
@@ -2694,7 +2734,7 @@ exit 0
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
       const claudeStateDir = path.join(stateDir, "akm-claude")
-      const bundleDir = makeBundle(tempDir, ["skills/draft-rollback"])
+      const bundleDir = makeBundle(tempDir, ["workflows/draft-rollback"])
       mkdirSync(binDir, { recursive: true })
       mkdirSync(claudeStateDir, { recursive: true })
 
@@ -2705,11 +2745,11 @@ exit 0
         `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$*" in
-  *show*skills/draft-rollback*)
-    echo '{"type":"skill","ref":"skills/draft-rollback","quality":"curated"}'
+  *show*workflows/draft-rollback*)
+    echo '{"type":"workflow","ref":"workflows/draft-rollback","quality":"curated"}'
     exit 0
     ;;
-  *feedback*skills/draft-rollback*)
+  *feedback*workflows/draft-rollback*)
     echo '{"ok":true}'
     exit 0
     ;;
@@ -2723,15 +2763,15 @@ exit 0
       // under test (at the head of the file, i.e. the oldest entry), padded
       // with filler entries so the file exceeds the tiny rotation cap below.
       const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
-      const fillerLines: string[] = ["2020-01-01T00:00:00Z\tskills/draft-rollback\tproposed"]
+      const fillerLines: string[] = ["2020-01-01T00:00:00Z\tworkflows/draft-rollback\tproposed"]
       for (let i = 0; i < 20; i++) fillerLines.push(`2020-01-01T00:00:0${i % 10}Z\tskills/filler-${i}\tcurated`)
       writeFileSync(qualityCachePath, `${fillerLines.join("\n")}\n`)
 
       runHook(["auto-feedback", "success"], {
         input: JSON.stringify({
           tool: "Bash",
-          input: { command: "akm workflow start skills/draft-rollback" },
-          output: "{\"type\":\"skill\",\"ref\":\"skills/draft-rollback\",\"quality\":\"curated\"}",
+          input: { command: "akm workflow run workflows/draft-rollback" },
+          output: "{\"type\":\"workflow\",\"ref\":\"workflows/draft-rollback\",\"quality\":\"curated\"}",
         }),
         env: {
           HOME: tempDir,
@@ -2744,13 +2784,13 @@ exit 0
 
       const calls = readFileSync(callLog, "utf8")
       // The stale cached "proposed" entry must not shadow a fresh probe.
-      expect(calls).toContain("show skills/draft-rollback")
+      expect(calls).toContain("show workflows/draft-rollback")
       // Quality is no longer "proposed", so auto-feedback must proceed.
-      expect(calls).toContain("feedback skills/draft-rollback")
+      expect(calls).toContain("feedback workflows/draft-rollback")
 
       const cacheAfter = readFileSync(qualityCachePath, "utf8")
       expect(cacheAfter).not.toContain("\tproposed")
-      expect(cacheAfter).toContain("skills/draft-rollback\tcurated")
+      expect(cacheAfter).toContain("workflows/draft-rollback\tcurated")
     })
 
     // F2-1: rotation alone is a size cap, not a freshness guarantee — on a
@@ -2764,11 +2804,11 @@ exit 0
         `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$*" in
-  *show*skills/draft-rollback*)
-    echo '{"type":"skill","ref":"skills/draft-rollback","quality":"curated"}'
+  *show*workflows/draft-rollback*)
+    echo '{"type":"workflow","ref":"workflows/draft-rollback","quality":"curated"}'
     exit 0
     ;;
-  *feedback*skills/draft-rollback*)
+  *feedback*workflows/draft-rollback*)
     echo '{"ok":true}'
     exit 0
     ;;
@@ -2784,7 +2824,7 @@ exit 0
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
       const claudeStateDir = path.join(stateDir, "akm-claude")
-      const bundleDir = makeBundle(tempDir, ["skills/draft-rollback"])
+      const bundleDir = makeBundle(tempDir, ["workflows/draft-rollback"])
       mkdirSync(binDir, { recursive: true })
       mkdirSync(claudeStateDir, { recursive: true })
       const callLog = path.join(tempDir, "akm-calls.log")
@@ -2793,13 +2833,13 @@ exit 0
       // A single stale entry in a tiny file: rotation (1 MiB default cap)
       // never fires, so only a lookup-time TTL can expire this.
       const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
-      writeFileSync(qualityCachePath, "2020-01-01T00:00:00Z\tskills/draft-rollback\tproposed\n")
+      writeFileSync(qualityCachePath, "2020-01-01T00:00:00Z\tworkflows/draft-rollback\tproposed\n")
 
       runHook(["auto-feedback", "success"], {
         input: JSON.stringify({
           tool: "Bash",
-          input: { command: "akm workflow start skills/draft-rollback" },
-          output: "{\"type\":\"skill\",\"ref\":\"skills/draft-rollback\",\"quality\":\"curated\"}",
+          input: { command: "akm workflow run workflows/draft-rollback" },
+          output: "{\"type\":\"workflow\",\"ref\":\"workflows/draft-rollback\",\"quality\":\"curated\"}",
         }),
         env: {
           HOME: tempDir,
@@ -2813,13 +2853,13 @@ exit 0
 
       const calls = readFileSync(callLog, "utf8")
       // The expired entry is a miss → probe re-runs and sees "curated".
-      expect(calls).toContain("show skills/draft-rollback")
+      expect(calls).toContain("show workflows/draft-rollback")
       // "curated" is not skipped, so auto-feedback proceeds.
-      expect(calls).toContain("feedback skills/draft-rollback")
+      expect(calls).toContain("feedback workflows/draft-rollback")
       // The probe result is appended as a fresh entry (newest wins on the
       // next lookup).
       const cacheAfter = readFileSync(qualityCachePath, "utf8")
-      expect(cacheAfter).toContain("skills/draft-rollback\tcurated")
+      expect(cacheAfter).toContain("workflows/draft-rollback\tcurated")
     })
 
     it("honors a fresh quality-cache entry within the TTL without re-probing", () => {
@@ -2827,20 +2867,20 @@ exit 0
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
       const claudeStateDir = path.join(stateDir, "akm-claude")
-      const bundleDir = makeBundle(tempDir, ["skills/draft-rollback"])
+      const bundleDir = makeBundle(tempDir, ["workflows/draft-rollback"])
       mkdirSync(binDir, { recursive: true })
       mkdirSync(claudeStateDir, { recursive: true })
       const callLog = path.join(tempDir, "akm-calls.log")
       writeQualityProbeAkm(binDir, callLog)
 
       const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
-      writeFileSync(qualityCachePath, `${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}\tskills/draft-rollback\tproposed\n`)
+      writeFileSync(qualityCachePath, `${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}\tworkflows/draft-rollback\tproposed\n`)
 
       runHook(["auto-feedback", "success"], {
         input: JSON.stringify({
           tool: "Bash",
-          input: { command: "akm workflow start skills/draft-rollback" },
-          output: "{\"type\":\"skill\",\"ref\":\"skills/draft-rollback\",\"quality\":\"curated\"}",
+          input: { command: "akm workflow run workflows/draft-rollback" },
+          output: "{\"type\":\"workflow\",\"ref\":\"workflows/draft-rollback\",\"quality\":\"curated\"}",
         }),
         env: {
           HOME: tempDir,
@@ -2853,10 +2893,10 @@ exit 0
       // Fresh cache hit: no show probe, and the "proposed" classification
       // short-circuits the feedback submission.
       const calls = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
-      expect(calls).not.toContain("show skills/draft-rollback")
-      expect(calls).not.toContain("feedback skills/draft-rollback")
+      expect(calls).not.toContain("show workflows/draft-rollback")
+      expect(calls).not.toContain("feedback workflows/draft-rollback")
       const skipLog = readLogLines(path.join(claudeStateDir, "feedback.log"))
-      expect(skipLog.some((line) => line.includes("skip_proposed\tskills/draft-rollback"))).toBe(true)
+      expect(skipLog.some((line) => line.includes("skip_proposed\tworkflows/draft-rollback"))).toBe(true)
     })
 
     it("re-probes on a legacy quality-cache line without a timestamp column instead of crashing", () => {
@@ -2864,7 +2904,7 @@ exit 0
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
       const claudeStateDir = path.join(stateDir, "akm-claude")
-      const bundleDir = makeBundle(tempDir, ["skills/draft-rollback"])
+      const bundleDir = makeBundle(tempDir, ["workflows/draft-rollback"])
       mkdirSync(binDir, { recursive: true })
       mkdirSync(claudeStateDir, { recursive: true })
       const callLog = path.join(tempDir, "akm-calls.log")
@@ -2873,14 +2913,14 @@ exit 0
       // Legacy 2-field format: `ref<TAB>quality`, no timestamp column. Must
       // be treated as expired (re-probe), never crash the hook.
       const qualityCachePath = path.join(claudeStateDir, "quality-cache.tsv")
-      writeFileSync(qualityCachePath, "skills/draft-rollback\tproposed\n")
+      writeFileSync(qualityCachePath, "workflows/draft-rollback\tproposed\n")
 
       // runHook throws on a non-zero exit, so it doubles as the no-crash assertion.
       runHook(["auto-feedback", "success"], {
         input: JSON.stringify({
           tool: "Bash",
-          input: { command: "akm workflow start skills/draft-rollback" },
-          output: "{\"type\":\"skill\",\"ref\":\"skills/draft-rollback\",\"quality\":\"curated\"}",
+          input: { command: "akm workflow run workflows/draft-rollback" },
+          output: "{\"type\":\"workflow\",\"ref\":\"workflows/draft-rollback\",\"quality\":\"curated\"}",
         }),
         env: {
           HOME: tempDir,
@@ -2891,8 +2931,8 @@ exit 0
       })
 
       const calls = readFileSync(callLog, "utf8")
-      expect(calls).toContain("show skills/draft-rollback")
-      expect(calls).toContain("feedback skills/draft-rollback")
+      expect(calls).toContain("show workflows/draft-rollback")
+      expect(calls).toContain("feedback workflows/draft-rollback")
     })
 
     // F2-2: the retained-half computation `lines.slice(ceil(len/2))` yields

@@ -222,7 +222,8 @@ export function installFakeAkm(config: FakeAkmConfig): LoadedFakeAkm {
     `#!/usr/bin/env sh
 INDEX="${indexPath}"
 HELPER="${helperPath}"
-exec node "$HELPER" "$INDEX" "$@"
+RUNTIME=${JSON.stringify(process.execPath)}
+exec "$RUNTIME" "$HELPER" "$INDEX" "$@"
 `,
   )
   chmodSync(akmPath, 0o755)
@@ -363,7 +364,7 @@ function nonFlagArgs() {
   const out = []
   for (let i = 0; i < tail.length; i++) {
     const a = tail[i]
-    if (a === "--limit" || a === "--type" || a === "--source" || a === "--name" || a === "--note" || a === "--run" || a === "--scope") {
+    if (a === "--limit" || a === "--type" || a === "--from" || a === "--name" || a === "--reason" || a === "--run" || a === "--scope") {
       i++
       continue
     }
@@ -388,7 +389,7 @@ if (verb === "curate" || verb === "search") {
 if (verb === "hints") {
   // SessionStart calls this. Emit a small static blurb so the hook has
   // something to inject; keeps the pipeline exercised.
-  process.stdout.write("Stash health: 15 assets. Run \`akm search <query>\`.\\n")
+  process.stdout.write("Bundle health: 15 assets. Run \`akm search <query>\`.\\n")
   process.exit(0)
 }
 
@@ -410,7 +411,7 @@ if (verb === "info") {
   process.stdout.write(
     JSON.stringify({
       schemaVersion: 1,
-      version: "0.9.0",
+      version: "0.9.2",
       bundleDir,
       defaultBundle: "bundle",
       assetTypes: [
@@ -447,8 +448,9 @@ if (verb === "info") {
 }
 
 // --- config get/set -------------------------------------------------------
-// Both hooks call \`config get stashDir\` (fallback path when AKM_STASH_DIR
-// isn't set) and \`config set --silent --layer user <key> <value>\` (to
+// The plugins resolve AKM_BUNDLE_DIR directly and use akm info as their
+// fallback. Keep generic config get/set behavior here because it is still a
+// public AKM surface exercised by eval scenarios.
 // persist defaults.agent / profiles.agent.<platform>). Real akm returns a
 // bare JSON scalar for a leaf \`config get\`, or an object wrapped with
 // {shape:"config", schemaVersion:1} for a subtree; \`config set\` is
@@ -559,7 +561,7 @@ if (verb === "proposal" && tail[0] === "list") {
 // deterministically fails.
 //
 // Three properties of that failure are load-bearing and are all reproduced
-// here, verified against akm-cli 0.9.0 (stable):
+// here, verified against akm-cli 0.9.2:
 //   1. the envelope goes to STDERR, not stdout (stdout stays empty);
 //   2. the exit code is 78 — akm's documented "config error" code, not 0;
 //   3. the code is LLM_NOT_CONFIGURED.
@@ -616,7 +618,11 @@ if (verb === "--version" || verb === "-V") {
   // treat the shim as an incompatible CLI and silently short-circuit
   // auto-feedback (queueFeedback bails before spawning). Keep this in lockstep
   // with the plugin's required range so eval harnesses exercise the real path.
-  process.stdout.write("fake-akm 0.9.0\\n")
+  // Node 24 can drop an async stdout write when this short-lived fake calls
+  // process.exit() immediately afterwards and stdout is a pipe (as it is for
+  // OpenCode's execFileSync version probe). Write synchronously so callers
+  // always receive the semver that governs the compatibility gate.
+  writeFileSync(1, "fake-akm 0.9.2\\n")
   process.exit(0)
 }
 

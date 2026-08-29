@@ -50,7 +50,7 @@ Score the run on each rubric dimension on a 0–3 scale:
 
 Be strict. Do not award partial credit for behaviors that are clearly absent. The goal is to detect regressions across plugin versions, so noise must be minimized.
 
-Use the score_run tool to record your verdict. Always populate every field. The justification must be ≤200 chars and reference concrete behaviors (e.g., "surfaced skill:code-review and recorded positive feedback").`
+Use the score_run tool to record your verdict. Always populate every field. The justification must be ≤200 chars and reference concrete behaviors (e.g., "surfaced skills/code-review and recorded positive feedback").`
 
 const STRICT_SYSTEM = `${DEFAULT_SYSTEM}
 

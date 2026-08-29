@@ -49,7 +49,12 @@ describe("OpenCode eval harness", () => {
           toolArgs: { ref: "skills/code-review" },
           output: "{\\"ok\\":false,\\"error\\":\\"asset not found\\",\\"ref\\":\\"skills/code-review\\"}",
         })
-        writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify(await waitForFeedback(sandbox.callLog)))
+        const feedback = await waitForFeedback(sandbox.callLog)
+        writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({
+          feedback,
+          calls: readCallLog(sandbox.callLog),
+          logs: harness.client.__logs,
+        }))
       } finally {
         sandbox.cleanup()
         uninstallEnvPatch()
@@ -65,6 +70,9 @@ describe("OpenCode eval harness", () => {
     const exitCode = await proc.exited
 
     try {
+      if (exitCode !== 0) {
+        throw new Error(`OpenCode eval harness exited ${exitCode}\nstdout: ${stdout}\nstderr: ${stderr}`)
+      }
       expect(exitCode).toBe(0)
       expect(stdout).toBe("")
       expect(stderr).toBe("")
@@ -74,8 +82,11 @@ describe("OpenCode eval harness", () => {
       // routing — that the harness's child-process patch sends the plugin's
       // `akm feedback` spawn to the sandbox shim rather than to a real akm on
       // PATH — and the negative path exercises exactly the same spawn.
-      const emitted = JSON.parse(readFileSync(resultPath, "utf8")) as string[][]
-      expect(emitted).toContainEqual([
+      const result = JSON.parse(readFileSync(resultPath, "utf8")) as { feedback: string[][]; calls: unknown[]; logs: unknown[] }
+      if (result.feedback.length === 0) {
+        throw new Error(`The eval harness did not route feedback: ${JSON.stringify(result)}`)
+      }
+      expect(result.feedback).toContainEqual([
         "feedback",
         "skills/code-review",
         "--negative",

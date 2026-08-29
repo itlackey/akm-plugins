@@ -37,7 +37,7 @@
 //
 // The two plugins are driven through different positive channels because they
 // HAVE different ones. Claude observes arbitrary Bash `akm <verb>` calls, so a
-// use-shaped verb (`agent`, `run`, `workflow start`) is a positive on the tool
+// use-shaped verb (`agent`, `run`, `workflow run`) is a positive on the tool
 // path. Every OpenCode tool that yields a ref is read-only, so after the same
 // rule OpenCode's tool path can never produce a positive by construction: its
 // positive channel is the retrospective one, and that is what the OpenCode arm

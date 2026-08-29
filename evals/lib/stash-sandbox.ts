@@ -3,11 +3,7 @@
 // — both must point at temp directories so concurrent evals don't collide
 // and so each scenario starts from a clean slate.
 //
-// $AKM_STASH_DIR is exported alongside $AKM_BUNDLE_DIR and points at the same
-// directory. AKM 0.9 renamed the bundle-root env var, but the older name is
-// still load-bearing here: evals/lib/fake-akm.ts models `config get stashDir`
-// (the hooks' documented fallback lookup) and evals/tier2/harness/opencode.ts
-// reads env.AKM_STASH_DIR when synthesizing the plugin's project directory.
+// The sandbox exports the AKM 0.9.2 bundle-root environment variable only.
 
 import { mkdtempSync, mkdirSync, rmSync, cpSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -79,8 +75,6 @@ export function createSandbox(opts: SandboxOptions = {}): Sandbox {
     // resolves, so an unset AKM_BUNDLE_DIR silently disables ALL ref
     // extraction — and therefore all auto-feedback.
     AKM_BUNDLE_DIR: stashDir,
-    // Legacy name, kept in lockstep — see the header note.
-    AKM_STASH_DIR: stashDir,
     // Force the plugin to ignore its bundled akm-cli so akm invocations resolve
     // to the deterministic fake shim on PATH (or the real akm in realAkm mode),
     // not the real bundled dependency.

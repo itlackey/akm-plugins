@@ -20,7 +20,7 @@ export type RecallDecision = {
   scopeHints?: string[]
 }
 
-const REF_RE = /(?:skill|command|agent|knowledge|workflow|lesson|wiki|memory|env|secret):[A-Za-z0-9._/-]+/i
+import { extractAkmRefsFromString } from "./ref-extraction"
 
 export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolean; recentAssetFailure?: boolean }): RecallDecision {
   const text = prompt.trim()
@@ -35,7 +35,11 @@ export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolea
   if (/\b(hi|hello|how are you|good morning|good night)\b/i.test(lower) && text.length < 40) {
     return { shouldRecall: false, reason: "skip-chitchat", query: text, scopeHints }
   }
-  if (/\bakm\b|\bstash\b/.test(lower) || REF_RE.test(text)) {
+  // Reuse the resolver-facing parser rather than carrying a second, stale
+  // grammar here. AKM 0.9.2 refs are [bundle//]conceptId[#fragment]; retired
+  // type:name strings must not turn an otherwise low-signal prompt into an
+  // explicit AKM recall.
+  if (/\bakm\b|\bbundle\b/.test(lower) || extractAkmRefsFromString(text).length > 0) {
     return { shouldRecall: true, reason: "explicit-akm", query: text, scopeHints: ["akm"] }
   }
   if (/\b(remember|memory|prior session|previous decision)\b/.test(lower)) {
@@ -47,7 +51,7 @@ export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolea
   if (/\b(dispatch|agent|subagent|reviewer|planner|curator)\b/.test(lower)) {
     return { shouldRecall: true, reason: "agent-dispatch", query: text, scopeHints: ["agent"] }
   }
-  if (/\b(command|slash command|run the stash command)\b/.test(lower)) {
+  if (/\b(command|slash command|run the bundle command)\b/.test(lower)) {
     return { shouldRecall: true, reason: "command-dispatch", query: text, scopeHints: ["command"] }
   }
   if (/\b(wiki|docs|knowledge base|ingest|lint)\b/.test(lower)) {

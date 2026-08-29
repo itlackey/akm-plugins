@@ -120,20 +120,18 @@ exit 0
 }
 
 describe("AKM_VERSION_RANGE contract", () => {
-  it("is a single caret clause anchored at the stable 0.9.0 release", () => {
-    // The RC floor (`^0.9.0-rc.14`) was retired when akm-cli 0.9.0 stable
-    // shipped: release candidates are dead once the release exists.
-    expect(AKM_VERSION_RANGE).toBe("^0.9.0")
+  it("is a single caret clause anchored at the stable 0.9.2 release", () => {
+    expect(AKM_VERSION_RANGE).toBe("^0.9.2")
   })
 
   it("accepts stable 0.9.x builds", () => {
-    for (const version of ["0.9.0", "0.9.1", "0.9.5"]) {
+    for (const version of ["0.9.2", "0.9.5"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(true)
     }
   })
 
   it("rejects every prerelease and versions outside 0.9", () => {
-    for (const version of ["0.8.9", "0.9.0-beta.33", "0.9.0-rc.14", "0.9.0-rc.15", "1.0.0", "0.10.0"]) {
+    for (const version of ["0.8.9", "0.9.0", "0.9.1", "0.9.2-beta.33", "0.9.2-rc.1", "1.0.0", "0.10.0"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(false)
     }
   })
@@ -144,9 +142,9 @@ describe("AKM_VERSION_RANGE contract", () => {
     // major.minor.patch. Any 0.9.x RC line therefore trips the gate until an
     // explicit `|| ^0.9.N-rc.N` clause is added. Pinned so re-admitting a
     // prerelease line is a deliberate edit rather than a surprise.
-    expect(satisfiesAkmVersionRange("0.9.1-rc.1")).toBe(false)
+    expect(satisfiesAkmVersionRange("0.9.3-rc.1")).toBe(false)
     // ...while the stable release on that same line is already accepted.
-    expect(satisfiesAkmVersionRange("0.9.1")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.9.3")).toBe(true)
   })
 
   it("rejects malformed or missing versions", () => {
@@ -158,7 +156,7 @@ describe("AKM_VERSION_RANGE contract", () => {
 
 describe("checkAkmVersion", () => {
   it("returns ok, logs readiness, and stays silent on stderr for a compatible CLI", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.0" })
+    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.2" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
@@ -167,7 +165,7 @@ describe("checkAkmVersion", () => {
   })
 
   it("accepts stable 0.9.x", () => {
-    for (const version of ["0.9.0", "0.9.5"]) {
+    for (const version of ["0.9.2", "0.9.5"]) {
       const result = runHookSandboxed(["ensure-akm"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
@@ -176,7 +174,7 @@ describe("checkAkmVersion", () => {
   })
 
   it("rejects every tested build below the stable floor", () => {
-    for (const version of ["0.8.3", "0.9.0-beta.6", "0.9.0-rc.15"]) {
+    for (const version of ["0.8.3", "0.9.0", "0.9.1", "0.9.2-beta.6", "0.9.2-rc.1"]) {
       const result = runHookSandboxed(["ensure-akm"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
@@ -190,7 +188,7 @@ describe("checkAkmVersion", () => {
     const tempDir = makeTempDir()
     const localCli = path.join(tempDir, "dist", "cli.js")
     mkdirSync(path.dirname(localCli), { recursive: true })
-    writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.9.0')\n")
+    writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.9.2')\n")
 
     const result = runHookSandboxed(["ensure-akm"], {
       akmVersion: null,
@@ -215,11 +213,11 @@ describe("checkAkmVersion", () => {
   })
 
   it("logs an incompatible CLI without writing to stderr", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.0-rc.15" })
+    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.2-rc.1" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("akm_version_mismatch") && line.includes("0.9.0-rc.15"))).toBe(true)
+    expect(sessionLog.some((line) => line.includes("akm_version_mismatch") && line.includes("0.9.2-rc.1"))).toBe(true)
     expect(result.installLog).toBe("")
   })
 
@@ -234,16 +232,15 @@ describe("checkAkmVersion", () => {
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("AKM is NOT available")
-    expect(result.stdout).toContain("^0.9.0")
-    expect(result.stdout).toContain("akm-cli@^0.9.0")
-    expect(result.stdout).not.toContain("rc.14")
+    expect(result.stdout).toContain("^0.9.2")
+    expect(result.stdout).toContain("akm-cli@^0.9.2")
     expect(result.installLog).toBe("")
     // additionalContext reaches the model, which cannot install anything.
     // systemMessage is the channel to the person who can, so it has to carry
     // the concrete command rather than a pointer to the model's context.
     const payload = JSON.parse(result.stdout.trim())
     expect(payload.systemMessage).toContain("AKM is unavailable this session")
-    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.9.0")
+    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.9.2")
   })
 
   it("session-start ships the header and footer on a healthy CLI with a completely quiet stash", () => {
@@ -256,7 +253,7 @@ describe("checkAkmVersion", () => {
     // unreachable on a fresh install. Assert the header actually ships.
     const bundleDir = makeTempDir()
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.9.0",
+      akmVersion: "0.9.2",
       env: { AKM_BUNDLE_DIR: bundleDir },
     })
     expect(result.exitCode).toBe(0)
@@ -273,7 +270,7 @@ describe("checkAkmVersion", () => {
   it("session-start reports a missing bundle through context and the state log, not stderr", () => {
     const missingBundleDir = path.join(makeTempDir(), "definitely-not-here")
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.9.0",
+      akmVersion: "0.9.2",
       env: { AKM_BUNDLE_DIR: missingBundleDir },
     })
     expect(result.exitCode).toBe(0)

@@ -1,5 +1,5 @@
 ---
-description: Record positive or negative feedback on an AKM stash asset.
+description: Record positive or negative feedback on an AKM bundle asset.
 argument-hint: <ref> <+|-> [note]
 allowed-tools: Bash(akm feedback *) Bash(akm show *)
 ---
