@@ -10,7 +10,7 @@
 
 You have access to a searchable library of skills, commands, agents, knowledge,
 instructions, lessons, workflows, scripts, memories, tasks, sessions, facts, env
-configs, and secrets via the `akm` CLI (v0.9.0+).
+configs, and secrets via the `akm` CLI (v0.9.2+).
 
 > The plugin exposes only search, show, curate, feedback, and remember. For other AKM verbs, inspect `akm --help` or `akm <command> --help` before invoking the CLI directly.
 
@@ -56,7 +56,7 @@ What you get back depends on the asset type:
 - **env** — A `.env`-style configuration store. **Only key names surface** — values never appear in JSON, logs, or search indexes. Use `akm env run <ref> -- $SHELL` to load into a shell (never `eval`/`source` raw values).
 - **secret** — One standalone sensitive value per file (an API token, a PEM key, a TLS cert). Values never surface
 
-Always search the stash first when you need a capability. Prefer existing
+Always search the bundle first when you need a capability. Prefer existing
 assets over writing new code.
 
 ## Logging and Error Handling Requirements
@@ -72,19 +72,19 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 
 **Proposal queue, improve, and task verbs:**
 - `akm proposal list` / `akm proposal show <id>` / `akm proposal diff <id>` / `akm proposal accept <id>` / `akm proposal reject <id> --reason "..."` — operate the durable proposal queue. `akm proposal diff` accepts UUID, UUID prefix, or asset ref positionally. Always confirm with the user before `accept`/`reject`.
-- `akm proposal drain --policy <personal-stash|conservative|manual|path> [--dry-run] [--promote] [--yes] [--max-accepts N] [--max-diff-lines N] [--older-than D] [--judgment] [--profile <p>]` — **mutating.** Bulk-triage the standing pending backlog by a deterministic policy (promotes/rejects and commits to git; no batch revert). Always `--dry-run` first; only `--promote --yes` after explicit user approval. This and the automatic `processes.triage` improve pre-pass supersede the old manual proposal-queue management agent session.
-- `akm improve [ref|type] [--task "..."]` — generate improvement proposals via the configured agent CLI. Improve profiles (`profiles.improve.<name>`) add a `processes.triage` pre-pass (`{ enabled, applyMode: queue|promote, policy, maxAcceptsPerRun, maxDiffLines, rejectEmpty, judgment }`) and end-of-run git `sync` (`{ enabled, push, message }` with `{timestamp}{date}{time}{scope}{refs}{accepted}` tokens; override via `--sync/--no-sync`, `--push/--no-push`).
+- `akm proposal drain --policy <personal-stash|conservative|manual|path> [--dry-run] [--promote] [--yes] [--max-accepts N] [--max-diff-lines N] [--older-than D] [--judgment] [--strategy <name>]` — **mutating.** Bulk-triage the standing pending backlog by a deterministic policy (promotes/rejects and commits to git; no batch revert). Always `--dry-run` first; only `--promote --yes` after explicit user approval. This and the automatic `processes.triage` improve pre-pass supersede the old manual proposal-queue management agent session.
+- `akm improve [ref|type] [--task "..."] [--strategy <name>]` — generate improvement proposals via the configured agent CLI. Improve strategies (`improve.strategies.<name>`) add a `processes.triage` pre-pass (`{ enabled, applyMode: queue|promote, policy, maxAcceptsPerRun, maxDiffLines, rejectEmpty, judgment }`) and end-of-run git `sync` (`{ enabled, push, message }` with `{timestamp}{date}{time}{scope}{refs}{accepted}` tokens; override via `--sync/--no-sync`, `--push/--no-push`).
 - `akm proposal new <type> <name> (--task "..." | --file <path>)` — ask the configured agent CLI to author a brand-new asset and queue it as a proposal.
-- `akm proposal extract --type <claude-code|opencode> --session-id <id>` — mine durable insights out of a native session file and queue them as proposals. Requires a configured LLM engine; without one it exits 78 (`LLM_NOT_CONFIGURED`).
-- `akm task add|run|history|sync|doctor` — manage scheduled task assets through the OS scheduler.
+- `akm proposal extract --type <claude|opencode> --session-id <id>` — mine durable insights out of a native session file and queue them as proposals. Requires a configured LLM engine; without one it exits 78 (`LLM_NOT_CONFIGURED`).
+- `akm task add|run|explain|history|sync|doctor` — manage scheduled task assets through the OS scheduler.
 - `akm setup` — interactive first-run configuration wizard for humans. Agents should not invoke it directly; use `akm bundle create --dir <path> --set-default` for agent-safe bundle initialization.
 - `akm search ... --include-proposed` — merge `quality:"proposed"` drafts into hits.
 
 **Store, workflow, and sync verbs:**
 - `akm env list|path|export|run|create|remove` / `akm secret list|run|set` — manage configuration/secret stores (values never echoed)
 - `akm workflow status|list|create|resume|abandon|run` — drive stateful runs
-- `akm sync [-m "msg"]` — commit (and push, when writable; `--no-push` to skip) a git-backed stash
-- `akm import <file|-> [--name <slug>]` — promote a file into the indexed stash
+- `akm sync [-m "msg"]` — commit (and push, when writable; `--no-push` to skip) a git-backed bundle
+- `akm import <file|-> [--name <slug>]` — promote a file into the indexed bundle
 - `akm help migrate <version>` — release notes / migration guidance
 
 Use `akm -h` for more options and details on searching and using assets.

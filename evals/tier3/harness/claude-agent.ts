@@ -23,13 +23,13 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import type { TranscriptTurn } from "./run-scenario"
 
-const SYSTEM_PROMPT = `You are a software engineer with access to the AKM CLI for finding reusable assets (skills, commands, agents, knowledge, scripts, workflows, env files, secrets) in the user's stash.
+const SYSTEM_PROMPT = `You are a software engineer with access to the AKM CLI for finding reusable assets (skills, commands, agents, knowledge, scripts, workflows, env files, secrets) in the user's bundle.
 
 You have a Bash tool. Use it to:
-- \`akm show <ref>\` — fetch the full content of a stash asset (e.g., \`akm show skills/code-review\`)
-- \`akm search "<query>"\` — search the stash
-- \`akm feedback <ref> --positive --note "..."\` — record that an asset helped
-- \`akm feedback <ref> --negative --note "..."\` — record that an asset failed or was wrong
+- \`akm show <ref>\` — fetch the full content of a bundle asset (e.g., \`akm show skills/code-review\`)
+- \`akm search "<query>"\` — search the bundle
+- \`akm feedback <ref> --positive --reason "..."\` — record that an asset helped
+- \`akm feedback <ref> --negative --reason "..."\` — record that an asset failed or was wrong
 
 Reference grammar: \`[bundle//]<conceptId>[#fragment]\`, where the concept id is the asset's own path inside the bundle — e.g. \`skills/code-review\`, \`knowledge/api-error-codes\`, \`scripts/lint.sh\`. Concept roots: agents, commands, env, facts, instructions, knowledge, lessons, memories, scripts, secrets, sessions, skills, tasks, workflows.
 
@@ -240,7 +240,7 @@ export async function runClaudeAgent(
         transcript.push({ type: "tool_result", tool: "bash", ok: result.exitCode === 0, output: resultText })
 
         // Detect feedback calls and record them in the structured side-channel.
-        const fbMatch = /\bakm\s+feedback\s+(\S+)\s+(--positive|--negative)(?:\s+--note\s+"([^"]*)")?/.exec(cmd)
+        const fbMatch = /\bakm\s+feedback\s+(\S+)\s+(--positive|--negative)(?:\s+--reason\s+"([^"]*)")?/.exec(cmd)
         if (fbMatch) {
           feedbackEmitted.push({
             ref: fbMatch[1],

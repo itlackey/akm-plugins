@@ -89,7 +89,7 @@ git add tier2/baseline/tier2.json
 Each metric:
 1. Spawns a sandbox via `lib/stash-sandbox.ts` — a temp dir with
    isolated `$AKM_BUNDLE_DIR`, `$AKM_PLUGIN_STATE_DIR`, `$XDG_*` so the
-   hook never touches the user's real stash.
+   hook never touches the user's real bundle.
 2. Installs a deterministic fake `akm` binary on `$PATH` via
    `lib/fake-akm.ts`. The shim ranks fixture assets with simple keyword
    matching so retrieval is held constant — metric deltas reflect plugin

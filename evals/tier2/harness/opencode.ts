@@ -15,7 +15,7 @@
 // once below to merge in the live process.env when callers omit it.
 
 import path from "node:path"
-import { createRequire } from "node:module"
+import { createRequire, syncBuiltinESMExports } from "node:module"
 import { pathToFileURL } from "node:url"
 import { existsSync, readFileSync } from "node:fs"
 import type { Plugin, PluginInput } from "@opencode-ai/plugin"
@@ -56,6 +56,19 @@ function patchChildProcessEnv() {
   const requireCjs = createRequire(import.meta.url)
   const cp = requireCjs("node:child_process") as Record<string, any>
   const mergeEnv = (options: Record<string, any>) => ({ ...process.env, ...(options.env ?? {}) })
+  // Bun's process launcher can resolve a bare command against the PATH it
+  // captured at process start rather than the per-spawn `env.PATH`. Eval
+  // sandboxes intentionally replace PATH with their fake `akm`, so resolve a
+  // bare executable from the merged environment before delegating to Bun.
+  const resolveExecutable = (command: string, env: Record<string, string | undefined>) => {
+    if (path.isAbsolute(command) || command.includes(path.sep)) return command
+    const delimiter = process.platform === "win32" ? ";" : ":"
+    for (const dir of (env.PATH ?? "").split(delimiter)) {
+      const candidate = path.join(dir || ".", command)
+      if (existsSync(candidate)) return candidate
+    }
+    return command
+  }
   const normalizeOutput = (value: string | Uint8Array<ArrayBufferLike> | null | undefined, encoding?: string) => {
     const buffer = typeof value === "string" ? Buffer.from(value) : Buffer.from(value ?? [])
     return encoding ? buffer.toString(encoding === "buffer" ? "utf8" : encoding) : buffer
@@ -86,7 +99,8 @@ function patchChildProcessEnv() {
     if (name === "execFileSync") {
       cp[name] = function patchedExecFileSync(command: string, args: string[] = [], options: Record<string, any> = {}) {
         const merged = { ...options, env: mergeEnv(options) }
-        const result = Bun.spawnSync([command, ...args], {
+        const executable = resolveExecutable(command, merged.env)
+        const result = Bun.spawnSync([executable, ...args], {
           cwd: merged.cwd,
           env: merged.env,
           stdin: "ignore",
@@ -120,7 +134,8 @@ function patchChildProcessEnv() {
     if (name === "spawn") {
       cp[name] = function patchedSpawn(command: string, args: string[] = [], options: Record<string, any> = {}) {
         const merged = { ...options, env: mergeEnv(options) }
-        const subprocess = Bun.spawn([command, ...args], {
+        const executable = resolveExecutable(command, merged.env)
+        const subprocess = Bun.spawn([executable, ...args], {
           cwd: merged.cwd,
           env: merged.env,
           stdin: "ignore",
@@ -146,6 +161,10 @@ function patchChildProcessEnv() {
       continue
     }
   }
+  // The plugin uses ESM named imports from node:child_process. Updating only
+  // the CJS object leaves those bindings stale under Bun, so its version probe
+  // escapes the sandbox PATH and auto-feedback never reaches fake-akm.
+  syncBuiltinESMExports()
 }
 
 export function uninstallEnvPatch() {
@@ -155,6 +174,7 @@ export function uninstallEnvPatch() {
   for (const [name, original] of Object.entries(envPatchOriginals)) {
     cp[name] = original
   }
+  syncBuiltinESMExports()
   envPatched = false
   envPatchOriginals = null
 }
@@ -255,7 +275,7 @@ export type OpenCodeHarness = {
 // evals/tier2/harness/claude.ts.
 const REF_RE =
   /(?<![A-Za-z0-9@._+/:=-])(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?(?![A-Za-z0-9@._+/#$=-])/g
-const CURATED_FILE_RE = /AKM stash curation written to `([^`]+)`/g
+const CURATED_FILE_RE = /AKM bundle curation written to `([^`]+)`/g
 
 function hydrateCuratedContext(context: string): string {
   let expanded = context
@@ -297,8 +317,8 @@ export async function createOpenCodeHarness(env: Record<string, string>): Promis
     const input: PluginInput = {
       client: client as any,
       project: {} as any,
-      directory: env.AKM_STASH_DIR ?? "/tmp/test-project",
-      worktree: env.AKM_STASH_DIR ?? "/tmp/test-project",
+      directory: env.AKM_BUNDLE_DIR ?? "/tmp/test-project",
+      worktree: env.AKM_BUNDLE_DIR ?? "/tmp/test-project",
       serverUrl: new URL("http://localhost:3000"),
       $: {} as any,
     }

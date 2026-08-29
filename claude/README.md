@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.0`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
+Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.2`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
 The AKM skill also supports delegating work to an AKM agent through Claude's
 existing Bash tool. It invokes `akm agent` directly; it does not use MCP,
@@ -21,7 +21,7 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.0`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
+The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.2`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
 
 ## Slash Commands
 
@@ -84,7 +84,7 @@ The four most useful settings are also exposed in Claude Code's `/plugin` config
 | --- | --- | --- |
 | `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. Set this. When it is unset the hooks discover the bundle by spawning `akm info`, which adds a subprocess to every file-tool hook that sees a concept-like token; setting it removes that spawn entirely. The session-start hook tells you to set it when no bundle is configured. |
 | `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to a locally built AKM CLI entry point. |
-| `AKM_PACKAGE_REF` | `akm-cli@^0.9.0` | Package specification shown when AKM is unavailable. It is never installed automatically. |
+| `AKM_PACKAGE_REF` | `akm-cli@^0.9.2` | Package specification shown when AKM is unavailable. It is never installed automatically. |
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Local plugin state directory. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. |
@@ -138,7 +138,7 @@ Hooks never write diagnostics to stderr. The few failures only you can fix — A
 | File | Contents |
 | --- | --- |
 | `session.log` | Hook lifecycle: AKM readiness, version mismatches, subprocess failures, session-end extraction attempts. |
-| `extract.log` | Output of the detached `akm proposal extract` run at session end. Check here first if durable memories never appear — a fresh install without a configured LLM profile logs `INVALID_CONFIG_FILE`, which `akm setup` resolves. You should not have to go looking: when the newest run in this file failed, the next session start reports it and prints this file's absolute path. |
+| `extract.log` | Output of the detached `akm proposal extract` run at session end. Check here first if durable memories never appear — a fresh install without a configured LLM profile logs `LLM_NOT_CONFIGURED`, which `akm setup` resolves. You should not have to go looking: when the newest run in this file failed, the next session start reports it and prints this file's absolute path. |
 | `index.log` | Output of the detached `akm index` refresh run at session end. Check here if search results go stale. |
 | `feedback.log` / `memory.log` | Automatic feedback decisions and observed concept IDs. |
 | `events.jsonl` | Structured, redacted lifecycle events. |

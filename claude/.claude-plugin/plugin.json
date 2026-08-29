@@ -2,7 +2,7 @@
   "name": "akm",
   "displayName": "AKM",
   "description": "Search, show, and curate AKM concepts, record feedback, and remember durable knowledge, with lifecycle hooks that load relevant context and learn from asset usage.",
-  "version": "0.9.1202608250804",
+  "version": "0.9.2202608290756",
   "author": {
     "name": "itlackey",
     "url": "https://github.com/itlackey"
@@ -12,7 +12,7 @@
   "license": "MPL-2.0",
   "keywords": [
     "akm",
-    "stash",
+    "bundle",
     "skills",
     "commands",
     "agents",
@@ -48,7 +48,7 @@
     "index_on_session_end": {
       "type": "boolean",
       "title": "Refresh the AKM index when a session ends",
-      "description": "Run `akm index` at SessionEnd so the local stash stays current. Turn off on CI runners or low-power machines; the periodic `akm improve` pass remains the backstop. Equivalent to AKM_INDEX_ON_SESSION_END.",
+      "description": "Run `akm index` at SessionEnd so the local bundle stays current. Turn off on CI runners or low-power machines; the periodic `akm improve` pass remains the backstop. Equivalent to AKM_INDEX_ON_SESSION_END.",
       "default": true
     }
   },
@@ -60,7 +60,7 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" session-start",
             "timeout": 120,
-            "statusMessage": "Checking the AKM CLI and loading stash hints..."
+            "statusMessage": "Checking the AKM CLI and loading bundle hints..."
           }
         ]
       }

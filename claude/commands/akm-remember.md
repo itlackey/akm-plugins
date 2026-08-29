@@ -1,5 +1,5 @@
 ---
-description: Capture a durable memory in the AKM stash from the current conversation.
+description: Capture a durable memory in the AKM bundle from the current conversation.
 argument-hint: "[optional name or topic hint]"
 allowed-tools: Bash(akm remember *)
 ---
