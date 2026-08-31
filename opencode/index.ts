@@ -48,7 +48,7 @@ const AKM_REQUIRED_VERSION_RANGE = AKM_VERSION_RANGE
 // The consent banner's package specification is kept explicit so it remains a
 // valid npm install target even if the shared compatibility range later grows
 // extra clauses. Keep it in sync with the minimum supported stable release.
-const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.2"
+const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.6"
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
@@ -194,7 +194,7 @@ const akmVersionProbeCache = new Map<string, string | null>()
 // whitespace-token extractor and is the single source of truth here.
 const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
 const AKM_WORKFLOW_INSTRUCTION = [
-  "# AKM workflow (v0.9.2)",
+  "# AKM workflow (v0.9.6)",
   "",
   "Use AKM as a reusable knowledge and workflow bundle.",
   "",
@@ -820,7 +820,7 @@ async function getPendingProposalCount(client: LogCapableClient, sessionID?: str
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) return { count: 0, unsupported: true }
   try {
-    // AKM 0.9.2 canonical proposal-queue listing path: `akm proposal list`.
+    // AKM 0.9.6 canonical proposal-queue listing path: `akm proposal list`.
     const stdout = execResolvedAkm(command, ["proposal", "list", "--status", "pending", "--format", "json"], {
       encoding: "utf8",
       timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
@@ -2749,6 +2749,7 @@ type SearchHit = {
   description?: string
   score?: number
   whyMatched?: string[]
+  matchStage?: "exact" | "prefix" | "relaxed"
   run?: string
   origin?: string | null
   size?: string

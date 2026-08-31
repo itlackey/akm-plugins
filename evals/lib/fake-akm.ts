@@ -329,11 +329,26 @@ function rank(query, limit) {
   const scored = idx.assets.map((a) => {
     const haystack = new Set([...tokens(a.description), ...a.keywords.flatMap(tokens), ...tokens(a.name)])
     let score = 0
-    for (const t of q) if (haystack.has(t)) score += 1
+    let matched = 0
+    for (const t of q) {
+      if (!haystack.has(t)) continue
+      score += 1
+      matched += 1
+    }
     // Tie-break on keyword density so docs with denser hits beat ones that
     // mention the term once in passing.
     score += haystack.size > 0 ? Math.min(0.5, q.size / haystack.size) * 0.01 : 0
-    return { ref: a.ref, type: a.type, name: a.name, description: a.description, score }
+    return {
+      ref: a.ref,
+      type: a.type,
+      name: a.name,
+      description: a.description,
+      score,
+      // AKM 0.9.6 exposes lexical ladder provenance on normal/full and agent
+      // hits. This fake has no prefix stage, but it preserves the exact vs.
+      // relaxed distinction consumed by contract-aware harnesses.
+      matchStage: matched === q.size ? "exact" : "relaxed",
+    }
   })
   scored.sort((a, b) => b.score - a.score || a.ref.localeCompare(b.ref))
   return scored.filter((s) => s.score > 0).slice(0, limit)
@@ -411,7 +426,7 @@ if (verb === "info") {
   process.stdout.write(
     JSON.stringify({
       schemaVersion: 1,
-      version: "0.9.2",
+      version: "0.9.6",
       bundleDir,
       defaultBundle: "bundle",
       assetTypes: [
@@ -561,7 +576,7 @@ if (verb === "proposal" && tail[0] === "list") {
 // deterministically fails.
 //
 // Three properties of that failure are load-bearing and are all reproduced
-// here, verified against akm-cli 0.9.2:
+// here, verified against akm-cli 0.9.6:
 //   1. the envelope goes to STDERR, not stdout (stdout stays empty);
 //   2. the exit code is 78 — akm's documented "config error" code, not 0;
 //   3. the code is LLM_NOT_CONFIGURED.
@@ -622,7 +637,7 @@ if (verb === "--version" || verb === "-V") {
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers
   // always receive the semver that governs the compatibility gate.
-  writeFileSync(1, "fake-akm 0.9.2\\n")
+  writeFileSync(1, "fake-akm 0.9.6\\n")
   process.exit(0)
 }
 

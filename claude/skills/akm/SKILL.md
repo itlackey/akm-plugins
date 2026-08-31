@@ -5,7 +5,7 @@ description: Search, show, and curate AKM concepts, record feedback, and remembe
 
 # AKM
 
-AKM `^0.9.2` exposes exactly five public plugin surfaces:
+AKM `^0.9.6` exposes exactly five public plugin surfaces:
 
 - `/akm-search` or `akm search` searches configured bundles or registries.
 - `/akm-show` or `akm show` retrieves a concept.

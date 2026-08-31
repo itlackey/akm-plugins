@@ -9,7 +9,7 @@
 | `ref-extraction.test.ts` | `extractAkmRefs()` pattern matching: all ref shapes, edge cases |
 | `ref-resolver-contract.test.ts` | Ref resolver contract: resolve + feedback integration |
 | `opencode-eval-harness.test.ts` | Eval harness fixtures and score thresholds |
-| `akm-version-check.test.ts` | `satisfiesAkmVersionRange()` against the `^0.9.2` contract: accepts stable 0.9.2+ builds in the 0.9 line and rejects older releases and prereleases. |
+| `akm-version-check.test.ts` | `satisfiesAkmVersionRange()` against the `^0.9.6` contract: accepts stable 0.9.6+ builds in the 0.9 line and rejects older releases and prereleases. |
 
 ## AKM CLI resolution (audit #19)
 
