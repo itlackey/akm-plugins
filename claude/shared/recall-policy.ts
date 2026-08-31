@@ -36,7 +36,7 @@ export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolea
     return { shouldRecall: false, reason: "skip-chitchat", query: text, scopeHints }
   }
   // Reuse the resolver-facing parser rather than carrying a second, stale
-  // grammar here. AKM 0.9.6 refs are [bundle//]conceptId[#fragment]; retired
+  // grammar here. AKM 0.9.7 refs are [bundle//]conceptId[#fragment]; retired
   // type:name strings must not turn an otherwise low-signal prompt into an
   // explicit AKM recall.
   if (/\bakm\b|\bbundle\b/.test(lower) || extractAkmRefsFromString(text).length > 0) {

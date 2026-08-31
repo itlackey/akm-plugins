@@ -5,7 +5,7 @@ description: Search, show, and curate AKM concepts, record feedback, and remembe
 
 # AKM
 
-AKM `^0.9.6` exposes exactly five public plugin surfaces:
+AKM `^0.9.7` exposes exactly five public plugin surfaces:
 
 - `/akm-search` or `akm search` searches configured bundles or registries.
 - `/akm-show` or `akm show` retrieves a concept.
@@ -72,6 +72,16 @@ Curate first when solving a task:
 ```sh
 akm curate "<specific task description>" --limit 5 --format json -q
 ```
+
+When the selected local assets' full content is needed immediately, pack it in
+one call instead of following every ref with a separate show:
+
+```sh
+akm curate "<specific task description>" --limit 5 --pack 8000 --format json -q
+```
+
+`--pack` is a shared token budget, not a per-item limit. AKM drops lower-ranked
+whole assets before truncating, and never packs registry-only hits.
 
 Use search when you know a concept exists and need its exact ID:
 

@@ -344,7 +344,7 @@ function rank(query, limit) {
       name: a.name,
       description: a.description,
       score,
-      // AKM 0.9.6 exposes lexical ladder provenance on normal/full and agent
+      // AKM 0.9.7 exposes lexical ladder provenance on normal/full and agent
       // hits. This fake has no prefix stage, but it preserves the exact vs.
       // relaxed distinction consumed by contract-aware harnesses.
       matchStage: matched === q.size ? "exact" : "relaxed",
@@ -426,7 +426,7 @@ if (verb === "info") {
   process.stdout.write(
     JSON.stringify({
       schemaVersion: 1,
-      version: "0.9.6",
+      version: "0.9.7",
       bundleDir,
       defaultBundle: "bundle",
       assetTypes: [
@@ -576,7 +576,7 @@ if (verb === "proposal" && tail[0] === "list") {
 // deterministically fails.
 //
 // Three properties of that failure are load-bearing and are all reproduced
-// here, verified against akm-cli 0.9.6:
+// here, verified against akm-cli 0.9.7:
 //   1. the envelope goes to STDERR, not stdout (stdout stays empty);
 //   2. the exit code is 78 — akm's documented "config error" code, not 0;
 //   3. the code is LLM_NOT_CONFIGURED.
@@ -637,7 +637,7 @@ if (verb === "--version" || verb === "-V") {
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers
   // always receive the semver that governs the compatibility gate.
-  writeFileSync(1, "fake-akm 0.9.6\\n")
+  writeFileSync(1, "fake-akm 0.9.7\\n")
   process.exit(0)
 }
 

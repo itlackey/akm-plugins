@@ -1,6 +1,6 @@
 import { type Plugin, tool } from "@opencode-ai/plugin"
 // @ts-expect-error akm-cli does not publish declarations for this in-process entrypoint.
-import { akmCurate } from "akm-cli/dist/commands/read/curate.js"
+import { akmCurate, packCuratedHits } from "akm-cli/dist/commands/read/curate.js"
 // @ts-expect-error akm-cli does not publish declarations for this in-process entrypoint.
 import { akmSearch } from "akm-cli/dist/commands/read/search.js"
 // @ts-expect-error akm-cli does not publish declarations for this in-process entrypoint.
@@ -48,7 +48,7 @@ const AKM_REQUIRED_VERSION_RANGE = AKM_VERSION_RANGE
 // The consent banner's package specification is kept explicit so it remains a
 // valid npm install target even if the shared compatibility range later grows
 // extra clauses. Keep it in sync with the minimum supported stable release.
-const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.6"
+const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.7"
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
@@ -194,7 +194,7 @@ const akmVersionProbeCache = new Map<string, string | null>()
 // whitespace-token extractor and is the single source of truth here.
 const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
 const AKM_WORKFLOW_INSTRUCTION = [
-  "# AKM workflow (v0.9.6)",
+  "# AKM workflow (v0.9.7)",
   "",
   "Use AKM as a reusable knowledge and workflow bundle.",
   "",
@@ -820,7 +820,7 @@ async function getPendingProposalCount(client: LogCapableClient, sessionID?: str
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) return { count: 0, unsupported: true }
   try {
-    // AKM 0.9.6 canonical proposal-queue listing path: `akm proposal list`.
+    // AKM 0.9.7 canonical proposal-queue listing path: `akm proposal list`.
     const stdout = execResolvedAkm(command, ["proposal", "list", "--status", "pending", "--format", "json"], {
       encoding: "utf8",
       timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
@@ -2662,11 +2662,24 @@ async function runInProcess(
   meta: CliLogMeta,
 ): Promise<string> {
   try {
+    if (
+      operation === "curate"
+      && input.pack !== undefined
+      && (typeof input.pack !== "number" || !Number.isInteger(input.pack) || input.pack <= 0)
+    ) {
+      throw new Error("pack must be a positive integer token budget")
+    }
     const result = operation === "search"
       ? await akmSearch(input as Parameters<typeof akmSearch>[0])
       : operation === "show"
         ? await akmShowUnified(input as Parameters<typeof akmShowUnified>[0])
-        : await akmCurate(input as Parameters<typeof akmCurate>[0])
+        : await (async () => {
+            const { pack, ...curateInput } = input
+            const curated = await akmCurate(curateInput as Parameters<typeof akmCurate>[0])
+            return typeof pack === "number"
+              ? packCuratedHits(curated, pack)
+              : curated
+          })()
     const output = JSON.stringify(result)
     const refs = extractAkmRefsFromString(output)
     noteRecentRefs(meta.sessionID, refs)
@@ -3580,18 +3593,19 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // zero akm_* calls while curation was demonstrably available (#95).
         // Leading with the decision — when to reach for this instead of just
         // reading the file — is what it has to win on.
-        description: "Reach for this BEFORE writing or editing a config file, manifest, schema, or command for any tool, format, or API whose exact syntax or keys you are not certain of — including a file already present in the workspace, since having read a file does not mean you know its schema. PRIMARY discovery entry point for the bundle: describe the task in natural language and this returns the top matches as a ranked list. Pass a hit's ref to akm_show before relying on it, then record akm_feedback once the result is known.",
+        description: "Reach for this BEFORE writing or editing a config file, manifest, schema, or command for any tool, format, or API whose exact syntax or keys you are not certain of — including a file already present in the workspace, since having read a file does not mean you know its schema. PRIMARY discovery entry point for the bundle: describe the task in natural language and this returns the top matches as a ranked list. Set pack to a token budget when you need the selected local assets' full content in one response; otherwise pass a hit's ref to akm_show before relying on it. Record akm_feedback once the result is known.",
         args: {
           query: tool.schema.string().describe("Task, topic, or natural-language description of what you want to do."),
           type: tool.schema.enum(ASSET_TYPES as unknown as [string, ...string[]]).optional().describe("Optional asset type filter."),
           limit: tool.schema.number().optional().describe("Maximum number of curated matches to return. Defaults to 4."),
           source: tool.schema.string().optional().describe("Search source: 'local', 'registry', 'all', or a configured bundle name."),
+          pack: tool.schema.number().optional().describe("Optional positive token budget for packing ranked local assets' full content into this response. Registry hits are never packed."),
         },
-        async execute({ query, type, limit, source }, context) {
+        async execute({ query, type, limit, source, pack }, context) {
           return runInProcess(
             client as unknown as LogCapableClient,
             "curate",
-            { query, type: type === "any" ? undefined : type, limit, source },
+            { query, type: type === "any" ? undefined : type, limit, source, pack },
             { toolName: "akm_curate", sessionID: context.sessionID, directory: context.directory },
           )
         },

@@ -17,7 +17,7 @@ const eventLogPath = path.join(eventStateDir, "akm-opencode", "events.jsonl")
 const realChildProcess = await import("node:child_process")
 
 const mockExecFileSync = mock((_command: string, args?: string[]) => {
-  if (args?.[0] === "--version") return "akm 0.9.6\n"
+  if (args?.[0] === "--version") return "akm 0.9.7\n"
   if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
   return "mock output"
 })
@@ -43,6 +43,12 @@ const mockAkmCurate = mock(async (input: Record<string, unknown>) => ({
   summary: "one match",
   items: [{ type: "skill", ref: "skills/review" }],
 }))
+const mockPackCuratedHits = mock(async (input: Record<string, unknown>, budget: number) => ({
+  query: input.query,
+  budget,
+  tokens: 3,
+  items: [{ ref: "skills/review", tokens: 3, content: "mock concept" }],
+}))
 
 mock.module("node:child_process", () => ({
   ...realChildProcess,
@@ -52,7 +58,10 @@ mock.module("node:child_process", () => ({
 }))
 mock.module("akm-cli/dist/commands/read/search.js", () => ({ akmSearch: mockAkmSearch }))
 mock.module("akm-cli/dist/commands/read/show.js", () => ({ akmShowUnified: mockAkmShowUnified }))
-mock.module("akm-cli/dist/commands/read/curate.js", () => ({ akmCurate: mockAkmCurate }))
+mock.module("akm-cli/dist/commands/read/curate.js", () => ({
+  akmCurate: mockAkmCurate,
+  packCuratedHits: mockPackCuratedHits,
+}))
 
 const pluginModule = await import("../opencode/index.ts")
 const { AkmPlugin } = pluginModule
@@ -102,7 +111,7 @@ describe("akm-opencode plugin", () => {
   beforeEach(() => {
     mockExecFileSync.mockClear()
     mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-      if (args?.[0] === "--version") return "akm 0.9.6\n"
+      if (args?.[0] === "--version") return "akm 0.9.7\n"
       if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
       return "mock output"
     })
@@ -111,6 +120,7 @@ describe("akm-opencode plugin", () => {
     mockAkmSearch.mockClear()
     mockAkmShowUnified.mockClear()
     mockAkmCurate.mockClear()
+    mockPackCuratedHits.mockClear()
     mockAkmSearch.mockImplementation(async (input: Record<string, unknown>) => ({
       schemaVersion: 1,
       bundleDir: "/tmp/akm-bundle",
@@ -269,7 +279,43 @@ describe("akm-opencode plugin", () => {
         limit: 4,
         source: "team-playbook",
       })
+      expect(mockPackCuratedHits).not.toHaveBeenCalled()
       expect(mockExecFileSync.mock.calls.some(([, args]) => Array.isArray(args) && args[0] === "curate")).toBe(false)
+    })
+
+    it("packs curated local content through the AKM 0.9.7 API when requested", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const result = await hooks.tool!.akm_curate.execute({
+        query: "deploy safely",
+        type: "knowledge",
+        limit: 4,
+        source: "local",
+        pack: 4096,
+      } as any, createToolContext())
+
+      expect(mockAkmCurate).toHaveBeenCalledWith({
+        query: "deploy safely",
+        type: "knowledge",
+        limit: 4,
+        source: "local",
+      })
+      expect(mockPackCuratedHits).toHaveBeenCalledWith(expect.objectContaining({ query: "deploy safely" }), 4096)
+      expect(JSON.parse(result)).toEqual(expect.objectContaining({ budget: 4096, tokens: 3 }))
+    })
+
+    it("rejects a non-positive or fractional pack budget instead of silently returning unpacked hits", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+
+      for (const pack of [0, -1, 1.5]) {
+        const result = await hooks.tool!.akm_curate.execute({
+          query: "deploy safely",
+          pack,
+        } as any, createToolContext())
+
+        expect(JSON.parse(result)).toEqual({ ok: false, error: "pack must be a positive integer token budget" })
+      }
+      expect(mockAkmCurate).not.toHaveBeenCalled()
+      expect(mockPackCuratedHits).not.toHaveBeenCalled()
     })
 
     it("degrades in-process failures into logged structured results", async () => {
@@ -369,9 +415,9 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("session context injection", () => {
-    it("reads pending proposals only from the AKM 0.9.6 proposal-list envelope", async () => {
+    it("reads pending proposals only from the AKM 0.9.7 proposal-list envelope", async () => {
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.9.6\n"
+        if (args?.[0] === "--version") return "akm 0.9.7\n"
         if (args?.[0] === "proposal") return JSON.stringify({ hits: [{ id: "legacy" }] })
         return ""
       })
@@ -381,7 +427,7 @@ describe("akm-opencode plugin", () => {
       expect(legacy.system.join("\n")).not.toContain("# AKM pending proposals")
 
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.9.6\n"
+        if (args?.[0] === "--version") return "akm 0.9.7\n"
         if (args?.[0] === "proposal") {
           return JSON.stringify({ schemaVersion: 1, totalCount: 1, proposals: [{ id: "current" }] })
         }
@@ -428,7 +474,7 @@ describe("akm-opencode plugin", () => {
       // templates requiring a single leading system message answer HTTP 500
       // ("System message must be at the beginning") — plugin arm only (#96).
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.9.6\n"
+        if (args?.[0] === "--version") return "akm 0.9.7\n"
         if (args?.includes("hints")) return "stash-authored hint text"
         if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
         return "mock output"
@@ -456,7 +502,7 @@ describe("akm-opencode plugin", () => {
       // array, a large hints output silently dropped the curated-stash pointer
       // — the plugin's actual deliverable — for the whole session.
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.9.6\n"
+        if (args?.[0] === "--version") return "akm 0.9.7\n"
         if (args?.includes("hints")) return "h".repeat(8000)
         if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
         return "mock output"
@@ -1749,7 +1795,7 @@ describe("akm-opencode plugin", () => {
         AkmPlugin.__resetResolvedAkmForTests()
         AkmPlugin.__resetWriteGateForTests()
         mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-          if (args?.[0] === "--version") return "akm 0.9.6\n"
+          if (args?.[0] === "--version") return "akm 0.9.7\n"
           if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
           return "mock output"
         })
