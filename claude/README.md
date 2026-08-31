@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.6`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
+Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.7`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
 The AKM skill also supports delegating work to an AKM agent through Claude's
 existing Bash tool. It invokes `akm agent` directly; it does not use MCP,
@@ -21,7 +21,7 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.6`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
+The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.7`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
 
 ## Slash Commands
 
@@ -29,7 +29,7 @@ The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, availa
 | --- | --- |
 | `/akm-search [query] [flags]` | Search configured bundles or registries; omit the query to browse. |
 | `/akm-show <ref>` | Show a concept by concept-ID reference. |
-| `/akm-curate <task>` | Curate ranked concepts for a task or topic. |
+| `/akm-curate <task>` | Curate ranked concepts and pack selected local assets' full content into one 8,000-token response. |
 | `/akm-feedback <ref> <+\|-> [note]` | Record positive or negative feedback. Negative feedback requires a note. |
 | `/akm-remember [name]` | Distill durable knowledge from the conversation into a memory. |
 
@@ -84,7 +84,7 @@ The four most useful settings are also exposed in Claude Code's `/plugin` config
 | --- | --- | --- |
 | `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. Set this. When it is unset the hooks discover the bundle by spawning `akm info`, which adds a subprocess to every file-tool hook that sees a concept-like token; setting it removes that spawn entirely. The session-start hook tells you to set it when no bundle is configured. |
 | `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to a locally built AKM CLI entry point. |
-| `AKM_PACKAGE_REF` | `akm-cli@^0.9.6` | Package specification shown when AKM is unavailable. It is never installed automatically. |
+| `AKM_PACKAGE_REF` | `akm-cli@^0.9.7` | Package specification shown when AKM is unavailable. It is never installed automatically. |
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Local plugin state directory. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. |

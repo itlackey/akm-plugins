@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode plugin for [AKM](https://github.com/itlackey/akm) `^0.9.6`. It exposes exactly five public tools and uses lifecycle hooks to bring relevant AKM context into a session.
+OpenCode plugin for [AKM](https://github.com/itlackey/akm) `^0.9.7`. It exposes exactly five public tools and uses lifecycle hooks to bring relevant AKM context into a session.
 
 ## Installation
 
@@ -18,13 +18,13 @@ Add the plugin to `opencode.json`:
 | --- | --- |
 | `akm_search` | Search configured bundles or registries. `source` accepts `local`, `registry`, `all`, or a configured bundle name. |
 | `akm_show` | Show a concept by `[bundle//]conceptId[#fragment]`. A fragment selects a Markdown section. |
-| `akm_curate` | Return ranked concepts for a task or topic. |
+| `akm_curate` | Return ranked concepts for a task or topic. Optional `pack` is a token budget that returns the selected local assets' full content in one response; registry hits are omitted from packed items. |
 | `akm_feedback` | Record positive or negative feedback for a concept. |
 | `akm_remember` | Save durable knowledge as a searchable memory. |
 
 `akm_search`, `akm_show`, and `akm_curate` call the bundled AKM read APIs in process. `akm_feedback` and `akm_remember` use the compatible AKM CLI because they mutate AKM state. Failures return structured results and are logged through OpenCode app logging.
 
-Use the `ref` returned by search or curate directly with show or feedback. Concept IDs look like `skills/code-review`, `memories/release-retro`, or `team-playbook//knowledge/deploy#Rollback`.
+Use the `ref` returned by search or curate directly with show or feedback. When `akm_curate.pack` is set, the response already includes packed local content, so a separate show call is only needed for omitted or registry-only hits. Concept IDs look like `skills/code-review`, `memories/release-retro`, or `team-playbook//knowledge/deploy#Rollback`.
 
 ## Lifecycle Hooks
 
@@ -113,7 +113,7 @@ These three are read once, when the plugin module is imported, so they must be s
 
 ## Usage
 
-1. Start with `akm_curate` for task-oriented discovery.
+1. Start with `akm_curate` for task-oriented discovery; set `pack` when you want the selected local content immediately.
 2. Use `akm_search` when you know the concept name and need its exact ID.
 3. Fetch the full concept with `akm_show` before relying on it.
 4. Record the outcome with `akm_feedback`.
