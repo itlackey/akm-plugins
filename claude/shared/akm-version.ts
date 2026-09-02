@@ -13,27 +13,31 @@
 // same code path runs on both sides.
 //
 // A single caret clause anchored at the stable release covers the whole
-// supported line: `^0.9.7` admits stable 0.9.7 and later 0.9.x releases.
-// 0.9.7 is the compatibility floor: its ref grammar, progressive-search
-// metadata, token-budgeted curate packing, workflow lifecycle, and task/workflow
-// wire contracts are the ones these plugins implement.
+// supported line: `^0.9.8` admits stable 0.9.8 and later 0.9.x releases.
+// 0.9.8 is the compatibility floor, and the reason is a one-way one: 0.9.8
+// adds state migrations 025 and 026, so once any 0.9.8 command opens
+// `state.db` an older CLI refuses to open it at all. A home these plugins
+// have driven is therefore a 0.9.8+ home, and admitting 0.9.7 would point
+// the gate at a CLI that cannot read it. Its ref grammar, progressive-search
+// metadata, token-budgeted curate packing, workflow lifecycle, and
+// task/workflow wire contracts are the ones these plugins implement.
 //
-// KNOWN GAP: NO prerelease satisfies this range — not 0.9.7-rc.1, and not a
-// *future* line such as 0.9.8-rc.1. That is node-semver's documented behavior
+// KNOWN GAP: NO prerelease satisfies this range — not 0.9.8-rc.1, and not a
+// *future* line such as 0.9.9-rc.1. That is node-semver's documented behavior
 // and the vendored matcher reproduces it: a prerelease only satisfies a range
 // whose lower bound is a prerelease with the same major.minor.patch. Admitting
 // a prerelease line again is an explicit one-clause edit here
-// (`^0.9.7 || ^0.9.8-rc.1`) when such a build actually needs testing — a
+// (`^0.9.8 || ^0.9.9-rc.1`) when such a build actually needs testing — a
 // deliberate opt-in rather than a range that silently accepts untested
 // prereleases.
 //
 // Earlier 0.9 releases are deliberately excluded as well: accepting them
 // would silently pass the version gate onto a CLI with retired ref and
-// workflow contracts.
+// workflow contracts, or one that cannot open a migrated state.db.
 
 import { satisfies } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.7"
+export const AKM_VERSION_RANGE = "^0.9.8"
 
 /**
  * True when `version` is a valid semver string that satisfies

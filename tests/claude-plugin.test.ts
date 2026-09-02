@@ -228,7 +228,7 @@ describe("Claude plugin metadata", () => {
     // invocations it runs. Without the grant the first thing a /akm-* turn does
     // is stop for a Bash permission prompt. The grant is per-command on
     // purpose: it lasts only the turn that invoked the command, so a command
-    // must name every verb its own body reaches for (curate uses 0.9.7's
+    // must name every verb its own body reaches for (curate uses 0.9.8's
     // token-budgeted `--pack`; feedback confirms an ambiguous ref with `akm show`; show
     // falls back to `akm search` in the same turn when the ref misses).
     // Asserted as SHAPE + verb set, not as one literal string. Comparing the
@@ -333,7 +333,7 @@ describe("Claude hook scripts", () => {
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 if [ "$1" = "--version" ]; then
-  echo "akm 0.9.7"
+  echo "akm 0.9.8"
   exit 0
 fi
 exit 0
@@ -350,7 +350,7 @@ exit 0
     })
 
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.9.7")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.9.8")
   })
 
   it("extract-session dispatches cleanly and returns no output (fire-and-forget)", () => {
@@ -812,7 +812,7 @@ echo "[knowledge] should-not-appear"
     const quotedLog = shellQuote(invokeLog)
 
     // Fake akm: version/install, index no-op, hints + curated output.
-    // The version MUST satisfy the plugin's required range (^0.9.7)
+    // The version MUST satisfy the plugin's required range (^0.9.8)
     // so the new SessionStart consent gate treats akm as healthy and proceeds
     // with the normal injected-context flow.
     writeFileSync(
@@ -820,7 +820,7 @@ echo "[knowledge] should-not-appear"
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 0.9.7"; exit 0 ;;
+  --version) echo "akm 0.9.8"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
@@ -892,7 +892,7 @@ exit 0
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 0.9.7"; exit 0 ;;
+  --version) echo "akm 0.9.8"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
@@ -2192,7 +2192,7 @@ exit 0
         `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${shellQuote(callLog)}
 case "$1" in
-  --version) echo "akm 0.9.7"; exit 0 ;;
+  --version) echo "akm 0.9.8"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
@@ -2484,11 +2484,11 @@ exit 0
       return { payload: JSON.parse(stdout.trim()), stateDir }
     }
 
-    it("reads pending proposals only from the AKM 0.9.7 proposal-list envelope", () => {
+    it("reads pending proposals only from the AKM 0.9.8 proposal-list envelope", () => {
       const legacy = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.7"; exit 0 ;;
+  --version) echo "akm 0.9.8"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "proposal" ]; then
   echo '{"hits":[{"id":"legacy"}]}'
@@ -2502,7 +2502,7 @@ exit 0
       const current = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.7"; exit 0 ;;
+  --version) echo "akm 0.9.8"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "proposal" ]; then
   echo '{"schemaVersion":1,"totalCount":1,"proposals":[{"id":"current"}]}'
@@ -2522,7 +2522,7 @@ exit 0
       const { payload } = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.7"; exit 0 ;;
+  --version) echo "akm 0.9.8"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
   echo '{"runs":[{"id":"run-7","workflowRef":"workflows/release","status":"active","currentStepId":"step-2","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"evilKey":"evilPayload"}}],"shape":"workflow-list","schemaVersion":1}'
@@ -2545,7 +2545,7 @@ exit 0
       const { payload } = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.7"; exit 0 ;;
+  --version) echo "akm 0.9.8"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
   echo '{"runs":[]}'
@@ -2571,7 +2571,7 @@ exit 0
         path.join(binDir, "akm"),
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.7"; exit 0 ;;
+  --version) echo "akm 0.9.8"; exit 0 ;;
 esac
 exit 0
 `,

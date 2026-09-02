@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.18.14",
-    "akm-cli": "^0.9.7"
+    "akm-cli": "^0.9.8"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

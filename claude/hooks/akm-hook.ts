@@ -24,7 +24,7 @@ const MODE = process.argv[3] ?? ""
 // AKM_REQUIRED_RANGE is the single shared version contract imported from
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
 // is a separate concern: the single package range passed to Bun/npm.
-const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.7"
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.8"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
@@ -1042,7 +1042,7 @@ function gatherSessionStartWarnings(bundleRoots: readonly string[]): string[] {
     appendLog(SESSION_LOG, "bundle_missing", bundleDir ?? "(unconfigured)")
   }
 
-  // No prerelease warning here: since the range moved to `^0.9.7` (stable
+  // No prerelease warning here: since the range moved to `^0.9.8` (stable
   // floor), no prerelease build can pass the version gate, so a passing
   // versionCheck is always a stable release.
 

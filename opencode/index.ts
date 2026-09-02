@@ -48,7 +48,7 @@ const AKM_REQUIRED_VERSION_RANGE = AKM_VERSION_RANGE
 // The consent banner's package specification is kept explicit so it remains a
 // valid npm install target even if the shared compatibility range later grows
 // extra clauses. Keep it in sync with the minimum supported stable release.
-const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.7"
+const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.8"
 
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
