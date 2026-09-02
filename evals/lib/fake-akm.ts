@@ -426,7 +426,7 @@ if (verb === "info") {
   process.stdout.write(
     JSON.stringify({
       schemaVersion: 1,
-      version: "0.9.8",
+      version: "0.9.9",
       bundleDir,
       defaultBundle: "bundle",
       assetTypes: [
@@ -637,7 +637,7 @@ if (verb === "--version" || verb === "-V") {
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers
   // always receive the semver that governs the compatibility gate.
-  writeFileSync(1, "fake-akm 0.9.8\\n")
+  writeFileSync(1, "fake-akm 0.9.9\\n")
   process.exit(0)
 }
 
