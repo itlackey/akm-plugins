@@ -5,7 +5,7 @@
 // auto-install is disabled).
 
 import { describe, expect, it } from "bun:test"
-import { satisfies, valid } from "../claude/shared/vendor-semver"
+import { compareSemver, satisfies, valid } from "../claude/shared/vendor-semver"
 
 describe("valid()", () => {
   it("accepts standard semver", () => {
@@ -100,5 +100,44 @@ describe("satisfies() — caret semantics", () => {
   })
   it("^X.Y.Z without prerelease floor does NOT match prereleases", () => {
     expect(satisfies("0.8.0-rc1", "^0.8.0")).toBe(false)
+  })
+})
+
+// compareSemver exists so callers can pick the NEWEST compatible candidate
+// rather than the first one that satisfies a range. A range answers "is this
+// eligible"; it says nothing about ordering, and treating first-match as
+// best-match is what let a plugin drive an ancient-but-in-range CLI
+// indefinitely (akm-plugins#106).
+describe("compareSemver()", () => {
+  it("orders by major, minor, then patch", () => {
+    expect(compareSemver("0.9.11", "0.9.2")).toBeGreaterThan(0)
+    expect(compareSemver("0.9.2", "0.9.11")).toBeLessThan(0)
+    expect(compareSemver("1.0.0", "0.9.99")).toBeGreaterThan(0)
+    expect(compareSemver("0.10.0", "0.9.99")).toBeGreaterThan(0)
+  })
+
+  it("treats equal versions as equal, ignoring a v prefix", () => {
+    expect(compareSemver("0.9.11", "0.9.11")).toBe(0)
+    expect(compareSemver("v0.9.11", "0.9.11")).toBe(0)
+  })
+
+  it("ranks a release above its own prerelease", () => {
+    expect(compareSemver("0.9.11", "0.9.11-beta.1")).toBeGreaterThan(0)
+    expect(compareSemver("0.9.11-beta.2", "0.9.11-beta.1")).toBeGreaterThan(0)
+  })
+
+  // An unreadable `akm --version` must never win a comparison, or a broken
+  // candidate could be selected over a working one.
+  it("sorts unparseable input lowest", () => {
+    expect(compareSemver("not-a-version", "0.0.1")).toBeLessThan(0)
+    expect(compareSemver("0.0.1", "")).toBeGreaterThan(0)
+    expect(compareSemver("bad", "worse")).toBe(0)
+  })
+
+  // The property the selection loop actually relies on.
+  it("picks the newest from a candidate list", () => {
+    const versions = ["0.9.2", "0.9.11", "0.9.8"]
+    const newest = versions.reduce((a, b) => (compareSemver(b, a) > 0 ? b : a))
+    expect(newest).toBe("0.9.11")
   })
 })
