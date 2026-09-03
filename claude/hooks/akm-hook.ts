@@ -1177,18 +1177,6 @@ function gatherSessionStartWarnings(bundleRoots: readonly string[]): string[] {
   return warnings
 }
 
-function recordUserFeedback() {
-  const rawInput = readStdin()
-  const text = extractUserText(rawInput)
-  const sid = extractSessionId(rawInput)
-  if (!text) return
-  appendLog(FEEDBACK_LOG, "user", "prompt", text)
-  if (/\b(remember|memory|memories)\b/i.test(text)) {
-    appendLog(MEMORY_LOG, "user", "intent", text)
-    writeSessionBuffer(sid, "user memory intent", text)
-  }
-}
-
 function recordPostTool() {
   const rawInput = readStdin()
   const { toolName, commandText, outputText, statusText, refs, sid } = extractPostToolFields(rawInput, MODE)
@@ -1765,62 +1753,17 @@ function extractSession(): string {
   return ""
 }
 
-// Dispatch. .claude-plugin/plugin.json wires exactly: session-start,
-// curate-prompt, user-prompt-expansion, post-tool, post-tool-nonbash,
-// post-tool-batch, auto-feedback, subagent-start, task-created,
-// task-completed, post-compact, session-end, extract-session.
-//
-// `ensure-akm` / `check-akm` / `user-feedback` are NOT reachable from the
-// manifest. They are retained deliberately as manual-diagnostic entry points
-// and as the entry points the test suite uses to exercise checkAkmVersion()
-// and recordUserFeedback() in isolation — both of which are live code
-// (checkAkmVersion() runs on every SessionStart; recordUserFeedback()
-// duplicates the feedback/memory-intent logging that curatePrompt() performs
-// inline). Do not add manifest wiring for them without re-reviewing that
-// duplication.
-//
-// `pre-tool` and `pre-tool-nonbash` are unwired for a different reason: both
-// once had handlers, both were deleted, and both survive here only as explicit
-// no-ops. See their cases below.
+// Dispatch. Every case here is wired in .claude-plugin/plugin.json; an
+// unrecognized command falls through to `default`, which logs it and returns
+// nothing rather than failing the hook.
 async function main(): Promise<string> {
   switch (COMMAND) {
-    case "ensure-akm":
-    case "check-akm":
-      // Not manifest-wired (see above). Legacy alias "ensure-akm" no longer
-      // installs anything; both subcommands are version checks that warn with
-      // manual installation guidance. See checkAkmVersion() for the rationale
-      // (Item 2, 0.8.0 polish plan).
-      checkAkmVersion()
-      return ""
     case "session-start":
       return await sessionStart()
-    case "user-feedback":
-      // Not manifest-wired (see above). curatePrompt(), which IS wired to
-      // UserPromptSubmit, performs the same feedback/memory-intent logging.
-      recordUserFeedback()
-      return ""
     case "curate-prompt":
       return curatePrompt()
     case "user-prompt-expansion":
       return userPromptExpansion()
-    case "pre-tool":
-      // Bash gating was removed in 0.8.0 — defer to the platform's permission
-      // system (see claude/README.md "Locking down destructive commands").
-      // Kept as an explicit no-op so an out-of-date user settings.json that
-      // still calls it cannot block a tool or spam the unknown-command log.
-      return ""
-    case "pre-tool-nonbash":
-      // The PreToolUse Read/Write/Edit/Glob/Grep matchers were dropped from
-      // the manifest: pretoolNonBash() wrote a `tool_ref_observed` event with
-      // only { tool, phase: "pre" }, and the PostToolUse handler writes that
-      // same event with strictly more fields (command, output preview, the
-      // real outcome status) plus the session-buffer lines. The pre pass also
-      // extracted refs with the whitespace-token splitter rather than the
-      // substring scan, so its refs were a subset of the post pass's modulo
-      // `.`/`:`-prefixed tokens the shared extractor rejects by design. Five
-      // hook processes per tool call bought nothing. Same no-op rationale as
-      // `pre-tool` above: a stale user settings.json must not block a tool.
-      return ""
     case "post-tool-nonbash":
       posttoolNonBash()
       return ""
