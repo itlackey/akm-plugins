@@ -138,7 +138,7 @@ Hooks never write diagnostics to stderr. The few failures only you can fix — A
 | File | Contents |
 | --- | --- |
 | `session.log` | Hook lifecycle: AKM readiness, version mismatches, subprocess failures, session-end extraction attempts. |
-| `extract.log` | Output of the detached `akm proposal extract` run at session end. Check here first if durable memories never appear — a fresh install without a configured LLM profile logs `LLM_NOT_CONFIGURED`, which `akm setup` resolves. You should not have to go looking: when the newest run in this file failed, the next session start reports it and prints this file's absolute path. |
+| `extract.log` | Output of the detached `akm proposal extract` run at session end. Check here first if durable memories never appear — a fresh install without a configured LLM profile logs `LLM_NOT_CONFIGURED`, which `akm setup` resolves. You should not have to go looking: when the newest run in this file failed, or ran but harvested nothing (e.g. an unreachable LLM engine), the next session start reports it and prints this file's absolute path. |
 | `index.log` | Output of the detached `akm index` refresh run at session end. Check here if search results go stale. |
 | `feedback.log` / `memory.log` | Automatic feedback decisions and observed concept IDs. |
 | `events.jsonl` | Structured, redacted lifecycle events. |

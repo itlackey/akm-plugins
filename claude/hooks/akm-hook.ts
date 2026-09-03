@@ -980,6 +980,44 @@ function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
 // how long the install has been running.
 const EXTRACT_LOG_TAIL_BYTES = 8 * 1024
 
+// #109 — skip reasons that mean infrastructure kept extraction from running
+// at all, mirrored from akm's own `EXTRACT_INFRASTRUCTURE_SKIP_REASONS`
+// (src/core/improve-types.ts, shipping in akm 0.9.12 — see akm#912).
+// `already_extracted`, `too_short`, and `triaged_out` are deliberately
+// excluded: that's the content ledger and pre-filter doing their job, not a
+// broken install, and warning on them would be exactly the always-on noise
+// #110 documents users learning to ignore. `malformed_model_output` is
+// excluded here too, but for a different reason — it already forwards its
+// own per-session detail into the envelope's top-level `warnings[]`, which
+// lastExtractFailureWarning() below reads before ever reaching this list.
+const EXTRACT_INFRASTRUCTURE_SKIP_REASONS = new Set(["llm_unavailable", "read_failed", "exception", "locked_concurrent"])
+
+// The dominant (most frequent) infrastructure skip reason across a run's
+// `sessions[]`, or undefined when none of them skipped for an infrastructure
+// reason. In practice extractSession() always requests a single `--session-id`,
+// so `sessions[]` has at most one entry and this just reads its `skipReason` —
+// the tie-break-by-frequency logic exists so this stays correct if a future
+// caller ever passes a multi-session envelope.
+function dominantInfrastructureSkipReason(rawSessions: unknown): string | undefined {
+  if (!Array.isArray(rawSessions)) return undefined
+  const counts = new Map<string, number>()
+  for (const session of rawSessions) {
+    if (!session || typeof session !== "object") continue
+    const reason = (session as { skipReason?: unknown }).skipReason
+    if (typeof reason !== "string" || !EXTRACT_INFRASTRUCTURE_SKIP_REASONS.has(reason)) continue
+    counts.set(reason, (counts.get(reason) ?? 0) + 1)
+  }
+  let best: string | undefined
+  let bestCount = 0
+  for (const [reason, count] of counts) {
+    if (count > bestCount) {
+      best = reason
+      bestCount = count
+    }
+  }
+  return best
+}
+
 /**
  * SessionEnd's `akm proposal extract` is the only memory-harvest path left and
  * it runs detached, so its failure was 100% silent: a fresh install with no LLM
@@ -987,6 +1025,19 @@ const EXTRACT_LOG_TAIL_BYTES = 8 * 1024
  * extract.log, and no hook output has ever named that file — claude/README.md
  * tells the user to "check here first if durable memories never appear" without
  * anywhere to check. Report the newest failure at SessionStart, with the path.
+ *
+ * #109: `ok:true` does not mean anything was harvested — akm's own docs say
+ * so plainly ("ok means the command ran to completion...it does not mean
+ * anything was harvested", akm#912). A run whose session hits an
+ * infrastructure skip reason (most commonly an unreachable LLM engine)
+ * returns `sessionsProcessed:0`, `sessionsSkipped:1`, `ok:true` — the
+ * ok:false branch below never fires, and the condition persists silently,
+ * potentially for weeks. (Found on the same machine as #106/#107: once the
+ * harness-rename bug there was fixed, extraction kept harvesting nothing for
+ * a second, unrelated reason — an unreachable LLM engine — with no warning
+ * either time.) So this also runs a second, narrower check below: nothing
+ * processed while at least one session was skipped for an infrastructure
+ * reason.
  *
  * This repeats every SessionStart until a later `proposal_extract` block
  * succeeds — deliberately, because the condition itself persists (an unset LLM
@@ -1003,11 +1054,6 @@ function lastExtractFailureWarning(): string {
     const newestBlock = tail.lastIndexOf("\tproposal_extract\t")
     if (newestBlock < 0) return ""
     const block = tail.slice(newestBlock)
-    // `ok:false` alone. This also accepted any `"code":` in the block, which
-    // matches a SUCCESSFUL extraction whose JSON happens to carry a `code`
-    // field anywhere — including inside a proposal body echoed into the log —
-    // and warned the user that memory extraction had failed when it had not.
-    if (!/"ok"\s*:\s*false/.test(block)) return ""
     // "session <id> not found for harness …" is a benign skip, not a broken
     // install: it means SessionEnd fired for a session with no transcript
     // (extractSession() now guards against spawning at all in that case, but
@@ -1024,9 +1070,14 @@ function lastExtractFailureWarning(): string {
     // its `warnings`/`error`/`code` instead of inventing one. A block that
     // fails to parse (truncated by a crash mid-write, or genuinely not JSON)
     // just falls through to no detail — the log path below is still correct.
-    const envelope = safeJsonParse<{ warnings?: unknown; error?: unknown; code?: unknown }>(
-      block.slice(block.indexOf("\n") + 1).trim(),
-    )
+    const envelope = safeJsonParse<{
+      warnings?: unknown
+      error?: unknown
+      code?: unknown
+      sessionsProcessed?: unknown
+      sessionsSkipped?: unknown
+      sessions?: unknown
+    }>(block.slice(block.indexOf("\n") + 1).trim())
     const warnings = Array.isArray(envelope?.warnings)
       ? envelope.warnings.filter((w): w is string => typeof w === "string")
       : []
@@ -1037,11 +1088,43 @@ function lastExtractFailureWarning(): string {
         : typeof envelope?.code === "string"
           ? `  ${envelope.code}`
           : ""
+    // `ok:false` alone. This also accepted any `"code":` in the block, which
+    // matches a SUCCESSFUL extraction whose JSON happens to carry a `code`
+    // field anywhere — including inside a proposal body echoed into the log —
+    // and warned the user that memory extraction had failed when it had not.
+    if (/"ok"\s*:\s*false/.test(block)) {
+      return [
+        "The last AKM session-end memory extraction failed — durable memories were not harvested.",
+        detail,
+        `See \`${EXTRACT_LOG}\` for the full result.`,
+      ].filter(Boolean).join("\n")
+    }
+    // #109: ok:true — only warn when the run processed nothing AND skipped
+    // at least one session. `sessionsProcessed`/`sessionsSkipped` must both
+    // parse as numbers or this stays silent (a shape we don't recognize is
+    // not evidence of a problem); "processed nothing, skipped nothing" is
+    // the ordinary steady state between sessions and must stay silent too.
+    const processed = typeof envelope?.sessionsProcessed === "number" ? envelope.sessionsProcessed : undefined
+    const skipped = typeof envelope?.sessionsSkipped === "number" ? envelope.sessionsSkipped : undefined
+    if (processed !== 0 || !skipped) return ""
+    const plural = skipped === 1 ? "" : "s"
+    if (detail) {
+      // `malformed_model_output` already forwards its own detail into
+      // warnings[] today; 0.9.12 adds an aggregate infrastructure-skip line
+      // here too (akm#912). Either way, prefer the CLI's own words over
+      // re-deriving a reason from sessions[] below.
+      return [
+        `The last AKM session-end memory extraction harvested nothing — ${skipped} session${plural} skipped.`,
+        detail,
+        `See \`${EXTRACT_LOG}\` for the full result.`,
+      ].filter(Boolean).join("\n")
+    }
+    const reason = dominantInfrastructureSkipReason(envelope?.sessions)
+    if (!reason) return ""
     return [
-      "The last AKM session-end memory extraction failed — durable memories were not harvested.",
-      detail,
+      `The last AKM session-end memory extraction harvested nothing — ${skipped} session${plural} skipped (${reason}).`,
       `See \`${EXTRACT_LOG}\` for the full result.`,
-    ].filter(Boolean).join("\n")
+    ].join("\n")
   } catch {
     return ""
   }
