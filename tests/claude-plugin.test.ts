@@ -2610,6 +2610,38 @@ exit 0
       expect(payload.systemMessage).toContain("memory extraction failed")
     })
 
+    it("prints the envelope's real warnings[] instead of a guessed cause (#107)", () => {
+      // The reporting bug for #107: a stale plugin's harness-name mismatch
+      // produced this exact warning, and the old message named
+      // LLM_NOT_CONFIGURED instead — a specific wrong cause that sent the
+      // investigation nowhere useful. Assert the actual warning text surfaces.
+      const { payload } = runSessionStartWithExtractLog(
+        [
+          "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
+          '{"ok":false,"warnings":["no available harness matches type \\"claude-code\\" (check that the platform is installed)"]}',
+          "",
+        ].join("\n"),
+      )
+
+      const context = payload.hookSpecificOutput.additionalContext as string
+      expect(context).toContain("no available harness matches type \"claude-code\"")
+      expect(context).not.toContain("LLM_NOT_CONFIGURED")
+    })
+
+    it("joins multiple warnings onto their own lines", () => {
+      const { payload } = runSessionStartWithExtractLog(
+        [
+          "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
+          '{"ok":false,"warnings":["first problem","second problem"]}',
+          "",
+        ].join("\n"),
+      )
+
+      const context = payload.hookSpecificOutput.additionalContext as string
+      expect(context).toContain("first problem")
+      expect(context).toContain("second problem")
+    })
+
     it("stays quiet when the newest failure is just a session with no transcript", () => {
       // "session <id> not found for harness …" is a benign skip (an ephemeral
       // session that never persisted a transcript), not a broken install.
