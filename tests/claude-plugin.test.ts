@@ -801,6 +801,93 @@ echo "[knowledge] should-not-appear"
     expect(stdout.trim()).toBe("")
   })
 
+  describe("AKM_CURATE_MIN_SCORE / AKM_CURATE_TYPE (#110)", () => {
+    // The prompt matters: shouldRecall() gates curation on its own signal
+    // heuristics, independent of the #110 fix under test here — this text
+    // clears the 120-char "long-prompt" floor unconditionally, so every case
+    // below reaches the curate call regardless of keyword matching.
+    const TOPICAL_PROMPT =
+      "can we adjust the curate hook configuration so the results it returns stay relevant across a long working session with many follow-up prompts"
+
+    function runCurateWithJson(curateJson: string, env: Record<string, string> = {}) {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const jsonPath = path.join(tempDir, "curate-response.json")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(stateDir, { recursive: true })
+      writeFileSync(jsonPath, curateJson)
+      const invokeLog = path.join(tempDir, "akm-invocations.log")
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(invokeLog)}
+for arg in "$@"; do
+  case "$arg" in
+    curate) cat ${shellQuote(jsonPath)}; exit 0 ;;
+  esac
+done
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+
+      const stdout = runHook(["curate-prompt"], {
+        input: JSON.stringify({ session_id: "sess-curate-score", prompt: TOPICAL_PROMPT }),
+        env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir, ...env },
+      })
+      const curatedPath = path.join(stateDir, "akm-claude", "curated", "prompt-sess-curate-score.md")
+      return {
+        stdout,
+        invocations: existsSync(invokeLog) ? readFileSync(invokeLog, "utf8") : "",
+        curatedContent: existsSync(curatedPath) ? readFileSync(curatedPath, "utf8") : "",
+      }
+    }
+
+    const MIXED_ITEMS = JSON.stringify({
+      items: [
+        { type: "website", name: "unrelated-blog-post", ref: "docs//blog/post", description: "scraped snapshot", score: 0.42 },
+        { type: "lesson", name: "curate-tuning-notes", ref: "lessons/curate-tuning", description: "authored lesson", score: 0.41 },
+        { type: "wiki", name: "yt-transcript", ref: "wikis/yt-123", description: "weak match", score: 0.2 },
+      ],
+    })
+
+    it("with the floor unset, still calls --format text and ignores per-item score entirely", () => {
+      const { invocations } = runCurateWithJson(MIXED_ITEMS)
+      expect(invocations).toContain("--format text")
+      expect(invocations).not.toContain("--format json")
+    })
+
+    it("drops items below AKM_CURATE_MIN_SCORE and ranks authored types ahead of imported ones", () => {
+      const { invocations, curatedContent } = runCurateWithJson(MIXED_ITEMS, { AKM_CURATE_MIN_SCORE: "0.3" })
+      expect(invocations).toContain("--format json")
+      // The weak wiki hit (0.2) is filtered out; the other two survive.
+      expect(curatedContent).toContain("curate-tuning-notes")
+      expect(curatedContent).toContain("unrelated-blog-post")
+      expect(curatedContent).not.toContain("yt-transcript")
+      // The authored lesson (0.41) sorts before the higher-scoring imported
+      // website snapshot (0.42) — the whole point of #110's cause 2.
+      expect(curatedContent.indexOf("curate-tuning-notes")).toBeLessThan(curatedContent.indexOf("unrelated-blog-post"))
+    })
+
+    it("writes no curated block at all when nothing clears the floor", () => {
+      const { stdout, curatedContent } = runCurateWithJson(MIXED_ITEMS, { AKM_CURATE_MIN_SCORE: "0.9" })
+      expect(curatedContent).toBe("")
+      expect(stdout.trim()).toBe("")
+    })
+
+    it("keeps an item with no numeric score rather than dropping it as unscored", () => {
+      const items = JSON.stringify({ items: [{ type: "lesson", name: "no-score-item", ref: "lessons/x" }] })
+      const { curatedContent } = runCurateWithJson(items, { AKM_CURATE_MIN_SCORE: "0.5" })
+      expect(curatedContent).toContain("no-score-item")
+    })
+
+    it("passes AKM_CURATE_TYPE through as --type on the curate call", () => {
+      const { invocations } = runCurateWithJson('{"items":[]}', { AKM_CURATE_TYPE: "lesson" })
+      expect(invocations).toContain("--type lesson")
+    })
+  })
+
   it("session-start injects hints and curated context without passing scope flags to curate", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
