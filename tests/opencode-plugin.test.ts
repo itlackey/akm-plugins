@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, mock, setSystemTime } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { createRequire } from "node:module"
 import type { PluginInput } from "@opencode-ai/plugin"
 
 // The plugin captures its structured-event log path at module load
@@ -15,6 +16,16 @@ process.env.XDG_STATE_HOME = eventStateDir
 const eventLogPath = path.join(eventStateDir, "akm-opencode", "events.jsonl")
 
 const realChildProcess = await import("node:child_process")
+
+// The plugin invokes the `akm-cli` package it declares as a dependency, so the
+// command it spawns is that package's own bin — resolved here exactly the way
+// the plugin resolves it. Asserting the literal string "akm" instead would only
+// prove the plugin still searches PATH, which is the behaviour this replaced.
+const akmBin = (() => {
+  const manifest = createRequire(new URL("../opencode/index.ts", import.meta.url)).resolve("akm-cli/package.json")
+  const bin = JSON.parse(readFileSync(manifest, "utf8")).bin
+  return path.resolve(path.dirname(manifest), typeof bin === "string" ? bin : bin.akm)
+})()
 
 const mockExecFileSync = mock((_command: string, args?: string[]) => {
   if (args?.[0] === "--version") return "akm 0.9.8\n"
@@ -137,7 +148,6 @@ describe("akm-opencode plugin", () => {
       summary: "one match",
       items: [{ type: "skill", ref: "skills/review" }],
     }))
-    AkmPlugin.__resetResolvedAkmForTests()
   })
 
   describe("plugin loading", () => {
@@ -341,7 +351,7 @@ describe("akm-opencode plugin", () => {
       } as any, createToolContext())
 
       expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
+        akmBin,
         ["feedback", "skills/review", "--positive", "--reason", "useful", "--format", "json"],
         expect.objectContaining({ encoding: "utf8" }),
       )
@@ -391,7 +401,7 @@ describe("akm-opencode plugin", () => {
       } as any, createToolContext())
 
       expect(mockExecFileSync).toHaveBeenCalledWith(
-        "akm",
+        akmBin,
         [
           "remember",
           "Deployment needs VPN",
@@ -545,27 +555,6 @@ describe("akm-opencode plugin", () => {
       }
     })
 
-    it("warns through the TUI once when no compatible akm resolves", async () => {
-      mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.1.0\n"
-        return "mock output"
-      })
-      const showToast = mock(async () => ({ data: true, error: undefined }))
-      const client = { ...createMockClient(), tui: { showToast } }
-      const hooks = await AkmPlugin(createPluginInput(client as any))
-
-      // The consent banner only reaches client.app.log; the toast is what the
-      // human actually sees. It fires from session.created, not the factory.
-      expect(showToast).not.toHaveBeenCalled()
-      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "toast-1" } } } as any)
-      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "toast-2" } } } as any)
-
-      expect(showToast).toHaveBeenCalledTimes(1)
-      expect(showToast).toHaveBeenCalledWith(expect.objectContaining({
-        body: expect.objectContaining({ variant: "warning", message: expect.stringContaining("akm CLI not installed or wrong version") }),
-      }))
-    })
-
     it("survives a host with no TUI attached", async () => {
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
         if (args?.[0] === "--version") return "akm 0.1.0\n"
@@ -592,7 +581,7 @@ describe("akm-opencode plugin", () => {
       // any resolved binary path containing a quote, backslash, or newline.
       expect(mockExecSync).not.toHaveBeenCalled()
       expect(mockSpawn).toHaveBeenCalledWith(
-        "akm",
+        akmBin,
         ["index"],
         expect.objectContaining({ detached: true, stdio: "ignore" }),
       )
@@ -640,23 +629,6 @@ describe("akm-opencode plugin", () => {
       expect(extractCalls()).toBe(1)
     })
 
-    it("probes `akm --version` once per resolved command instead of before every CLI call", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const versionCalls = () =>
-        mockExecFileSync.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === "--version").length
-
-      const beforeTools = versionCalls()
-      await hooks.tool!.akm_feedback.execute({ ref: "skills/review", sentiment: "positive" } as any, createToolContext())
-      const afterFirstTool = versionCalls()
-      await hooks.tool!.akm_feedback.execute({ ref: "skills/review", sentiment: "negative" } as any, createToolContext())
-
-      // The first CLI-backed call still probes the resolved command once; every
-      // later one reuses the memoized result, so a tool call costs one spawn
-      // instead of two (and a hung probe can no longer stall every call).
-      expect(afterFirstTool).toBe(beforeTools + 1)
-      expect(versionCalls()).toBe(afterFirstTool)
-    })
-
     it("surfaces a failed session extract through the plugin log", async () => {
       const { EventEmitter } = await import("node:events")
       const makeStream = () => Object.assign(new EventEmitter(), { setEncoding() {}, unref() {} })
@@ -677,7 +649,7 @@ describe("akm-opencode plugin", () => {
       await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "idle-extract-1" } } } as any)
 
       expect(mockSpawn).toHaveBeenCalledWith(
-        "akm",
+        akmBin,
         ["proposal", "extract", "--type", "opencode", "--session-id", "idle-extract-1", "--format", "json", "-q"],
         expect.objectContaining({ detached: true, stdio: ["ignore", "pipe", "pipe"] }),
       )
@@ -1614,18 +1586,6 @@ describe("akm-opencode plugin", () => {
           },
         },
         {
-          reason: "akm-unresolved",
-          status: "skipped",
-          run: async () => {
-            mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-              if (args?.[0] === "--version") return "akm 0.1.0\n"
-              return "mock output"
-            })
-            const hooks = await AkmPlugin(createPluginInput())
-            await hooks["tool.execute.before"]!(beforeInput("led-unresolved"), beforeOutput())
-          },
-        },
-        {
           reason: "apply-patch-unsupported",
           status: "skipped",
           run: async () => {
@@ -1792,8 +1752,7 @@ describe("akm-opencode plugin", () => {
 
       for (const { reason, status, run } of cases) {
         delete process.env.AKM_WRITE_GATE
-        AkmPlugin.__resetResolvedAkmForTests()
-        AkmPlugin.__resetWriteGateForTests()
+            AkmPlugin.__resetWriteGateForTests()
         mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
           if (args?.[0] === "--version") return "akm 0.9.8\n"
           if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
@@ -1833,22 +1792,6 @@ describe("akm-opencode plugin", () => {
       await expect(hooks["tool.execute.before"]!(beforeInput("gate-observe"), beforeOutput())).resolves.toBeUndefined()
       expect(gateReasons()).toEqual(["observe", "latched"])
       expect(writeGateEvents()[0]!.outcome?.status).toBe("ok")
-    })
-
-    it("never blocks an edit when akm itself did not resolve", async () => {
-      // akm missing or the wrong version is a normal state on a fresh machine.
-      // A blocked edit there is pure cost with no possible upside.
-      mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.1.0\n"
-        return "mock output"
-      })
-      stubInkwellHit()
-      const hooks = await AkmPlugin(createPluginInput())
-      await readServiceYaml(hooks, "gate-unresolved")
-      clearEventLog()
-
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-unresolved"), beforeOutput())).resolves.toBeUndefined()
-      expect(gateReasons()).toEqual(["akm-unresolved"])
     })
 
     it("drops file identity, the latch and the shown-ref set on session teardown", async () => {

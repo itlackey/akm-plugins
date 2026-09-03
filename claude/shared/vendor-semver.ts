@@ -76,24 +76,6 @@ function parseCaretRange(token: string): CaretRange | null {
   return { min, maxExclusive, allowPrereleases: min.prerelease.length > 0 }
 }
 
-/**
- * Compare two versions by semver precedence: negative when `a < b`, positive
- * when `a > b`, 0 when equal. Unparseable input sorts LOWEST, so a candidate
- * whose `--version` could not be read never wins a comparison.
- *
- * Exists so callers can pick the NEWEST compatible candidate rather than the
- * first one that happens to satisfy a range — a range is an eligibility test,
- * not an ordering.
- */
-export function compareSemver(a: string, b: string): number {
-  const pa = parse(a)
-  const pb = parse(b)
-  if (!pa && !pb) return 0
-  if (!pa) return -1
-  if (!pb) return 1
-  return cmp(pa, pb)
-}
-
 export function satisfies(version: string, range: string): boolean {
   const v = parse(version)
   if (!v) return false

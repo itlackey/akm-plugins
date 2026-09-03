@@ -44,7 +44,15 @@ Claude receives the five slash commands, an AKM skill, and lifecycle hooks for s
 
 ## Development
 
-Set `AKM_LOCAL_BUILD_CLI=/absolute/path/to/akm/dist/cli.js` to test either plugin against a local AKM build.
+To test against a local AKM build: the Claude hook reads
+`AKM_LOCAL_BUILD_CLI=/absolute/path/to/akm/dist/cli.js` and runs it under Bun;
+the OpenCode plugin reads `AKM_OPENCODE_CLI=/absolute/path/to/akm/dist/akm` and
+execs it as-is. Two names because they take two different things — one name for
+both is how the eval sandbox handed each plugin the other's form.
+
+The OpenCode plugin otherwise runs the `akm-cli` version its own `package.json`
+declares — the package manager resolves it at install time, and the plugin does
+not search `PATH` or compare versions at runtime.
 
 ## Versioning
 
