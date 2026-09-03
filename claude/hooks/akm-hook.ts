@@ -1014,7 +1014,34 @@ function lastExtractFailureWarning(): string {
     // pre-guard blocks persist in the log). Warning on it sent users chasing
     // a phantom LLM-profile problem.
     if (/not found for harness/.test(block)) return ""
-    return `The last AKM session-end memory extraction failed — durable memories were not harvested. See \`${EXTRACT_LOG}\` for the error (a fresh install without a configured LLM profile logs LLM_NOT_CONFIGURED; \`akm setup\` configures one).`
+    // #107: this used to append a guessed cause ("a fresh install without a
+    // configured LLM profile logs LLM_NOT_CONFIGURED") no matter what actually
+    // failed. On the reporting machine the real block held a `claude-code`
+    // harness-name mismatch, LLM_NOT_CONFIGURED appeared zero times, and the
+    // guess sent the investigation at `akm setup` instead of the real bug — a
+    // specific wrong cause is worse than none. The child's JSON envelope
+    // (everything after the header line) is already sitting in `block`; read
+    // its `warnings`/`error`/`code` instead of inventing one. A block that
+    // fails to parse (truncated by a crash mid-write, or genuinely not JSON)
+    // just falls through to no detail — the log path below is still correct.
+    const envelope = safeJsonParse<{ warnings?: unknown; error?: unknown; code?: unknown }>(
+      block.slice(block.indexOf("\n") + 1).trim(),
+    )
+    const warnings = Array.isArray(envelope?.warnings)
+      ? envelope.warnings.filter((w): w is string => typeof w === "string")
+      : []
+    const detail = warnings.length > 0
+      ? warnings.map((w) => `  ${w}`).join("\n")
+      : typeof envelope?.error === "string"
+        ? `  ${envelope.error}`
+        : typeof envelope?.code === "string"
+          ? `  ${envelope.code}`
+          : ""
+    return [
+      "The last AKM session-end memory extraction failed — durable memories were not harvested.",
+      detail,
+      `See \`${EXTRACT_LOG}\` for the full result.`,
+    ].filter(Boolean).join("\n")
   } catch {
     return ""
   }
@@ -1550,6 +1577,29 @@ function extractSession(): string {
     logFd = undefined
   }
 
+  // `--type claude` is a literal, not discovered via `--auto` — akm-cli's only
+  // harness-discovery flag (#106). `--auto` iterates every *available* harness
+  // (session-log directory present on disk, independent of which plugin is
+  // installed) and folds the per-harness results into one envelope whose
+  // top-level `ok` is `results.every(r => r.ok)`. On a machine where OpenCode
+  // has ever run too, the OpenCode harness has no session matching `sid` and
+  // answers ok:false, which would flip `ok` to false on every *successful*
+  // Claude extraction — corrupting the exact signal lastExtractFailureWarning()
+  // reads at SessionStart, turning "nothing failed" into a permanent false
+  // alarm.
+  //
+  // The version floor in checkAkmVersion() does NOT protect this literal, and
+  // the reporting machine is the proof: plugin 0.9.1 declared
+  // AKM_VERSION_RANGE "^0.9.0", akm-cli was 0.9.10, and `^0.9.0` accepts
+  // 0.9.10 — so the check ran, passed, and reported a healthy pairing while
+  // 0.9.2's claude-code -> claude rename had already broken every extraction.
+  // Raising the floor in a NEW release cannot help, because an already-
+  // installed plugin carries its OWN old range; a caret range inside 0.9.x has
+  // no ceiling below 0.10.0, so any behavioural change in a 0.9.x patch passes
+  // it. What actually surfaces a rename is the ok:false block this spawn
+  // writes to EXTRACT_LOG, reported at the next SessionStart by
+  // lastExtractFailureWarning() — which is why that message must name the real
+  // warning (#107) rather than guess a cause.
   try {
     const child = spawn(
       akm.command,
