@@ -1,6 +1,6 @@
 {
   "name": "akm-claude",
-  "version": "0.9.9202609021827",
+  "version": "0.9.11202609031834",
   "private": true,
   "description": "Claude Code plugin for AKM skills and hooks.",
   "license": "MPL-2.0",
