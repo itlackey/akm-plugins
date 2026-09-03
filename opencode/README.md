@@ -92,6 +92,8 @@ The `agent`, `run`, and `project` dimensions come from OpenCode itself (the acti
 | `AKM_CURATE_LIMIT` | `5` | Maximum curated results injected per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length for automatic curation. |
 | `AKM_CURATE_TIMEOUT` | `8` | Timeout in seconds for AKM calls made by hooks. |
+| `AKM_CURATE_MIN_SCORE` | `0` (disabled) | Minimum per-item relevance score to keep a curated result. `0` preserves the long-standing behavior. Set it above `0` and items below the floor are dropped (no curated block at all when none survive), and the survivors are reordered so locally authored assets (lesson, memory, knowledge, skill, command, agent, instruction, fact, workflow, task, env, secret) come before imported website/wiki snapshots. Same contract as the Claude plugin's `AKM_CURATE_MIN_SCORE` — see `claude/README.md` for the full explanation, including why there is no universal default value. |
+| `AKM_CURATE_TYPE` | unset | Passthrough for `akm curate --type`. |
 | `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum length of the AKM text injected into the system prompt on one turn. Past it the block is truncated with a marker. |
 | `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Timeout in seconds for the pending-proposal count. Floored at 0.5s. |
 | `AKM_SESSION_BUFFER_MAX_ENTRIES` | `200` | Per-session cap on buffered observations. Oldest entries are dropped first. |

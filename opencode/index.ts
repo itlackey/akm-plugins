@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
 import { classifyFeedbackSignal, createExplicitCorrectionRegex, createRetrospectiveFeedbackRegex, createRetrospectiveNegativeRegex, shouldSubmitAutomaticFeedback } from "../claude/shared/feedback-signals"
 import { appendMemoryEvent, getEventLogPath, type AkmMemoryEvent } from "../claude/shared/memory-events"
 import { AKM_VERSION_RANGE, satisfiesAkmVersionRange } from "../claude/shared/akm-version"
@@ -57,6 +58,13 @@ const AKM_PENDING_PROPOSAL_TIMEOUT_MS = Math.max(500, (Number(process.env.AKM_PE
 const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
+// #110 — same contract as the Claude hook's CURATE_MIN_SCORE/CURATE_TYPE (see
+// claude/hooks/akm-hook.ts and claude/shared/curate-render.ts): 0 (default)
+// disables the floor entirely and keeps the long-standing `--format text`
+// call untouched; a positive value switches to `--format json` so per-item
+// `score`/`type` become available to filter/rank on.
+const AKM_CURATE_MIN_SCORE = Number(process.env.AKM_CURATE_MIN_SCORE ?? "0") || 0
+const AKM_CURATE_TYPE = (process.env.AKM_CURATE_TYPE ?? "").trim()
 // --- write gate (#99) -------------------------------------------------------
 // #94 and #95 both moved engagement by rewording the prompt, and both left the
 // one cell that matters untouched: editing a file whose format the model does
@@ -587,39 +595,55 @@ async function runCurateLogged(
   })
 }
 
+// #110 — mirrors claude/hooks/akm-hook.ts's buildCurateArgs(): appends
+// `--type` when AKM_CURATE_TYPE is set, and requests `--format json` instead
+// of the long-standing `--format text` only when the AKM_CURATE_MIN_SCORE
+// floor is enabled, since per-item `score`/`type` are only needed then. With
+// the floor disabled this is the exact argv these two call sites have always
+// sent, so that (default, tested) path is unchanged.
+function buildCurateArgs(query: string): string[] {
+  const args = ["--shape", "agent", "-q", "curate"]
+  if (query) args.push(query)
+  args.push("--limit", String(AKM_CURATE_LIMIT))
+  if (AKM_CURATE_TYPE) args.push("--type", AKM_CURATE_TYPE)
+  args.push("--format", AKM_CURATE_MIN_SCORE > 0 ? "json" : "text")
+  return args
+}
+
+// #110 — mirrors claude/hooks/akm-hook.ts's renderCuratedJson(): decode a
+// `--format json` curate response, apply the relevance floor +
+// authored-type-first ranking, and render what survives back into the same
+// kind of plain text `--format text` would have produced. Returns null both
+// when nothing survives the floor (no curated block at all, by design) and
+// when the response fails to parse.
+function renderCuratedJsonResponse(raw: string | null, query: string): string | null {
+  if (raw === null) return null
+  let parsed: { items?: unknown } | undefined
+  try {
+    parsed = JSON.parse(raw.trim())
+  } catch {
+    return null
+  }
+  const items = filterAndRankCuratedItems(parsed?.items, AKM_CURATE_MIN_SCORE)
+  return items.length > 0 ? renderCuratedItems(query, items) : null
+}
+
 async function runCurateForPrompt(client: LogCapableClient, text: string, sessionID?: string): Promise<string | null> {
   if (!text || text.length < AKM_CURATE_MIN_CHARS) return null
-  return runCurateLogged(client,
-    [
-      "--shape",
-      "agent",
-      "--format",
-      "text",
-      "-q",
-      "curate",
-      text,
-      "--limit",
-      String(AKM_CURATE_LIMIT),
-    ],
+  const raw = await runCurateLogged(client,
+    buildCurateArgs(text),
     { toolName: "chat.message", sessionID, operation: "prompt-curate" },
   )
+  return AKM_CURATE_MIN_SCORE > 0 ? renderCuratedJsonResponse(raw, text) : raw
 }
 
 async function runCurateForSession(client: LogCapableClient, sessionID: string, query?: string): Promise<string | null> {
-  const args = [
-    "--shape",
-    "agent",
-    "--format",
-    "text",
-    "-q",
-    "curate",
-  ]
-  if (query) args.push(query)
-  args.push("--limit", String(AKM_CURATE_LIMIT))
-  return runCurateLogged(client,
+  const args = buildCurateArgs(query ?? "")
+  const raw = await runCurateLogged(client,
     args,
     { toolName: "session.start", sessionID, operation: "session-curate" },
   )
+  return AKM_CURATE_MIN_SCORE > 0 ? renderCuratedJsonResponse(raw, query ?? "") : raw
 }
 
 async function runHintsForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
