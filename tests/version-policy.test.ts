@@ -137,16 +137,14 @@ describe("version policy", () => {
   })
 
   test("every install-ref copy restates AKM_VERSION_RANGE exactly", () => {
-    // Three hand-maintained copies of the range live outside the constant.
-    // They are what a user is told to install when the version gate fails, so a
-    // stale copy sends people to the wrong akm.
+    // Two copies of the range live outside the constant. The Claude hook has no
+    // package manager behind it (git marketplace, no npm deps), so it installs
+    // akm itself and its ref is what a user is told to run. The OpenCode plugin
+    // states the range once, as an ordinary dependency, and npm resolves it.
     const expectedRef = `akm-cli@${AKM_VERSION_RANGE}`
 
     const packageRef = /AKM_PACKAGE_REF\s*\?\?\s*"([^"]+)"/.exec(readText("claude/hooks/akm-hook.ts"))?.[1]
     expect(`claude/hooks/akm-hook.ts: ${packageRef}`).toBe(`claude/hooks/akm-hook.ts: ${expectedRef}`)
-
-    const installRef = /AKM_RECOMMENDED_INSTALL_REF\s*=\s*"([^"]+)"/.exec(readText("opencode/index.ts"))?.[1]
-    expect(`opencode/index.ts: ${installRef}`).toBe(`opencode/index.ts: ${expectedRef}`)
 
     const bundledDep = readJson("opencode/package.json").dependencies["akm-cli"]
     expect(`opencode/package.json akm-cli: ${bundledDep}`).toBe(`opencode/package.json akm-cli: ${AKM_VERSION_RANGE}`)

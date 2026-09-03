@@ -75,10 +75,10 @@ export function createSandbox(opts: SandboxOptions = {}): Sandbox {
     // resolves, so an unset AKM_BUNDLE_DIR silently disables ALL ref
     // extraction — and therefore all auto-feedback.
     AKM_BUNDLE_DIR: stashDir,
-    // Force the plugin to ignore its bundled akm-cli so akm invocations resolve
-    // to the deterministic fake shim on PATH (or the real akm in realAkm mode),
-    // not the real bundled dependency.
-    AKM_OPENCODE_IGNORE_BUNDLED_CLI: "1",
+    // Point the OpenCode plugin at the deterministic shim instead of the
+    // akm-cli dependency it would otherwise resolve. Claude's hook finds the
+    // same shim through the sandbox PATH.
+    ...(opts.realAkm ? {} : { AKM_LOCAL_BUILD_CLI: path.join(binDir, "akm") }),
     ...opts.env,
   }
 

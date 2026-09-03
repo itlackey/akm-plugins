@@ -7,51 +7,18 @@ import { akmSearch } from "akm-cli/dist/commands/read/search.js"
 import { akmShowUnified } from "akm-cli/dist/commands/read/show.js"
 import { execFileSync, spawn } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
-import { compareSemver } from "../claude/shared/vendor-semver"
 import { classifyFeedbackSignal, createExplicitCorrectionRegex, createRetrospectiveFeedbackRegex, createRetrospectiveNegativeRegex, shouldSubmitAutomaticFeedback } from "../claude/shared/feedback-signals"
 import { appendMemoryEvent, getEventLogPath, type AkmMemoryEvent } from "../claude/shared/memory-events"
-import { AKM_VERSION_RANGE, satisfiesAkmVersionRange } from "../claude/shared/akm-version"
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractAkmRefsFromString, validateRefCandidates } from "../claude/shared/ref-extraction"
 
-let resolvedAkmCommand = "akm"
-// Recorded by ensureSupportedAkmResolved() so the first session.created can
-// surface the failure in the TUI; the plugin factory runs too early to toast.
-let akmResolutionFailed = false
-let akmMissingToastShown = false
-
-// Test-only: reset the module-level resolved-CLI cache so each test resolves
-// the akm command fresh under its own sandboxed env (HOME / AKM_OPENCODE_*).
-// Without this, the first test to resolve pins `resolvedAkmCommand` for the
-// rest of the process (resolveAkmCommand short-circuits on a still-valid
-// cached command), making later resolution tests order-dependent. The version
-// probe cache is keyed by command path and is process-lifetime, so it has to be
-// dropped here too or a stale probe would survive the reset — as does the
-// once-per-process missing-akm toast latch.
-function __resetResolvedAkmForTests(): void {
-  resolvedAkmCommand = "akm"
-  akmVersionProbeCache.clear()
-  akmResolutionFailed = false
-  akmMissingToastShown = false
-}
-
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
-const SEMVER_PATTERN = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b/
-// The version contract lives in the shared module (also used by the Claude
-// hook). satisfiesAkmVersionRange() routes through the same vendored semver
-// matcher; AKM_REQUIRED_VERSION_RANGE is just the display alias used in the
-// diagnostics below.
-const AKM_REQUIRED_VERSION_RANGE = AKM_VERSION_RANGE
-// The consent banner's package specification is kept explicit so it remains a
-// valid npm install target even if the shared compatibility range later grows
-// extra clauses. Keep it in sync with the minimum supported stable release.
-const AKM_RECOMMENDED_INSTALL_REF = "akm-cli@^0.9.8"
-
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
 const AKM_AUTO_HINTS = (process.env.AKM_AUTO_HINTS ?? "1") !== "0"
@@ -108,10 +75,9 @@ function resolveWriteGateMode(raw: string | undefined): GateMode {
   writeGateInvalidValue = raw
   return "invalid"
 }
-// `let`, not `const`, only so __resetWriteGateForTests() can re-read the env the
-// way __resetResolvedAkmForTests() re-resolves the CLI: one process runs every
-// test, and a mode captured at import would pin the first test's env for all of
-// them. Nothing in the plugin reassigns it.
+// `let`, not `const`, only so __resetWriteGateForTests() can re-read the env:
+// one process runs every test, and a mode captured at import would pin the
+// first test's env for all of them. Nothing in the plugin reassigns it.
 let AKM_WRITE_GATE: GateMode = resolveWriteGateMode(process.env.AKM_WRITE_GATE)
 const WRITE_GATE_HEAD_BYTES = 4096
 const WRITE_GATE_RESOLVE_TIMEOUT_MS = 750
@@ -184,16 +150,6 @@ const AKM_EXTRACT_MIN_INTERVAL_MS = (() => {
 const pendingProposalSummaryCache = new Map<string, { count: number; expiresAt: number; unsupported?: boolean }>()
 const retrospectiveState = new Map<string, { recentRefs: string[]; lastNegativeSignalAt?: number }>()
 let cachedAkmBundleDir: string | undefined
-// `akm --version` probe results keyed by resolved command path. The probe is a
-// synchronous spawn with a 10s timeout and resolveAkmCommand() ran it before
-// EVERY CLI-backed call, so each lifecycle helper and each CLI-backed tool call
-// cost two spawns instead of one (and a hung probe stalled the host). A command
-// path's version cannot change under a running process, so caching it for the
-// process lifetime is safe; `undefined` means "not probed yet" and a cached
-// `null` means "probed, no usable version" (the resolution fallback below still
-// re-runs the full candidate chain in that case).
-const akmVersionProbeCache = new Map<string, string | null>()
-
 // Passive ref observation (narrower than explicit show/search input, so
 // ordinary repository paths cannot become automatic feedback targets) lives in
 // claude/shared/ref-extraction.ts. This module deliberately keeps no local copy
@@ -267,7 +223,7 @@ type CliLogMeta = {
 
 function formatCliError(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
-    return "The 'akm' CLI was not found on PATH. Install it first from https://github.com/itlackey/akm."
+    return "The akm-cli dependency could not be executed. Reinstall the akm-opencode plugin so the package manager installs it."
   }
   return error instanceof Error ? error.message : String(error)
 }
@@ -1140,7 +1096,6 @@ const gateSkipReasons = new Map<string, number>()
 type GateReason =
   | "disabled"
   | "invalid-mode"
-  | "akm-unresolved"
   | "apply-patch-unsupported"
   | "no-file-path"
   | "create-not-edit"
@@ -1177,10 +1132,9 @@ type GateReason =
 
 type GateDecision = { filePath: string; token: string; ref: string; description: string }
 
-// Test-only: drop the process-wide resolution caches and the inert-latch
-// counters, and re-read AKM_WRITE_GATE from the env. Same reason
-// __resetResolvedAkmForTests() exists — one process runs the whole suite, so a
-// cache or a mode captured by the first test would otherwise decide the rest.
+// Test-only: drop the process-wide inert-latch counters and re-read
+// AKM_WRITE_GATE from the env. One process runs the whole suite, so a cache or
+// a mode captured by the first test would otherwise decide the rest.
 // Deliberately does NOT touch the session-keyed maps: those are torn down by
 // clearSessionState() on session.deleted, and one test drives the gate against
 // an identity recorded before the caches were dropped.
@@ -1809,13 +1763,6 @@ async function gateDecision(
     emitWriteGate(client, input, directory, undefined, "disabled", "skipped")
     return null
   }
-  // A plugin that cannot reach the stash must never block an edit. This is the
-  // single most important self-disable: akm missing or the wrong version is a
-  // normal state on a fresh machine, and a blocked edit there is pure cost.
-  if (akmResolutionFailed) {
-    emitWriteGate(client, input, directory, undefined, "akm-unresolved", "skipped")
-    return null
-  }
   // apply_patch carries `patchText` and no `filePath`, so the gate is
   // STRUCTURALLY blind on the gpt-* model family. Parsing the patch envelope to
   // recover paths is deliberately out of scope; pretending the gate is live
@@ -2209,62 +2156,10 @@ function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, direct
   }
 }
 
-function extractFirstSemverMatch(value: string): string | null {
-  return value.match(SEMVER_PATTERN)?.[0] ?? null
-}
-
-function getCommandVersion(command: string): string | null {
-  try {
-    const version = execFileSync(command, ["--version"], {
-      encoding: "utf8",
-      timeout: 10_000,
-    })
-    return extractFirstSemverMatch(version)
-  } catch {
-    return null
-  }
-}
-
-// Memoized getCommandVersion, backed by akmVersionProbeCache. Used by
-// resolveAkmCommand's hot path; the one-shot consent-banner diagnostic keeps
-// calling getCommandVersion directly so it always reports a freshly probed
-// version.
-function getCachedCommandVersion(command: string): string | null {
-  const cached = akmVersionProbeCache.get(command)
-  if (cached !== undefined) return cached
-  const version = getCommandVersion(command)
-  akmVersionProbeCache.set(command, version)
-  return version
-}
-
 type ResolvedAkmCommand = {
   command: string
   argsPrefix: string[]
   displayCommand: string
-}
-
-type CommandProbe = {
-  command: string
-  argsPrefix: string[]
-  displayCommand: string
-  exists: boolean
-  version: string | null
-  failureReason: string | null
-}
-
-// Like getCommandVersion, but distinguishes "binary not found on disk" from
-// "binary found but failed to produce a version" — the latter typically means
-// the binary is corrupt, wrong architecture, or has a runtime dependency missing.
-// Used by the diagnostic resolution trail so the consent banner can tell users
-// which failure mode they're hitting.
-function getLocalBuildAkmCommand(): ResolvedAkmCommand | null {
-  const cliPath = process.env.AKM_LOCAL_BUILD_CLI?.trim()
-  if (!cliPath) return null
-  return {
-    command: process.env.BUN || "bun",
-    argsPrefix: [cliPath],
-    displayCommand: cliPath,
-  }
 }
 
 // Every call site passes `encoding: "utf8"`, so the real runtime return value
@@ -2282,309 +2177,36 @@ function execResolvedAkm(command: ResolvedAkmCommand, args: string[], options: E
   return execFileSync(command.command, [...command.argsPrefix, ...args], options) as string
 }
 
-function probeCommand(command: ResolvedAkmCommand): CommandProbe {
-  const displayIsAbsolute = path.isAbsolute(command.displayCommand)
-  const displayExists = displayIsAbsolute ? existsSync(command.displayCommand) : true
-  if (displayIsAbsolute && !displayExists) {
-    return { ...command, exists: false, version: null, failureReason: "not_on_disk" }
-  }
-  const commandIsAbsolute = path.isAbsolute(command.command)
-  const commandExists = commandIsAbsolute ? existsSync(command.command) : true
-  if (commandIsAbsolute && !commandExists) {
-    return { ...command, exists: false, version: null, failureReason: "command_not_on_disk" }
-  }
-  try {
-    // Pipe (don't inherit) the child's stderr. Some akm builds validate the
-    // user's config on EVERY invocation — including `--version` — and a version
-    // skew (e.g. a bundled akm-cli@0.8.x against a config written by 0.9.x, whose
-    // improve process keys 0.8 rejects) makes `--version` exit non-zero and print
-    // an INVALID_CONFIG_FILE blob to stderr. With the default inherited stderr
-    // that blob leaks to OpenCode's console on every plugin load, reading as a
-    // plugin failure even though resolution correctly falls through to a
-    // compatible akm. Capturing it keeps the probe silent; the structured
-    // resolution trail / consent banner still surfaces a genuine no-akm case.
-    const version = execResolvedAkm(command, ["--version"], {
-      encoding: "utf8",
-      timeout: 10_000,
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-    const parsed = extractFirstSemverMatch(version)
-    if (!parsed) {
-      return { ...command, exists: true, version: null, failureReason: "no_semver_in_output" }
-    }
-    return { ...command, exists: true, version: parsed, failureReason: null }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code
-    if (code === "ENOENT") {
-      return { ...command, exists: false, version: null, failureReason: "not_on_path" }
-    }
-    return { ...command, exists: true, version: null, failureReason: code ?? "version_check_failed" }
-  }
-}
-
-function getBundledAkmCommand(): string | null {
-  const packagePath = path.join(moduleDir, "node_modules", "akm-cli", "package.json")
-  const fallback = path.join(moduleDir, "node_modules", ".bin", process.platform === "win32" ? "akm.cmd" : "akm")
-  try {
-    const raw = readFileSync(packagePath, "utf8")
-    const pkg = JSON.parse(raw) as { bin?: unknown }
-    const bin = pkg.bin
-    const relativeBin = typeof bin === "string"
-      ? bin
-      : bin && typeof bin === "object" && typeof (bin as Record<string, unknown>).akm === "string"
-        ? (bin as Record<string, string>).akm
-        : null
-    if (!relativeBin) return existsSync(fallback) ? fallback : null
-    const bundledCommand = path.join(moduleDir, "node_modules", "akm-cli", relativeBin)
-    return existsSync(bundledCommand) ? bundledCommand : existsSync(fallback) ? fallback : null
-  } catch {
-    return existsSync(fallback) ? fallback : null
-  }
-}
-
-function getConfigNodeModulesAkmCommand(): string | null {
-  const homeDir = process.env.HOME || os.homedir()
-  const configDir = process.env.XDG_CONFIG_HOME || path.join(homeDir, ".config")
-  const configBin = path.join(configDir, "opencode", "node_modules", ".bin", process.platform === "win32" ? "akm.cmd" : "akm")
-  return existsSync(configBin) ? configBin : null
-}
-
-function getPathAkmCandidates(): string[] {
-  const candidates: string[] = []
-  const configNodeModules = getConfigNodeModulesAkmCommand()
-  if (configNodeModules) candidates.push(configNodeModules)
-  candidates.push("akm")
-  // Honor an explicit $HOME override (standard POSIX, and matches
-  // getConfigNodeModulesAkmCommand). os.homedir() snapshots HOME at process
-  // start and ignores later changes, which made this path non-sandboxable.
-  const home = process.env.HOME || os.homedir()
-  if (home) {
-    candidates.push(path.join(home, ".local", "bin", process.platform === "win32" ? "akm.cmd" : "akm"))
-  }
-  return candidates
-}
-
-type AkmResolutionTrail = Array<{
-  command: string
-  source: "bundled" | "path" | "local_build"
-  version: string | null
-  outcome: "selected" | "superseded" | "version_out_of_range" | "missing" | "probe_failed"
-  failureReason: string | null
-}>
-
-let lastAkmResolutionTrail: AkmResolutionTrail = []
-
-function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displayCommand: string; version: string; source: "bundled" | "path" | "local_build" } | null {
-  const candidates: Array<{ command: string; argsPrefix: string[]; displayCommand: string; source: "bundled" | "path" | "local_build" }> = []
-  // Resolution: probe every candidate, then take the NEWEST compatible one.
-  //
-  // This used to be first-compatible-wins with PATH ahead of the bundled dep,
-  // on the reasoning that the user's own akm wrote their config and has its
-  // native deps built. That reasoning is sound about which candidates are
-  // ELIGIBLE; it is not a reason to stop at the first one. Because the floor is
-  // a range (^0.9.8) and not an exact pin, first-match silently bound a plugin
-  // that depends on a much newer akm-cli to whatever ancient-but-in-range `akm`
-  // happened to sit earliest on PATH — for as long as that stayed true. That is
-  // the failure mode behind akm-plugins#106: a plugin driving a CLI it was not
-  // built against, indefinitely, with nothing reporting the mismatch.
-  //
-  // Picking the newest compatible candidate keeps every prior eligibility rule
-  // (a config-incompatible or unbuilt candidate still fails its `--version`
-  // probe and is skipped, so the probe remains the compatibility gate) while
-  // removing the arbitrary dependence on PATH order. When the user's own akm is
-  // current — the normal case — it is still selected, because it ties with or
-  // beats the bundled copy and ties resolve in candidate order.
-  //
-  // Candidate order therefore now only breaks ties:
-  //   1. AKM_LOCAL_BUILD_CLI  — explicit dev override
-  //   2. PATH / user installs — preferred at equal version
-  //   3. bundled akm-cli      — the dependency npm resolved for this plugin
-  const localBuild = getLocalBuildAkmCommand()
-  if (localBuild) candidates.push({ ...localBuild, source: "local_build" })
-  for (const command of getPathAkmCandidates()) {
-    candidates.push({ command, argsPrefix: [], displayCommand: command, source: "path" })
-  }
-  // Opt-out (default off): drop the bundled fallback entirely. Used by the eval
-  // harness so a deterministic fake `akm` on PATH is the only candidate; also a
-  // useful escape hatch when the bundled dep is broken.
-  const ignoreBundled = process.env.AKM_OPENCODE_IGNORE_BUNDLED_CLI === "1"
-  const bundled = ignoreBundled ? null : getBundledAkmCommand()
-  if (bundled) candidates.push({ command: bundled, argsPrefix: [], displayCommand: bundled, source: "bundled" })
-
-  const trail: AkmResolutionTrail = []
-  const seen = new Set<string>()
-  const eligible: Array<{ candidate: (typeof candidates)[number]; version: string }> = []
-  for (const candidate of candidates) {
-    const cacheKey = `${candidate.command}::${candidate.argsPrefix.join(" ")}`
-    if (!candidate.command || seen.has(cacheKey)) continue
-    seen.add(cacheKey)
-    const probe = probeCommand(candidate)
-    if (!probe.exists) {
-      trail.push({ command: candidate.displayCommand, source: candidate.source, version: null, outcome: "missing", failureReason: probe.failureReason })
-      continue
-    }
-    if (probe.failureReason || !probe.version) {
-      trail.push({ command: candidate.displayCommand, source: candidate.source, version: probe.version, outcome: "probe_failed", failureReason: probe.failureReason })
-      continue
-    }
-    if (!satisfiesAkmVersionRange(probe.version)) {
-      trail.push({ command: candidate.displayCommand, source: candidate.source, version: probe.version, outcome: "version_out_of_range", failureReason: null })
-      continue
-    }
-    eligible.push({ candidate, version: probe.version })
-  }
-
-  // Newest compatible wins; candidate order breaks ties, so an up-to-date user
-  // install still beats the bundled copy at equal version.
-  let best: { candidate: (typeof candidates)[number]; version: string } | null = null
-  for (const entry of eligible) {
-    if (!best || compareSemver(entry.version, best.version) > 0) best = entry
-  }
-  for (const entry of eligible) {
-    const isSelected = best !== null && entry.candidate === best.candidate
-    trail.push({
-      command: entry.candidate.displayCommand,
-      source: entry.candidate.source,
-      version: entry.version,
-      outcome: isSelected ? "selected" : "superseded",
-      failureReason: null,
-    })
-  }
-  lastAkmResolutionTrail = trail
-  if (best) return { ...best.candidate, version: best.version }
-  return null
-}
-
-// The OpenCode plugin has never silently auto-installed akm-cli — it relies on
-// the bundled binary that ships with the plugin, falling back to PATH. When
-// neither path produces a compatible akm we log a warn-level event to the host
-// AND emit a consent banner through the host's structured logging channel so
-// the human running OpenCode actually sees the problem. The banner mirrors
-// the Claude plugin's wording: install must be user-driven, never automatic.
-// The recommended consent point is `akm setup` (or the host-specific akm
-// setup slash command if one exists).
-async function ensureSupportedAkmResolved(client: LogCapableClient): Promise<void> {
-  const installedAkm = getResolvedAkmDetails()
-  if (!installedAkm) {
-    akmResolutionFailed = true
-    await writePluginLog(client, "warn", "AKM CLI resolution failed", {
-      subsystem: "akm",
-      requiredRange: AKM_REQUIRED_VERSION_RANGE,
-      bundledCommand: getBundledAkmCommand(),
-      pathCommand: "akm",
-      reason: "no_supported_command",
-      trail: lastAkmResolutionTrail,
-    })
-    await writeAkmConsentBanner(client, {
-      detected: getCommandVersion("akm") ?? undefined,
-      bundled: getBundledAkmCommand(),
-      trail: lastAkmResolutionTrail,
-    })
-    return
-  }
-
-  akmResolutionFailed = false
-  resolvedAkmCommand = installedAkm.command
-  await writePluginLog(client, "info", "AKM CLI resolved", {
-    subsystem: "akm",
-    command: installedAkm.command,
-    source: installedAkm.source,
-    version: installedAkm.version,
-    requiredRange: AKM_REQUIRED_VERSION_RANGE,
-  })
-}
-
-async function writeAkmConsentBanner(client: LogCapableClient, info: { detected?: string; bundled?: string | null; trail?: AkmResolutionTrail }) {
-  const detectedLabel = info.detected ?? "(not found on PATH)"
-  const bundledLabel = info.bundled ?? "(none)"
-  const trailLines: string[] = []
-  if (info.trail && info.trail.length > 0) {
-    trailLines.push("", "  resolution trail (in order tried):")
-    for (const entry of info.trail) {
-      const versionLabel = entry.version ?? "no version"
-      const reason = entry.failureReason ? ` reason=${entry.failureReason}` : ""
-      trailLines.push(`    [${entry.source}] ${entry.command} → ${entry.outcome} (${versionLabel})${reason}`)
-    }
-  }
-  const banner = [
-    "─".repeat(60),
-    "akm-opencode plugin: akm CLI not installed or wrong version",
-    `  detected on PATH: ${detectedLabel}`,
-    `  bundled fallback: ${bundledLabel}`,
-    `  required:         ${AKM_REQUIRED_VERSION_RANGE}`,
-    ...trailLines,
-    "",
-    "Reinstall or update the akm-opencode plugin so OpenCode/Bun",
-    "installs the dependency, or install akm-cli manually:",
-    `  bun install -g ${AKM_RECOMMENDED_INSTALL_REF}`,
-    `  npm install -g ${AKM_RECOMMENDED_INSTALL_REF}`,
-    "Then run `akm setup` interactively to configure the bundle.",
-    "─".repeat(60),
-  ].join("\n")
-  // AGENTS.md forbids plugin runtime code from writing to
-  // console.*/stdout/stderr; route the banner through the host's structured
-  // logging channel (client.app.log) instead of process.stderr.write so it
-  // still reaches the user without violating that rule.
-  await writePluginLog(client, "warn", "akm CLI not installed or wrong version", {
-    subsystem: "akm",
-    detected: detectedLabel,
-    bundled: bundledLabel,
-    required: AKM_REQUIRED_VERSION_RANGE,
-    installRef: AKM_RECOMMENDED_INSTALL_REF,
-    banner,
-  })
-}
-
-// The consent banner above only lands in client.app.log — a log file nobody
-// opens, so on a broken install the human sees nothing and the agent silently
-// works without a stash. A TUI toast is the one channel that puts the failure
-// in front of them without violating the AGENTS.md ban on
-// console.*/stdout/stderr writes. Fired at most once per process, and from the
-// first session.created rather than from the plugin factory: at factory time
-// the TUI client may not be attached yet, so a toast issued there is dropped.
-async function showAkmMissingToast(client: LogCapableClient): Promise<void> {
-  if (!akmResolutionFailed || akmMissingToastShown) return
-  // Latch before awaiting: a host that rejects the call must not be re-toasted
-  // on every subsequent session.created.
-  akmMissingToastShown = true
-  try {
-    await client.tui?.showToast?.({
-      body: {
-        title: "akm-opencode",
-        message: `akm CLI not installed or wrong version (required ${AKM_REQUIRED_VERSION_RANGE}). Install it with \`bun install -g ${AKM_RECOMMENDED_INSTALL_REF}\`, then run \`akm setup\`.`,
-        variant: "warning",
-      },
-    })
-  } catch {
-    // Best-effort: a host with no TUI attached must never fail session.created
-    // over a diagnostic.
-  }
-}
-
+/**
+ * `akm-cli` is a declared dependency of this package, so the package manager
+ * has already installed a version satisfying that range alongside us and
+ * created its `bin` entry. Resolve it the way any package invokes a
+ * dependency's executable. Version compatibility is the range in package.json,
+ * enforced by npm at install time — not something this plugin re-litigates at
+ * runtime.
+ */
 function resolveAkmCommand(): ResolvedAkmCommand | CliError {
-  const localBuild = getLocalBuildAkmCommand()
-  if (localBuild) {
-    const probe = probeCommand(localBuild)
-    if (probe.exists && satisfiesAkmVersionRange(probe.version)) return localBuild
-  }
+  // The one seam: an explicit absolute path to an akm executable. The eval
+  // harness points this at its deterministic shim, which is the only way to
+  // substitute a CLI for a resolved dependency. Not discovery — nothing is
+  // searched for and nothing is ranked; if it is set, it is used.
+  const override = process.env.AKM_LOCAL_BUILD_CLI?.trim()
+  if (override) return { command: override, argsPrefix: [], displayCommand: override }
 
-  const currentVersion = getCachedCommandVersion(resolvedAkmCommand)
-  if (satisfiesAkmVersionRange(currentVersion)) {
-    return { command: resolvedAkmCommand, argsPrefix: [], displayCommand: resolvedAkmCommand }
-  }
-
-  const installedAkm = getResolvedAkmDetails()
-  if (installedAkm) {
-    resolvedAkmCommand = installedAkm.command
-    return { command: installedAkm.command, argsPrefix: installedAkm.argsPrefix, displayCommand: installedAkm.displayCommand }
-  }
-
-  return {
-    ok: false,
-    error: `AKM CLI ${AKM_REQUIRED_VERSION_RANGE} is required, but no compatible bundled or PATH 'akm' executable was found. Reinstall or update the akm-opencode plugin so OpenCode/Bun installs the dependency.`,
+  try {
+    const manifestPath = createRequire(import.meta.url).resolve("akm-cli/package.json")
+    const bin = JSON.parse(readFileSync(manifestPath, "utf8")).bin
+    const relative = typeof bin === "string" ? bin : bin?.akm
+    if (!relative) throw new Error("akm-cli declares no 'akm' bin")
+    const command = path.resolve(path.dirname(manifestPath), relative)
+    return { command, argsPrefix: [], displayCommand: command }
+  } catch (error) {
+    return {
+      ok: false,
+      error: `The 'akm-cli' dependency could not be resolved (${error instanceof Error ? error.message : String(error)}). Reinstall the akm-opencode plugin so the package manager installs it.`,
+    }
   }
 }
-
 async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta): Promise<string> {
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) {
@@ -2593,7 +2215,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       toolName: meta.toolName,
       sessionID: meta.sessionID,
       directory: meta.directory,
-      command: resolvedAkmCommand,
+      command: "akm-cli",
       args,
       exitCode: null,
       stdout: "",
@@ -2946,8 +2568,6 @@ function truncateLogText(value: string, limit = 1_000): string {
 }
 
 const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
-  await ensureSupportedAkmResolved(client as unknown as LogCapableClient)
-
   const logClient = client as unknown as LogCapableClient
   return {
     // Events cover the lifecycle boundaries that Claude Code exposes as
@@ -2968,11 +2588,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             outcome: { status: "ok" },
           })
           if (type === "session.created") {
-            // The TUI client is attached by now (it was not necessarily when
-            // the plugin factory ran), so this is the first point at which a
-            // missing-akm toast can actually be delivered. No-op unless
-            // resolution failed, and at most once per process.
-            await showAkmMissingToast(logClient)
             // Best-effort, fire-and-forget, fully error-trapped internally —
             // must never block or fail session.created (13: "tmp-file cleanup").
             void pruneStaleCuratedFiles()
@@ -3678,19 +3293,15 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
 //
 // "Only" means ONLY, including test helpers — issue #86. Two `__*ForTests`
 // functions were exported alongside this one, and the loader dutifully called
-// them as plugin factories. `__resetResolvedAkmForTests` returns void, so the
-// host then read `.config` off `undefined` and every OpenCode session using
-// akm-opencode@0.9.0 died at startup with "undefined is not an object
-// (evaluating 'N.config')". It was not even an inert crash: that helper resets
-// resolvedAkmCommand and clears the version-probe cache, so the loader
-// invoking it also wiped real plugin state.
+// them as plugin factories. Those helpers return void, so the host then read
+// `.config` off `undefined` and every OpenCode session using akm-opencode@0.9.0
+// died at startup with "undefined is not an object (evaluating 'N.config')".
 //
 // Hanging the helpers off the plugin function keeps them reachable from tests
 // while leaving exactly one module export for the loader to find. The guard is
 // in tests/opencode-plugin.test.ts and asserts the whole export list, not a
 // denylist of names that have already burned us once.
 export const AkmPlugin = Object.assign(akmPlugin, {
-  __resetResolvedAkmForTests,
   __curatedDirForTests,
   // #110 — AKM_CURATE_MIN_SCORE / AKM_CURATE_TYPE are read into module-level
   // consts at import, so the only way to cover the env -> behaviour wiring is
@@ -3700,9 +3311,6 @@ export const AkmPlugin = Object.assign(akmPlugin, {
   // file that re-imports here would leak into tests/opencode-plugin.test.ts.
   // tests/opencode-curate-floor.test.ts therefore drives these two seams from
   // a subprocess instead, which shares no module registry with anything.
-  // #106 — lets a test observe WHICH akm the resolver selected (and at what
-  // version), which is the whole behaviour the newest-compatible rule changes.
-  __resolvedAkmDetailsForTests: getResolvedAkmDetails,
   __buildCurateArgsForTests: buildCurateArgs,
   __renderCuratedJsonResponseForTests: renderCuratedJsonResponse,
   __resetWriteGateForTests,
