@@ -92,12 +92,20 @@ function createMockClient() {
   }
 }
 
+// A real directory carrying a project indicator (package.json), because
+// gatherCwdContext() reads the filesystem and session-start curation is
+// skipped outright when it yields nothing — `akm curate` requires a query.
+// A bare "/tmp/project" produced an empty context, so these tests used to
+// exercise a query-less curate that only ever succeeded against the mock.
+const projectDir = mkdtempSync(path.join(tmpdir(), "akm-opencode-test-project-"))
+writeFileSync(path.join(projectDir, "package.json"), JSON.stringify({ name: "fixture-project" }))
+
 function createPluginInput(client = createMockClient()): PluginInput {
   return {
     client: client as any,
     project: {} as any,
-    directory: "/tmp/project",
-    worktree: "/tmp/project",
+    directory: projectDir,
+    worktree: projectDir,
     serverUrl: new URL("http://localhost:3000"),
     $: {} as any,
   }
@@ -477,6 +485,23 @@ describe("akm-opencode plugin", () => {
       expect(injected).toMatch(/not certain of/)
       expect(injected).toMatch(/already being present in the workspace is not evidence/)
       expect(injected).not.toContain("from scratch")
+    })
+
+    it("does not run curate at all when the directory yields no context", async () => {
+      // `akm curate` requires a query and rejects the call without one, so an
+      // empty context is nothing to curate. The plugin used to build the call
+      // anyway and spend a subprocess per session start earning a
+      // MISSING_REQUIRED_ARGUMENT warning — invisible in tests, because the
+      // mock answered a query-less call happily.
+      const emptyDir = mkdtempSync(path.join(tmpdir(), "akm-opencode-test-empty-"))
+      const client = createMockClient()
+      const hooks = await AkmPlugin({ ...createPluginInput(client), directory: emptyDir, worktree: emptyDir })
+      mockExecFileSync.mockClear()
+
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "no-context-1" } } } as any)
+
+      const curateCalls = mockExecFileSync.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes("curate"))
+      expect(curateCalls).toHaveLength(0)
     })
 
     it("contributes exactly one system entry, with the curated pointer leading", async () => {

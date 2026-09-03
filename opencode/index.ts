@@ -559,8 +559,7 @@ async function runCurateLogged(
 // the floor disabled this is the exact argv these two call sites have always
 // sent, so that (default, tested) path is unchanged.
 function buildCurateArgs(query: string): string[] {
-  const args = ["--shape", "agent", "-q", "curate"]
-  if (query) args.push(query)
+  const args = ["--shape", "agent", "-q", "curate", query]
   args.push("--limit", String(AKM_CURATE_LIMIT))
   if (AKM_CURATE_TYPE) args.push("--type", AKM_CURATE_TYPE)
   args.push("--format", AKM_CURATE_MIN_SCORE > 0 ? "json" : "text")
@@ -595,12 +594,18 @@ async function runCurateForPrompt(client: LogCapableClient, text: string, sessio
 }
 
 async function runCurateForSession(client: LogCapableClient, sessionID: string, query?: string): Promise<string | null> {
-  const args = buildCurateArgs(query ?? "")
+  // `akm curate` requires a query and rejects the call without one, so an
+  // empty context is nothing to curate — not a curate call with the query
+  // left off. Building one anyway spent a subprocess per session start to
+  // log a MISSING_REQUIRED_ARGUMENT warning.
+  const trimmed = query?.trim()
+  if (!trimmed) return null
+  const args = buildCurateArgs(trimmed)
   const raw = await runCurateLogged(client,
     args,
     { toolName: "session.start", sessionID, operation: "session-curate" },
   )
-  return AKM_CURATE_MIN_SCORE > 0 ? renderCuratedJsonResponse(raw, query ?? "") : raw
+  return AKM_CURATE_MIN_SCORE > 0 ? renderCuratedJsonResponse(raw, trimmed) : raw
 }
 
 async function runHintsForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
