@@ -2186,11 +2186,16 @@ function execResolvedAkm(command: ResolvedAkmCommand, args: string[], options: E
  * runtime.
  */
 function resolveAkmCommand(): ResolvedAkmCommand | CliError {
-  // The one seam: an explicit absolute path to an akm executable. The eval
-  // harness points this at its deterministic shim, which is the only way to
-  // substitute a CLI for a resolved dependency. Not discovery — nothing is
-  // searched for and nothing is ranked; if it is set, it is used.
-  const override = process.env.AKM_LOCAL_BUILD_CLI?.trim()
+  // The one seam: an explicit absolute path to an akm executable, exec'd as-is.
+  // The eval harness points this at its deterministic shim, which is the only
+  // way to substitute a CLI for a resolved dependency. Not discovery — nothing
+  // is searched for and nothing is ranked; if it is set, it is used.
+  //
+  // Deliberately NOT the Claude hook's AKM_LOCAL_BUILD_CLI: that one names a JS
+  // entry point run under Bun. The eval sandbox exports one env to both
+  // plugins, so one name meaning two things silently breaks whichever plugin
+  // gets handed the other's form.
+  const override = process.env.AKM_OPENCODE_CLI?.trim()
   if (override) return { command: override, argsPrefix: [], displayCommand: override }
 
   try {

@@ -77,8 +77,10 @@ export function createSandbox(opts: SandboxOptions = {}): Sandbox {
     AKM_BUNDLE_DIR: stashDir,
     // Point the OpenCode plugin at the deterministic shim instead of the
     // akm-cli dependency it would otherwise resolve. Claude's hook finds the
-    // same shim through the sandbox PATH.
-    ...(opts.realAkm ? {} : { AKM_LOCAL_BUILD_CLI: path.join(binDir, "akm") }),
+    // same shim through the sandbox PATH and must NOT be handed
+    // AKM_LOCAL_BUILD_CLI here: it runs that path under Bun, and the shim is a
+    // sh script.
+    ...(opts.realAkm ? {} : { AKM_OPENCODE_CLI: path.join(binDir, "akm") }),
     ...opts.env,
   }
 

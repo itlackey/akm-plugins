@@ -64,7 +64,7 @@ Every kill switch below is opt-out and reads the same way: only the literal `0` 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. When unset the plugin discovers it once per process by running `akm info`. The resolved value is re-exported to shell tools through the `shell.env` hook. |
-| `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency. Used by the eval harness to substitute a deterministic shim. |
+| `AKM_OPENCODE_CLI` | unset | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency, exec'd as-is. Used by the eval harness to substitute a deterministic shim. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic prompt curation. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic outcome feedback. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip the per-session `akm hints` call. The missing-bundle warning is deliberately not gated on this: it explains why the bundle is empty in the first place. |
