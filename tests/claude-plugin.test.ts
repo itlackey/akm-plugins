@@ -2672,6 +2672,93 @@ exit 0
       expect(payload.hookSpecificOutput.additionalContext).not.toContain("memory extraction failed")
       expect(payload.systemMessage).toBeUndefined()
     })
+
+    it("warns when ok:true but the run processed nothing and skipped a session for an infrastructure reason (#109)", () => {
+      // The gap #108 didn't close: an unreachable LLM engine makes akm skip
+      // every session and still report ok:true with empty warnings[], so the
+      // ok:false gate above never fires. sessionsProcessed/sessionsSkipped
+      // and the per-session skipReason are the fields that expose it instead.
+      const { payload, extractLogPath } = runSessionStartWithExtractLog(
+        [
+          "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
+          JSON.stringify({
+            ok: true,
+            sessionsProcessed: 0,
+            sessionsSkipped: 1,
+            warnings: [],
+            sessions: [{ sessionId: "sess-new", harness: "claude", skipReason: "llm_unavailable" }],
+          }),
+          "",
+        ].join("\n"),
+      )
+
+      const context = payload.hookSpecificOutput.additionalContext as string
+      expect(context).toContain("harvested nothing")
+      expect(context).toContain("llm_unavailable")
+      expect(context).toContain(extractLogPath)
+      expect(payload.systemMessage).toContain("harvested nothing")
+    })
+
+    it("stays quiet on a benign content-ledger skip (already_extracted) even though processed is 0 (#109)", () => {
+      // already_extracted means the content-hash ledger already has this
+      // session — a cheap, expected re-fire skip, not a broken install.
+      // Warning on it would be exactly the always-on noise #110 documents
+      // users learning to ignore.
+      const { payload } = runSessionStartWithExtractLog(
+        [
+          "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
+          JSON.stringify({
+            ok: true,
+            sessionsProcessed: 0,
+            sessionsSkipped: 1,
+            warnings: [],
+            sessions: [{ sessionId: "sess-new", harness: "claude", skipReason: "already_extracted" }],
+          }),
+          "",
+        ].join("\n"),
+      )
+
+      expect(payload.hookSpecificOutput.additionalContext).not.toContain("harvested nothing")
+      expect(payload.systemMessage).toBeUndefined()
+    })
+
+    it("stays quiet when nothing was discovered at all — processed 0, skipped 0 (#109)", () => {
+      // The ordinary steady state between sessions: no candidates entered
+      // the run. Must not be confused with "discovered some, harvested none".
+      const { payload } = runSessionStartWithExtractLog(
+        [
+          "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
+          '{"ok":true,"sessionsProcessed":0,"sessionsSkipped":0,"warnings":[]}',
+          "",
+        ].join("\n"),
+      )
+
+      expect(payload.hookSpecificOutput.additionalContext).not.toContain("harvested nothing")
+      expect(payload.systemMessage).toBeUndefined()
+    })
+
+    it("prefers the envelope's own warnings[] detail over a re-derived skip reason (#109)", () => {
+      // malformed_model_output already forwards its own per-session detail
+      // into the top-level warnings[] on today's akm — reuse it rather than
+      // re-deriving a generic reason string.
+      const { payload } = runSessionStartWithExtractLog(
+        [
+          "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
+          JSON.stringify({
+            ok: true,
+            sessionsProcessed: 0,
+            sessionsSkipped: 1,
+            warnings: ["session sess-new: malformed_model_output: unexpected token"],
+            sessions: [{ sessionId: "sess-new", harness: "claude", skipReason: "malformed_model_output" }],
+          }),
+          "",
+        ].join("\n"),
+      )
+
+      const context = payload.hookSpecificOutput.additionalContext as string
+      expect(context).toContain("harvested nothing")
+      expect(context).toContain("malformed_model_output: unexpected token")
+    })
   })
 
   describe("state-file rotation and quality-cache freshness", () => {
