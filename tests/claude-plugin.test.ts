@@ -724,8 +724,11 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM bundle curation written to")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/prompt-sess-curate-2.md")
+    // The curation itself is injected, with its provenance banner, rather than
+    // a pointer at the file: a pointer costs a tool-call round trip larger than
+    // the budget it saves, and is routinely never followed.
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM PROVENANCE")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("AKM bundle curation written to")
     // 07 hardening: the prompt-recall path also provenance-tags the recalled content.
     const curatedContent = readFileSync(
       path.join(stateDir, "akm-claude", "curated", "prompt-sess-curate-2.md"),
@@ -769,8 +772,8 @@ exit 0
 
     const payload = JSON.parse(stdout.trim())
     expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM bundle curation written to")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/prompt-sess-curate-release-1.md")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM PROVENANCE")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("AKM bundle curation written to")
   })
 
   it("curate-prompt skips curation for very short prompts", () => {
@@ -941,8 +944,8 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toMatch(/already being present in the workspace is not evidence/)
     expect(payload.hookSpecificOutput.additionalContext).not.toContain("from scratch")
     expect(payload.hookSpecificOutput.additionalContext).toContain("Bundle hints")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM bundle curation written to")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("curated/session-sess-start-1.md")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM PROVENANCE")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("AKM bundle curation written to")
     // 07 hardening: the recalled/curated content is provenance-tagged so an
     // embedded directive cannot pose as a trusted instruction.
     const curatedContent = readFileSync(

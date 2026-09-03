@@ -1494,11 +1494,29 @@ function curatePrompt(): string {
     outcome: { status: curated.trim() ? "ok" : "skipped" },
   })
   if (!curated.trim()) return ""
-  const curatedFile = path.join(CURATED_DIR, `prompt-${sid || "unknown"}.md`)
-  try {
-    writeFileSync(curatedFile, tagRecalledContent(curated.trim()))
-  } catch {}
-  return emitHookContext("UserPromptSubmit", `AKM bundle curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this task. ${CURATED_CONTEXT_TAIL}`)
+    // The curated results go into the model's context DIRECTLY, trimmed to
+    // AKM_CONTEXT_BUDGET_CHARS by emitHookContext.
+    //
+    // This used to inject a one-line pointer at the file below instead, to
+    // keep the per-turn budget spend near zero. That trade does not pay:
+    // retrieving the file costs a tool-call round trip far larger than the
+    // budget it saved, so the model either spends MORE context than injecting
+    // would have, or — measured across a ~200-turn session — never reads it at
+    // all and the curation is thrown away. A budget is a reason to inject
+    // LESS (fewer results, trimmed), never a reason to inject a promise of
+    // content.
+    //
+    // The file is still written: it holds the untruncated results for
+    // follow-up and for debugging what a turn actually recalled.
+    const curatedFile = path.join(CURATED_DIR, `prompt-${sid || "unknown"}.md`)
+    const tagged = tagRecalledContent(curated.trim())
+    try {
+      writeFileSync(curatedFile, tagged)
+    } catch {}
+    // tagRecalledContent carries the provenance banner marking this as
+    // RECALLED DATA rather than instructions — it must travel with the content
+    // into context, not stay behind in the file.
+    return emitHookContext("UserPromptSubmit", `${tagged}\n\n${CURATED_CONTEXT_TAIL}`)
 }
 
 async function sessionStart(): Promise<string> {
@@ -1623,7 +1641,10 @@ async function sessionStart(): Promise<string> {
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (workflowSummary) body = `${body}\n\n${workflowSummary}`
   if (hints) body = `${body}\n\n${hints}`
-  if (curatedFile) body = `${body}\n\nAKM bundle curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${CURATED_CONTEXT_TAIL}`
+    // Same reasoning as the UserPromptSubmit path: inject the curation, do not
+    // point at it. The file remains the untruncated copy; emitHookContext trims
+    // what actually enters context to AKM_CONTEXT_BUDGET_CHARS.
+    if (curatedTrimmed) body = `${body}\n\n${tagRecalledContent(curatedTrimmed)}\n\n${CURATED_CONTEXT_TAIL}`
   body = `${body}\n\n${SESSION_START_FOOTER}`
   // The warnings also ride the user-visible channel: a missing bundle or a
   // failed extraction is the user's to fix, and telling only the model about it

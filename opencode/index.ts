@@ -11,6 +11,7 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
+import { compareSemver } from "../claude/shared/vendor-semver"
 import { classifyFeedbackSignal, createExplicitCorrectionRegex, createRetrospectiveFeedbackRegex, createRetrospectiveNegativeRegex, shouldSubmitAutomaticFeedback } from "../claude/shared/feedback-signals"
 import { appendMemoryEvent, getEventLogPath, type AkmMemoryEvent } from "../claude/shared/memory-events"
 import { AKM_VERSION_RANGE, satisfiesAkmVersionRange } from "../claude/shared/akm-version"
@@ -2367,7 +2368,7 @@ type AkmResolutionTrail = Array<{
   command: string
   source: "bundled" | "path" | "local_build"
   version: string | null
-  outcome: "selected" | "version_out_of_range" | "missing" | "probe_failed"
+  outcome: "selected" | "superseded" | "version_out_of_range" | "missing" | "probe_failed"
   failureReason: string | null
 }>
 
@@ -2375,17 +2376,29 @@ let lastAkmResolutionTrail: AkmResolutionTrail = []
 
 function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displayCommand: string; version: string; source: "bundled" | "path" | "local_build" } | null {
   const candidates: Array<{ command: string; argsPrefix: string[]; displayCommand: string; source: "bundled" | "path" | "local_build" }> = []
-  // Resolution precedence — first compatible candidate wins:
+  // Resolution: probe every candidate, then take the NEWEST compatible one.
+  //
+  // This used to be first-compatible-wins with PATH ahead of the bundled dep,
+  // on the reasoning that the user's own akm wrote their config and has its
+  // native deps built. That reasoning is sound about which candidates are
+  // ELIGIBLE; it is not a reason to stop at the first one. Because the floor is
+  // a range (^0.9.8) and not an exact pin, first-match silently bound a plugin
+  // that depends on a much newer akm-cli to whatever ancient-but-in-range `akm`
+  // happened to sit earliest on PATH — for as long as that stayed true. That is
+  // the failure mode behind akm-plugins#106: a plugin driving a CLI it was not
+  // built against, indefinitely, with nothing reporting the mismatch.
+  //
+  // Picking the newest compatible candidate keeps every prior eligibility rule
+  // (a config-incompatible or unbuilt candidate still fails its `--version`
+  // probe and is skipped, so the probe remains the compatibility gate) while
+  // removing the arbitrary dependence on PATH order. When the user's own akm is
+  // current — the normal case — it is still selected, because it ties with or
+  // beats the bundled copy and ties resolve in candidate order.
+  //
+  // Candidate order therefore now only breaks ties:
   //   1. AKM_LOCAL_BUILD_CLI  — explicit dev override
-  //   2. PATH / user installs — the akm the user actually installed, which wrote
-  //      their config and has its native deps (e.g. embeddings) built
-  //   3. bundled akm-cli      — last-resort fallback for users with no akm
-  // The bundled CLI is deliberately LAST: preferring it over the user's own
-  // install would ignore a newer user akm that understands a newer config and
-  // route through a bundled copy whose native postinstalls may be unbuilt. A
-  // config-INCOMPATIBLE candidate fails its `--version` probe — older akm builds
-  // validate config on every invocation and exit non-zero — so it is skipped
-  // silently and the version probe doubles as a config-compatibility gate.
+  //   2. PATH / user installs — preferred at equal version
+  //   3. bundled akm-cli      — the dependency npm resolved for this plugin
   const localBuild = getLocalBuildAkmCommand()
   if (localBuild) candidates.push({ ...localBuild, source: "local_build" })
   for (const command of getPathAkmCandidates()) {
@@ -2400,6 +2413,7 @@ function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displ
 
   const trail: AkmResolutionTrail = []
   const seen = new Set<string>()
+  const eligible: Array<{ candidate: (typeof candidates)[number]; version: string }> = []
   for (const candidate of candidates) {
     const cacheKey = `${candidate.command}::${candidate.argsPrefix.join(" ")}`
     if (!candidate.command || seen.has(cacheKey)) continue
@@ -2417,11 +2431,27 @@ function getResolvedAkmDetails(): { command: string; argsPrefix: string[]; displ
       trail.push({ command: candidate.displayCommand, source: candidate.source, version: probe.version, outcome: "version_out_of_range", failureReason: null })
       continue
     }
-    trail.push({ command: candidate.displayCommand, source: candidate.source, version: probe.version, outcome: "selected", failureReason: null })
-    lastAkmResolutionTrail = trail
-    return { ...candidate, version: probe.version }
+    eligible.push({ candidate, version: probe.version })
+  }
+
+  // Newest compatible wins; candidate order breaks ties, so an up-to-date user
+  // install still beats the bundled copy at equal version.
+  let best: { candidate: (typeof candidates)[number]; version: string } | null = null
+  for (const entry of eligible) {
+    if (!best || compareSemver(entry.version, best.version) > 0) best = entry
+  }
+  for (const entry of eligible) {
+    const isSelected = best !== null && entry.candidate === best.candidate
+    trail.push({
+      command: entry.candidate.displayCommand,
+      source: entry.candidate.source,
+      version: entry.version,
+      outcome: isSelected ? "selected" : "superseded",
+      failureReason: null,
+    })
   }
   lastAkmResolutionTrail = trail
+  if (best) return { ...best.candidate, version: best.version }
   return null
 }
 
@@ -3670,6 +3700,9 @@ export const AkmPlugin = Object.assign(akmPlugin, {
   // file that re-imports here would leak into tests/opencode-plugin.test.ts.
   // tests/opencode-curate-floor.test.ts therefore drives these two seams from
   // a subprocess instead, which shares no module registry with anything.
+  // #106 — lets a test observe WHICH akm the resolver selected (and at what
+  // version), which is the whole behaviour the newest-compatible rule changes.
+  __resolvedAkmDetailsForTests: getResolvedAkmDetails,
   __buildCurateArgsForTests: buildCurateArgs,
   __renderCuratedJsonResponseForTests: renderCuratedJsonResponse,
   __resetWriteGateForTests,
