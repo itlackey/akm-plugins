@@ -235,6 +235,14 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      # `npm publish` fires opencode's prepack, which runs `bun run build` to
+      # bundle the plugin and its shared modules into dist/.
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install opencode deps
+        working-directory: opencode
+        run: bun install --frozen-lockfile
+
       - run: npm install -g npm@latest
 
       - name: Check if akm-opencode version already exists

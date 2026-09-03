@@ -154,9 +154,12 @@ describe("AKM_VERSION_RANGE contract", () => {
   })
 })
 
+// Driven through `session-start`, the hook command the manifest actually wires
+// and the one on which checkAkmVersion() runs. The former `ensure-akm` /
+// `check-akm` entry points existed only for these tests.
 describe("checkAkmVersion", () => {
   it("returns ok, logs readiness, and stays silent on stderr for a compatible CLI", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.8" })
+    const result = runHookSandboxed(["session-start"], { akmVersion: "0.9.8" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
@@ -166,7 +169,7 @@ describe("checkAkmVersion", () => {
 
   it("accepts stable 0.9.x", () => {
     for (const version of ["0.9.8", "0.9.9"]) {
-      const result = runHookSandboxed(["ensure-akm"], { akmVersion: version })
+      const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
       expect(result.installLog).toBe("")
@@ -175,7 +178,7 @@ describe("checkAkmVersion", () => {
 
   it("rejects every tested build below the stable floor", () => {
     for (const version of ["0.8.3", "0.9.0", "0.9.2", "0.9.5", "0.9.6", "0.9.7", "0.9.8-beta.6", "0.9.8-rc.1"]) {
-      const result = runHookSandboxed(["ensure-akm"], { akmVersion: version })
+      const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
       const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
@@ -190,7 +193,7 @@ describe("checkAkmVersion", () => {
     mkdirSync(path.dirname(localCli), { recursive: true })
     writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.9.8')\n")
 
-    const result = runHookSandboxed(["ensure-akm"], {
+    const result = runHookSandboxed(["session-start"], {
       akmVersion: null,
       env: {
         AKM_LOCAL_BUILD_CLI: localCli,
@@ -204,7 +207,7 @@ describe("checkAkmVersion", () => {
   })
 
   it("logs a missing CLI without writing to stderr", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: null })
+    const result = runHookSandboxed(["session-start"], { akmVersion: null })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
@@ -213,7 +216,7 @@ describe("checkAkmVersion", () => {
   })
 
   it("logs an incompatible CLI without writing to stderr", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: "0.9.8-rc.1" })
+    const result = runHookSandboxed(["session-start"], { akmVersion: "0.9.8-rc.1" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
@@ -222,7 +225,7 @@ describe("checkAkmVersion", () => {
   })
 
   it("never spawns an installer when AKM is missing", () => {
-    const result = runHookSandboxed(["ensure-akm"], { akmVersion: null })
+    const result = runHookSandboxed(["session-start"], { akmVersion: null })
     expect(result.installLog).toBe("")
     expect(result.installLog).not.toContain("install\t-g\takm-cli@")
   })

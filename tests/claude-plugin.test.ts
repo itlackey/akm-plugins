@@ -341,7 +341,7 @@ exit 0
     )
     chmodSync(path.join(binDir, "akm"), 0o755)
 
-    runHook(["ensure-akm"], {
+    runHook(["session-start"], {
       env: {
         HOME: tempDir,
         PATH: `${binDir}:/usr/bin:/bin`,
@@ -504,7 +504,7 @@ exit 0
     const stateDir = path.join(tempDir, "state")
     mkdirSync(stateDir, { recursive: true })
 
-    runHook(["user-feedback"], {
+    runHook(["curate-prompt"], {
       input: JSON.stringify({
         prompt: "Please remember that the release checklist worked great with akm.",
       }),
@@ -1695,42 +1695,6 @@ exit 0
     expect(feedbackEvent.scope.user).toBeUndefined()
   })
 
-  it("pre-tool returns an empty verdict (Bash gating removed; defer to platform permissions)", () => {
-    // 0.8.0 removed the tokenized risky-command gate. The hook is still
-    // wired for pre-tool calls but never blocks — destructive akm verbs are
-    // now gated via Claude Code's `permissions.ask` / `permissions.deny`
-    // entries (documented in claude/README.md "Locking down destructive
-    // commands"). This test pins the no-block behavior so a future regression
-    // re-introducing tokenized blocking would be caught.
-    const tempDir = makeTempDir()
-    const stateDir = path.join(tempDir, "state")
-    mkdirSync(stateDir, { recursive: true })
-
-    for (const command of [
-      "akm proposal accept p_123",
-      "akm proposal revert p_abc",
-      "akm task add nightly --schedule \"0 2 * * *\" --command \"akm improve\"",
-      "akm env create --from-file .env.dev",
-      "akm remember OPENAI_API_KEY=sk-secret-value",
-    ]) {
-      const stdout = runHook(["pre-tool", "bash"], {
-        input: JSON.stringify({
-          session_id: "sess-pretool-passthrough",
-          tool: "Bash",
-          input: { command },
-        }),
-        env: {
-          HOME: tempDir,
-          PATH: process.env.PATH ?? "/usr/bin:/bin",
-          XDG_STATE_HOME: stateDir,
-        },
-      })
-      // No stdout / no block decision for any of these — the hook is a
-      // no-op for the Bash matcher post-removal.
-      expect(stdout.trim()).toBe("")
-    }
-  })
-
   it("user-prompt-expansion records a retained AKM slash command", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
@@ -2863,10 +2827,18 @@ exit 0
         AKM_PLUGIN_MAX_LOG_BYTES: "300",
       }
 
+      // Driven through `post-tool`, which writes feedback.log for any akm
+      // command and does no subprocess work of its own. `curate-prompt` writes
+      // the same log but shells out to `akm curate` on every call, which is 40
+      // CLI invocations to test a file rotation.
       const totalEntries = 40
       for (let i = 0; i < totalEntries; i++) {
-        runHook(["user-feedback"], {
-          input: JSON.stringify({ prompt: `remember entry-${i} padding-padding-padding-padding` }),
+        runHook(["post-tool", "success"], {
+          input: JSON.stringify({
+            session_id: "sess-rotate-1",
+            tool: "Bash",
+            input: { command: `akm search entry-${i} padding-padding-padding-padding` },
+          }),
           env,
         })
       }
@@ -2920,7 +2892,7 @@ exit 0
       chmodSync(feedbackLogPath, 0o644)
       expect(permissionBits(feedbackLogPath)).toBe(0o644)
 
-      runHook(["user-feedback"], {
+      runHook(["curate-prompt"], {
         input: JSON.stringify({ prompt: "remember the entry that triggers rotation" }),
         env: {
           HOME: tempDir,
@@ -3157,7 +3129,7 @@ exit 0
       const oversizedLine = `2026-01-01T00:00:00Z\tuser\tprompt\tSINGLE-OVERSIZED-ENTRY ${"x".repeat(150)}`
       writeFileSync(feedbackLogPath, `${oversizedLine}\n`)
 
-      runHook(["user-feedback"], {
+      runHook(["curate-prompt"], {
         input: JSON.stringify({ prompt: "a fresh short entry" }),
         env: {
           HOME: tempDir,

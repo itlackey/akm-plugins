@@ -14,9 +14,9 @@
  *  - Zero third-party imports. claude/hooks/akm-hook.ts runs as a bare Bun
  *    script with no node_modules at hook-execution time, so only node:* builtins
  *    are importable here.
- *  - It is vendored into the published OpenCode tarball by
- *    opencode/scripts/vendor-shared.mjs, which copies every *.ts in
- *    claude/shared/ — no registration step is needed for a new file.
+ *  - It is inlined into the published OpenCode tarball by that package's
+ *    `bun run build` bundle step, which follows the imports — no registration
+ *    step is needed for a new file.
  */
 
 import { chmodSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"

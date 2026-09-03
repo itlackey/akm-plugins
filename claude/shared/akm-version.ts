@@ -8,9 +8,8 @@
 //
 // The matcher is the vendored `satisfies()` rather than the npm `semver`
 // package because the Claude hook runs as a bare Bun script with no
-// node_modules at hook-execution time. This module is vendored into the
-// published OpenCode tarball by opencode/scripts/vendor-shared.mjs, so the
-// same code path runs on both sides.
+// node_modules at hook-execution time. The OpenCode build inlines this module
+// into its published bundle, so the same code path runs on both sides.
 //
 // A single caret clause anchored at the stable release covers the whole
 // supported line: `^0.9.8` admits stable 0.9.8 and later 0.9.x releases.

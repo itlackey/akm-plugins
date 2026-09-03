@@ -24,17 +24,16 @@
   },
   "license": "MPL-2.0",
   "files": [
-    "index.ts",
-    "shared/",
+    "dist/",
     "README.md"
   ],
-  "main": "./index.ts",
+  "main": "./dist/index.js",
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "prepack": "node ./scripts/vendor-shared.mjs",
-    "postpack": "node ./scripts/unvendor-shared.mjs",
+    "build": "bun build ./index.ts --target=bun --outfile=dist/index.js --external @opencode-ai/plugin --external akm-cli",
+    "prepack": "bun run build",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
