@@ -1,6 +1,4 @@
-# Vendored at pack time by scripts/vendor-shared.mjs; never committed.
-shared/
-# Restored at postpack by scripts/unvendor-shared.mjs; should not be committed.
-index.ts.prepack-bak
+# Built by `bun run build` at prepack; the published tarball ships dist/ only.
+dist/
 # Pack artifacts.
 *.tgz
