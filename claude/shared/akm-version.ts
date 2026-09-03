@@ -34,6 +34,31 @@
 // Earlier 0.9 releases are deliberately excluded as well: accepting them
 // would silently pass the version gate onto a CLI with retired ref and
 // workflow contracts, or one that cannot open a migrated state.db.
+//
+// #106 asked, as a maintainer decision, whether a caret range is the right
+// matcher at all given akm's own STABILITY.md: "0.9.x patch releases may
+// also contain breaking changes" while the 0.9.x line pays off technical
+// debt pre-1.0. Verified against that document and against the akm 0.9.12
+// branch (itlackey/akm, release/0.9.12) while checking this plugin for
+// compatibility: every akm surface these plugins call is tier Stable
+// (search, curate, show, info, feedback, workflow list) EXCEPT `akm proposal
+// extract`, which is tier Evolving — "payload shapes may shift" — and is
+// exactly the surface `extractSession()`/`lastExtractFailureWarning()` parse
+// most deeply. 0.9.12 did change that envelope again (added `engine`,
+// `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
+// all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
+// Decision: keep the caret range, not because the risk is unreal but because
+// a narrower pin doesn't address it — the failure mode #106 reported was
+// never "the version gate passed when it shouldn't have" (an *already
+// installed* plugin at 0.9.1 would need 0.9.1 itself to have shipped a
+// tighter range, which a future release cannot retroactively fix), it was
+// "a breaking change degraded to silence downstream of the gate". That is
+// what #107/#108/#109 fix directly: every read of the extract envelope goes
+// through safeJsonParse with every field optional-chained, so an Evolving
+// surface changing shape degrades to "say less" (a missing field silently
+// omitted) rather than a crash or a fabricated warning. That is the
+// appropriate mitigation for an Evolving dependency the gate cannot pin
+// away without also rejecting users on every newer patch release.
 
 import { satisfies } from "./vendor-semver"
 
