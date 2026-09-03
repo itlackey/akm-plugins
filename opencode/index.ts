@@ -3662,6 +3662,16 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
 export const AkmPlugin = Object.assign(akmPlugin, {
   __resetResolvedAkmForTests,
   __curatedDirForTests,
+  // #110 — AKM_CURATE_MIN_SCORE / AKM_CURATE_TYPE are read into module-level
+  // consts at import, so the only way to cover the env -> behaviour wiring is
+  // to import this module afresh under a chosen environment. bun:test's
+  // `mock.module` is process-global for a whole `bun test tests/` run (see
+  // tests/fake-akm-contract.test.ts's header), so a second in-process test
+  // file that re-imports here would leak into tests/opencode-plugin.test.ts.
+  // tests/opencode-curate-floor.test.ts therefore drives these two seams from
+  // a subprocess instead, which shares no module registry with anything.
+  __buildCurateArgsForTests: buildCurateArgs,
+  __renderCuratedJsonResponseForTests: renderCuratedJsonResponse,
   __resetWriteGateForTests,
   __extractFormatIdentity: extractFormatIdentity,
   __assetDeclaresFormat: assetDeclaresFormat,
