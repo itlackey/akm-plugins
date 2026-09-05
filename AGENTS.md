@@ -10,7 +10,7 @@
 
 You have access to a searchable library of skills, commands, agents, knowledge,
 instructions, lessons, workflows, scripts, memories, tasks, sessions, facts, env
-configs, and secrets via the `akm` CLI (v0.9.7+).
+configs, and secrets via the `akm` CLI (v0.9.14+).
 
 > The plugin exposes only search, show, curate, feedback, and remember. For other AKM verbs, inspect `akm --help` or `akm <command> --help` before invoking the CLI directly.
 

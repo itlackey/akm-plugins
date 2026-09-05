@@ -159,7 +159,7 @@ let cachedAkmBundleDir: string | undefined
 // whitespace-token extractor and is the single source of truth here.
 const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
 const AKM_WORKFLOW_INSTRUCTION = [
-  "# AKM workflow (v0.9.7)",
+  "# AKM workflow (v0.9.14)",
   "",
   "Use AKM as a reusable knowledge and workflow bundle.",
   "",
@@ -806,7 +806,7 @@ async function getPendingProposalCount(client: LogCapableClient, sessionID?: str
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) return { count: 0, unsupported: true }
   try {
-    // AKM 0.9.7 canonical proposal-queue listing path: `akm proposal list`.
+    // AKM 0.9.14 canonical proposal-queue listing path: `akm proposal list`.
     const stdout = execResolvedAkm(command, ["proposal", "list", "--status", "pending", "--format", "json"], {
       encoding: "utf8",
       timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
@@ -2184,11 +2184,11 @@ function execResolvedAkm(command: ResolvedAkmCommand, args: string[], options: E
 
 /**
  * `akm-cli` is a declared dependency of this package, so the package manager
- * has already installed a version satisfying that range alongside us and
- * created its `bin` entry. Resolve it the way any package invokes a
- * dependency's executable. Version compatibility is the range in package.json,
- * enforced by npm at install time — not something this plugin re-litigates at
- * runtime.
+ * has already installed the exact tested version alongside us and created its
+ * `bin` entry. Resolve it the way any package invokes a dependency's
+ * executable. Version compatibility is the exact pin in package.json,
+ * synchronized with Claude's compatibility floor by tests and the release
+ * workflow — not something this plugin re-litigates at runtime.
  */
 function resolveAkmCommand(): ResolvedAkmCommand | CliError {
   // The one seam: an explicit absolute path to an akm executable, exec'd as-is.

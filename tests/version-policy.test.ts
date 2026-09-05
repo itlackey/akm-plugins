@@ -2,11 +2,11 @@
 // line they target, and let PATCH diverge freely inside that minor.
 //
 // The sync point is AKM_VERSION_RANGE in claude/shared/akm-version.ts. On a 0.x
-// version a caret range is exactly a minor line (`^0.9.8` == `>=0.9.8 <0.10.0`),
+// version a caret range is exactly a minor line (`^0.9.14` == `>=0.9.14 <0.10.0`),
 // so "plugins are 0.9.x while akm is 0.9.x" is already what that constant says.
 // This file makes the invariant enforced rather than conventional: four version
-// fields and three install-ref copies all restate the same fact by hand, and
-// nothing previously stopped them drifting apart.
+// fields, Claude's install ref, and OpenCode's exact package/lockfile pins all
+// restate the same fact by hand, and nothing previously stopped them drifting.
 //
 // Patch divergence is deliberate. A plugin-only fix — the issue #86 startup
 // crash, say — has to be shippable without waiting for an akm release, which is
@@ -23,7 +23,7 @@ const REPO_ROOT = path.join(import.meta.dir, "..")
 const readText = (relative: string): string => readFileSync(path.join(REPO_ROOT, relative), "utf8")
 const readJson = (relative: string): Record<string, any> => JSON.parse(readText(relative))
 
-/** `0.9.8` -> `0.9`. Returns null for anything that is not plain semver. */
+/** `0.9.14` -> `0.9`. Returns null for anything that is not plain semver. */
 function minorLine(version: string): string | null {
   const parsed = valid(version)
   if (!parsed) return null
@@ -31,7 +31,7 @@ function minorLine(version: string): string | null {
   return `${major}.${minor}`
 }
 
-/** `^0.9.8` -> `0.9.8`. The range floor is the minimum compatible CLI version. */
+/** `^0.9.14` -> `0.9.14`. The range floor is the minimum compatible CLI version. */
 function rangeFloor(range: string): string {
   return range.trim().replace(/^[\^~>=v\s]+/, "")
 }
@@ -46,7 +46,7 @@ const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
 
 describe("version policy", () => {
   test("the akm range is a caret range, so a minor line is what it pins", () => {
-    // The whole policy rests on `^0.9.8` meaning ">=0.9.8 <0.10.0". If the range
+    // The whole policy rests on `^0.9.14` meaning ">=0.9.14 <0.10.0". If the range
     // is ever widened into an OR-list or a bare pin, "MAJOR.MINOR in sync" stops
     // having a single answer and every assertion below becomes a guess.
     expect(AKM_VERSION_RANGE).toMatch(/^\^\d+\.\d+\.\d+$/)
@@ -55,7 +55,7 @@ describe("version policy", () => {
 
   test("every stamped version is plain semver", () => {
     // Guards the format directly. A four-component version like
-    // `0.9.8.20260831.1` reads as a reasonable way to encode a dated build, but
+    // `0.9.14.20260904.1` reads as a reasonable way to encode a dated build, but
     // it is not semver: npm's own parser returns null for it and the registry
     // rejects it on publish. release.yml stamps, commits and tags BEFORE npm
     // ever sees the version, so an invalid string leaves a bad tag behind and
@@ -86,7 +86,7 @@ describe("version policy", () => {
     // future change tightening patch back into lockstep fails here and has to
     // argue with the comment at the top of this file instead of sliding in.
     const floorPatch = rangeFloor(AKM_VERSION_RANGE)
-    for (const candidate of ["0.9.0", "0.9.1", "0.9.8"]) {
+    for (const candidate of ["0.9.0", "0.9.1", "0.9.14"]) {
       expect(minorLine(candidate)).toBe(minorLine(floorPatch))
     }
     expect(minorLine("0.10.0")).not.toBe(minorLine(floorPatch))
@@ -132,21 +132,32 @@ describe("version policy", () => {
     // Monotonic within one akm patch, across an akm patch bump (even with an
     // earlier clock), and across a two-digit akm patch.
     expect(patchOf(derive("0.9.1", "202608242013"))).toBeGreaterThan(patchOf(derive("0.9.1", "202608242012")))
-    expect(patchOf(derive("0.9.8", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.1", "202612312359")))
-    expect(patchOf(derive("0.9.10", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.8", "202612312359")))
+    expect(patchOf(derive("0.9.14", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.1", "202612312359")))
+    expect(patchOf(derive("0.9.15", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.14", "202612312359")))
   })
 
-  test("every install-ref copy restates AKM_VERSION_RANGE exactly", () => {
-    // Two copies of the range live outside the constant. The Claude hook has no
-    // package manager behind it (git marketplace, no npm deps), so it installs
-    // akm itself and its ref is what a user is told to run. The OpenCode plugin
-    // states the range once, as an ordinary dependency, and npm resolves it.
+  test("Claude follows the range and OpenCode exact-pins its floor", () => {
+    // The Claude hook has no package manager behind it (git marketplace, no
+    // npm deps), so its ref is what a user is told to install. OpenCode imports
+    // private dist modules in process, so both its manifest and lockfile must
+    // resolve exactly the CLI version we tested rather than a future patch.
     const expectedRef = `akm-cli@${AKM_VERSION_RANGE}`
+    const floor = rangeFloor(AKM_VERSION_RANGE)
 
     const packageRef = /AKM_PACKAGE_REF\s*\?\?\s*"([^"]+)"/.exec(readText("claude/hooks/akm-hook.ts"))?.[1]
     expect(`claude/hooks/akm-hook.ts: ${packageRef}`).toBe(`claude/hooks/akm-hook.ts: ${expectedRef}`)
 
     const bundledDep = readJson("opencode/package.json").dependencies["akm-cli"]
-    expect(`opencode/package.json akm-cli: ${bundledDep}`).toBe(`opencode/package.json akm-cli: ${AKM_VERSION_RANGE}`)
+    expect(`opencode/package.json akm-cli: ${bundledDep}`).toBe(`opencode/package.json akm-cli: ${floor}`)
+
+    const lockfile = readText("opencode/bun.lock")
+    expect(lockfile).toContain(`"akm-cli": "${floor}"`)
+    expect(lockfile).toContain(`"akm-cli": ["akm-cli@${floor}",`)
+  })
+
+  test("the release workflow refuses version-contract drift before tagging", () => {
+    const workflow = readText(".github/workflows/release.yml")
+    expect(workflow).toContain("does not equal AKM_VERSION_RANGE floor")
+    expect(workflow).toContain("must exact-pin akm-cli")
   })
 })

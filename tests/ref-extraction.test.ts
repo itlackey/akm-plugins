@@ -40,6 +40,7 @@ describe("extractAllRefs", () => {
     const text = [
       "Use skills/code-review, then knowledge/deploy.md#Rollback.",
       "Also team-playbook//lessons/release-safety#Before-you-start!",
+      "Opaque selectors work too: knowledge/long-guide#akm-fragment-3-1138d4941c9a.",
       "Repeat skills/code-review (deduped).",
     ].join("\n")
 
@@ -47,6 +48,7 @@ describe("extractAllRefs", () => {
       "skills/code-review",
       "knowledge/deploy.md#Rollback",
       "team-playbook//lessons/release-safety#Before-you-start",
+      "knowledge/long-guide#akm-fragment-3-1138d4941c9a",
     ])
   })
 
@@ -139,10 +141,18 @@ describe("validateRefCandidates", () => {
 
     expect(
       validateRefCandidates(
-        ["team-playbook//lessons/release-safety#Before-rollout", "lessons/release-safety#Summary"],
+        [
+          "team-playbook//lessons/release-safety#Before-rollout",
+          "lessons/release-safety#Summary",
+          "lessons/release-safety#akm-fragment-3-1138d4941c9a",
+        ],
         [bundle],
       ),
-    ).toEqual(["lessons/release-safety#Summary", "team-playbook//lessons/release-safety#Before-rollout"])
+    ).toEqual([
+      "lessons/release-safety#Summary",
+      "lessons/release-safety#akm-fragment-3-1138d4941c9a",
+      "team-playbook//lessons/release-safety#Before-rollout",
+    ])
   })
 
   it("supports explicit Markdown extensions and derived memories", () => {

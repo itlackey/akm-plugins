@@ -1,32 +1,28 @@
 // Single source of truth for the akm-cli version contract.
 //
-// Both the Claude hook (claude/hooks/akm-hook.ts) and the OpenCode plugin
-// (opencode/index.ts) validate the user's installed akm-cli against this exact
-// range. Keeping it here — alongside the vendored semver matcher — means a
-// version bump is a one-line change in one file instead of three drifting
-// copies (a hand-rolled `minor === 8` check previously diverged here).
+// The Claude hook validates the user's installed akm-cli against this exact
+// range. OpenCode executes its declared akm-cli dependency in process and
+// therefore pins the range floor exactly in opencode/package.json; the version
+// policy tests and release workflow keep those two contracts synchronized.
 //
 // The matcher is the vendored `satisfies()` rather than the npm `semver`
 // package because the Claude hook runs as a bare Bun script with no
-// node_modules at hook-execution time. The OpenCode build inlines this module
-// into its published bundle, so the same code path runs on both sides.
+// node_modules at hook-execution time.
 //
-// A single caret clause anchored at the stable release covers the whole
-// supported line: `^0.9.8` admits stable 0.9.8 and later 0.9.x releases.
-// 0.9.8 is the compatibility floor, and the reason is a one-way one: 0.9.8
-// adds state migrations 025 and 026, so once any 0.9.8 command opens
-// `state.db` an older CLI refuses to open it at all. A home these plugins
-// have driven is therefore a 0.9.8+ home, and admitting 0.9.7 would point
-// the gate at a CLI that cannot read it. Its ref grammar, progressive-search
-// metadata, token-budgeted curate packing, workflow lifecycle, and
-// task/workflow wire contracts are the ones these plugins implement.
+// A single caret clause anchored at the stable release covers the supported
+// public CLI line: `^0.9.14` admits stable 0.9.14 and later 0.9.x releases.
+// 0.9.14 is a required compatibility floor, not a marketing version. It moves
+// the shared derived index from generation 22 to 23 for lexical Markdown
+// fragments. A 0.9.13 reader correctly refuses that index, while older 0.9.x
+// binaries can also reject state migration 027. Once 0.9.14 touches a home,
+// admitting an older binary leaves the plugin inactive against that home.
 //
-// KNOWN GAP: NO prerelease satisfies this range — not 0.9.8-rc.1, and not a
-// *future* line such as 0.9.9-rc.1. That is node-semver's documented behavior
+// KNOWN GAP: NO prerelease satisfies this range — not 0.9.14-rc.1, and not a
+// *future* line such as 0.9.15-rc.1. That is node-semver's documented behavior
 // and the vendored matcher reproduces it: a prerelease only satisfies a range
 // whose lower bound is a prerelease with the same major.minor.patch. Admitting
 // a prerelease line again is an explicit one-clause edit here
-// (`^0.9.8 || ^0.9.9-rc.1`) when such a build actually needs testing — a
+// (`^0.9.14 || ^0.9.15-rc.1`) when such a build actually needs testing — a
 // deliberate opt-in rather than a range that silently accepts untested
 // prereleases.
 //
@@ -46,22 +42,17 @@
 // most deeply. 0.9.12 did change that envelope again (added `engine`,
 // `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
 // all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
-// Decision: keep the caret range, not because the risk is unreal but because
-// a narrower pin doesn't address it — the failure mode #106 reported was
-// never "the version gate passed when it shouldn't have" (an *already
-// installed* plugin at 0.9.1 would need 0.9.1 itself to have shipped a
-// tighter range, which a future release cannot retroactively fix), it was
-// "a breaking change degraded to silence downstream of the gate". That is
-// what #107/#108/#109 fix directly: every read of the extract envelope goes
-// through safeJsonParse with every field optional-chained, so an Evolving
-// surface changing shape degrades to "say less" (a missing field silently
-// omitted) rather than a crash or a fabricated warning. That is the
-// appropriate mitigation for an Evolving dependency the gate cannot pin
-// away without also rejecting users on every newer patch release.
+// The 0.9.14 compatibility review makes the split explicit: keep the caret
+// range for Claude's stable CLI calls, but exact-pin OpenCode's package because
+// it imports private in-process modules and shares AKM's databases. The
+// #107/#108/#109 envelope hardening remains necessary on both surfaces: every
+// read of the Evolving extract envelope goes through safeJsonParse with every
+// field optional-chained, so an additive shape change degrades to "say less"
+// rather than a crash or fabricated warning.
 
 import { satisfies } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.8"
+export const AKM_VERSION_RANGE = "^0.9.14"
 
 /**
  * True when `version` is a valid semver string that satisfies

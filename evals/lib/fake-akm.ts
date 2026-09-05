@@ -344,7 +344,7 @@ function rank(query, limit) {
       name: a.name,
       description: a.description,
       score,
-      // AKM 0.9.7 exposes lexical ladder provenance on normal/full and agent
+      // AKM 0.9.14 exposes lexical ladder provenance on normal/full and agent
       // hits. This fake has no prefix stage, but it preserves the exact vs.
       // relaxed distinction consumed by contract-aware harnesses.
       matchStage: matched === q.size ? "exact" : "relaxed",
@@ -362,8 +362,30 @@ function emitText(hits) {
   }
 }
 
-function emitJson(hits) {
-  process.stdout.write(JSON.stringify({ ok: true, hits }))
+function emitSearchJson(hits) {
+  process.stdout.write(JSON.stringify({ hits, searchMode: "keyword", results: hits }))
+}
+
+function emitCurateJson(query, hits) {
+  const items = hits.map((hit) => ({
+    ...hit,
+    source: "local",
+    followUp: "akm show " + hit.ref,
+    reason: 'Fake lexical match for "' + query + '".',
+  }))
+  process.stdout.write(
+    JSON.stringify({
+      schemaVersion: 1,
+      shape: "curate",
+      query,
+      summary:
+        "Selected " + items.length + " curated result" + (items.length === 1 ? "" : "s") +
+        (items.length > 0 ? ": " + items.map((item) => item.ref).join(", ") + "." : "."),
+      items,
+      searchMode: "keyword",
+      results: items,
+    }),
+  )
 }
 
 function getLimit(defaultLimit) {
@@ -394,7 +416,8 @@ if (verb === "curate" || verb === "search") {
   const query = nonFlagArgs().join(" ")
   const hits = rank(query, getLimit())
   if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
-    emitJson(hits)
+    if (verb === "curate") emitCurateJson(query, hits)
+    else emitSearchJson(hits)
   } else {
     emitText(hits)
   }
@@ -425,8 +448,9 @@ if (verb === "info") {
   for (const a of idx.assets) byType[a.type] = (byType[a.type] || 0) + 1
   process.stdout.write(
     JSON.stringify({
+      ok: true,
       schemaVersion: 1,
-      version: "0.9.9",
+      version: "0.9.14",
       bundleDir,
       defaultBundle: "bundle",
       assetTypes: [
@@ -554,7 +578,8 @@ if (verb === "config") {
 // fake stash never has live workflow runs, so an empty-but-real-shaped
 // envelope exercises the parse path without inventing fixture state.
 if (verb === "workflow" && tail[0] === "list") {
-  process.stdout.write(JSON.stringify({ runs: [], shape: "workflow-list", schemaVersion: 1 }))
+  const runs = []
+  process.stdout.write(JSON.stringify({ ok: true, runs, shape: "workflow-list", schemaVersion: 1, results: runs }))
   process.exit(0)
 }
 
@@ -562,7 +587,8 @@ if (verb === "workflow" && tail[0] === "list") {
 // getPendingProposalCount() (both plugins) parses \`.proposals\` off this to
 // surface a pending-proposal count in the session-start header.
 if (verb === "proposal" && tail[0] === "list") {
-  process.stdout.write(JSON.stringify({ totalCount: 0, proposals: [] }))
+  const proposals = []
+  process.stdout.write(JSON.stringify({ totalCount: 0, proposals, results: proposals }))
   process.exit(0)
 }
 
@@ -576,7 +602,7 @@ if (verb === "proposal" && tail[0] === "list") {
 // deterministically fails.
 //
 // Three properties of that failure are load-bearing and are all reproduced
-// here, verified against akm-cli 0.9.7:
+// here, verified against akm-cli 0.9.14:
 //   1. the envelope goes to STDERR, not stdout (stdout stays empty);
 //   2. the exit code is 78 — akm's documented "config error" code, not 0;
 //   3. the code is LLM_NOT_CONFIGURED.
@@ -637,7 +663,7 @@ if (verb === "--version" || verb === "-V") {
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers
   // always receive the semver that governs the compatibility gate.
-  writeFileSync(1, "fake-akm 0.9.9\\n")
+  writeFileSync(1, "fake-akm 0.9.14\\n")
   process.exit(0)
 }
 

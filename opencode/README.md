@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode plugin for [AKM](https://github.com/itlackey/akm) `^0.9.8`. It exposes exactly five public tools and uses lifecycle hooks to bring relevant AKM context into a session.
+OpenCode plugin for [AKM](https://github.com/itlackey/akm) `0.9.14`. It exposes exactly five public tools and uses lifecycle hooks to bring relevant AKM context into a session. The dependency is exact-pinned because the plugin calls AKM's in-process `dist/` APIs.
 
 ## Installation
 
