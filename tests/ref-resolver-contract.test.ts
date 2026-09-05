@@ -4,7 +4,7 @@
 // The fixture mirrors the directory layout `akm bundle create` scaffolds in
 // 0.9 — agents commands env facts instructions knowledge lessons memories
 // scripts secrets sessions skills tasks workflows — verified against
-// akm-cli@0.9.8 (stable). `wikis` is deliberately absent: it is neither in
+// akm-cli@0.9.14 (stable). `wikis` is deliberately absent: it is neither in
 // `akm info --format json`'s assetTypes nor scaffolded by `bundle create`, so
 // including it would assert a contract the sister implementation does not
 // have. facts/, instructions/ and sessions/ are the roots added since 0.8.
@@ -91,10 +91,17 @@ describe("AKM 0.9 ref-resolver contract", () => {
     const bundle = makeBundle()
     expect(
       validateRefCandidates(
-        ["team-playbook//lessons/no-fine-tuning#Why", "team-playbook//lessons/missing#Why"],
+        [
+          "team-playbook//lessons/no-fine-tuning#Why",
+          "lessons/no-fine-tuning#akm-fragment-3-1138d4941c9a",
+          "team-playbook//lessons/missing#Why",
+        ],
         [bundle],
       ),
-    ).toEqual(["team-playbook//lessons/no-fine-tuning#Why"])
+    ).toEqual([
+      "lessons/no-fine-tuning#akm-fragment-3-1138d4941c9a",
+      "team-playbook//lessons/no-fine-tuning#Why",
+    ])
   })
 
   test("does not resolve paths outside the bundle root", () => {

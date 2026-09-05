@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The akm CLI version these plugins target (e.g. 0.9.1). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp."
+        description: "The exact akm CLI compatibility floor these plugins target (e.g. 0.9.14). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp."
         required: true
         type: string
 
@@ -91,12 +91,12 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Targeting akm $AKM_VERSION; releasing plugins as $VERSION"
 
-      # Three rules, all checked before the tag exists (npm would otherwise be
+      # Four rules, all checked before the tag exists (npm would otherwise be
       # the first thing to reject a bad version, by which point the tag is
-      # already pushed): the supplied akm version must be plain semver, its
-      # MAJOR.MINOR must match the akm line the plugins target (see
-      # tests/version-policy.test.ts), and the derived version must sort ABOVE
-      # whatever npm currently calls `latest`.
+      # already pushed): the supplied akm version must be plain semver and
+      # exactly match the Claude compatibility floor, OpenCode must exact-pin
+      # that same version, and the derived version must sort ABOVE whatever npm
+      # currently calls `latest`.
       - name: Validate release version
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
@@ -109,6 +109,7 @@ jobs:
           const akmVersion = process.env.AKM_VERSION
           const version = process.env.VERSION
           const source = fs.readFileSync('claude/shared/akm-version.ts', 'utf8')
+          const opencodePackage = JSON.parse(fs.readFileSync('opencode/package.json', 'utf8'))
           const range = /AKM_VERSION_RANGE\s*=\s*"([^"]+)"/.exec(source)?.[1]
           if (!range) {
             console.error('Could not read AKM_VERSION_RANGE from claude/shared/akm-version.ts')
@@ -119,7 +120,7 @@ jobs:
           const parsedAkm = SEMVER.exec(akmVersion)
           if (!parsedAkm) {
             console.error(`akm_version "${akmVersion}" is not valid semver (MAJOR.MINOR.PATCH).`)
-            console.error('Supply the akm CLI version these plugins target, e.g. 0.9.1 -- the workflow appends the timestamp.')
+            console.error('Supply the exact akm CLI version these plugins target, e.g. 0.9.14 -- the workflow appends the timestamp.')
             process.exit(1)
           }
 
@@ -135,11 +136,21 @@ jobs:
             process.exit(1)
           }
 
-          const want = `${floor[1]}.${floor[2]}`
-          const got = `${parsedAkm[1]}.${parsedAkm[2]}`
-          if (got !== want) {
-            console.error(`akm_version "${akmVersion}" is on the ${got} line but the plugins target akm ${range} (the ${want} line).`)
-            console.error(`Release against a ${want}.x akm version, or move AKM_VERSION_RANGE first if the plugins now target a new akm minor.`)
+          const floorVersion = `${floor[1]}.${floor[2]}.${floor[3]}`
+          if (akmVersion !== floorVersion) {
+            console.error(`akm_version "${akmVersion}" does not equal AKM_VERSION_RANGE floor "${floorVersion}" (${range}).`)
+            console.error('Move AKM_VERSION_RANGE first and validate that exact CLI version before publishing.')
+            process.exit(1)
+          }
+
+          // OpenCode imports akm-cli's private dist modules in process. A
+          // caret range would let the same plugin release execute different,
+          // untested private APIs on different machines, so it must exact-pin
+          // the tested floor. Claude only shells out through public CLI verbs
+          // and deliberately retains the stable caret range.
+          const opencodeAkm = opencodePackage.dependencies?.['akm-cli']
+          if (opencodeAkm !== akmVersion) {
+            console.error(`opencode/package.json must exact-pin akm-cli to "${akmVersion}"; found "${opencodeAkm ?? '<missing>'}".`)
             process.exit(1)
           }
 
@@ -172,7 +183,7 @@ jobs:
             console.log(`${version} sorts above the published latest ${published}.`)
           }
 
-          console.log(`Version ${version} is valid semver on the ${got} line, matching akm ${range}.`)
+          console.log(`Version ${version} is valid semver; Claude targets ${range} and OpenCode exact-pins akm-cli ${opencodeAkm}.`)
           EOF
 
       - name: Bump versions

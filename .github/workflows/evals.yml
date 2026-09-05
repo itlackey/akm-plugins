@@ -148,12 +148,14 @@ jobs:
         working-directory: evals
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BUDGET_USD: ${{ inputs.budget_usd }}
+          SCENARIOS: ${{ inputs.scenarios }}
         run: |
-          ARGS="--budget ${{ inputs.budget_usd }} --out ../eval-results/tier3"
-          if [ -n "${{ inputs.scenarios }}" ]; then
-            ARGS="$ARGS --scenarios ${{ inputs.scenarios }}"
+          ARGS=(--budget "$BUDGET_USD" --out ../eval-results/tier3)
+          if [ -n "$SCENARIOS" ]; then
+            ARGS+=(--scenarios "$SCENARIOS")
           fi
-          bun tier3/runner.ts $ARGS
+          bun tier3/runner.ts "${ARGS[@]}"
 
       - name: Upload tier-3 artifacts
         if: always()

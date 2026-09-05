@@ -5,8 +5,8 @@ import path from "node:path"
 import { installFakeAkm } from "../evals/lib/fake-akm"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
-// actually invoke (info, workflow list --active, proposal list, proposal
-// extract) against a REAL akm binary, so a real 0.9 envelope shape change
+// actually invoke (search, curate, info, workflow list --active, proposal
+// list, proposal extract) against a REAL akm binary, so a real 0.9 envelope shape change
 // would fail this test instead of passing every eval/unit test silently
 // (the failure mode called out in docs/reviews/release-0.9.0-plugin-review.md
 // §7 "Three independent fake-akm implementations, none contract-tested").
@@ -108,6 +108,38 @@ function runRaw(cmd: string, args: string[], env?: Record<string, string | undef
 }
 
 describe("fake-akm envelope contract", () => {
+  test.skipIf(!akmAvailable)("search envelope matches real akm, including the results alias", () => {
+    const real = makeRealEnv()
+    const fake = makeFakeEnv()
+    try {
+      const args = ["--format", "json", "--shape", "agent", "-q", "search", "contract-no-match", "--from", "local"]
+      const realEnvelope = runReal(real, args) as Record<string, unknown>
+      const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
+      expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
+      expect(realEnvelope.hits).toEqual(realEnvelope.results)
+      expect(fakeEnvelope.hits).toEqual(fakeEnvelope.results)
+    } finally {
+      cleanup(real)
+      cleanup(fake)
+    }
+  })
+
+  test.skipIf(!akmAvailable)("curate envelope matches real akm, including the results alias", () => {
+    const real = makeRealEnv()
+    const fake = makeFakeEnv()
+    try {
+      const args = ["--format", "json", "--shape", "agent", "-q", "curate", "contract-no-match", "--from", "local", "--limit", "5"]
+      const realEnvelope = runReal(real, args) as Record<string, unknown>
+      const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
+      expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
+      expect(realEnvelope.items).toEqual(realEnvelope.results)
+      expect(fakeEnvelope.items).toEqual(fakeEnvelope.results)
+    } finally {
+      cleanup(real)
+      cleanup(fake)
+    }
+  })
+
   // `info` gates ALL ref validation on both plugins: they resolve their
   // bundle root from $AKM_BUNDLE_DIR, else `akm info --format json` →
   // .bundleDir (claude/hooks/akm-hook.ts resolveStashRoots(),

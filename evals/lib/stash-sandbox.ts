@@ -3,7 +3,7 @@
 // — both must point at temp directories so concurrent evals don't collide
 // and so each scenario starts from a clean slate.
 //
-// The sandbox exports the AKM 0.9.7 bundle-root environment variable only.
+// The sandbox exports the AKM 0.9.14 bundle-root environment variable only.
 
 import { mkdtempSync, mkdirSync, rmSync, cpSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
