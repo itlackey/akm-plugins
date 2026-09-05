@@ -46,6 +46,16 @@
 // most deeply. 0.9.12 did change that envelope again (added `engine`,
 // `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
 // all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
+//
+// Re-verified against akm 0.9.14 (itlackey/akm, main). 0.9.14 makes `akm
+// search` return addressable fragment refs — `<ref>#akm-fragment-<n>-<12 hex>`
+// — which `akm show` resolves to that fragment alone. Checked live: the ref
+// grammar in ./ref-extraction.ts extracts and validates such a ref, and
+// resolves it to its PARENT concept for local bundle lookup, which is the
+// behaviour these plugins want. No range change: `^0.9.8` already admits
+// 0.9.14, and raising the floor would drop 0.9.8–0.9.13 users to gate against
+// a change that is additive.
+//
 // Decision: keep the caret range, not because the risk is unreal but because
 // a narrower pin doesn't address it — the failure mode #106 reported was
 // never "the version gate passed when it shouldn't have" (an *already
