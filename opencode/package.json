@@ -1,6 +1,6 @@
 {
   "name": "akm-opencode",
-  "version": "0.9.14202609050009",
+  "version": "0.9.14202609050148",
   "type": "module",
   "description": "OpenCode plugin for AKM 0.9 with in-process search, show, and curate tools plus feedback and remember.",
   "keywords": [
