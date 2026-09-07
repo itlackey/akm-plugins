@@ -17,6 +17,7 @@ import { appendMemoryEvent, getEventLogPath, type AkmMemoryEvent } from "../clau
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractAkmRefsFromString, validateRefCandidates } from "../claude/shared/ref-extraction"
+import { normalizeFragmentShowInput } from "./fragment-context"
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
@@ -115,6 +116,7 @@ const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
 const AKM_RETROSPECTIVE_NEGATIVE_RE = createRetrospectiveNegativeRegex()
 const AKM_EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
 const PLUGIN_VERSION = readPackageVersion()
+const BUNDLED_AKM_API_VERSION = readBundledAkmVersion()
 const OPENCODE_EVENT_LOG = getEventLogPath("opencode")
 
 // Per-session state that drives the compound-engineering loop.
@@ -176,6 +178,18 @@ function readPackageVersion(): string {
     const raw = readFileSync(path.join(moduleDir, "package.json"), "utf8")
     const parsed = JSON.parse(raw) as { version?: unknown }
     return typeof parsed.version === "string" && parsed.version ? parsed.version : "0.0.0"
+  } catch {
+    return "0.0.0"
+  }
+}
+
+function readBundledAkmVersion(): string {
+  try {
+    const manifestPath = createRequire(import.meta.url).resolve("akm-cli/package.json")
+    const raw = readFileSync(manifestPath, "utf8")
+    const parsed = JSON.parse(raw) as { version?: unknown }
+    const version = parsed.version
+    return typeof version === "string" && version ? version : "0.0.0"
   } catch {
     return "0.0.0"
   }
@@ -2355,10 +2369,13 @@ async function runInProcess(
     ) {
       throw new Error("pack must be a positive integer token budget")
     }
+    const normalizedInput = operation === "show"
+      ? normalizeFragmentShowInput(input, BUNDLED_AKM_API_VERSION)
+      : input
     const result = operation === "search"
-      ? await akmSearch(input as Parameters<typeof akmSearch>[0])
+      ? await akmSearch(normalizedInput as Parameters<typeof akmSearch>[0])
       : operation === "show"
-        ? await akmShowUnified(input as Parameters<typeof akmShowUnified>[0])
+        ? await akmShowUnified(normalizedInput as Parameters<typeof akmShowUnified>[0])
         : await (async () => {
             const { pack, ...curateInput } = input
             const curated = await akmCurate(curateInput as Parameters<typeof akmCurate>[0])
@@ -2447,6 +2464,7 @@ type SearchHit = {
   name?: string
   description?: string
   score?: number
+  estimatedTokens?: number
   whyMatched?: string[]
   matchStage?: "exact" | "prefix" | "relaxed"
   run?: string
@@ -2456,6 +2474,18 @@ type SearchHit = {
   editHint?: string
   curated?: boolean
   quality?: string
+  selectedRef?: string
+  parentRef?: string
+  fragmentOrdinal?: number
+  fragmentCount?: number
+  startLine?: number
+  endLine?: number
+  previousRef?: string
+  nextRef?: string
+  fragmentChars?: number
+  fragmentEstimatedTokens?: number
+  parentChars?: number
+  parentEstimatedTokens?: number
 }
 
 type SearchResponse = {
@@ -3187,17 +3217,26 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         },
       }),
       akm_show: tool({
-        description: "Show an AKM asset by [bundle//]conceptId[#fragment]. Markdown heading fragments select a section. Read an asset this way before relying on it, then record akm_feedback once you know whether it helped.",
+        description: "Show an AKM asset by [bundle//]conceptId[#fragment]. Reads stay exact by default. For an opaque fragment ref returned by search, context='lead' prepends bounded indexed-safe lead context and labels the selected match last; authored heading selectors retain their existing source-live behavior. Read an asset this way before relying on it, then record akm_feedback once you know whether it helped.",
         args: {
           ref: tool.schema.string().describe("Asset ref returned by akm_curate or akm_search, optionally with a #fragment — e.g. `skills/code-review` or `local//knowledge/deploy#Rollback`."),
           detail: tool.schema.enum(["brief", "summary", "normal", "full"]).optional().describe("Response detail level. Defaults to 'normal'."),
+          context: tool.schema.enum(["exact", "lead"]).optional().describe("Fragment context mode. Defaults to exact. For an opaque search fragment, use lead to prepend indexed-safe lead context while keeping the selected match last."),
+          max_tokens: tool.schema.number().optional().describe("Positive token budget for context='lead', estimated as four characters per token. Mutually exclusive with max_chars."),
+          max_chars: tool.schema.number().optional().describe("Positive character budget for context='lead'. Mutually exclusive with max_tokens. Lead defaults to 3200 characters."),
         },
-        async execute({ ref, detail }, context) {
+        async execute({ ref, detail, context, max_tokens, max_chars }, toolContext) {
           return runInProcess(
             client as unknown as LogCapableClient,
             "show",
-            { ref, detail },
-            { toolName: "akm_show", sessionID: context.sessionID, directory: context.directory },
+            {
+              ref,
+              detail,
+              context,
+              max_tokens,
+              max_chars,
+            },
+            { toolName: "akm_show", sessionID: toolContext.sessionID, directory: toolContext.directory },
           )
         },
       }),

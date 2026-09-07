@@ -28,12 +28,19 @@ The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, availa
 | Command | Description |
 | --- | --- |
 | `/akm-search [query] [flags]` | Search configured bundles or registries; omit the query to browse. |
-| `/akm-show <ref>` | Show a concept by concept-ID reference. |
+| `/akm-show <ref> [context flags]` | Show a concept; opaque search fragments are exact by default and support bounded indexed-safe lead context. |
 | `/akm-curate <task>` | Curate ranked concepts and pack selected local assets' full content into one 8,000-token response. |
 | `/akm-feedback <ref> <+\|-> [note]` | Record positive or negative feedback. Negative feedback requires a note. |
 | `/akm-remember [name]` | Distill durable knowledge from the conversation into a memory. |
 
 AKM references use `[bundle//]conceptId[#fragment]`, for example `skills/code-review`, `memories/release-retro`, or `team-playbook//knowledge/deploy#Rollback`. Search flags use current source names: `--from local`, `--from registry`, `--from all`, or `--from <bundle-name>`.
+
+`/akm-show` accepts `--context exact|lead` plus one of `--max-tokens N` or
+`--max-chars N`. `exact` is backward-compatible and remains the default.
+For an opaque fragment ref returned by search, `lead` returns the indexed-safe
+first fragment followed by an explicitly labelled selected match, bounded to
+3,200 characters unless overridden. Friendly authored heading selectors retain
+their existing source-live behavior.
 
 ## Lifecycle Hooks
 
