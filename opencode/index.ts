@@ -2737,17 +2737,28 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
           !proposalSummary.unsupported && proposalSummary.count > 0 ? formatPendingProposalContext(proposalSummary.count) : "",
         ]
-        // ONE entry, not N. OpenCode maps each `system` entry to its own system
-        // message, and chat templates that require a single leading system
-        // message reject the request outright — "Jinja Exception: System
-        // message must be at the beginning", surfacing as an opaque provider
-        // HTTP 500 that hits only sessions with the plugin installed (#96;
-        // reproduced with a bare two-system-message request on
-        // qwen3.6-35b-a3b and devstral-small-2-2512, no akm involved).
-        // Budgeting is unchanged and still happens per block, so joining can
-        // only re-seam blocks applyContextBudget already kept.
+        // ONE entry, not N (#96), and merged into the host's LAST existing
+        // entry rather than pushed as a new one (#121). OpenCode maps each
+        // `system` entry to its own system message, and chat templates that
+        // require a single leading system message reject a second one
+        // outright — "Jinja Exception: System message must be at the
+        // beginning", surfacing as an opaque provider HTTP 500 that hits only
+        // sessions with the plugin installed. Merging into the LAST entry
+        // (never prepended to output.system[0]) keeps the host's own first
+        // entry a stable prompt-cache prefix, since AKM's blocks change from
+        // turn to turn while the host's leading entry does not. Pushing a new
+        // entry only when the array is empty preserves the number of system
+        // entries the host built, except for that one case where the model
+        // would otherwise have no system message at all. Budgeting is
+        // unchanged and still happens per block, so joining can only re-seam
+        // blocks applyContextBudget already kept.
         const budgeted = applyContextBudget(blocks)
-        if (budgeted.length > 0) output.system.push(budgeted.join("\n\n"))
+        if (budgeted.length > 0) {
+          const block = budgeted.join("\n\n")
+          const last = output.system.length - 1
+          if (last >= 0) output.system[last] = `${output.system[last]}\n\n${block}`
+          else output.system.push(block)
+        }
       } catch (error: unknown) {
         await logHookFailure(logClient, "experimental.chat.system.transform", error)
       }
