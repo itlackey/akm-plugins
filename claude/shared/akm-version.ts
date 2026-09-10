@@ -52,7 +52,7 @@
 
 import { satisfies } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.14"
+export const AKM_VERSION_RANGE = "^0.9.15"
 
 /**
  * True when `version` is a valid semver string that satisfies
