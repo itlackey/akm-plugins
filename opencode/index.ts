@@ -2766,7 +2766,22 @@ function extractText(parts: unknown): string {
   const segments: string[] = []
   for (const part of parts as Array<Record<string, unknown>>) {
     if (part?.type === "text" && typeof part.text === "string") {
-      const text = part.text.trim()
+      const raw = part.text.trim()
+      // `opencode run "one argument"` persists that argument as a JSON string
+      // literal (including its surrounding quotes) and forwards the same text
+      // to chat.message. Start-anchored learning signals such as `Always ...`
+      // would otherwise see `"Always ..."` and be missed in the real CLI even
+      // though the TUI-shaped hook fixture passes plain text. Unwrap exactly
+      // one JSON-string layer; never parse objects or arrays from user input.
+      let text = raw
+      if (raw.startsWith('"') && raw.endsWith('"')) {
+        try {
+          const decoded = JSON.parse(raw)
+          if (typeof decoded === "string") text = decoded.trim()
+        } catch {
+          // A literal unmatched/escaped quote is ordinary user text.
+        }
+      }
       if (text) segments.push(text)
     }
   }

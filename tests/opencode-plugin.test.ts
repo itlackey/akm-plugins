@@ -277,6 +277,27 @@ describe("akm-opencode plugin", () => {
       expect(signalLog).toContain('"kind":"preference"')
     })
 
+    it("unwraps the JSON-string text shape emitted by opencode run before classifying", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["chat.message"]!(
+        { sessionID: "learning-cli-shape-1", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: JSON.stringify("Always run the host-shaped focused test first") }] } as any,
+      )
+
+      const proposalCalls = mockSpawn.mock.calls.filter(([, args]: any[]) =>
+        Array.isArray(args) && args[0] === "proposal" && args[1] === "new")
+      expect(proposalCalls).toHaveLength(1)
+      const args = proposalCalls[0]?.[1] as string[]
+      const taskFile = args[args.indexOf("--file") + 1]
+      expect(readFileSync(taskFile, "utf8")).toContain("Always run the host-shaped focused test first")
+      const signals = readFileSync(path.join(eventStateDir, "akm-opencode", "learning-signals.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { sessionId?: string; message?: string })
+      expect(signals.find((entry) => entry.sessionId === "learning-cli-shape-1")?.message)
+        .toBe("Always run the host-shaped focused test first")
+    })
+
     it("accepts a successful JSON result even when AKM also writes a warning to stderr", async () => {
       const { EventEmitter } = await import("node:events")
       const makeStream = () => Object.assign(new EventEmitter(), { setEncoding() {}, unref() {} })
