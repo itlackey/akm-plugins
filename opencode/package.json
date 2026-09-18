@@ -1,6 +1,6 @@
 {
   "name": "akm-opencode",
-  "version": "0.9.14202609050148",
+  "version": "0.9.15202609102133",
   "type": "module",
   "description": "OpenCode plugin for AKM with discovery tools, feedback, memory, and automatic learning proposals from corrections and recurring workflows.",
   "keywords": [
@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.18.14",
-    "akm-cli": "0.9.14"
+    "akm-cli": "0.9.15"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

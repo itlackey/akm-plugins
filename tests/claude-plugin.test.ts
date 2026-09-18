@@ -339,7 +339,7 @@ describe("Claude hook scripts", () => {
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 if [ "$1" = "--version" ]; then
-  echo "akm 0.9.14"
+  echo "akm 0.9.15"
   exit 0
 fi
 exit 0
@@ -356,7 +356,7 @@ exit 0
     })
 
     expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.9.14")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.9.15")
   })
 
   it("extract-session dispatches cleanly and returns no output (fire-and-forget)", () => {
@@ -972,7 +972,7 @@ exit 0
     const quotedLog = shellQuote(invokeLog)
 
     // Fake akm: version/install, index no-op, hints + curated output.
-    // The version MUST satisfy the plugin's required range (^0.9.14)
+    // The version MUST satisfy the plugin's required range (^0.9.15)
     // so the new SessionStart consent gate treats akm as healthy and proceeds
     // with the normal injected-context flow.
     writeFileSync(
@@ -980,7 +980,7 @@ exit 0
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
@@ -1052,7 +1052,7 @@ exit 0
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
@@ -1105,7 +1105,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
@@ -2316,7 +2316,7 @@ exit 0
         `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${shellQuote(callLog)}
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 for arg in "$@"; do
   case "$arg" in
@@ -2649,7 +2649,7 @@ exit 0
       const legacy = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "proposal" ]; then
   echo '{"hits":[{"id":"legacy"}]}'
@@ -2663,7 +2663,7 @@ exit 0
       const current = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "proposal" ]; then
   echo '{"schemaVersion":1,"totalCount":1,"proposals":[{"id":"current"}]}'
@@ -2683,7 +2683,7 @@ exit 0
       const { payload } = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
   echo '{"runs":[{"id":"run-7","workflowRef":"workflows/release","status":"active","currentStepId":"step-2","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"evilKey":"evilPayload"}}],"shape":"workflow-list","schemaVersion":1}'
@@ -2706,7 +2706,7 @@ exit 0
       const { payload } = runSessionStartWith(
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
   echo '{"runs":[]}'
@@ -2732,7 +2732,7 @@ exit 0
         path.join(binDir, "akm"),
         `#!/usr/bin/env sh
 case "$1" in
-  --version) echo "akm 0.9.14"; exit 0 ;;
+  --version) echo "akm 0.9.15"; exit 0 ;;
 esac
 exit 0
 `,

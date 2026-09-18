@@ -443,6 +443,21 @@ if (verb === "hints") {
 // assetTypes is the 0.9 asset-type vocabulary, in the order real akm emits it.
 // tests/fake-akm-contract.test.ts pins both the envelope shape and this list
 // against the real binary.
+// 0.9.15 info reports the four XDG-derived directories alongside bundleDir.
+function xdgDir(akmVar, xdgVar, fallback) {
+  const direct = (process.env[akmVar] || "").trim()
+  if (direct) return direct
+  const base = (process.env[xdgVar] || "").trim()
+  const root = base || require("node:path").join(process.env.HOME || "", fallback)
+  return require("node:path").join(root, "akm")
+}
+
+// 0.9.15 workflow list envelopes carry a scope key derived from the cwd.
+function fakeScopeKey() {
+  const hash = require("node:crypto").createHash("sha256").update(process.cwd()).digest("hex")
+  return "dir:v1:" + hash
+}
+
 if (verb === "info") {
   const bundleDir = (process.env.AKM_BUNDLE_DIR || idx.bundleDir || "").trim()
   const byType = {}
@@ -451,8 +466,12 @@ if (verb === "info") {
     JSON.stringify({
       ok: true,
       schemaVersion: 1,
-      version: "0.9.14",
+      version: "0.9.15",
       bundleDir,
+      cacheDir: xdgDir("AKM_CACHE_DIR", "XDG_CACHE_HOME", ".cache"),
+      configDir: xdgDir("AKM_CONFIG_DIR", "XDG_CONFIG_HOME", ".config"),
+      dataDir: xdgDir("AKM_DATA_DIR", "XDG_DATA_HOME", ".local/share"),
+      stateDir: xdgDir("AKM_STATE_DIR", "XDG_STATE_HOME", ".local/state"),
       defaultBundle: "bundle",
       assetTypes: [
         "skill",
@@ -580,7 +599,7 @@ if (verb === "config") {
 // envelope exercises the parse path without inventing fixture state.
 if (verb === "workflow" && tail[0] === "list") {
   const runs = []
-  process.stdout.write(JSON.stringify({ ok: true, runs, shape: "workflow-list", schemaVersion: 1, results: runs }))
+  process.stdout.write(JSON.stringify({ ok: true, runs, scopeKey: fakeScopeKey(), shape: "workflow-list", schemaVersion: 1, results: runs }))
   process.exit(0)
 }
 
@@ -685,7 +704,7 @@ if (verb === "--version" || verb === "-V") {
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers
   // always receive the semver that governs the compatibility gate.
-  writeFileSync(1, "fake-akm 0.9.14\\n")
+  writeFileSync(1, "fake-akm 0.9.15\\n")
   process.exit(0)
 }
 

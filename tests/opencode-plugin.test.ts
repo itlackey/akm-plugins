@@ -28,7 +28,6 @@ const bundledAkmManifest = (() => {
   const manifest = createRequire(new URL("../opencode/index.ts", import.meta.url)).resolve("akm-cli/package.json")
   return { path: manifest, value: JSON.parse(readFileSync(manifest, "utf8")) as { bin: string | { akm: string }; version: string } }
 })()
-const bundledAkmVersion = bundledAkmManifest.value.version
 const akmBin = path.resolve(
   path.dirname(bundledAkmManifest.path),
   typeof bundledAkmManifest.value.bin === "string"
@@ -420,18 +419,13 @@ describe("akm-opencode plugin", () => {
       expect(mockAkmShowUnified).not.toHaveBeenCalled()
     })
 
-    it("fails explicitly when lead context is requested from the older bundled API", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_show.execute({
+    it("fails explicitly when lead context is requested from an older loaded API", () => {
+      expect(() => normalizeFragmentShowInput({
         ref: "memories/timeline#akm-fragment-7-1138d4941c9a",
         context: "lead",
-      } as any, createToolContext())
-
-      expect(JSON.parse(result)).toEqual({
-        ok: false,
-        error: `context='lead' requires akm-cli >=0.9.15; this plugin bundles ${bundledAkmVersion}. Install the plugin release whose exact akm-cli pin is 0.9.15 or newer.`,
-      })
-      expect(mockAkmShowUnified).not.toHaveBeenCalled()
+      }, "0.9.14")).toThrow(
+        "context='lead' requires akm-cli >=0.9.15; this plugin bundles 0.9.14. Install the plugin release whose exact akm-cli pin is 0.9.15 or newer.",
+      )
     })
 
     it("preserves fragment provenance returned by 0.9.15", async () => {
@@ -643,12 +637,14 @@ describe("akm-opencode plugin", () => {
 
     it("pushes the AKM doctrine block on every system transform, not once per session", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      const first: { system: string[] } = { system: [] }
-      const second: { system: string[] } = { system: [] }
+      const first: { system: string[] } = { system: ["HOST PROMPT"] }
+      const second: { system: string[] } = { system: ["HOST PROMPT"] }
 
       // The host rebuilds output.system from scratch per request, so a
       // once-per-session push meant the model saw AKM's framing on turn one
-      // and never again (nor after a compaction).
+      // and never again (nor after a compaction). Both outputs seed a host
+      // entry so this proves the merge happens on every request, not only
+      // the first.
       await hooks["experimental.chat.system.transform"]!({ sessionID: "transform-1" } as any, first as any)
       await hooks["experimental.chat.system.transform"]!({ sessionID: "transform-1" } as any, second as any)
 
@@ -693,6 +689,8 @@ describe("akm-opencode plugin", () => {
       // OpenCode maps each `system` entry to a separate system message, and
       // templates requiring a single leading system message answer HTTP 500
       // ("System message must be at the beginning") — plugin arm only (#96).
+      // The host has already provided its own entry, so the AKM block must
+      // merge into it rather than ride in as a second entry (#121).
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
         if (args?.[0] === "--version") return "akm 0.9.14\n"
         if (args?.includes("hints")) return "stash-authored hint text"
@@ -701,18 +699,62 @@ describe("akm-opencode plugin", () => {
       })
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.event!({ event: { type: "session.created", properties: { sessionID: "single-system-1" } } } as any)
-      const output: { system: string[] } = { system: [] }
+      const output: { system: string[] } = { system: ["HOST PROMPT"] }
       await hooks["experimental.chat.system.transform"]!({ sessionID: "single-system-1" } as any, output as any)
 
       // Multiple blocks are live for this session (curated pointer + doctrine
-      // + hints), and they must still arrive as one entry.
+      // + hints), and they must still arrive merged into the host's one entry.
       expect(output.system).toHaveLength(1)
+      expect(output.system[0]!.startsWith("HOST PROMPT\n\n")).toBe(true)
       expect(output.system[0]).toContain("AKM bundle curation written to")
       expect(output.system[0]).toContain("# AKM is available in this session")
       expect(output.system[0]).toContain("stash-authored hint text")
       expect(output.system[0]!.indexOf("AKM bundle curation written to")).toBeLessThan(
         output.system[0]!.indexOf("# AKM is available in this session"),
       )
+    })
+
+    it("merges into the last host entry when the host provides several, leaving earlier entries untouched", async () => {
+      // OpenCode keeps the provider prompt as output.system[0] so it stays a
+      // stable prompt-cache prefix; AKM's blocks change turn to turn and
+      // belong at the end of the LAST entry, never prepended to entry 0.
+      mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
+        if (args?.[0] === "--version") return "akm 0.9.14\n"
+        if (args?.includes("hints")) return "stash-authored hint text"
+        if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
+        return "mock output"
+      })
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "two-host-entries-1" } } } as any)
+      const output: { system: string[] } = { system: ["PROVIDER PROMPT", "AGENT PROMPT"] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "two-host-entries-1" } as any, output as any)
+
+      expect(output.system).toHaveLength(2)
+      expect(output.system[0]).toBe("PROVIDER PROMPT")
+      expect(output.system[1]!.startsWith("AGENT PROMPT\n\n")).toBe(true)
+      expect(output.system[1]).toContain("AKM bundle curation written to")
+    })
+
+    it("pushes a new entry only when the host array is empty", async () => {
+      // Today's behaviour, kept: with no host entry to merge into, the
+      // model would otherwise get no system message at all.
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "empty-host-array-1" } } } as any)
+      const output: { system: string[] } = { system: [] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "empty-host-array-1" } as any, output as any)
+
+      expect(output.system).toHaveLength(1)
+      expect(output.system[0]).toContain("# AKM is available in this session")
+    })
+
+    it("leaves the host entry untouched when there is nothing to inject", async () => {
+      // No session id means no cached blocks to look up, so the transform
+      // must not merge in an empty block or append a trailing separator.
+      const hooks = await AkmPlugin(createPluginInput())
+      const output: { system: string[] } = { system: ["HOST PROMPT"] }
+      await hooks["experimental.chat.system.transform"]!({} as any, output as any)
+
+      expect(output.system).toEqual(["HOST PROMPT"])
     })
 
     it("keeps the curated pointer when a large hints payload overruns the context budget", async () => {
