@@ -14,6 +14,8 @@ import { normalizeFragmentShowInput } from "../opencode/fragment-context"
 // tests would be appending to — the developer's real ~/.local/state tree.
 const eventStateDir = mkdtempSync(path.join(tmpdir(), "akm-opencode-test-state-"))
 process.env.XDG_STATE_HOME = eventStateDir
+process.env.AKM_AUTO_LEARNING = "1"
+process.env.AKM_AUTO_SKILL_PROPOSALS = "1"
 const eventLogPath = path.join(eventStateDir, "akm-opencode", "events.jsonl")
 
 const realChildProcess = await import("node:child_process")
@@ -249,6 +251,83 @@ describe("akm-opencode plugin", () => {
           extra: expect.objectContaining({ subsystem: "hook", hook: "shell.env" }),
         }),
       }))
+    })
+  })
+
+  describe("learning proposals", () => {
+    it("submits corrections asynchronously and deduplicates the captured evidence", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const input = { sessionID: "learning-proposal-1", messageID: "message-1", agent: "build" } as any
+      const output = { parts: [{ type: "text", text: "no, use pnpm not npm for this repository" }] } as any
+
+      await hooks["chat.message"]!(input, output)
+      const proposalCalls = () => mockSpawn.mock.calls.filter(([, args]: any[]) =>
+        Array.isArray(args) && args[0] === "proposal" && args[1] === "new")
+      expect(proposalCalls()).toHaveLength(1)
+      const args = proposalCalls()[0]?.[1] as string[]
+      expect(args).toEqual(expect.arrayContaining([
+        "proposal", "new", "instruction", "--file", "--format", "json", "-q", "--timeout-ms", "600000",
+      ]))
+      const taskFile = args[args.indexOf("--file") + 1]
+      expect(readFileSync(taskFile, "utf8")).toContain("no, use pnpm not npm for this repository")
+      expect(readFileSync(taskFile, "utf8")).toContain("Do not edit CLAUDE.md, AGENTS.md")
+
+      await hooks["chat.message"]!(input, output)
+      expect(proposalCalls()).toHaveLength(1)
+      const signalLog = readFileSync(path.join(eventStateDir, "akm-opencode", "learning-signals.jsonl"), "utf8")
+      expect(signalLog).toContain('"kind":"preference"')
+    })
+
+    it("accepts a successful JSON result even when AKM also writes a warning to stderr", async () => {
+      const { EventEmitter } = await import("node:events")
+      const makeStream = () => Object.assign(new EventEmitter(), { setEncoding() {}, unref() {} })
+      const stdout = makeStream()
+      const stderr = makeStream()
+      const childHandlers = new Map<string, (...args: any[]) => void>()
+      mockSpawn.mockImplementationOnce((() => ({
+        stdout,
+        stderr,
+        on: (event: string, handler: (...args: any[]) => void) => childHandlers.set(event, handler),
+        unref: () => undefined,
+      })) as any)
+
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["chat.message"]!(
+        { sessionID: "learning-proposal-stderr", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: "I prefer Volta for runtime pinning" }] } as any,
+      )
+      const proposalCall = mockSpawn.mock.calls.find(([, args]: any[]) =>
+        Array.isArray(args) && args[0] === "proposal" && args[1] === "new") as any[] | undefined
+      const args = proposalCall?.[1] as string[]
+      const taskFile = args[args.indexOf("--file") + 1]
+      expect(existsSync(taskFile)).toBe(true)
+
+      stdout.emit("data", JSON.stringify({
+        ok: true,
+        ref: "instructions/prefer-volta-runtime-pinning",
+        proposal: { id: "proposal-warning", ref: "instructions/prefer-volta-runtime-pinning" },
+      }))
+      stderr.emit("data", "AKM used the fallback authoring engine\n")
+      childHandlers.get("close")?.(0, null)
+
+      expect(existsSync(taskFile)).toBe(false)
+      const ledger = readFileSync(path.join(eventStateDir, "akm-opencode", "learning-proposals.jsonl"), "utf8")
+      expect(ledger).toContain('"proposalId":"proposal-warning"')
+      expect(ledger).toContain('"status":"submitted"')
+    })
+
+    it("captures positive feedback without turning praise into a proposal", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["chat.message"]!(
+        { sessionID: "learning-positive-1", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: "Perfect — that's exactly what I wanted" }] } as any,
+      )
+
+      const proposals = mockSpawn.mock.calls.filter(([, args]: any[]) =>
+        Array.isArray(args) && args[0] === "proposal" && args[1] === "new")
+      expect(proposals).toHaveLength(0)
+      const signalLog = readFileSync(path.join(eventStateDir, "akm-opencode", "learning-signals.jsonl"), "utf8")
+      expect(signalLog).toContain('"kind":"positive-feedback"')
     })
   })
 
@@ -737,9 +816,9 @@ describe("akm-opencode plugin", () => {
     })
 
     it("AKM_AUTO_MEMORY=0 skips the session.idle extraction entirely", async () => {
-      // Same kill switch as the Claude hook's SessionEnd extract: this spawn is
-      // the whole of automatic memory harvesting on OpenCode, so one variable
-      // has to silence both harnesses.
+      // Same kill switch as the Claude hook's SessionEnd extract: this controls
+      // native-transcript extraction on both harnesses. Prompt-time learning
+      // proposals use the separate AKM_AUTO_LEARNING switch.
       const hooks = await AkmPlugin(createPluginInput())
       const extractCalls = () =>
         mockSpawn.mock.calls.filter(([, args]: any[]) => Array.isArray(args) && args[0] === "proposal" && args[1] === "extract").length
@@ -786,7 +865,7 @@ describe("akm-opencode plugin", () => {
       )
 
       // Real akm with no LLM engine configured: JSON envelope on stderr.
-      // Discarding it (stdio: "ignore") made the only remaining memory-harvest
+      // Discarding it (stdio: "ignore") made the native-session extraction
       // path fail silently on a default install.
       stderr.emit(
         "data",

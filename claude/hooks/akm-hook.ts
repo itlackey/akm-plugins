@@ -3,6 +3,7 @@
 import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
 import { AKM_VERSION_RANGE as AKM_REQUIRED_RANGE } from "../shared/akm-version"
 import { satisfies, valid } from "../shared/vendor-semver"
 import {
@@ -14,6 +15,16 @@ import {
 } from "../shared/feedback-signals"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../shared/curate-render"
 import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
+import {
+  appendCapturedLearningSignal,
+  captureLearningSignal,
+  createLearningProposalJob,
+  observeRecurringWorkflow,
+  recordLearningProposalStatus,
+  removeLearningProposalJob,
+  reserveLearningProposal,
+  type ProposalCandidate,
+} from "../shared/learning-signals"
 import { shouldRecall } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
 import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
@@ -35,6 +46,10 @@ const MEMORY_LOG = path.join(STATE_DIR, "memory.log")
 // so a failing harvest (e.g. no LLM profile configured -> LLM_NOT_CONFIGURED)
 // leaves a trace instead of vanishing into stdio: "ignore". See extractSession().
 const EXTRACT_LOG = path.join(STATE_DIR, "extract.log")
+// High-confidence prompt signals are authored into AKM proposals by a detached
+// worker. Its bounded output and failures land here; raw hook stdout remains
+// reserved for the Claude hook protocol envelope.
+const LEARNING_PROPOSAL_LOG = path.join(STATE_DIR, "learning-proposals.log")
 // SessionEnd's `akm index` is detached for the same reason and lands here for
 // the same reason — see runIndexOnSessionEnd().
 const INDEX_LOG = path.join(STATE_DIR, "index.log")
@@ -82,12 +97,12 @@ function envFlag(name: string, defaultOn: boolean): boolean {
 }
 
 /**
- * .claude-plugin/plugin.json declares four `userConfig` options, and Claude
+ * .claude-plugin/plugin.json declares `userConfig` options, and Claude
  * Code exports every declared option to hook processes as
  * CLAUDE_PLUGIN_OPTION_<KEY uppercased>. Shell-form hook commands (which all of
  * ours are) cannot use ${user_config.*} substitution, so the env var is the
  * only delivery route — without these reads the settings dialog would render
- * four controls wired to nothing.
+ * controls wired to nothing.
  *
  * Each option is an alias for an AKM_* variable that already existed, so the
  * resolution order is explicit env var -> plugin option -> built-in default.
@@ -117,10 +132,12 @@ function flagSetting(envName: string, optionKey: string, defaultOn: boolean): bo
 }
 
 const AUTO_FEEDBACK = flagSetting("AKM_AUTO_FEEDBACK", "AUTO_FEEDBACK", true)
-// AKM_AUTO_MEMORY gates automatic memory harvesting. That harvest is exactly
-// one `akm proposal extract` spawn on each harness — SessionEnd here (see
-// extractSession()), session.idle on OpenCode (maybeExtractSessionOnIdle) —
-// so the one variable really does switch both off.
+const AUTO_LEARNING = flagSetting("AKM_AUTO_LEARNING", "AUTO_LEARNING", true)
+const AUTO_SKILL_PROPOSALS = envFlag("AKM_AUTO_SKILL_PROPOSALS", true)
+// AKM_AUTO_MEMORY gates native-transcript extraction. That path is exactly one
+// `akm proposal extract` spawn on each harness — SessionEnd here (see
+// extractSession()), session.idle on OpenCode (maybeExtractSessionOnIdle).
+// Prompt-time learning proposals have their own AKM_AUTO_LEARNING switch.
 const AUTO_MEMORY = envFlag("AKM_AUTO_MEMORY", true)
 const AUTO_CURATE = envFlag("AKM_AUTO_CURATE", true)
 const AUTO_HINTS = envFlag("AKM_AUTO_HINTS", true)
@@ -238,7 +255,7 @@ function sanitize(value: string): string {
   return value.replace(/[\t\r\n]+/g, " ").replace(/ {2,}/g, " ").trim()
 }
 
-// 13: state-file rotation/caps. Seven append-only files live under STATE_DIR
+// 13: state-file rotation/caps. Append-only files live under STATE_DIR
 // (session.log, feedback.log, memory.log, quality-cache.tsv, extract.log via
 // appendLog(); sessions/<sid>.md via writeSessionBuffer(); events.jsonl via the
 // shared module). None had a size cap, so they grew without bound for the
@@ -289,6 +306,129 @@ function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
   rotateIfOversized(bufferPath)
   const redacted = redactSecrets(body).text.replace(/\b([A-Z][A-Z0-9_]{2,})\s*=\s*(?:\[[^\]]+\]|[^\s"'`,;]+)/g, "[REDACTED_ASSIGNMENT:$1]")
   appendFileSync(bufferPath, `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
+}
+
+function learningProposalMinConfidence(): number {
+  const raw = Number(process.env.AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE ?? "0.75")
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.75
+}
+
+function promptProject(rawInput: string): string {
+  const parsed = safeJsonParse<Record<string, unknown>>(rawInput)
+  for (const value of [parsed?.cwd, parsed?.project_dir, parsed?.projectDir]) {
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return process.cwd()
+}
+
+/**
+ * Reserve and dispatch one proposal-authoring job without adding proposal
+ * latency to UserPromptSubmit. The detached worker owns the long-running
+ * `akm proposal new` call, result parsing, durable status, and cleanup.
+ */
+function submitLearningProposal(candidate: ProposalCandidate): void {
+  if (!AUTO_LEARNING || candidate.confidence < learningProposalMinConfidence()) return
+  const akm = resolveAkmCommandSpec()
+  if (!akm) {
+    appendLog(LEARNING_PROPOSAL_LOG, "skipped", candidate.kind, "akm unavailable")
+    return
+  }
+  const reservation = reserveLearningProposal(STATE_DIR, candidate)
+  if (!reservation) return
+  let jobFile = ""
+  let taskFile = ""
+  try {
+    const created = createLearningProposalJob({
+      stateDir: STATE_DIR,
+      command: akm.command,
+      argsPrefix: akm.argsPrefix,
+      candidate,
+      reservation,
+      logFile: LEARNING_PROPOSAL_LOG,
+      eventLog: EVENT_LOG,
+    })
+    jobFile = created.jobFile
+    taskFile = created.job.taskFile
+    const workerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "akm-proposal-worker.ts")
+    const child = spawn(process.execPath, [workerPath, jobFile], {
+      detached: true,
+      stdio: "ignore",
+    })
+    child.unref()
+    appendLog(
+      LEARNING_PROPOSAL_LOG,
+      "queued",
+      reservation.key,
+      reservation.proposalType,
+      reservation.proposalName,
+      candidate.kind,
+    )
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    recordLearningProposalStatus({
+      stateDir: STATE_DIR,
+      candidate,
+      reservation,
+      status: "failed",
+      error: message,
+    })
+    if (jobFile || taskFile) removeLearningProposalJob(jobFile, taskFile)
+    appendLog(LEARNING_PROPOSAL_LOG, "spawn_failed", reservation.key, message)
+  }
+}
+
+/** Capture prompt evidence first; proposal authoring/review stays in AKM. */
+function capturePromptLearning(rawInput: string, text: string, sid: string): void {
+  if (!AUTO_LEARNING) return
+  const project = promptProject(rawInput)
+  const signal = captureLearningSignal({
+    text,
+    harness: "claude-code",
+    project,
+    ...(sid ? { sessionId: sid } : {}),
+  })
+  if (signal) {
+    try {
+      appendCapturedLearningSignal(STATE_DIR, signal)
+      writeSessionBuffer(
+        sid,
+        `learning signal: ${signal.kind}`,
+        `- confidence: ${signal.confidence.toFixed(2)}\n- patterns: ${signal.patterns.join(", ")}\n- evidence: ${signal.message}`,
+      )
+      writeMemoryEvent({
+        event: "learning_signal",
+        sessionId: sid || undefined,
+        project,
+        scope: buildScope(sid),
+        input: {
+          kind: signal.kind,
+          confidence: signal.confidence,
+          patterns: signal.patterns,
+          proposalType: signal.proposalType ?? null,
+          evidence: signal.message,
+        },
+        outcome: { status: signal.proposalType ? "ok" : "skipped" },
+      })
+    } catch (error: unknown) {
+      appendLog(LEARNING_PROPOSAL_LOG, "capture_failed", error instanceof Error ? error.message : String(error))
+    }
+    if (signal.proposalType) submitLearningProposal(signal)
+  }
+
+  if (!AUTO_SKILL_PROPOSALS) return
+  try {
+    const workflow = observeRecurringWorkflow({
+      stateDir: STATE_DIR,
+      text,
+      harness: "claude-code",
+      project,
+      ...(sid ? { sessionId: sid } : {}),
+      ...(signal ? { signal } : {}),
+    })
+    if (workflow) submitLearningProposal(workflow)
+  } catch (error: unknown) {
+    appendLog(LEARNING_PROPOSAL_LOG, "workflow_capture_failed", error instanceof Error ? error.message : String(error))
+  }
 }
 
 /**
@@ -842,8 +982,9 @@ function taskCompleted(): string {
     input: { taskId: parsed.task_id ?? parsed.taskId ?? null, summary },
     outcome: { status: "ok" },
   })
-  // The session buffer is the transcript `akm proposal extract` reads at
-  // SessionEnd, so a completed task's summary has to land in it.
+  // Keep task summaries in the plugin's private audit buffer. Native session
+  // extraction reads Claude's JSONL transcript; this file is intentionally not
+  // presented as a second transcript source.
   if (sid && summary) writeSessionBuffer(sid, "task completed", summary)
   return ""
 }
@@ -1189,11 +1330,11 @@ function recordPostTool() {
     // touched. Appended last so the existing column order is unchanged.
     appendLog(MEMORY_LOG, "system", toolName || "Bash", ref, commandText, sid)
   }
-  // Record one buffer section per post-tool event (command + status). We
+  // Record one private audit-buffer section per post-tool event (command + status). We
   // deliberately do NOT inject `- ref: <type>:<slug>` lines into the body —
-  // the buffer is one of the transcript sources `akm proposal extract` reads
-  // at SessionEnd, and leaving raw command text (not synthetic ref lines)
-  // keeps that transcript honest.
+  // leaving raw command text (not synthetic ref lines) keeps that audit trail
+  // honest. Native `akm proposal extract` reads Claude's JSONL transcript, not
+  // this plugin-owned file.
   if (sid && refs.length > 0) {
     writeSessionBuffer(sid, `${toolName || "Bash"} ${statusText}`, `- command: ${commandText}`)
   }
@@ -1445,6 +1586,7 @@ function curatePrompt(): string {
       appendLog(MEMORY_LOG, "user", "intent", text)
       writeSessionBuffer(sid, "user memory intent", text)
     }
+    capturePromptLearning(rawInput, text, sid)
   }
   if (!text) return ""
   // Before the curate gate on purpose: "that worked" is a short prompt that
@@ -1653,7 +1795,7 @@ async function sessionStart(): Promise<string> {
  * session isn't really done; the hourly `akm improve` extract pass remains the
  * backstop for crashes that fire no hook.
  *
- * Observability: this is the only remaining memory-harvest path (the
+ * Observability: this is the native-session harvest path (the
  * Stop/SubagentStop/PreCompact hooks were removed from plugin.json in 0.9.0),
  * and on a fresh install with no LLM profile configured `akm proposal extract`
  * exits having printed `{"ok":false,...,"code":"LLM_NOT_CONFIGURED"}`. With
@@ -1663,8 +1805,8 @@ async function sessionStart(): Promise<string> {
  * recorded in session.log. Still detached, still unref'd, still no wait.
  */
 function extractSession(): string {
-  // AKM_AUTO_MEMORY=0 turns automatic memory harvesting off. This spawn is the
-  // whole of that harvest on Claude, so it is the only place the switch bites.
+  // AKM_AUTO_MEMORY=0 turns native-session extraction off. Prompt-time
+  // correction/preference proposals are controlled by AKM_AUTO_LEARNING.
   if (!AUTO_MEMORY) return ""
   const raw = readStdin()
   const sid = extractSessionId(raw)
@@ -1677,13 +1819,13 @@ function extractSession(): string {
   // for them is guaranteed to fail — `akm proposal extract` answers
   // "session not found for harness claude" — and that ok:false block
   // then trips lastExtractFailureWarning() on every subsequent SessionStart.
-  // Only spawn when at least one of the two transcript sources akm reads
-  // actually exists: the harness transcript named in the hook payload, or
-  // this plugin's own session buffer.
+  // Only spawn when the native transcript AKM actually reads exists. The
+  // plugin-owned session buffer is an audit/evidence file, not a Claude JSONL
+  // transcript; treating it as one produced guaranteed "session not found"
+  // runs for ephemeral sessions.
   const transcriptPath = typeof parsed.transcript_path === "string" ? parsed.transcript_path : ""
   const hasTranscript = transcriptPath !== "" && existsSync(transcriptPath)
-  const hasBuffer = existsSync(path.join(SESSIONS_DIR, `${sid}.md`))
-  if (!hasTranscript && !hasBuffer) {
+  if (!hasTranscript) {
     appendLog(SESSION_LOG, "extract_skipped_no_transcript", sid, transcriptPath)
     return ""
   }

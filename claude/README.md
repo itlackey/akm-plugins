@@ -49,7 +49,7 @@ Hooks are non-blocking and keep local, redacted state for feedback and memory ca
 | Event | Behavior |
 | --- | --- |
 | `SessionStart` | Verifies Bun and AKM availability, warms AKM data, and injects the AKM discovery guidance plus hints, pending proposals, active workflows, and curated context when available. Surfaces a missing bundle or a failed previous extraction to both the model and the user. |
-| `UserPromptSubmit` | Curates substantive prompts and supplies the result as additional context. It also records explicit memory intent and captures retrospective feedback ("that worked") for concepts the session recently touched. |
+| `UserPromptSubmit` | Curates substantive prompts and supplies the result as additional context. It also captures explicit memories, corrections, guardrails, preferences, and positive feedback. High-confidence durable signals are authored asynchronously with `akm proposal new`; repeated task intent across distinct sessions can produce a skill proposal. Retrospective praise still credits concepts the session recently touched. |
 | `UserPromptExpansion` | Records use of the five AKM slash commands. |
 | `PostToolUse` / `PostToolUseFailure` | Records tool observations and submits deduplicated positive or negative feedback for eligible concepts. |
 | `PostToolBatch` | Adds a compact batch observation to local session state. |
@@ -61,6 +61,12 @@ Hooks are non-blocking and keep local, redacted state for feedback and memory ca
 The plugin registers no `PreToolUse` hooks: nothing it does needs to run before a tool, and the `PostToolUse` pass records strictly more about the same call.
 
 Hook processing never prints secret values. Automatic feedback skips references that AKM reports as ineligible, and a *successful* read-only `akm show` / `search` / `curate` submits nothing — inspecting a concept is not evidence that it helped. Failures of those same verbs still count as negative signal. The OpenCode plugin applies the same rule to its `akm_show` / `akm_search` / `akm_curate` tools, so the same action lands the same way on either harness.
+
+### Automatic learning proposals
+
+The prompt hook uses a conservative local classifier as a fast first pass. Explicit `remember:` requests, durable preferences, guardrails, and corrections above the confidence floor are redacted, deduplicated per project, then sent to a detached proposal-authoring worker. The worker submits an `instruction` or `memory` through `akm proposal new`; it never edits `CLAUDE.md`, `AGENTS.md`, rules, commands, or project files. AKM's normal proposal commands own review, acceptance, rejection, and later improvement. Proposal authoring requires the AKM agent profile configured by `akm setup`; failures are retained in the proposal ledger and worker log.
+
+Positive feedback is retained as evidence and continues to drive feedback for recently used assets, but praise by itself does not create a content-free proposal. Separately, short task intents are compared within the project. A similar intent must occur in at least three distinct sessions before the plugin submits a cross-platform `skill` proposal. Exact and near-duplicate submissions are suppressed by the durable ledger under the plugin state directory.
 
 ## Locking down destructive commands
 
@@ -83,7 +89,7 @@ Independently of any permission rule, the AKM skill instructs the agent to get e
 
 Every kill switch below is opt-out and reads the same way: only the literal `0` disables it. Any other value — including `false` — leaves the feature on.
 
-The four most useful settings are also exposed in Claude Code's `/plugin` configuration dialog: **AKM bundle directory**, **Record feedback automatically**, **Curated results per prompt**, and **Refresh the AKM index when a session ends**. They are aliases for `AKM_BUNDLE_DIR`, `AKM_AUTO_FEEDBACK`, `AKM_CURATE_LIMIT`, and `AKM_INDEX_ON_SESSION_END`. An environment variable you set yourself always wins over the dialog, so exporting one of these pins it regardless of what the UI shows.
+The most useful settings are also exposed in Claude Code's `/plugin` configuration dialog: **AKM bundle directory**, **Record feedback automatically**, **Propose durable learnings automatically**, **Curated results per prompt**, and **Refresh the AKM index when a session ends**. They are aliases for `AKM_BUNDLE_DIR`, `AKM_AUTO_FEEDBACK`, `AKM_AUTO_LEARNING`, `AKM_CURATE_LIMIT`, and `AKM_INDEX_ON_SESSION_END`. An environment variable you set yourself always wins over the dialog, so exporting one of these pins it regardless of what the UI shows.
 
 ### Core
 
@@ -95,8 +101,9 @@ The four most useful settings are also exposed in Claude Code's `/plugin` config
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Local plugin state directory. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. |
+| `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. This does not disable native session extraction; use `AKM_AUTO_MEMORY=0` for that. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip the session-start `akm hints` call. |
-| `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic memory harvesting. The `SessionEnd` `akm proposal extract` spawn is the whole of that harvest here, and the OpenCode plugin honours the same variable for its own single extract, so one setting covers both harnesses. |
+| `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable native-session extraction through `akm proposal extract`. The OpenCode plugin honours the same variable for its interval-gated extraction. |
 | `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the `akm index` refresh at session end. Useful on CI runners and low-power machines; the periodic `akm improve` pass remains the backstop. |
 
 ### Scope
@@ -127,7 +134,11 @@ The `run` dimension is the Claude session ID and has no environment variable; it
 | `AKM_PLUGIN_MAX_LOG_BYTES` | `1048576` | Size cap for each append-only state file. Past the cap the newest half is retained. |
 | `AKM_PLUGIN_QUALITY_TTL_MS` | `86400000` | Freshness window for the cached per-concept quality classification. Past it the `akm show` probe re-runs, so a `proposed` asset later promoted to `curated` stops being misclassified. |
 | `AKM_AUTO_FEEDBACK_MIN_CONFIDENCE` | `0.6` | Minimum classifier confidence before automatic feedback is actually submitted. Raise it to submit less. |
-| `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | `\b(thanks\|perfect\|worked)\b` | Case-insensitive regex for "that worked" prompts. Retune it for other languages or project jargon. An invalid regex falls back to the default rather than failing the hook. |
+| `AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE` | `0.75` | Minimum correction/preference confidence required before `akm proposal new` is dispatched. Lower-confidence signals remain in the local evidence log for native session extraction. |
+| `AKM_LEARNING_PROPOSAL_TIMEOUT_MS` | `600000` | Maximum runtime for the detached Claude proposal-authoring worker. |
+| `AKM_AUTO_SKILL_PROPOSALS` | `1` | Set to `0` to retain correction/preference proposals but disable recurring-intent skill proposals. |
+| `AKM_WORKFLOW_PROPOSAL_MIN_SESSIONS` | `3` | Number of distinct sessions that must express a similar task intent before a skill proposal is submitted. Values below `2` fall back to `3`. |
+| `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | positive confirmation phrases | Case-insensitive regex for retrospective confirmation. The default covers thanks/worked plus phrases such as “exactly right,” “great approach,” “love it,” and “nailed it.” Retune it for other languages or project jargon. An invalid regex falls back to the default rather than failing the hook. |
 | `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong\|failed\|broken\|didn't work\|did not work\|bad)\b` | Case-insensitive regex that vetoes retrospective credit, so a mixed message ("thanks, but it did not work") is skipped rather than misread as praise. Same fallback behavior. |
 
 ### Redaction
@@ -149,6 +160,9 @@ Hooks never write diagnostics to stderr. The few failures only you can fix — A
 | `session.log` | Hook lifecycle: AKM readiness, version mismatches, subprocess failures, session-end extraction attempts. |
 | `extract.log` | Output of the detached `akm proposal extract` run at session end. Check here first if durable memories never appear — a fresh install without a configured LLM profile logs `LLM_NOT_CONFIGURED`, which `akm setup` resolves. You should not have to go looking: when the newest run in this file failed, or ran but harvested nothing (e.g. an unreachable LLM engine), the next session start reports it and prints this file's absolute path. |
 | `index.log` | Output of the detached `akm index` refresh run at session end. Check here if search results go stale. |
+| `learning-signals.jsonl` | Redacted prompt signals captured by the hot-path classifier. |
+| `learning-proposals.jsonl` / `learning-proposals.log` | Durable dedupe/status ledger and bounded worker outcomes for automatic proposals. |
+| `workflow-observations.jsonl` | Redacted task-intent observations used to require recurrence across distinct sessions before proposing a skill. |
 | `feedback.log` / `memory.log` | Automatic feedback decisions and observed concept IDs. |
 | `events.jsonl` | Structured, redacted lifecycle events. |
 

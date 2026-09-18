@@ -13,7 +13,17 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
 import { classifyFeedbackSignal, createExplicitCorrectionRegex, createRetrospectiveFeedbackRegex, createRetrospectiveNegativeRegex, shouldSubmitAutomaticFeedback } from "../claude/shared/feedback-signals"
-import { appendMemoryEvent, getEventLogPath, type AkmMemoryEvent } from "../claude/shared/memory-events"
+import { appendMemoryEvent, getEventLogPath, getHarnessStateDir, type AkmMemoryEvent } from "../claude/shared/memory-events"
+import {
+  appendCapturedLearningSignal,
+  captureLearningSignal,
+  createLearningProposalJob,
+  observeRecurringWorkflow,
+  recordLearningProposalStatus,
+  removeLearningProposalJob,
+  reserveLearningProposal,
+  type ProposalCandidate,
+} from "../claude/shared/learning-signals"
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractAkmRefsFromString, validateRefCandidates } from "../claude/shared/ref-extraction"
@@ -21,12 +31,18 @@ import { normalizeFragmentShowInput } from "./fragment-context"
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
+const AKM_AUTO_LEARNING = (process.env.AKM_AUTO_LEARNING ?? "1") !== "0"
+const AKM_AUTO_SKILL_PROPOSALS = (process.env.AKM_AUTO_SKILL_PROPOSALS ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
 const AKM_AUTO_HINTS = (process.env.AKM_AUTO_HINTS ?? "1") !== "0"
 const AKM_PENDING_PROPOSAL_TIMEOUT_MS = Math.max(500, (Number(process.env.AKM_PENDING_PROPOSAL_TIMEOUT ?? "2") || 2) * 1_000)
 const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
+const AKM_LEARNING_PROPOSAL_TIMEOUT_MS = Math.max(
+  1_000,
+  Number(process.env.AKM_LEARNING_PROPOSAL_TIMEOUT_MS ?? "600000") || 600_000,
+)
 // #110 — same contract as the Claude hook's CURATE_MIN_SCORE/CURATE_TYPE (see
 // claude/hooks/akm-hook.ts and claude/shared/curate-render.ts): 0 (default)
 // disables the floor entirely and keeps the long-standing `--format text`
@@ -118,6 +134,7 @@ const AKM_EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
 const PLUGIN_VERSION = readPackageVersion()
 const BUNDLED_AKM_API_VERSION = readBundledAkmVersion()
 const OPENCODE_EVENT_LOG = getEventLogPath("opencode")
+const OPENCODE_STATE_DIR = getHarnessStateDir("opencode")
 
 // Per-session state that drives the compound-engineering loop.
 // These maps are keyed by OpenCode sessionID.
@@ -129,7 +146,7 @@ const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
 type SessionBufferEntry = {
   timestamp: string
-  kind: "memory-intent" | "tool-ref"
+  kind: "memory-intent" | "tool-ref" | "learning-signal"
   toolName?: string
   ref?: string
   status?: "positive" | "negative" | "unknown"
@@ -2075,7 +2092,7 @@ function unrefChildStream(stream: unknown): void {
  * it never stalls the turn; the hourly `akm improve` extract pass remains the backstop for the final delta.
  *
  * The outcome is reported through the normal plugin log + telemetry channels.
- * This is the only remaining memory-harvest path in 0.9, and on a default
+ * This is the native-session harvest path in 0.9, and on a default
  * install it does not work: `akm proposal extract` needs an LLM engine, and
  * without one it answers `{ ok: false, code: "LLM_NOT_CONFIGURED", … }`. Real
  * akm prints that envelope on stderr and exits non-zero, but the shape is not
@@ -2087,10 +2104,9 @@ function unrefChildStream(stream: unknown): void {
  * regardless of exit status, so the actionable code/hint reaches the log.
  */
 function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, directory: string | undefined): void {
-  // AKM_AUTO_MEMORY=0 turns automatic memory harvesting off, the same switch
-  // the Claude hook applies to its SessionEnd extract — this spawn is the whole
-  // of that harvest here, so without the gate the documented kill switch would
-  // be Claude-only. Read per call rather than at import, like
+  // AKM_AUTO_MEMORY=0 turns native-transcript extraction off, matching the
+  // Claude hook's SessionEnd behavior. Prompt-time correction/preference
+  // proposals use AKM_AUTO_LEARNING. Read per call rather than at import, like
   // shouldIndexOnSessionEnd(), because the plugin process outlives many
   // sessions.
   if ((process.env.AKM_AUTO_MEMORY ?? "1") === "0") return
@@ -2172,6 +2188,244 @@ function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, direct
     child.unref()
   } catch (error: unknown) {
     reportExtractFailure(formatCliError(error))
+  }
+}
+
+function learningProposalMinConfidence(): number {
+  const raw = Number(process.env.AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE ?? "0.75")
+  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.75
+}
+
+function parseLearningProposalEnvelope(raw: string): {
+  ok?: boolean
+  ref?: string
+  proposalId?: string
+  error?: string
+} {
+  const parsed = safeJsonParse<{
+    ok?: unknown
+    ref?: unknown
+    error?: unknown
+    proposal?: { id?: unknown; ref?: unknown }
+  }>(raw)
+  if (!parsed) return {}
+  return {
+    ...(typeof parsed.ok === "boolean" ? { ok: parsed.ok } : {}),
+    ...(typeof parsed.ref === "string"
+      ? { ref: parsed.ref }
+      : typeof parsed.proposal?.ref === "string"
+        ? { ref: parsed.proposal.ref }
+        : {}),
+    ...(typeof parsed.proposal?.id === "string" ? { proposalId: parsed.proposal.id } : {}),
+    ...(typeof parsed.error === "string" ? { error: parsed.error } : {}),
+  }
+}
+
+/** Fire-and-forget semantic authoring; AKM owns the proposal and its review. */
+function submitLearningProposal(
+  client: LogCapableClient,
+  candidate: ProposalCandidate,
+  directory: string | undefined,
+): void {
+  if (!AKM_AUTO_LEARNING || candidate.confidence < learningProposalMinConfidence()) return
+  const command = resolveAkmCommand()
+  if (typeof command === "object" && "ok" in command) {
+    void writePluginLog(client, "warn", "AKM learning proposal skipped", {
+      subsystem: "learning",
+      sessionID: candidate.sessionId,
+      directory,
+      kind: candidate.kind,
+      error: command.error,
+    })
+    return
+  }
+  const reservation = reserveLearningProposal(OPENCODE_STATE_DIR, candidate)
+  if (!reservation) return
+  let jobFile = ""
+  let taskFile = ""
+  let settled = false
+  const finish = (
+    status: "submitted" | "failed",
+    result: { ref?: string; proposalId?: string; error?: string },
+  ): void => {
+    if (settled) return
+    settled = true
+    recordLearningProposalStatus({
+      stateDir: OPENCODE_STATE_DIR,
+      candidate,
+      reservation,
+      status,
+      ...(result.ref ? { ref: result.ref } : {}),
+      ...(result.proposalId ? { proposalId: result.proposalId } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    })
+    removeLearningProposalJob(jobFile, taskFile)
+    if (status === "submitted") pendingProposalSummaryCache.delete(candidate.sessionId ?? "global")
+    writeStructuredEvent({
+      event: "learning_proposal",
+      sessionId: candidate.sessionId,
+      project: candidate.project,
+      scope: buildEventScope(candidate.sessionId, directory),
+      input: {
+        kind: candidate.kind,
+        confidence: candidate.confidence,
+        proposalType: reservation.proposalType,
+        proposalName: reservation.proposalName,
+      },
+      refs: result.ref ? [result.ref] : undefined,
+      outcome: status === "submitted"
+        ? { status: "ok" }
+        : { status: "failed", error: result.error ?? "proposal submission failed" },
+    })
+    void writePluginLog(client, status === "submitted" ? "info" : "warn", `AKM learning proposal ${status}`, {
+      subsystem: "learning",
+      sessionID: candidate.sessionId,
+      directory,
+      kind: candidate.kind,
+      proposalType: reservation.proposalType,
+      proposalName: reservation.proposalName,
+      ref: result.ref,
+      proposalId: result.proposalId,
+      error: result.error,
+    })
+  }
+
+  try {
+    const created = createLearningProposalJob({
+      stateDir: OPENCODE_STATE_DIR,
+      command: command.command,
+      argsPrefix: command.argsPrefix,
+      candidate,
+      reservation,
+      logFile: path.join(OPENCODE_STATE_DIR, "learning-proposals.log"),
+      eventLog: OPENCODE_EVENT_LOG,
+    })
+    jobFile = created.jobFile
+    taskFile = created.job.taskFile
+    const child = spawn(
+      command.command,
+      [
+        ...command.argsPrefix,
+        "proposal",
+        "new",
+        reservation.proposalType,
+        reservation.proposalName,
+        "--file",
+        taskFile,
+        "--format",
+        "json",
+        "-q",
+        "--timeout-ms",
+        String(AKM_LEARNING_PROPOSAL_TIMEOUT_MS),
+      ],
+      {
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: AKM_LEARNING_PROPOSAL_TIMEOUT_MS,
+      },
+    )
+    let stdout = ""
+    let stderr = ""
+    for (const [stream, channel] of [[child.stdout, "stdout"], [child.stderr, "stderr"]] as const) {
+      if (!stream) continue
+      unrefChildStream(stream)
+      stream.setEncoding("utf8")
+      stream.on("data", (chunk: string) => {
+        if (channel === "stdout" && stdout.length < AKM_EXTRACT_OUTPUT_MAX_CHARS) stdout += chunk
+        if (channel === "stderr" && stderr.length < AKM_EXTRACT_OUTPUT_MAX_CHARS) stderr += chunk
+      })
+      stream.on("error", () => {})
+    }
+    child.on("close", (code, signal) => {
+      const stdoutBody = stdout.trim().slice(0, AKM_EXTRACT_OUTPUT_MAX_CHARS)
+      const stderrBody = stderr.trim().slice(0, AKM_EXTRACT_OUTPUT_MAX_CHARS)
+      const stdoutEnvelope = parseLearningProposalEnvelope(stdoutBody)
+      const envelope = stdoutEnvelope.ok === undefined && !stdoutEnvelope.error
+        ? parseLearningProposalEnvelope(stderrBody)
+        : stdoutEnvelope
+      const failed = envelope.ok !== true || (typeof code === "number" && code !== 0) || !!signal
+      if (failed) {
+        finish("failed", {
+          error: envelope.error
+            || stderrBody
+            || (signal ? `akm proposal new exited via signal ${signal}` : `akm proposal new exited with code ${code}`),
+        })
+      } else {
+        finish("submitted", envelope)
+      }
+    })
+    child.on("error", (error) => finish("failed", { error: formatCliError(error) }))
+    child.unref()
+  } catch (error: unknown) {
+    finish("failed", { error: formatCliError(error) })
+  }
+}
+
+function capturePromptLearning(
+  client: LogCapableClient,
+  text: string,
+  sessionID: string | undefined,
+  project: string,
+  directory: string | undefined,
+): void {
+  if (!AKM_AUTO_LEARNING) return
+  const signal = captureLearningSignal({
+    text,
+    harness: "opencode",
+    project,
+    ...(sessionID ? { sessionId: sessionID } : {}),
+  })
+  if (signal) {
+    try {
+      appendCapturedLearningSignal(OPENCODE_STATE_DIR, signal)
+      addBufferEntry(sessionID, {
+        kind: "learning-signal",
+        status: signal.sentiment === "positive" ? "positive" : "negative",
+        note: truncateLogText(signal.message, 500),
+      })
+      writeStructuredEvent({
+        event: "learning_signal",
+        sessionId: sessionID,
+        project,
+        scope: buildEventScope(sessionID, directory),
+        input: {
+          kind: signal.kind,
+          confidence: signal.confidence,
+          patterns: signal.patterns,
+          proposalType: signal.proposalType ?? null,
+          evidence: signal.message,
+        },
+        outcome: { status: signal.proposalType ? "ok" : "skipped" },
+      })
+    } catch (error: unknown) {
+      void writePluginLog(client, "warn", "AKM learning signal capture failed", {
+        subsystem: "learning",
+        sessionID,
+        directory,
+        error: formatCliError(error),
+      })
+    }
+    if (signal.proposalType) submitLearningProposal(client, signal, directory)
+  }
+
+  if (!AKM_AUTO_SKILL_PROPOSALS) return
+  try {
+    const workflow = observeRecurringWorkflow({
+      stateDir: OPENCODE_STATE_DIR,
+      text,
+      harness: "opencode",
+      project,
+      ...(sessionID ? { sessionId: sessionID } : {}),
+      ...(signal ? { signal } : {}),
+    })
+    if (workflow) submitLearningProposal(client, workflow, directory)
+  } catch (error: unknown) {
+    void writePluginLog(client, "warn", "AKM recurring-workflow capture failed", {
+      subsystem: "learning",
+      sessionID,
+      directory,
+      error: formatCliError(error),
+    })
   }
 }
 
@@ -2804,6 +3058,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           agent: input.agent,
           text: truncateLogText(text),
         })
+        capturePromptLearning(logClient, text, input.sessionID, directory || worktree, directory)
 
         if (AKM_AUTO_CURATE && input.sessionID) {
           const decision = shouldRecall(text, { activeWorkflow: !!sessionWorkflow.get(input.sessionID), recentAssetFailure: retrospectiveState.get(input.sessionID)?.lastNegativeSignalAt != null })

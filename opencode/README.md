@@ -45,7 +45,7 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 | --- | --- |
 | `session.created` | Warms local data in the background, and prepares hints, an active-workflow summary, and curated context for the session. |
 | `session.updated` | Backfills hints and the workflow summary for a session the plugin has not prepared yet. It does not re-run session-created work. |
-| `chat.message` | Records feedback or memory intent and can schedule non-blocking curation for a substantive prompt. The curate is fire-and-forget: its result is injected on a later turn rather than delaying this one. |
+| `chat.message` | Records feedback/memory intent, captures corrections, guardrails, preferences, explicit memories, and positive feedback, and can schedule non-blocking curation. High-confidence durable signals submit asynchronous AKM proposals; recurring task intent across distinct sessions can submit a skill proposal. |
 | `experimental.chat.system.transform` | Injects the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. |
 | `tool.execute.before` | The format-declaration write gate (`AKM_WRITE_GATE`, `observe` by default). Blocks the first `edit`/`write` to an existing file that declares a format your bundle documents and hands the model the ref to read. Once per file per session, released unconditionally on the retry. |
 | `tool.execute.after` | Tracks concepts used by AKM tools, records deduplicated feedback, and checkpoints session observations. It also records what a file the session `read` declares about its own format, which is what the write gate above keys on. `write` is deliberately not a source: a file the session created is not one it needs the bundle to explain. The create itself is recorded on the write's `tool.execute.before` pass, so a later read-back of that file cannot re-arm the gate. |
@@ -57,6 +57,12 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 The session observation buffer that retrospective feedback reads from survives every non-terminal event: it is bounded by `AKM_SESSION_BUFFER_MAX_ENTRIES` and dropped only on `session.deleted`. Discarding it at `session.idle` would empty it between turns, so "thanks, that worked" would credit nothing in exactly the sessions that used the most assets.
 
 Automatic feedback skips references that AKM reports as ineligible, and a *successful* `akm_show` / `akm_search` / `akm_curate` submits nothing — inspecting a concept is not evidence that it helped, so on OpenCode the positive signal comes from a retrospective confirmation instead. Failures of those same tools still count as negative signal. Same rule as the Claude plugin, which applies it to the `akm` subcommand of a Bash invocation.
+
+### Automatic learning proposals
+
+The chat hook applies the same shared classifier and proposal contract as the Claude plugin. Redacted, high-confidence memories and behavioral signals are project-scoped and submitted with `akm proposal new` as `memory` or `instruction` proposals. The plugin never writes `AGENTS.md`, `CLAUDE.md`, command files, or rules; AKM's proposal queue owns review and all later state changes. Proposal authoring requires the AKM agent profile configured by `akm setup`; outcomes are recorded through OpenCode app logging and the durable proposal ledger.
+
+Praise is captured as supporting evidence and can credit recently used assets, but it does not create an empty proposal. Repeated task intents are compared across sessions in the same project; the default threshold is three distinct sessions before a cross-platform `skill` proposal is submitted. A durable ledger suppresses exact and near-duplicate submissions across OpenCode restarts.
 
 ## Locking down destructive commands
 
@@ -78,8 +84,9 @@ Every kill switch below is opt-out and reads the same way: only the literal `0` 
 | `AKM_OPENCODE_CLI` | unset | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency, exec'd as-is. Used by the eval harness to substitute a deterministic shim. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic prompt curation. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic outcome feedback. |
+| `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. Native session extraction is controlled separately by `AKM_AUTO_MEMORY`. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip the per-session `akm hints` call. The missing-bundle warning is deliberately not gated on this: it explains why the bundle is empty in the first place. |
-| `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable automatic memory harvesting — the interval-gated `akm proposal extract` on `session.idle`, which is the whole of that harvest here. The Claude plugin honours the same variable for its `SessionEnd` extract, so one setting covers both harnesses. |
+| `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable interval-gated native-session extraction through `akm proposal extract`. The Claude plugin honours the same variable for its `SessionEnd` extraction. |
 | `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the `akm index` refresh. It runs only on `session.deleted` — never on `session.idle`, which fires after every turn. |
 | `AKM_WRITE_GATE` | `observe` | The format-declaration write gate (#99). When a file the session **read** declares a format your bundle documents — an `apiVersion:` namespace, a `yaml-language-server` pragma, a `$schema` key, an XML root namespace — and that asset has not been opened this session, the FIRST `edit`/`write` to that file is blocked once and the model is told which ref to read. It ships in `observe`: everything runs and the would-fire count lands in the ledger, but nothing is blocked. Set `enforce` to block, or `off`/`0` to disable it entirely. An unrecognized value is a configuration error — it logs one error per process and the gate refuses to run rather than guessing a default. It never fires on a file this session created: the create is recorded when it happens — a `write` to a path this session has not read, or an `edit` with an empty `oldString` — and that path stays insulated for the rest of the session, so reading back the model's own output does not re-arm it (ledger reason `session-created`). It is inert on `apply_patch` (which carries no file path) — that case logs one warning per process rather than failing quietly. |
 
@@ -110,7 +117,11 @@ The `agent`, `run`, and `project` dimensions come from OpenCode itself (the acti
 | `AKM_EXTRACT_MIN_INTERVAL_MS` | `600000` | Minimum gap between `akm proposal extract` runs for one session. `session.idle` fires after every turn, so without this gate extraction would flood. |
 | `AKM_PLUGIN_MAX_LOG_BYTES` | `1048576` | Size cap for each append-only state file under `$XDG_STATE_HOME/akm-opencode`. Past the cap the newest half is retained. |
 | `AKM_AUTO_FEEDBACK_MIN_CONFIDENCE` | `0.6` | Minimum classifier confidence before automatic feedback is actually submitted. Raise it to submit less. |
-| `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | `\b(thanks\|perfect\|worked)\b` | Case-insensitive regex for "that worked" messages. Retune it for other languages or project jargon. An invalid regex falls back to the default rather than failing the hook. |
+| `AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE` | `0.75` | Minimum correction/preference confidence required before `akm proposal new` is dispatched. Lower-confidence evidence remains available to native session extraction. |
+| `AKM_LEARNING_PROPOSAL_TIMEOUT_MS` | `600000` | Maximum runtime for one detached proposal-authoring child. |
+| `AKM_AUTO_SKILL_PROPOSALS` | `1` | Set to `0` to retain correction/preference proposals but disable recurring-intent skill proposals. |
+| `AKM_WORKFLOW_PROPOSAL_MIN_SESSIONS` | `3` | Distinct-session recurrence required before a skill proposal is submitted. Values below `2` fall back to `3`. |
+| `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | positive confirmation phrases | Case-insensitive regex for retrospective confirmation. The default covers thanks/worked plus “exactly right,” “great approach,” “love it,” and “nailed it.” Retune it for other languages or project jargon. An invalid regex falls back to the default rather than failing the hook. |
 | `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong\|failed\|broken\|didn't work\|did not work\|bad)\b` | Case-insensitive regex that vetoes retrospective credit, so a mixed message ("thanks, but it did not work") is skipped rather than misread as praise. Same fallback behavior. |
 
 ### Redaction

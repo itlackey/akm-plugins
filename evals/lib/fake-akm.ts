@@ -9,9 +9,10 @@
 // shell script as a static lookup table). It also implements the subset of
 // `akm` verbs the hooks actually call: `curate`, `feedback`, `remember`,
 // `index`, `hints`, `info`, `search`, `config get`/`config set`,
-// `workflow list`, `proposal list`, `extract`, `--version`. Envelope shapes
-// for these are pinned against a real `akm` binary by
-// tests/fake-akm-contract.test.ts. Any other verb still exits 0 (never breaks
+// `workflow list`, `proposal list`/`new`, `extract`, `--version`. Non-agent
+// envelope shapes are pinned against a real `akm` binary by
+// tests/fake-akm-contract.test.ts; `proposal new` is an authoring-agent boundary
+// and the fake only acknowledges it deterministically. Any other verb still exits 0 (never breaks
 // the hook) but logs to stderr instead of no-op'ing silently — see the bottom
 // of RANK_HELPER_JS.
 //
@@ -589,6 +590,27 @@ if (verb === "workflow" && tail[0] === "list") {
 if (verb === "proposal" && tail[0] === "list") {
   const proposals = []
   process.stdout.write(JSON.stringify({ totalCount: 0, proposals, results: proposals }))
+  process.exit(0)
+}
+
+// --- proposal new -----------------------------------------------------------
+// Learning capture is intentionally fire-and-forget in both plugins. The fake
+// does not run an authoring agent, but it returns the success fields the
+// plugin's completion bookkeeping consumes so evals exercise that boundary.
+if (verb === "proposal" && tail[0] === "new") {
+  const type = tail[1] || "instruction"
+  const name = tail[2] || "captured-learning"
+  const ref = (type === "skill" ? "skills/" : type === "memory" ? "memories/" : "instructions/") + name
+  process.stdout.write(
+    JSON.stringify({
+      schemaVersion: 2,
+      ok: true,
+      ref,
+      proposal: { id: "fake-" + callId, ref, status: "pending" },
+      engine: "fake",
+      durationMs: 0,
+    }),
+  )
   process.exit(0)
 }
 

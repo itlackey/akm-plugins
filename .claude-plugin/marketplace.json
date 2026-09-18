@@ -8,7 +8,7 @@
     {
       "name": "akm",
       "source": "./claude",
-      "description": "Search, show, and curate AKM concepts, record feedback, and remember durable knowledge, with lifecycle hooks that load relevant context and learn from asset usage.",
+      "description": "Search, show, and curate AKM concepts, record feedback, and turn corrections, preferences, memories, and recurring workflows into reviewable AKM proposals.",
       "version": "0.9.14202609050148"
     }
   ]

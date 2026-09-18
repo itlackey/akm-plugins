@@ -19,6 +19,16 @@ parent identity alongside selected-fragment, neighbor, size, and truncation
 provenance. Friendly authored heading selectors retain their existing
 source-live behavior.
 
+## Automatic learning proposals
+
+Both plugins now capture the learning signals that occur naturally in a coding conversation: explicit `remember:` requests, corrections, guardrails, durable preferences, and positive confirmation. Strong reusable signals are redacted, project-scoped, durably deduplicated, and submitted asynchronously with `akm proposal new` as `memory` or `instruction` proposals. Positive feedback remains evidence rather than becoming a content-free proposal.
+
+Proposal authoring uses the agent profile configured for AKM; run `akm setup` if `proposal new` reports that no authoring agent is available.
+
+This flow is informed by [claude-reflect](https://github.com/BayramAnnakov/claude-reflect)'s capture-then-review design, but it ends at the AKM proposal queue instead of writing assistant instruction files directly.
+
+They also retain conservative task-intent observations across sessions. When a similar intent recurs in at least three distinct sessions, the plugin submits a cross-platform `skill` proposal. Neither integration edits `CLAUDE.md`, `AGENTS.md`, rule files, or commands; the boundary stops at proposal submission, and downstream AKM proposal commands own review and promotion.
+
 ## OpenCode
 
 Add the plugin to `opencode.json`:

@@ -31,11 +31,12 @@ export type AkmFeedbackSignal = {
  * it.
  */
 export function createRetrospectiveFeedbackRegex(): RegExp {
-  const pattern = process.env.AKM_RETROSPECTIVE_FEEDBACK_PATTERN ?? "\\b(thanks|perfect|worked)\\b"
+  const pattern = process.env.AKM_RETROSPECTIVE_FEEDBACK_PATTERN
+    ?? "\\b(thanks|thank you|perfect|worked|exactly right|great approach|keep doing this|love it|excellent|nailed it)\\b|that's exactly|that's what I wanted"
   try {
     return new RegExp(pattern, "i")
   } catch {
-    return /\b(thanks|perfect|worked)\b/i
+    return /\b(thanks|thank you|perfect|worked|exactly right|great approach|keep doing this|love it|excellent|nailed it)\b|that's exactly|that's what I wanted/i
   }
 }
 
@@ -53,7 +54,7 @@ export function createRetrospectiveNegativeRegex(): RegExp {
  * the tunable negative matcher, so this one is deliberately not overridable.
  */
 export function createExplicitCorrectionRegex(): RegExp {
-  return /\b(this was wrong|that was wrong|you were wrong|incorrect|not correct)\b/i
+  return /\b(this was wrong|that was wrong|you were wrong|incorrect|not correct|that's wrong|that is wrong|I meant|I said|I told you|I already told you|from now on)\b|^(?:no[,. ]+|don't\b|do not\b|stop\b|never\b|actually[,. ])/i
 }
 
 export function getAutoFeedbackMinConfidence(): number {

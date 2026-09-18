@@ -1,7 +1,7 @@
 {
   "name": "akm",
   "displayName": "AKM",
-  "description": "Search, show, and curate AKM concepts, record feedback, and remember durable knowledge, with lifecycle hooks that load relevant context and learn from asset usage.",
+  "description": "Search, show, and curate AKM concepts, record feedback, and turn corrections, preferences, memories, and recurring workflows into reviewable AKM proposals.",
   "version": "0.9.14202609050148",
   "author": {
     "name": "itlackey",
@@ -35,6 +35,12 @@
       "type": "boolean",
       "title": "Record feedback automatically",
       "description": "Submit `akm feedback` for concepts a tool call used, based on whether the call succeeded, and credit concepts when you say something worked. Turn off to record feedback only via /akm-feedback. Equivalent to AKM_AUTO_FEEDBACK.",
+      "default": true
+    },
+    "auto_learning": {
+      "type": "boolean",
+      "title": "Propose durable learnings automatically",
+      "description": "Capture explicit memories, corrections, guardrails, and preferences from prompts and submit high-confidence AKM proposals for review. Repeated task intents across distinct sessions can also propose reusable skills. Equivalent to AKM_AUTO_LEARNING.",
       "default": true
     },
     "curate_limit": {

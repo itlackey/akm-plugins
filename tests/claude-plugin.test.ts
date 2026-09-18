@@ -113,6 +113,10 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
     cwd: options?.cwd ?? repoRoot,
     env: {
       ...baseEnv,
+      // Unit tests opt out unless a case explicitly exercises proposal
+      // submission; otherwise a test that inherits a real akm on PATH could
+      // enqueue a proposal in the developer's actual bundle.
+      ...(options?.env?.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING === undefined ? { AKM_AUTO_LEARNING: "0" } : {}),
       ...options?.env,
     },
     stdio: [stdin, "pipe", "pipe"],
@@ -170,6 +174,7 @@ describe("Claude plugin metadata", () => {
     expect(plugin.hooks.TaskCompleted).toBeDefined()
     expect(plugin.hooks.PostCompact).toBeDefined()
     expect(plugin.hooks.SessionEnd).toBeDefined()
+    expect(plugin.userConfig.auto_learning.default).toBe(true)
     expect(plugin.version).toBe(pkg.version)
     expect(marketplace.plugins[0].version).toBe(plugin.version)
 
@@ -291,6 +296,7 @@ describe("Claude plugin metadata", () => {
       "memory-events",
       "redaction",
       "feedback-signals",
+      "learning-signals",
       "recall-policy",
     ]
     for (const name of sharedFiles) {
@@ -304,7 +310,7 @@ describe("Claude plugin metadata", () => {
     // being replaced by a local reimplementation — which is how the two
     // plugins drift apart on rules that are supposed to be identical.
     const hookSource = readFileSync(hookScript, "utf8")
-    for (const module of ["feedback-signals", "memory-events", "recall-policy", "redaction", "ref-extraction", "state-files"]) {
+    for (const module of ["feedback-signals", "learning-signals", "memory-events", "recall-policy", "redaction", "ref-extraction", "state-files"]) {
       expect(hookSource).toContain(`from "../shared/${module}"`)
     }
   })
@@ -475,10 +481,10 @@ exit 0
     expect(sessionLog.some((line) => line.includes("extract_spawned"))).toBe(false)
   })
 
-  it("extract-session still spawns when only the plugin's session buffer exists", () => {
-    // The session buffer under STATE_DIR/sessions is the other transcript
-    // source `akm proposal extract` reads; its presence alone must keep the
-    // harvest alive even when the harness payload names no transcript.
+  it("extract-session does not mistake the plugin audit buffer for a native transcript", () => {
+    // AKM's Claude adapter reads native JSONL. The plugin's Markdown buffer is
+    // useful local evidence, but it cannot make an otherwise-ephemeral session
+    // extractable and must not trigger a guaranteed "session not found" run.
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
@@ -496,7 +502,8 @@ exit 0
     ).toBe("")
 
     const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("extract_spawned\tsess-buffered"))).toBe(true)
+    expect(sessionLog.some((line) => line.includes("extract_spawned\tsess-buffered"))).toBe(false)
+    expect(sessionLog.some((line) => line.includes("extract_skipped_no_transcript\tsess-buffered"))).toBe(true)
   })
 
   it("records user feedback and memory intent from prompt submissions", () => {
@@ -517,6 +524,69 @@ exit 0
 
     expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("user\tprompt\tPlease remember that the release checklist worked great with akm.")
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("user\tintent\tPlease remember that the release checklist worked great with akm.")
+  })
+
+  it("submits a high-confidence correction as one deduplicated AKM proposal", async () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "proposal-calls.log")
+    const taskCopy = path.join(tempDir, "proposal-task.md")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--file" ]; then
+    cp "$argument" ${shellQuote(taskCopy)}
+  fi
+  previous="$argument"
+done
+printf '{"ok":true,"ref":"instructions/use-pnpm","proposal":{"id":"proposal-1","ref":"instructions/use-pnpm"}}\\n'
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+    const env = {
+      HOME: tempDir,
+      PATH: `${binDir}:/usr/bin:/bin`,
+      XDG_STATE_HOME: stateDir,
+      AKM_AUTO_CURATE: "0",
+      AKM_AUTO_FEEDBACK: "0",
+      AKM_AUTO_LEARNING: "1",
+      AKM_AUTO_SKILL_PROPOSALS: "0",
+    }
+    const input = JSON.stringify({
+      session_id: "sess-learning-proposal",
+      cwd: "/tmp/acme-project",
+      prompt: "no, use pnpm not npm for this repository",
+    })
+
+    expect(runHook(["curate-prompt"], { input, env })).toBe("")
+    const ledgerPath = path.join(stateDir, "akm-claude/learning-proposals.jsonl")
+    const ledger = await waitFor(() => {
+      const body = readFileSync(ledgerPath, "utf8")
+      return body.includes('"status":"submitted"') ? body : undefined
+    })
+    expect(ledger).toContain('"proposalType":"instruction"')
+    expect(readFileSync(callLog, "utf8")).toMatch(
+      /proposal new instruction use-pnpm-not-npm-repository-[a-f0-9]{8} --file /,
+    )
+    const task = readFileSync(taskCopy, "utf8")
+    expect(task).toContain("untrusted evidence")
+    expect(task).toContain("no, use pnpm not npm for this repository")
+    expect(task).toContain("Do not edit CLAUDE.md, AGENTS.md")
+
+    // The same evidence in the same project is a durable-ledger duplicate.
+    expect(runHook(["curate-prompt"], { input, env })).toBe("")
+    await Bun.sleep(100)
+    const proposalCalls = readFileSync(callLog, "utf8")
+      .split("\n")
+      .filter((line) => line.includes("proposal new"))
+    expect(proposalCalls).toHaveLength(1)
   })
 
   it("records successful system feedback and memory concept IDs for akm Bash calls", () => {
@@ -1714,7 +1784,7 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toContain("slash-command expansion should keep mutating actions explicit")
   })
 
-  it("task-completed writes the summary into the session buffer akm proposal extract reads", () => {
+  it("task-completed writes the summary into the private session audit buffer", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
     const bundleDir = makeBundle(tempDir, ["skills/deploy"])
@@ -2285,7 +2355,7 @@ exit 0
       return { stdout, calls: existsSync(callLog) ? readFileSync(callLog, "utf8") : "" }
     }
 
-    // plugin.json declares four `userConfig` options. Claude Code delivers them
+    // plugin.json declares five `userConfig` options. Claude Code delivers them
     // to hook processes as CLAUDE_PLUGIN_OPTION_<KEY>, which is the ONLY route
     // available here — shell-form hook commands cannot use ${user_config.*}
     // substitution. Without these reads the /plugin dialog would render four
@@ -2398,6 +2468,43 @@ exit 0
 
         expect(runSessionEnd("false")).not.toContain("index_spawned")
         expect(runSessionEnd("1")).toContain("index_spawned")
+      })
+
+      it("auto_learning controls prompt capture, and an explicit env var still wins", () => {
+        function captured(option: string, explicitEnv?: string) {
+          const tempDir = makeTempDir()
+          const binDir = path.join(tempDir, "bin")
+          const stateDir = path.join(tempDir, "state")
+          const callLog = path.join(tempDir, "akm-calls.log")
+          mkdirSync(binDir, { recursive: true })
+          mkdirSync(stateDir, { recursive: true })
+          makeLoggingAkm(binDir, callLog)
+
+          runHook(["curate-prompt"], {
+            input: JSON.stringify({
+              session_id: "sess-option-learning",
+              cwd: "/tmp/option-learning",
+              prompt: "I prefer pnpm for package scripts",
+            }),
+            env: {
+              HOME: tempDir,
+              PATH: `${binDir}:/usr/bin:/bin`,
+              XDG_STATE_HOME: stateDir,
+              AKM_AUTO_CURATE: "0",
+              AKM_AUTO_FEEDBACK: "0",
+              AKM_AUTO_SKILL_PROPOSALS: "0",
+              AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1",
+              CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: option,
+              ...(explicitEnv === undefined ? {} : { AKM_AUTO_LEARNING: explicitEnv }),
+            },
+          })
+
+          return existsSync(path.join(stateDir, "akm-claude", "learning-signals.jsonl"))
+        }
+
+        expect(captured("false")).toBe(false)
+        expect(captured("true")).toBe(true)
+        expect(captured("false", "1")).toBe(true)
       })
     })
 
