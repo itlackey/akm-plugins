@@ -10,19 +10,19 @@
 // node_modules at hook-execution time.
 //
 // A single caret clause anchored at the stable release covers the supported
-// public CLI line: `^0.9.14` admits stable 0.9.14 and later 0.9.x releases.
-// 0.9.14 is a required compatibility floor, not a marketing version. It moves
-// the shared derived index from generation 22 to 23 for lexical Markdown
-// fragments. A 0.9.13 reader correctly refuses that index, while older 0.9.x
-// binaries can also reject state migration 027. Once 0.9.14 touches a home,
-// admitting an older binary leaves the plugin inactive against that home.
+// public CLI line: `^0.9.16` admits stable 0.9.16 and later 0.9.x releases.
+// 0.9.16 is a required compatibility floor, not a marketing version. It is
+// the release this plugin is verified against after bundle activation and
+// executable authority moved behind host-owned configuration. Admitting an
+// older binary would silently restore a different trust model even where the
+// CLI payload consumed by the plugin still looks compatible.
 //
-// KNOWN GAP: NO prerelease satisfies this range — not 0.9.14-rc.1, and not a
-// *future* line such as 0.9.15-rc.1. That is node-semver's documented behavior
+// KNOWN GAP: NO prerelease satisfies this range — not 0.9.16-rc.1, and not a
+// *future* line such as 0.9.17-rc.1. That is node-semver's documented behavior
 // and the vendored matcher reproduces it: a prerelease only satisfies a range
 // whose lower bound is a prerelease with the same major.minor.patch. Admitting
 // a prerelease line again is an explicit one-clause edit here
-// (`^0.9.14 || ^0.9.15-rc.1`) when such a build actually needs testing — a
+// (`^0.9.16 || ^0.9.17-rc.1`) when such a build actually needs testing — a
 // deliberate opt-in rather than a range that silently accepts untested
 // prereleases.
 //
@@ -42,7 +42,7 @@
 // most deeply. 0.9.12 did change that envelope again (added `engine`,
 // `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
 // all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
-// The 0.9.14 compatibility review makes the split explicit: keep the caret
+// The 0.9.16 compatibility review keeps the split explicit: keep the caret
 // range for Claude's stable CLI calls, but exact-pin OpenCode's package because
 // it imports private in-process modules and shares AKM's databases. The
 // #107/#108/#109 envelope hardening remains necessary on both surfaces: every
@@ -52,7 +52,7 @@
 
 import { satisfies } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.15"
+export const AKM_VERSION_RANGE = "^0.9.16"
 
 /**
  * True when `version` is a valid semver string that satisfies

@@ -2,7 +2,7 @@
 // line they target, and let PATCH diverge freely inside that minor.
 //
 // The sync point is AKM_VERSION_RANGE in claude/shared/akm-version.ts. On a 0.x
-// version a caret range is exactly a minor line (`^0.9.14` == `>=0.9.14 <0.10.0`),
+// version a caret range is exactly a minor line (`^0.9.16` == `>=0.9.16 <0.10.0`),
 // so "plugins are 0.9.x while akm is 0.9.x" is already what that constant says.
 // This file makes the invariant enforced rather than conventional: four version
 // fields, Claude's install ref, and OpenCode's exact package/lockfile pins all
@@ -23,7 +23,7 @@ const REPO_ROOT = path.join(import.meta.dir, "..")
 const readText = (relative: string): string => readFileSync(path.join(REPO_ROOT, relative), "utf8")
 const readJson = (relative: string): Record<string, any> => JSON.parse(readText(relative))
 
-/** `0.9.14` -> `0.9`. Returns null for anything that is not plain semver. */
+/** `0.9.16` -> `0.9`. Returns null for anything that is not plain semver. */
 function minorLine(version: string): string | null {
   const parsed = valid(version)
   if (!parsed) return null
@@ -31,7 +31,7 @@ function minorLine(version: string): string | null {
   return `${major}.${minor}`
 }
 
-/** `^0.9.14` -> `0.9.14`. The range floor is the minimum compatible CLI version. */
+/** `^0.9.16` -> `0.9.16`. The range floor is the minimum compatible CLI version. */
 function rangeFloor(range: string): string {
   return range.trim().replace(/^[\^~>=v\s]+/, "")
 }
@@ -46,7 +46,7 @@ const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
 
 describe("version policy", () => {
   test("the akm range is a caret range, so a minor line is what it pins", () => {
-    // The whole policy rests on `^0.9.14` meaning ">=0.9.14 <0.10.0". If the range
+    // The whole policy rests on `^0.9.16` meaning ">=0.9.16 <0.10.0". If the range
     // is ever widened into an OR-list or a bare pin, "MAJOR.MINOR in sync" stops
     // having a single answer and every assertion below becomes a guess.
     expect(AKM_VERSION_RANGE).toMatch(/^\^\d+\.\d+\.\d+$/)
@@ -86,7 +86,7 @@ describe("version policy", () => {
     // future change tightening patch back into lockstep fails here and has to
     // argue with the comment at the top of this file instead of sliding in.
     const floorPatch = rangeFloor(AKM_VERSION_RANGE)
-    for (const candidate of ["0.9.0", "0.9.1", "0.9.14"]) {
+    for (const candidate of ["0.9.0", "0.9.1", "0.9.16"]) {
       expect(minorLine(candidate)).toBe(minorLine(floorPatch))
     }
     expect(minorLine("0.10.0")).not.toBe(minorLine(floorPatch))
@@ -133,7 +133,7 @@ describe("version policy", () => {
     // earlier clock), and across a two-digit akm patch.
     expect(patchOf(derive("0.9.1", "202608242013"))).toBeGreaterThan(patchOf(derive("0.9.1", "202608242012")))
     expect(patchOf(derive("0.9.14", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.1", "202612312359")))
-    expect(patchOf(derive("0.9.15", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.14", "202612312359")))
+    expect(patchOf(derive("0.9.16", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.15", "202612312359")))
   })
 
   test("Claude follows the range and OpenCode exact-pins its floor", () => {
