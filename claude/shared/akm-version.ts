@@ -17,14 +17,14 @@
 // older binary would silently restore a different trust model even where the
 // CLI payload consumed by the plugin still looks compatible.
 //
-// KNOWN GAP: NO prerelease satisfies this range — not 0.9.16-rc.1, and not a
-// *future* line such as 0.9.17-rc.1. That is node-semver's documented behavior
-// and the vendored matcher reproduces it: a prerelease only satisfies a range
-// whose lower bound is a prerelease with the same major.minor.patch. Admitting
-// a prerelease line again is an explicit one-clause edit here
-// (`^0.9.16 || ^0.9.17-rc.1`) when such a build actually needs testing — a
-// deliberate opt-in rather than a range that silently accepts untested
-// prereleases.
+// The gate reads the RELEASE CORE (major.minor.patch) and ignores a prerelease
+// tag. node-semver's default rule, which the vendored matcher reproduces, is
+// that no prerelease satisfies a stable range — so an installed 0.9.17-alpha.3
+// was refused against ^0.9.16 and akm was disabled for the whole session
+// ("version-mismatch") although it is a NEWER build than the floor. A newer
+// akm must never be refused here. Floor and ceiling still apply to the core:
+// 0.9.15-rc.1 is below the floor, and 0.10.0-beta.1 is the next minor line —
+// on 0.x the next plugin line (see tests/version-policy.test.ts).
 //
 // Earlier 0.9 releases are deliberately excluded as well: accepting them
 // would silently pass the version gate onto a CLI with retired ref and
@@ -50,14 +50,17 @@
 // field optional-chained, so an additive shape change degrades to "say less"
 // rather than a crash or fabricated warning.
 
-import { satisfies } from "./vendor-semver"
+import { satisfies, valid } from "./vendor-semver"
 
 export const AKM_VERSION_RANGE = "^0.9.16"
 
 /**
- * True when `version` is a valid semver string that satisfies
+ * True when `version` is a valid semver string whose release core
+ * (major.minor.patch, prerelease and build tags dropped) satisfies
  * {@link AKM_VERSION_RANGE}. Non-strings (e.g. a failed probe) return false.
  */
 export function satisfiesAkmVersionRange(version: string | null | undefined): boolean {
-  return typeof version === "string" && satisfies(version, AKM_VERSION_RANGE)
+  const normalized = typeof version === "string" ? valid(version) : null
+  if (!normalized) return false
+  return satisfies(normalized.replace(/[-+].*$/, ""), AKM_VERSION_RANGE)
 }

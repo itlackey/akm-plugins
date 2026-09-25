@@ -21,7 +21,7 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.16`; the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
+The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.16` (judged on `major.minor.patch`, so a prerelease of a newer 0.9.x build such as `0.9.17-alpha.3` passes); the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
 
 ## Slash Commands
 

@@ -16,7 +16,7 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 
-import { AKM_VERSION_RANGE } from "../claude/shared/akm-version"
+import { AKM_VERSION_RANGE, satisfiesAkmVersionRange } from "../claude/shared/akm-version"
 import { valid } from "../claude/shared/vendor-semver"
 
 const REPO_ROOT = path.join(import.meta.dir, "..")
@@ -90,6 +90,18 @@ describe("version policy", () => {
       expect(minorLine(candidate)).toBe(minorLine(floorPatch))
     }
     expect(minorLine("0.10.0")).not.toBe(minorLine(floorPatch))
+  })
+
+  test("the range ceiling is real, and a prerelease is judged by its release core", () => {
+    // claude/shared/akm-version.ts drops a prerelease tag before matching, so a
+    // newer 0.9.x build is never refused for being a prerelease — 0.9.17-alpha.3
+    // against ^0.9.16 used to disable akm for whole sessions. The ceiling is
+    // this file's policy: 0.10.0-beta.1 is the next minor line, on 0.x the next
+    // plugin line, so it is refused exactly like 0.10.0 until a 0.10.x plugin
+    // ships with a new floor.
+    expect(satisfiesAkmVersionRange("0.9.17-alpha.3")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.10.0")).toBe(false)
+    expect(satisfiesAkmVersionRange("0.10.0-beta.1")).toBe(false)
   })
 
   test("the release workflow derives the version instead of accepting a typed one", () => {

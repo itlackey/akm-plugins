@@ -4,8 +4,8 @@ import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { AKM_VERSION_RANGE as AKM_REQUIRED_RANGE } from "../shared/akm-version"
-import { satisfies, valid } from "../shared/vendor-semver"
+import { AKM_VERSION_RANGE as AKM_REQUIRED_RANGE, satisfiesAkmVersionRange } from "../shared/akm-version"
+import { valid } from "../shared/vendor-semver"
 import {
   classifyFeedbackSignal,
   createExplicitCorrectionRegex,
@@ -555,7 +555,7 @@ function akmVersionSatisfies(commandSpec: AkmCommandSpec): { ok: boolean; versio
   const version = readAkmVersion(commandSpec)
   if (!version) return { ok: false, version: "unknown", error: "unable to parse akm version" }
   if (!valid(version)) return { ok: false, version, error: "akm version is not valid semver" }
-  if (!satisfies(version, AKM_REQUIRED_RANGE)) return { ok: false, version, error: `akm version does not satisfy ${AKM_REQUIRED_RANGE}` }
+  if (!satisfiesAkmVersionRange(version)) return { ok: false, version, error: `akm version does not satisfy ${AKM_REQUIRED_RANGE}` }
   return { ok: true, version }
 }
 

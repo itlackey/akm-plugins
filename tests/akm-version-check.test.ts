@@ -124,27 +124,30 @@ describe("AKM_VERSION_RANGE contract", () => {
     expect(AKM_VERSION_RANGE).toBe("^0.9.16")
   })
 
-  it("accepts stable 0.9.x builds", () => {
-    for (const version of ["0.9.16", "0.9.17"]) {
+  it("accepts every build whose release core is in the 0.9 line at or above the floor, prerelease or not", () => {
+    for (const version of ["0.9.16", "0.9.17", "0.9.16-rc.1", "0.9.17-alpha.3", "0.9.17-20260922.1", "0.9.17+build.5"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(true)
     }
   })
 
-  it("rejects every prerelease and versions outside 0.9", () => {
-    for (const version of ["0.8.9", "0.9.0", "0.9.7", "0.9.8", "0.9.9", "0.9.14", "0.9.15", "0.9.16-beta.1", "0.9.16-rc.1", "1.0.0", "0.10.0"]) {
+  it("rejects releases below the floor or outside the 0.9 line, prerelease or not", () => {
+    for (const version of ["0.8.9", "0.9.0", "0.9.7", "0.9.8", "0.9.9", "0.9.14", "0.9.15", "0.9.15-rc.1", "1.0.0", "1.0.0-rc.1", "0.10.0", "0.10.0-beta.1"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(false)
     }
   })
 
-  it("documents that a 0.9.x prerelease line needs its own explicit clause", () => {
-    // node-semver behavior, reproduced by ./vendor-semver: a prerelease only
-    // satisfies a range whose lower bound is a prerelease with the same
-    // major.minor.patch. Any 0.9.x RC line therefore trips the gate until an
-    // explicit `|| ^0.9.N-rc.N` clause is added. Pinned so re-admitting a
-    // prerelease line is a deliberate edit rather than a surprise.
-    expect(satisfiesAkmVersionRange("0.9.16-rc.1")).toBe(false)
-    // ...while the stable release on that same line is already accepted.
-    expect(satisfiesAkmVersionRange("0.9.16")).toBe(true)
+  it("never refuses a newer akm for being a prerelease", () => {
+    // node-semver's default, reproduced by ./vendor-semver: no prerelease
+    // satisfies a stable range. That refused an installed 0.9.17-alpha.3
+    // against ^0.9.16 and disabled akm for the whole session ("version-
+    // mismatch") although it is newer than the floor. The gate therefore
+    // judges the release core only; floor and ceiling still apply to it.
+    expect(satisfiesAkmVersionRange("0.9.17-alpha.3")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.9.15-rc.1")).toBe(false)
+    // The ceiling is the versioning policy (plugin MAJOR.MINOR tracks akm's):
+    // a prerelease of the next minor line is that line, refused like 0.10.0
+    // itself until a 0.10.x plugin ships with a new floor.
+    expect(satisfiesAkmVersionRange("0.10.0-beta.1")).toBe(false)
   })
 
   it("rejects malformed or missing versions", () => {
@@ -167,17 +170,22 @@ describe("checkAkmVersion", () => {
     expect(result.installLog).toBe("")
   })
 
-  it("accepts stable 0.9.x", () => {
-    for (const version of ["0.9.16", "0.9.17"]) {
+  it("accepts 0.9.x at or above the floor, prerelease included", () => {
+    for (const version of ["0.9.16", "0.9.17", "0.9.17-alpha.3"]) {
       const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
       expect(result.installLog).toBe("")
+      // The mismatch path also exits 0 with a quiet stderr, so only the log
+      // line proves the gate passed.
+      const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
+      expect(sessionLog.some((line) => line.includes("akm_ready") && line.includes(version))).toBe(true)
+      expect(sessionLog.some((line) => line.includes("akm_version_mismatch"))).toBe(false)
     }
   })
 
-  it("rejects every tested build below the stable floor", () => {
-    for (const version of ["0.8.3", "0.9.0", "0.9.7", "0.9.8", "0.9.9", "0.9.14", "0.9.15", "0.9.16-beta.1", "0.9.16-rc.1"]) {
+  it("rejects every tested build outside the range", () => {
+    for (const version of ["0.8.3", "0.9.0", "0.9.7", "0.9.8", "0.9.9", "0.9.14", "0.9.15", "0.9.15-rc.1", "0.10.0-beta.1"]) {
       const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
@@ -216,11 +224,11 @@ describe("checkAkmVersion", () => {
   })
 
   it("logs an incompatible CLI without writing to stderr", () => {
-    const result = runHookSandboxed(["session-start"], { akmVersion: "0.9.16-rc.1" })
+    const result = runHookSandboxed(["session-start"], { akmVersion: "0.9.15" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
-    expect(sessionLog.some((line) => line.includes("akm_version_mismatch") && line.includes("0.9.16-rc.1"))).toBe(true)
+    expect(sessionLog.some((line) => line.includes("akm_version_mismatch") && line.includes("0.9.15"))).toBe(true)
     expect(result.installLog).toBe("")
   })
 
