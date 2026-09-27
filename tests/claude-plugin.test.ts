@@ -874,6 +874,147 @@ echo "[knowledge] should-not-appear"
     expect(stdout.trim()).toBe("")
   })
 
+  describe("curate-prompt skips harness/tool envelopes and oversized pastes (non-task prompts)", () => {
+    // Measured 2026-09-27: at least 53% of 30 days of per-prompt curate calls
+    // were harness/tool envelopes and long pastes rather than task queries,
+    // and every one still spent a curate subprocess and injected irrelevant
+    // assets into context. shouldRecall() (claude/shared/recall-policy.ts)
+    // carries the actual classifier and its own exhaustive per-tag coverage —
+    // these confirm the hook wiring itself never reaches `akm curate` for the
+    // shapes that matter, using a call-logging fake akm the short-prompt case
+    // above does not need (an empty stdout alone would not prove akm was
+    // never spawned).
+    function makeCallLoggingAkm(binDir: string, callLog: string) {
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+echo "[knowledge] should-not-appear"
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+    }
+
+    it("skips a <task-notification> envelope", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const callLog = path.join(tempDir, "akm-calls.log")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(stateDir, { recursive: true })
+      makeCallLoggingAkm(binDir, callLog)
+
+      const envelope = [
+        "<task-notification>",
+        JSON.stringify({ task_id: "t-1", status: "completed", summary: "Background agent finished the migration." }),
+        "</task-notification>",
+      ].join("\n")
+
+      const stdout = runHook(["curate-prompt"], {
+        input: JSON.stringify({ session_id: "sess-envelope", prompt: envelope }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      expect(stdout.trim()).toBe("")
+      expect(existsSync(callLog)).toBe(false)
+    })
+
+    it("skips the exact AKM stash README boilerplate", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const callLog = path.join(tempDir, "akm-calls.log")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(stateDir, { recursive: true })
+      makeCallLoggingAkm(binDir, callLog)
+
+      const stdout = runHook(["curate-prompt"], {
+        input: JSON.stringify({
+          session_id: "sess-boilerplate",
+          prompt: "This is an **AKM stash** — a structured knowledge repository that stores reusable",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      expect(stdout.trim()).toBe("")
+      expect(existsSync(callLog)).toBe(false)
+    })
+
+    it("skips a paste longer than 2,000 characters", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const callLog = path.join(tempDir, "akm-calls.log")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(stateDir, { recursive: true })
+      makeCallLoggingAkm(binDir, callLog)
+
+      const paste = "a".repeat(2001)
+      const stdout = runHook(["curate-prompt"], {
+        input: JSON.stringify({ session_id: "sess-long-paste", prompt: paste }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      expect(stdout.trim()).toBe("")
+      expect(existsSync(callLog)).toBe(false)
+    })
+
+    it("still curates a genuinely long task prompt under the paste limit", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(stateDir, { recursive: true })
+
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+for arg in "$@"; do
+  case "$arg" in
+    curate) echo "[knowledge] release-plan"; echo "  ref: knowledge/release-plan"; exit 0 ;;
+  esac
+done
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+
+      // Long enough to be well past the short-prompt heuristics, still under
+      // the 2,000-char paste limit, and phrased to hit the coding-task signal.
+      const prompt = (
+        "We need to refactor the deployment pipeline: review the rollback runbook, fix the flaky "
+        + "healthcheck, update the changelog and release notes, and design the new error code convention. "
+      ).repeat(8)
+      expect(prompt.length).toBeGreaterThan(400)
+      expect(prompt.length).toBeLessThan(2000)
+
+      const stdout = runHook(["curate-prompt"], {
+        input: JSON.stringify({ session_id: "sess-long-legit", prompt }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+        },
+      })
+
+      const payload = JSON.parse(stdout.trim())
+      expect(payload.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
+      expect(payload.hookSpecificOutput.additionalContext).toContain("AKM PROVENANCE")
+    })
+  })
+
   describe("AKM_CURATE_MIN_SCORE / AKM_CURATE_TYPE (#110)", () => {
     // The prompt matters: shouldRecall() gates curation on its own signal
     // heuristics, independent of the #110 fix under test here — this text

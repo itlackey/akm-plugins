@@ -134,6 +134,27 @@ function createToolContext() {
   } as any
 }
 
+/**
+ * Poll until `probe` returns a value. chat.message's recalled-prompt curate
+ * runs fire-and-forget (not awaited by the hook itself), so a fixed sleep
+ * would be either flaky or slow — mirrors the helper of the same name in
+ * tests/claude-plugin.test.ts, which polls a detached child process for the
+ * same reason.
+ */
+async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      const value = probe()
+      if (value !== undefined) return value
+    } catch {
+      // Not ready yet — keep polling.
+    }
+    if (Date.now() >= deadline) throw new Error("waitFor timed out")
+    await Bun.sleep(25)
+  }
+}
+
 describe("akm-opencode plugin", () => {
   beforeEach(() => {
     mockExecFileSync.mockClear()
@@ -841,6 +862,79 @@ describe("akm-opencode plugin", () => {
       expect(client.app.log).not.toHaveBeenCalledWith(expect.objectContaining({
         body: expect.objectContaining({ message: "AKM event hook failed" }),
       }))
+    })
+  })
+
+  describe("chat.message skips harness/tool envelopes and oversized pastes (non-task prompts)", () => {
+    // Measured 2026-09-27: at least 53% of 30 days of per-prompt curate calls
+    // were harness/tool envelopes and long pastes rather than task queries.
+    // shouldRecall() (../claude/shared/recall-policy.ts, shared with the
+    // Claude hook) carries the actual classifier and its own exhaustive
+    // per-tag coverage — these confirm chat.message's wiring never reaches
+    // `akm curate` for the shapes that matter. The skip branch is fully
+    // synchronous (no fire-and-forget curate spawn), so no waitFor is needed.
+    function curateCallCount() {
+      return mockExecFileSync.mock.calls.filter(([, args]) => Array.isArray(args) && args.includes("curate")).length
+    }
+
+    it("skips a <task-notification> envelope", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const envelope = [
+        "<task-notification>",
+        JSON.stringify({ task_id: "t-1", status: "completed", summary: "Background agent finished the migration." }),
+        "</task-notification>",
+      ].join("\n")
+
+      await hooks["chat.message"]!(
+        { sessionID: "envelope-1", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: envelope }] } as any,
+      )
+
+      expect(curateCallCount()).toBe(0)
+    })
+
+    it("skips the exact AKM stash README boilerplate", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const boilerplate = "This is an **AKM stash** — a structured knowledge repository that stores reusable"
+
+      await hooks["chat.message"]!(
+        { sessionID: "boilerplate-1", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: boilerplate }] } as any,
+      )
+
+      expect(curateCallCount()).toBe(0)
+    })
+
+    it("skips a paste longer than 2,000 characters", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+
+      await hooks["chat.message"]!(
+        { sessionID: "long-paste-1", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: "a".repeat(2001) }] } as any,
+      )
+
+      expect(curateCallCount()).toBe(0)
+    })
+
+    it("still recalls a genuinely long task prompt under the paste limit", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      // Long enough to be well past the short-prompt heuristics, still under
+      // the 2,000-char paste limit, and phrased to hit the coding-task signal.
+      const prompt = (
+        "We need to refactor the deployment pipeline: review the rollback runbook, fix the flaky "
+        + "healthcheck, update the changelog and release notes, and design the new error code convention. "
+      ).repeat(8)
+      expect(prompt.length).toBeGreaterThan(400)
+      expect(prompt.length).toBeLessThan(2000)
+
+      await hooks["chat.message"]!(
+        { sessionID: "long-legit-1", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: prompt }] } as any,
+      )
+
+      // The curate call for a recalled prompt is fire-and-forget (not awaited
+      // by chat.message), so poll briefly for it rather than assert instantly.
+      await waitFor(() => (curateCallCount() > 0 ? true : undefined))
     })
   })
 

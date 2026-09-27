@@ -16,11 +16,52 @@ export type RecallDecision = {
     | "skip-short"
     | "skip-chitchat"
     | "skip-low-signal"
+    | "skip-nontask"
   query: string
   scopeHints?: string[]
 }
 
 import { extractAkmRefsFromString } from "./ref-extraction"
+
+// Measured 2026-09-27: at least 53% of 30 days of per-prompt curate calls
+// were not task queries at all — harness/tool envelopes (<task-notification>,
+// <agent-message>, <bash-*>, <system-reminder>, <command-*>, <local-command>),
+// 220 byte-identical copies of the "This is an **AKM stash**" README
+// boilerplate (src/assets/stash-skeleton/README.md in the akm CLI repo) that
+// leaks into a query field, and long pastes. Every one of those still spent a
+// curate subprocess and injected up to CURATE_LIMIT irrelevant assets into
+// context. This mirrors `_looks_like_nontask`/`classify` in the retrieval eval
+// harness (akm-test-corpus/harness/retrieval/queries.py) so prompts the eval
+// suite treats as non-task are the same ones skipped here.
+const NONTASK_ENVELOPE_TAGS = [
+  "<task-notification>",
+  "<agent-message",
+  "<bash-input>",
+  "<bash-stdout>",
+  "<bash-stderr>",
+  "<system-reminder>",
+  "<local-command",
+  "<command-name>",
+  "<command-message>",
+]
+const STASH_BOILERPLATE = "This is an **AKM stash** — a structured knowledge repository that stores reusable"
+const NONTASK_PASTE_CHAR_LIMIT = 2000
+
+/**
+ * True for a harness/tool envelope or oversized paste rather than a prompt a
+ * user actually typed as a task. Trimmed `text` in, same contract as
+ * `_looks_like_nontask` in the eval harness: an envelope tag anywhere in the
+ * text, the literal stash boilerplate, any XML-like payload (starts with `<`
+ * and contains a closing tag `</`), or length over the paste limit.
+ */
+export function isNonTaskPrompt(text: string): boolean {
+  if (text.length > NONTASK_PASTE_CHAR_LIMIT) return true
+  if (text === STASH_BOILERPLATE) return true
+  if (NONTASK_ENVELOPE_TAGS.some((tag) => text.includes(tag))) return true
+  const stripped = text.replace(/^\s+/, "")
+  if (stripped.startsWith("<") && text.includes("</")) return true
+  return false
+}
 
 export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolean; recentAssetFailure?: boolean }): RecallDecision {
   const text = prompt.trim()
@@ -29,6 +70,7 @@ export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolea
   if (!text) return { shouldRecall: false, reason: "skip-low-signal", query: "", scopeHints }
   if (options?.activeWorkflow) return { shouldRecall: true, reason: "active-workflow", query: text, scopeHints: ["workflow"] }
   if (options?.recentAssetFailure) return { shouldRecall: true, reason: "recent-asset-failure", query: text, scopeHints }
+  if (isNonTaskPrompt(text)) return { shouldRecall: false, reason: "skip-nontask", query: text, scopeHints }
   if (text.length < 4 || /^(ok|thanks|thank you|yes|no|continue|go ahead|sure|cool)$/i.test(lower)) {
     return { shouldRecall: false, reason: "skip-short", query: text, scopeHints }
   }
