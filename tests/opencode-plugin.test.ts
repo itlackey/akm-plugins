@@ -865,7 +865,7 @@ describe("akm-opencode plugin", () => {
     })
   })
 
-  describe("chat.message skips harness/tool envelopes and oversized pastes (non-task prompts)", () => {
+  describe("chat.message skips harness/tool envelopes (non-task prompts)", () => {
     // Measured 2026-09-27: at least 53% of 30 days of per-prompt curate calls
     // were harness/tool envelopes and long pastes rather than task queries.
     // shouldRecall() (../claude/shared/recall-policy.ts, shared with the
@@ -905,15 +905,17 @@ describe("akm-opencode plugin", () => {
       expect(curateCallCount()).toBe(0)
     })
 
-    it("skips a paste longer than 2,000 characters", async () => {
+    it("still recalls a task prompt longer than 2,000 characters", async () => {
       const hooks = await AkmPlugin(createPluginInput())
+      const prompt = "fix the flaky retry logic in the deploy pipeline. ".repeat(50)
+      expect(prompt.length).toBeGreaterThan(2000)
 
       await hooks["chat.message"]!(
-        { sessionID: "long-paste-1", messageID: "message-1", agent: "build" } as any,
-        { parts: [{ type: "text", text: "a".repeat(2001) }] } as any,
+        { sessionID: "long-prompt-1", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: prompt }] } as any,
       )
 
-      expect(curateCallCount()).toBe(0)
+      expect(curateCallCount()).toBe(1)
     })
 
     it("still recalls a genuinely long task prompt under the paste limit", async () => {

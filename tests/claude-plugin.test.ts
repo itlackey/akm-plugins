@@ -874,7 +874,7 @@ echo "[knowledge] should-not-appear"
     expect(stdout.trim()).toBe("")
   })
 
-  describe("curate-prompt skips harness/tool envelopes and oversized pastes (non-task prompts)", () => {
+  describe("curate-prompt skips harness/tool envelopes (non-task prompts)", () => {
     // Measured 2026-09-27: at least 53% of 30 days of per-prompt curate calls
     // were harness/tool envelopes and long pastes rather than task queries,
     // and every one still spent a curate subprocess and injected irrelevant
@@ -948,7 +948,7 @@ echo "[knowledge] should-not-appear"
       expect(existsSync(callLog)).toBe(false)
     })
 
-    it("skips a paste longer than 2,000 characters", () => {
+    it("still curates a task prompt longer than 2,000 characters", () => {
       const tempDir = makeTempDir()
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
@@ -957,9 +957,10 @@ echo "[knowledge] should-not-appear"
       mkdirSync(stateDir, { recursive: true })
       makeCallLoggingAkm(binDir, callLog)
 
-      const paste = "a".repeat(2001)
-      const stdout = runHook(["curate-prompt"], {
-        input: JSON.stringify({ session_id: "sess-long-paste", prompt: paste }),
+      const prompt = "fix the flaky retry logic in the deploy pipeline. ".repeat(50)
+      expect(prompt.length).toBeGreaterThan(2000)
+      runHook(["curate-prompt"], {
+        input: JSON.stringify({ session_id: "sess-long-prompt", prompt }),
         env: {
           HOME: tempDir,
           PATH: `${binDir}:/usr/bin:/bin`,
@@ -967,8 +968,7 @@ echo "[knowledge] should-not-appear"
         },
       })
 
-      expect(stdout.trim()).toBe("")
-      expect(existsSync(callLog)).toBe(false)
+      expect(existsSync(callLog)).toBe(true)
     })
 
     it("still curates a genuinely long task prompt under the paste limit", () => {
