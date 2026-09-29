@@ -11,11 +11,15 @@
 //
 // A single caret clause anchored at the stable release covers the supported
 // public CLI line: `^0.9.17` admits stable 0.9.17 and later 0.9.x releases.
-// 0.9.17 is a required compatibility floor, not a marketing version. It
-// removes the LLM entity graph, LLM metadata enrichment, and `akm show`'s
-// `related` list (replaced by declared `links`) — this plugin reads none of
-// them, so the floor moves to track the published stable release rather than
-// to avoid a specific incompatibility with an older binary.
+// 0.9.17 is a required compatibility floor, not a marketing version. The
+// OpenCode plugin runs akm-cli in-process against the same `index.db` and
+// `state.db` as the installed CLI, and 0.9.17 migrates both forward (index
+// layout 26, the improve-ledger state migrations); an older in-process
+// akm-cli keeps writing to them on its own older schema. Before 0.9.16,
+// bundle activation and executable authority were not yet host-owned, so an
+// older binary would also restore a different trust model. Nothing this
+// plugin reads was removed in 0.9.17 (the LLM entity graph, LLM metadata
+// enrichment, and `akm show`'s `related` list).
 //
 // The gate reads the RELEASE CORE (major.minor.patch) and ignores a prerelease
 // tag. node-semver's default rule, which the vendored matcher reproduces, is
