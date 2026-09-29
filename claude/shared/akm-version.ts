@@ -10,12 +10,12 @@
 // node_modules at hook-execution time.
 //
 // A single caret clause anchored at the stable release covers the supported
-// public CLI line: `^0.9.16` admits stable 0.9.16 and later 0.9.x releases.
-// 0.9.16 is a required compatibility floor, not a marketing version. It is
-// the release this plugin is verified against after bundle activation and
-// executable authority moved behind host-owned configuration. Admitting an
-// older binary would silently restore a different trust model even where the
-// CLI payload consumed by the plugin still looks compatible.
+// public CLI line: `^0.9.17` admits stable 0.9.17 and later 0.9.x releases.
+// 0.9.17 is a required compatibility floor, not a marketing version. It
+// removes the LLM entity graph, LLM metadata enrichment, and `akm show`'s
+// `related` list (replaced by declared `links`) — this plugin reads none of
+// them, so the floor moves to track the published stable release rather than
+// to avoid a specific incompatibility with an older binary.
 //
 // The gate reads the RELEASE CORE (major.minor.patch) and ignores a prerelease
 // tag. node-semver's default rule, which the vendored matcher reproduces, is
@@ -42,7 +42,7 @@
 // most deeply. 0.9.12 did change that envelope again (added `engine`,
 // `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
 // all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
-// The 0.9.16 compatibility review keeps the split explicit: keep the caret
+// The 0.9.17 compatibility review keeps the split explicit: keep the caret
 // range for Claude's stable CLI calls, but exact-pin OpenCode's package because
 // it imports private in-process modules and shares AKM's databases. The
 // #107/#108/#109 envelope hardening remains necessary on both surfaces: every
@@ -52,7 +52,7 @@
 
 import { satisfies, valid } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.16"
+export const AKM_VERSION_RANGE = "^0.9.17"
 
 /**
  * True when `version` is a valid semver string whose release core
