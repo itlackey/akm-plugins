@@ -9,7 +9,7 @@
       "name": "akm",
       "source": "./claude",
       "description": "Search, show, and curate AKM concepts, record feedback, and turn corrections, preferences, memories, and recurring workflows into reviewable AKM proposals.",
-      "version": "0.9.16202609280225"
+      "version": "0.9.17202609292126"
     }
   ]
 }
