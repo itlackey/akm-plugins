@@ -1,6 +1,6 @@
 {
   "name": "akm-claude",
-  "version": "0.9.17202609292126",
+  "version": "0.9.18202609300340",
   "private": true,
   "description": "Claude Code plugin for AKM discovery, feedback, memory, and automatic learning proposals.",
   "license": "MPL-2.0",
