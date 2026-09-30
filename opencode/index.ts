@@ -2006,7 +2006,7 @@ const AKM_HINTS_PREFIX = [
   "- **`akm_search` (known name)** — use ONLY when you already know an asset exists (e.g. after `akm_show` returned \"not found\") and need to locate its exact ref. Do not use as a discovery tool.",
   "- **`akm_show <bundle>//meta`** — when working in or with an unfamiliar bundle, read its optional `.meta/` orientation (purpose, key assets, conventions, maintainer) before diving in. `akm_show meta` reads your working bundle's `.meta/index.md`; `akm_show meta:<name>` reads other `.meta/` docs (e.g. `meta:about`). These docs are direct-read and never appear in `akm_search`.",
   "",
-  "Record `akm_feedback <ref> positive|negative` whenever an asset materially helps or misses, and use `akm_remember` to persist durable learnings so future sessions inherit them.",
+  "Record `akm_feedback <ref> positive|negative` whenever an asset's content materially helps, or proves wrong, stale or unhelpful (a failed akm call is not feedback on the asset), and use `akm_remember` to persist durable learnings so future sessions inherit them.",
   "",
   AKM_WORKFLOW_INSTRUCTION,
 ].join("\n")
@@ -2827,29 +2827,18 @@ function extractMemoryRefs(toolName: string, args: Record<string, unknown>, valu
   return [...refs]
 }
 
-// Tools that only LOOK at an asset. A successful lookup names the ref in its
-// own arguments, so directInput scored it 0.65 — over the 0.6 floor — and
-// merely inspecting a concept submitted POSITIVE feedback for it, biasing the
-// exact ranking loop this plugin exists to feed. Failures still count: a
-// show/search/curate that errors says something real about the ref it was
-// pointed at. Byte-for-byte the same rule as AKM_READ_ONLY_VERBS in
-// claude/hooks/akm-hook.ts (which matches on the `akm` subcommand of a Bash
-// invocation rather than on a tool name), so the two harnesses cannot disagree
-// about whether inspecting an asset is evidence that it helped. On OpenCode
-// that leaves the retrospective channel — the user saying it worked — as the
-// positive signal, which is the point: viewing is not using.
-const AKM_READ_ONLY_TOOLS = new Set(["akm_show", "akm_search", "akm_curate"])
-
 // Refs that must never receive automatic feedback, in bundle-qualified form
 // too (`local//lessons/foo`). Lessons take feedback through the proposal
-// queue; memories/env/secrets are not ranked assets at all. Shared by BOTH
-// auto-feedback paths (tool outcome and retrospective) because they had
-// drifted: the retrospective filter omitted `lessons`, so a lessons ref
-// touched in a session the user later thanked got auto-feedback here and not
-// on Claude. Same source as NO_AUTO_FEEDBACK_REF_RE in
-// claude/hooks/akm-hook.ts.
+// queue; memories/env/secrets are not ranked assets at all. Same source as
+// NO_AUTO_FEEDBACK_REF_RE in claude/hooks/akm-hook.ts, which applies it to
+// both of its auto-feedback paths.
 const AKM_NO_AUTO_FEEDBACK_REF_RE = /^(?:.*\/\/)?(?:memories|env|secrets|lessons)\//
 
+// The outcome of an akm tool call: "positive" when it returned a result,
+// "negative" when it failed (a CLI error, `ok: false`, an `error` string). It
+// gates the write gate's already-shown credit and labels the observation
+// events; it is NOT feedback on the asset. A failed akm call says nothing about
+// the asset's content (akm#999), so nothing here reaches `akm feedback`.
 function classifyToolFeedback(value: unknown): "positive" | "negative" | undefined {
   if (!value || typeof value !== "object") return undefined
   if (isCliError(value)) return "negative"
@@ -3329,10 +3318,9 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
 
         const feedback = classifyToolFeedback(parsed)
         if (feedback) {
-          await writePluginLog(logClient, feedback === "negative" ? "warn" : "info", "AKM system feedback recorded", {
-            subsystem: "feedback",
-            actor: "system",
-            feedback,
+          await writePluginLog(logClient, feedback === "negative" ? "warn" : "info", "AKM tool call result", {
+            subsystem: "akm",
+            outcome: feedback === "negative" ? "failed" : "ok",
             toolName: input.tool,
             sessionID: input.sessionID,
             callID: input.callID,
@@ -3396,62 +3384,13 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
         }
 
-        if (
-          AKM_AUTO_FEEDBACK
-          && feedback
-          && input.tool !== "akm_feedback"
-          // Inspecting is not helping — see AKM_READ_ONLY_TOOLS.
-          && !(feedback === "positive" && AKM_READ_ONLY_TOOLS.has(input.tool))
-          && toolRefs.length > 0
-        ) {
-          const dedupe = new Set<string>()
-          const note = feedback === "positive"
-            ? `opencode auto: ${input.tool} succeeded`
-            : `opencode auto: ${input.tool} failed`
-          for (const ref of toolRefs) {
-            // Skip refs that should never receive auto-feedback (see
-            // AKM_NO_AUTO_FEEDBACK_REF_RE — same list the retrospective path
-            // applies, and the same list as the claude-side hook).
-            if (AKM_NO_AUTO_FEEDBACK_REF_RE.test(ref)) continue
-            const directInput = Object.values(input.args as Record<string, unknown>).some((value) => typeof value === "string" && value.includes(ref))
-            const signal = classifyFeedbackSignal({
-              ref,
-              polarity: feedback,
-              harness: "opencode",
-              sessionId: input.sessionID,
-              directInput,
-              note: `${note}; confidence=${directInput ? "0.65" : "0.25"}; source=${feedback === "positive" ? "tool_success" : "tool_failure"}`,
-            })
-            if (!shouldSubmitAutomaticFeedback(signal)) {
-              writeStructuredEvent({
-                event: "feedback_recorded",
-                sessionId: input.sessionID,
-                scope: buildEventScope(input.sessionID, directory, input.tool),
-                refs: [ref],
-                input: { source: signal.source, confidence: signal.confidence, note: signal.note },
-                outcome: { status: "skipped", warnings: ["confidence below automatic submission threshold"] },
-              })
-              continue
-            }
-            const ok = queueFeedback(logClient, ref, feedback, signal.note, {
-              toolName: input.tool,
-              sessionID: input.sessionID,
-              directory,
-              agent: input.tool,
-            }, dedupe)
-            if (ok) {
-              writeStructuredEvent({
-                event: "feedback_recorded",
-                sessionId: input.sessionID,
-                scope: buildEventScope(input.sessionID, directory, input.tool),
-                refs: [ref],
-                input: { source: signal.source, confidence: signal.confidence, note: signal.note },
-                outcome: { status: "ok" },
-              })
-            }
-            if (!ok) break
-          }
-        }
+        // No feedback is submitted from a tool outcome. A successful akm_show /
+        // akm_search / akm_curate only inspected a concept (viewing is not
+        // using), the other akm tools write memories or are feedback themselves,
+        // and a FAILED akm call says nothing about the asset's content (akm#999):
+        // submitting `--negative` for it made akm's distill write lessons about
+        // the error. OpenCode's automatic feedback is the retrospective channel
+        // in chat.message — the user saying it worked.
       } catch (error: unknown) {
         await writePluginLog(logClient, "error", "AKM tool.execute.after hook failed", {
           subsystem: "hook",
@@ -3537,7 +3476,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         },
       }),
       akm_feedback: tool({
-        description: "Record positive or negative feedback for a bundle asset so AKM can improve future ranking. Call it after akm_show whenever an asset materially helped or missed.",
+        description: "Record positive or negative feedback for a bundle asset so AKM can improve future ranking. Call it after akm_show whenever the asset's content materially helped, or proved wrong, stale or unhelpful. A failed akm call is not feedback on the asset.",
         args: {
           ref: tool.schema.string().describe("Asset ref to record feedback for."),
           sentiment: tool.schema.enum(["positive", "negative"]).describe("Whether the feedback is positive or negative."),

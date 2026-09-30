@@ -48,7 +48,7 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 | `chat.message` | Records feedback/memory intent, captures corrections, guardrails, preferences, explicit memories, and positive feedback, and can schedule non-blocking curation. High-confidence durable signals submit asynchronous AKM proposals; recurring task intent across distinct sessions can submit a skill proposal. |
 | `experimental.chat.system.transform` | Injects the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. |
 | `tool.execute.before` | The format-declaration write gate (`AKM_WRITE_GATE`, `observe` by default). Blocks the first `edit`/`write` to an existing file that declares a format your bundle documents and hands the model the ref to read. Once per file per session, released unconditionally on the retry. |
-| `tool.execute.after` | Tracks concepts used by AKM tools, records deduplicated feedback, and checkpoints session observations. It also records what a file the session `read` declares about its own format, which is what the write gate above keys on. `write` is deliberately not a source: a file the session created is not one it needs the bundle to explain. The create itself is recorded on the write's `tool.execute.before` pass, so a later read-back of that file cannot re-arm the gate. |
+| `tool.execute.after` | Tracks concepts used by AKM tools and checkpoints session observations. It also records what a file the session `read` declares about its own format, which is what the write gate above keys on. `write` is deliberately not a source: a file the session created is not one it needs the bundle to explain. The create itself is recorded on the write's `tool.execute.before` pass, so a later read-back of that file cannot re-arm the gate. |
 | `shell.env` | Exposes `AKM_PROJECT`, `AKM_PLUGIN_VERSION`, and the resolved `AKM_BUNDLE_DIR` to shell tools. |
 | `session.idle` | Runs interval-gated memory extraction (`AKM_AUTO_MEMORY=0` disables it). Fires after every turn, so it is rate-limited. |
 | `session.compacted` | Records a post-compaction event. |
@@ -56,7 +56,7 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 
 The session observation buffer that retrospective feedback reads from survives every non-terminal event: it is bounded by `AKM_SESSION_BUFFER_MAX_ENTRIES` and dropped only on `session.deleted`. Discarding it at `session.idle` would empty it between turns, so "thanks, that worked" would credit nothing in exactly the sessions that used the most assets.
 
-Automatic feedback skips references that AKM reports as ineligible, and a *successful* `akm_show` / `akm_search` / `akm_curate` submits nothing — inspecting a concept is not evidence that it helped, so on OpenCode the positive signal comes from a retrospective confirmation instead. Failures of those same tools still count as negative signal. Same rule as the Claude plugin, which applies it to the `akm` subcommand of a Bash invocation.
+Automatic feedback skips references that AKM reports as ineligible, and no `akm_*` tool call submits feedback on its own. A *successful* `akm_show` / `akm_search` / `akm_curate` only inspected a concept, which is not evidence that it helped, so on OpenCode the positive signal comes from a retrospective confirmation instead. A *failed* call (an error result, a timeout, an ambiguous ref) is not feedback on the asset either, and is only logged. Same rules as the Claude plugin, which applies them to the `akm` subcommand of a Bash invocation.
 
 ### Automatic learning proposals
 
@@ -83,7 +83,7 @@ Every kill switch below is opt-out and reads the same way: only the literal `0` 
 | `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. When unset the plugin discovers it once per process by running `akm info`. The resolved value is re-exported to shell tools through the `shell.env` hook. |
 | `AKM_OPENCODE_CLI` | unset | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency, exec'd as-is. Used by the eval harness to substitute a deterministic shim. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic prompt curation. |
-| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic outcome feedback. |
+| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback: the retrospective ("that worked") confirmation. |
 | `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. Native session extraction is controlled separately by `AKM_AUTO_MEMORY`. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip the per-session `akm hints` call. The missing-bundle warning is deliberately not gated on this: it explains why the bundle is empty in the first place. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable interval-gated native-session extraction through `akm proposal extract`. The Claude plugin honours the same variable for its `SessionEnd` extraction. |
@@ -139,7 +139,7 @@ These three are read once, when the plugin module is imported, so they must be s
 1. Start with `akm_curate` for task-oriented discovery; set `pack` when you want the selected local content immediately.
 2. Use `akm_search` when you know the concept name and need its exact ID.
 3. Fetch a concept with `akm_show` before relying on it; opt into bounded lead context only when a selected fragment needs it.
-4. Record the outcome with `akm_feedback`.
+4. Record whether the concept helped with `akm_feedback`; a failed akm call is not feedback on the asset.
 5. Use `akm_remember` for durable knowledge that should be available to future sessions.
 
 ## Docs

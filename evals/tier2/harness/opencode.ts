@@ -263,8 +263,7 @@ export type OpenCodeHarness = {
   // extracted from it.
   curateAndExtract(args: { sessionID: string; prompt: string }): Promise<{ context: string; refs: string[]; durationMs: number }>
   // Drive a tool.execute.after with synthetic output and return a snapshot
-  // of any logs the plugin wrote (feedback subsystem entries are what we
-  // care about).
+  // of any logs the plugin wrote.
   toolAfter(args: { sessionID: string; tool: string; toolArgs: Record<string, unknown>; output: string; title?: string }): Promise<{ logs: CapturedLogEntry[]; durationMs: number }>
 }
 

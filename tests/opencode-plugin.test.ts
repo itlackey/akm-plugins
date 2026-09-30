@@ -1077,13 +1077,30 @@ describe("akm-opencode plugin", () => {
       expect(feedbackCalls()).toHaveLength(0)
     })
 
-    it("still submits negative feedback when a read-only lookup fails", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      await showTool(hooks, "ro-2", "skills/review", JSON.stringify({ ok: false, error: "asset not found", ref: "skills/review" }))
+    it("submits nothing when an akm tool call fails, and keeps the failure in the plugin log", async () => {
+      // A failed akm call says nothing about the asset's content, so it is not
+      // feedback on the asset (akm#999): a not-found ref, an ambiguous ref,
+      // duplicate physical owners and a timeout all look the same to the asset.
+      // The ref is named in the tool's own args, so each of these used to score
+      // 0.65 and submit `--negative`.
+      const failures: Array<[string, Record<string, unknown>]> = [
+        ["not found", { ok: false, error: "asset not found", ref: "skills/review" }],
+        ["ambiguous ref", { ok: false, error: "ambiguous ref: skills/review matches 2 bundles", ref: "skills/review" }],
+        ["duplicate physical owners", { ok: false, error: "duplicate physical owners for skills/review" }],
+        ["timeout", { error: "akm timed out after 60000ms" }],
+      ]
+      for (const [index, [label, envelope]] of failures.entries()) {
+        const client = createMockClient()
+        const hooks = await AkmPlugin(createPluginInput(client))
+        await showTool(hooks, `ro-2-${index}`, "skills/review", JSON.stringify(envelope))
 
-      const negative = feedbackCalls("--negative")
-      expect(negative).toHaveLength(1)
-      expect(negative[0]?.[1]).toEqual(expect.arrayContaining(["feedback", "skills/review", "--negative"]))
+        expect(feedbackCalls(), label).toHaveLength(0)
+        // The failure stays visible, in the plugin's own log, and is not
+        // described as feedback.
+        const logged = client.app.log.mock.calls.map(([entry]: any[]) => entry.body as { level: string; message: string; extra: Record<string, unknown> })
+        expect(logged.some((entry) => entry.level === "warn" && entry.extra.toolName === "akm_show" && typeof entry.extra.error === "string"), label).toBe(true)
+        expect(logged.some((entry) => /feedback/i.test(entry.message)), label).toBe(false)
+      }
     })
 
     it("keeps the session observation buffer across session.idle so a later confirmation still credits", async () => {

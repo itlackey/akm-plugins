@@ -121,14 +121,14 @@ Preserve relevant structured fields such as `prompt`, `template`, `run`, `origin
 
 ## Feedback
 
-After the outcome is known, record whether the concept materially helped:
+After the outcome is known, record whether the concept's content materially helped, or proved wrong, stale or unhelpful:
 
 ```sh
 akm feedback "<ref>" --positive --format json -q
-akm feedback "<ref>" --negative --reason "<what failed>" --format json -q
+akm feedback "<ref>" --negative --reason "<what was wrong>" --format json -q
 ```
 
-Negative feedback requires a reason. Do not submit feedback for a reference AKM reports as ineligible.
+Negative feedback requires a reason. A failed akm command (for example `akm show` erroring) is not feedback on the asset — do not record it. Do not submit feedback for a reference AKM reports as ineligible.
 
 ## Remember
 

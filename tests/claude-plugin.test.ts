@@ -209,6 +209,13 @@ describe("Claude plugin metadata", () => {
     expect(postToolCommands.some((c: string) => c.includes("post-tool success"))).toBe(true)
     expect(postToolCommands.some((c: string) => c.includes("auto-feedback success"))).toBe(true)
 
+    // A failed akm command says nothing about the asset (akm#999), so the
+    // failure pass records the observation and never runs auto-feedback.
+    const failureBashHook = plugin.hooks.PostToolUseFailure.find((entry: { matcher: string }) => entry.matcher === "Bash")
+    const postToolFailureCommands = failureBashHook.hooks.map((h: { command: string }) => h.command)
+    expect(postToolFailureCommands.some((c: string) => c.includes("post-tool failure"))).toBe(true)
+    expect(postToolFailureCommands.some((c: string) => c.includes("auto-feedback"))).toBe(false)
+
     expect(plugin.hooks.SubagentStart[0].hooks[0].command as string).toContain("subagent-start")
     expect(plugin.hooks.TaskCreated[0].hooks[0].command as string).toContain("task-created")
     expect(plugin.hooks.TaskCompleted[0].hooks[0].command as string).toContain("task-completed")
@@ -1329,12 +1336,16 @@ exit 0
     expect(recorded).toContain("--reason")
   })
 
-  it("auto-feedback records negative feedback and skips memory refs", () => {
+  it("auto-feedback records nothing when the akm command failed", () => {
+    // A failed akm command (non-zero exit, timeout) says nothing about the
+    // asset's content, so it is not feedback on the asset (akm#999). It used to
+    // submit `--negative` for every ref the command named, which akm's distill
+    // then turned into lessons about the error itself.
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
     const feedbackLog = path.join(tempDir, "akm-feedback.log")
-    const bundleDir = makeBundle(tempDir, ["commands/release", "memories/notes"])
+    const bundleDir = makeBundle(tempDir, ["commands/release", "workflows/code-review"])
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(feedbackLog)
@@ -1343,22 +1354,79 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
-if printf '%s' "$*" | grep -q 'remember'; then
-  printf '{"ok":true}\\n'
-  exit 0
-fi
 printf '{"ok":true}\\n'
 exit 0
 `,
     )
     chmodSync(path.join(binDir, "akm"), 0o755)
 
-    runHook(["auto-feedback", "failure"], {
+    // A read-only lookup and a use-shaped verb: neither may submit a signal on
+    // failure, whichever verb failed.
+    for (const command of ["akm show commands/release", "akm workflow run workflows/code-review"]) {
+      runHook(["auto-feedback", "failure"], {
+        input: JSON.stringify({
+          session_id: "sess-auto-2",
+          tool: "Bash",
+          input: { command },
+          output: "error: template missing",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          AKM_BUNDLE_DIR: bundleDir,
+        },
+      })
+    }
+
+    const recorded = existsSync(feedbackLog) ? readFileSync(feedbackLog, "utf8") : ""
+    expect(recorded).not.toContain("feedback")
+
+    // The failure stays visible in the plugin's own log, not in akm feedback.
+    runHook(["post-tool", "failure"], {
       input: JSON.stringify({
         session_id: "sess-auto-2",
         tool: "Bash",
-        input: { command: "akm show commands/release && akm show memories/notes" },
+        input: { command: "akm show commands/release" },
         output: "error: template missing",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_BUNDLE_DIR: bundleDir,
+      },
+    })
+    const pluginLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
+    expect(pluginLog.some((line) => line.includes("system\tfailure\tBash\takm show commands/release"))).toBe(true)
+  })
+
+  it("auto-feedback skips memory refs", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const feedbackLog = path.join(tempDir, "akm-feedback.log")
+    const bundleDir = makeBundle(tempDir, ["workflows/code-review", "memories/notes"])
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    const quotedLog = shellQuote(feedbackLog)
+
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${quotedLog}
+printf '{"ok":true}\\n'
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["auto-feedback", "success"], {
+      input: JSON.stringify({
+        session_id: "sess-auto-2",
+        tool: "Bash",
+        input: { command: "akm workflow run workflows/code-review && akm show memories/notes" },
+        output: "{\"workflowRef\":\"workflows/code-review\"}",
       }),
       env: {
         HOME: tempDir,
@@ -1369,7 +1437,7 @@ exit 0
     })
 
     const recorded = readFileSync(feedbackLog, "utf8")
-    expect(recorded).toContain("feedback commands/release --negative")
+    expect(recorded).toContain("feedback workflows/code-review --positive")
     expect(recorded).not.toContain("feedback memories/notes")
   })
 
@@ -2223,7 +2291,10 @@ exit 0
       expect(existsSync(callLog)).toBe(false)
     })
 
-    it("still records a negative signal when a read-only akm lookup fails", () => {
+    it("records no signal when a read-only akm lookup fails either", () => {
+      // A lookup that errors (not found, ambiguous ref, duplicate physical
+      // owners) says nothing about the asset it was pointed at: a failed akm
+      // command is not feedback on the asset (akm#999).
       const tempDir = makeTempDir()
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
@@ -2247,7 +2318,8 @@ exit 0
         },
       })
 
-      expect(readFileSync(callLog, "utf8")).toContain("feedback skills/code-review --negative")
+      const calls = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+      expect(calls).not.toContain("feedback")
     })
   })
 

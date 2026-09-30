@@ -34,7 +34,7 @@
     "auto_feedback": {
       "type": "boolean",
       "title": "Record feedback automatically",
-      "description": "Submit `akm feedback` for concepts a tool call used, based on whether the call succeeded, and credit concepts when you say something worked. Turn off to record feedback only via /akm-feedback. Equivalent to AKM_AUTO_FEEDBACK.",
+      "description": "Submit positive `akm feedback` for concepts a successful tool call used, and credit concepts when you say something worked. A failed akm command is never recorded as feedback. Turn off to record feedback only via /akm-feedback. Equivalent to AKM_AUTO_FEEDBACK.",
       "default": true
     },
     "auto_learning": {
@@ -168,11 +168,6 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" post-tool failure",
             "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh\" auto-feedback failure",
-            "timeout": 20
           }
         ]
       },

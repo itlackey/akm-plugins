@@ -1,11 +1,13 @@
 // Auto-feedback emission metric.
 //
 // Both plugins inspect tool outputs and decide whether to fire
-// `akm feedback <ref> --positive|--negative` on any refs they see. We
-// hold both sides to the SAME measurement: actual akm CLI calls in the
-// fake-akm call log, NOT the in-process classification signal that
-// earlier versions of this metric inspected. Classification without
-// emission is invisible to the user; emission is what matters.
+// `akm feedback <ref> --positive` on any refs they see; neither may fire
+// `--negative` from a tool outcome, because a failed akm command says nothing
+// about the asset (akm#999). We hold both sides to the SAME measurement:
+// actual akm CLI calls in the fake-akm call log, NOT the in-process
+// classification signal that earlier versions of this metric inspected.
+// Classification without emission is invisible to the user; emission is what
+// matters.
 //
 // For each labeled fixture (label ∈ {positive, negative, neither}):
 //   - Drive the appropriate plugin's auto-feedback path with the
@@ -28,12 +30,14 @@
 // A fixture is driven on success, on failure, or on both. "neither" defaults
 // to both (the skip must hold either way) and positive/negative to the one
 // matching their label; the optional `drive` field overrides that. `drive`
-// exists for the read-only-verb rule added in 0.9: a SUCCESSFUL
-// `akm show|search|curate` must emit nothing, while a FAILING one must still
-// emit negative, and that is two different truths about one fixture. The
-// read-only fixtures are therefore labeled "neither" and driven on success
-// only — their failure half is covered by the `akm show` failures in fb-004
-// and fb-005. Do not "fix" a read-only regression by re-labeling these.
+// exists because the two halves of a fixture are different truths: a
+// SUCCESSFUL read-only `akm show|search|curate` must emit nothing, and so must
+// a FAILING command of any verb — a failed akm command is not feedback on the
+// asset (akm#999; it used to submit `--negative`). The read-only fixtures are
+// therefore labeled "neither" and driven on success only, and the
+// failing-command fixtures (fb-004, fb-005, fb-006, fb-012) are labeled
+// "neither" and driven on failure only, the pass that models a failed command.
+// Do not "fix" a regression here by re-labeling these.
 //
 // The two plugins are driven through different positive channels because they
 // HAVE different ones. Claude observes arbitrary Bash `akm <verb>` calls, so a
@@ -295,7 +299,7 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
     },
     notes: [
       `Both plugins measured by actual \`akm feedback\` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).`,
-      `n=${fixtures.length} synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/) and, for the success-only ones, for a read-only \`show\`/\`search\`/\`curate\` that succeeded.`,
+      `n=${fixtures.length} synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/), for a read-only \`show\`/\`search\`/\`curate\` that succeeded, and for a failed \`akm\` command of any verb (a failed command is not feedback on the asset).`,
       `Positive fixtures are driven through each plugin's real positive channel: a use-shaped \`akm\` verb on Claude, a retrospective "thanks, that worked" on OpenCode, whose ref-yielding tools are all read-only.`,
     ],
   }

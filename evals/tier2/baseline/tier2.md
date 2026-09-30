@@ -52,11 +52,11 @@
 ## feedback
 
 > Both plugins measured by actual `akm feedback` invocations in the call log (NOT in-process classification — that change vs the previous metric exposed an apparent ~18% precision delta on OpenCode that was entirely due to the asymmetric measurement).
-> n=14 synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/) and, for the success-only ones, for a read-only `show`/`search`/`curate` that succeeded.
+> n=14 synthetic tool outputs, all using AKM 0.9 concept-ID refs. "neither"-labeled fixtures verify the plugins correctly skip auto-feedback for the documented skip list (memories/, env/, secrets/, lessons/), for a read-only `show`/`search`/`curate` that succeeded, and for a failed `akm` command of any verb (a failed command is not feedback on the asset).
 > Positive fixtures are driven through each plugin's real positive channel: a use-shaped `akm` verb on Claude, a retrospective "thanks, that worked" on OpenCode, whose ref-yielding tools are all read-only.
 
 | plugin | tp | fp | fn | tn | precision | recall | polarity flips |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude | 7 | 0 | 0 | 7 | 1.0000 | 1.0000 | 0 |
-| opencode | 7 | 0 | 0 | 7 | 1.0000 | 1.0000 | 0 |
+| claude | 3 | 0 | 0 | 11 | 1.0000 | 1.0000 | 0 |
+| opencode | 3 | 0 | 0 | 11 | 1.0000 | 1.0000 | 0 |
 

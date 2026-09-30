@@ -186,7 +186,7 @@ const SESSION_START_HEADER = [
   '- **`akm search "<known name>"`** — exact lookup when you already know a concept exists.',
   '- **`akm show <ref>`** — inspect a `[bundle//]conceptId[#fragment]` before relying on it.',
   "",
-  'Record `akm feedback <ref> --positive|--negative` whenever an asset materially helps or misses, and use `akm remember` to persist durable learnings so future sessions inherit them.',
+  'Record `akm feedback <ref> --positive|--negative` whenever an asset\'s content materially helps, or proves wrong, stale or unhelpful (a failed akm command is not feedback on the asset), and use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
 // There is deliberately no local ref regex in this file. Every ref observed by
 // a hook goes through ../shared/ref-extraction, whose concept-root allowlist
@@ -1356,9 +1356,7 @@ const NO_AUTO_FEEDBACK_REF_RE = /^(?:.*\/\/)?(?:memories|env|secrets|lessons)\//
 // Verbs that only LOOK at an asset. `akm show <ref>` names the ref in the
 // command, so directInput scored it 0.65 — over the 0.6 floor — and merely
 // inspecting an asset submitted POSITIVE feedback for it, biasing the exact
-// ranking loop this plugin exists to feed. Failures still count for these
-// verbs: a `show`/`search`/`curate` that errors says something real about the
-// ref it was pointed at.
+// ranking loop this plugin exists to feed.
 const AKM_READ_ONLY_VERBS = new Set(["show", "search", "curate"])
 // Global flags that take a separate value, so `akm --format json -q show <ref>`
 // resolves to `show` rather than to `json`.
@@ -1391,6 +1389,13 @@ function akmSubcommand(commandText: string): string {
 }
 
 function autoFeedback() {
+  // A failed akm command (non-zero exit, timeout) says nothing about the
+  // asset's content, so it is never feedback on the asset (akm#999):
+  // submitting `--negative` for it made akm's distill write lessons about the
+  // error itself. The failure hook no longer runs this; the guard keeps a stale
+  // wiring from turning a failure into a signal. The failure stays visible
+  // through recordPostTool()'s feedback.log row and tool_observation event.
+  if (MODE === "failure") return
   if (!AUTO_FEEDBACK || !akmAvailable()) return
   const rawInput = readStdin()
   const parsedInput = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
@@ -1399,7 +1404,7 @@ function autoFeedback() {
   const { commandText, statusText, refs, commandRefs, sid } = extractPostToolFields(rawInput, MODE)
   if (/akm\s+feedback|\/akm\s+feedback/.test(commandText)) return
   // Inspecting is not helping — see AKM_READ_ONLY_VERBS.
-  if (statusText !== "failure" && AKM_READ_ONLY_VERBS.has(akmSubcommand(commandText))) return
+  if (AKM_READ_ONLY_VERBS.has(akmSubcommand(commandText))) return
   if (refs.length === 0) return
   for (const ref of refs) {
     if (NO_AUTO_FEEDBACK_REF_RE.test(ref)) continue
@@ -1409,11 +1414,11 @@ function autoFeedback() {
     }
     const signal = classifyFeedbackSignal({
       ref,
-      polarity: statusText === "failure" ? "negative" : "positive",
+      polarity: "positive",
       harness: "claude-code",
       sessionId: sid || undefined,
       directInput: commandRefs.includes(ref),
-      note: `claude-code auto: source=${statusText === "failure" ? "tool_failure" : "tool_success"}; confidence=${(commandRefs.includes(ref) ? 0.65 : 0.25).toFixed(2)}`,
+      note: `claude-code auto: source=tool_success; confidence=${(commandRefs.includes(ref) ? 0.65 : 0.25).toFixed(2)}`,
     })
     if (!shouldSubmitAutomaticFeedback(signal)) {
       writeMemoryEvent({
@@ -1426,7 +1431,7 @@ function autoFeedback() {
       })
       continue
     }
-    const result = akmRun(["feedback", ref, signal.polarity === "negative" ? "--negative" : "--positive", "--reason", redactSecrets(signal.note).text, "--format", "json", "-q"])
+    const result = akmRun(["feedback", ref, "--positive", "--reason", redactSecrets(signal.note).text, "--format", "json", "-q"])
     if (!result.trim()) appendLog(FEEDBACK_LOG, "system", "feedback_failed", ref, statusText, "empty stdout from akm feedback")
     else {
       writeMemoryEvent({

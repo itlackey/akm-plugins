@@ -42,13 +42,30 @@ describe("OpenCode eval harness", () => {
 
       const sandbox = createSandbox({ sourceStash: ${JSON.stringify(fixtureStashDir)} })
       try {
-        const harness = await createOpenCodeHarness(sandbox.env)
+        // Per-prompt curation is off: chat.message below only delivers the
+        // retrospective confirmation, and a fire-and-forget \`akm curate\` would
+        // be unrelated noise in the same call log.
+        const harness = await createOpenCodeHarness({ ...sandbox.env, AKM_AUTO_CURATE: "0" })
+        // A failed akm call is not feedback on the asset (akm#999): this session
+        // observes a failing lookup and must emit nothing.
         await harness.toolAfter({
-          sessionID: "eval-feedback-1",
+          sessionID: "eval-feedback-0",
           tool: "akm_show",
           toolArgs: { ref: "skills/code-review" },
           output: "{\\"ok\\":false,\\"error\\":\\"asset not found\\",\\"ref\\":\\"skills/code-review\\"}",
         })
+        // OpenCode's only automatic feedback is the user confirming an asset the
+        // session observed: a successful lookup, then "thanks, that worked".
+        await harness.toolAfter({
+          sessionID: "eval-feedback-1",
+          tool: "akm_show",
+          toolArgs: { ref: "skills/code-review" },
+          output: "{\\"ok\\":true,\\"type\\":\\"skill\\",\\"ref\\":\\"skills/code-review\\",\\"content\\":\\"Review pull requests...\\"}",
+        })
+        await harness.hooks["chat.message"](
+          { sessionID: "eval-feedback-1", messageID: "msg-eval-feedback-1", agent: "build" },
+          { parts: [{ type: "text", text: "thanks, that worked" }] },
+        )
         const feedback = await waitForFeedback(sandbox.callLog)
         writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({
           feedback,
@@ -77,11 +94,11 @@ describe("OpenCode eval harness", () => {
       expect(stdout).toBe("")
       expect(stderr).toBe("")
 
-      // A FAILING lookup, because a successful read-only one deliberately
-      // emits nothing (AKM_READ_ONLY_TOOLS). What this test is about is the
-      // routing — that the harness's child-process patch sends the plugin's
-      // `akm feedback` spawn to the sandbox shim rather than to a real akm on
-      // PATH — and the negative path exercises exactly the same spawn.
+      // What this test is about is the routing — that the harness's
+      // child-process patch sends the plugin's `akm feedback` spawn to the
+      // sandbox shim rather than to a real akm on PATH. The retrospective
+      // confirmation is the one automatic feedback OpenCode has: a tool call
+      // never submits any, successful or failed (akm#999).
       const result = JSON.parse(readFileSync(resultPath, "utf8")) as { feedback: string[][]; calls: unknown[]; logs: unknown[] }
       if (result.feedback.length === 0) {
         throw new Error(`The eval harness did not route feedback: ${JSON.stringify(result)}`)
@@ -89,13 +106,14 @@ describe("OpenCode eval harness", () => {
       expect(result.feedback).toContainEqual([
         "feedback",
         "skills/code-review",
-        "--negative",
+        "--positive",
         "--reason",
-        "opencode auto: akm_show failed; confidence=0.65; source=tool_failure",
+        "opencode retrospective: user confirmed it worked",
         "--format",
         "json",
         "-q",
       ])
+      expect(result.feedback.some((argv) => argv.includes("--negative"))).toBe(false)
     } finally {
       rmSync(resultDir, { recursive: true, force: true })
     }

@@ -51,7 +51,7 @@ Hooks are non-blocking and keep local, redacted state for feedback and memory ca
 | `SessionStart` | Verifies Bun and AKM availability, warms AKM data, and injects the AKM discovery guidance plus hints, pending proposals, active workflows, and curated context when available. Surfaces a missing bundle or a failed previous extraction to both the model and the user. |
 | `UserPromptSubmit` | Curates substantive prompts and supplies the result as additional context. It also captures explicit memories, corrections, guardrails, preferences, and positive feedback. High-confidence durable signals are authored asynchronously with `akm proposal new`; repeated task intent across distinct sessions can produce a skill proposal. Retrospective praise still credits concepts the session recently touched. |
 | `UserPromptExpansion` | Records use of the five AKM slash commands. |
-| `PostToolUse` / `PostToolUseFailure` | Records tool observations and submits deduplicated positive or negative feedback for eligible concepts. |
+| `PostToolUse` / `PostToolUseFailure` | Records tool observations. A successful `akm` command that used a concept also submits deduplicated positive feedback for eligible concepts; a failed one submits nothing. |
 | `PostToolBatch` | Adds a compact batch observation to local session state. |
 | `SubagentStart` | Injects concise AKM context for the subagent. |
 | `TaskCreated` / `TaskCompleted` | Records task lifecycle summaries for later memory extraction. |
@@ -60,7 +60,7 @@ Hooks are non-blocking and keep local, redacted state for feedback and memory ca
 
 The plugin registers no `PreToolUse` hooks: nothing it does needs to run before a tool, and the `PostToolUse` pass records strictly more about the same call.
 
-Hook processing never prints secret values. Automatic feedback skips references that AKM reports as ineligible, and a *successful* read-only `akm show` / `search` / `curate` submits nothing — inspecting a concept is not evidence that it helped. Failures of those same verbs still count as negative signal. The OpenCode plugin applies the same rule to its `akm_show` / `akm_search` / `akm_curate` tools, so the same action lands the same way on either harness.
+Hook processing never prints secret values. Automatic feedback skips references that AKM reports as ineligible, and a *successful* read-only `akm show` / `search` / `curate` submits nothing — inspecting a concept is not evidence that it helped. A *failed* `akm` command (non-zero exit or timeout) submits nothing either: a failed akm command is not feedback on the asset, and `PostToolUseFailure` only records the observation. The OpenCode plugin applies the same rules to its `akm_show` / `akm_search` / `akm_curate` tools, so the same action lands the same way on either harness.
 
 ### Automatic learning proposals
 
@@ -163,7 +163,7 @@ Hooks never write diagnostics to stderr. The few failures only you can fix — A
 | `learning-signals.jsonl` | Redacted prompt signals captured by the hot-path classifier. |
 | `learning-proposals.jsonl` / `learning-proposals.log` | Durable dedupe/status ledger and bounded worker outcomes for automatic proposals. |
 | `workflow-observations.jsonl` | Redacted task-intent observations used to require recurrence across distinct sessions before proposing a skill. |
-| `feedback.log` / `memory.log` | Automatic feedback decisions and observed concept IDs. |
+| `feedback.log` / `memory.log` | Automatic feedback decisions, the outcome of each `akm` command (a failure is logged here, never submitted as feedback), and observed concept IDs. |
 | `events.jsonl` | Structured, redacted lifecycle events. |
 
 ## Recommended Flow
