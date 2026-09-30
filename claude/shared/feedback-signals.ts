@@ -5,7 +5,6 @@ export type AkmFeedbackSignal = {
   source:
     | "explicit_user_feedback"
     | "tool_success"
-    | "tool_failure"
     | "retrospective_positive"
     | "retrospective_negative"
     | "workflow_completion"
@@ -75,7 +74,10 @@ export function classifyFeedbackSignal(input: {
   curatorAssessment?: boolean
   note?: string
 }): AkmFeedbackSignal {
-  let source: AkmFeedbackSignal["source"] = input.polarity === "positive" ? "tool_success" : "tool_failure"
+  // An unflagged signal is a tool outcome, and a tool outcome is only ever
+  // positive: a failed akm command says nothing about the asset, so it is not
+  // feedback on the asset (akm#999) and there is no tool-failure source.
+  let source: AkmFeedbackSignal["source"] = "tool_success"
   let confidence = input.directInput ? 0.65 : 0.25
 
   if (input.explicitUser) {
