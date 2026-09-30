@@ -25,7 +25,7 @@ import {
   reserveLearningProposal,
   type ProposalCandidate,
 } from "../shared/learning-signals"
-import { shouldRecall } from "../shared/recall-policy"
+import { isNonTaskPrompt, shouldRecall } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
 import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
@@ -1585,19 +1585,25 @@ function curatePrompt(): string {
   const rawInput = readStdin()
   const text = extractUserText(rawInput)
   const sid = extractSessionId(rawInput)
+  // UserPromptSubmit also carries text nobody typed: subagent hand-backs,
+  // cross-session messages, task notifications, the post-compaction
+  // continuation. Those are not the user's words, so they are never recorded as
+  // user intent or memory intent, never learned from, and never read as praise
+  // for the assets the session touched.
+  const typed = !isNonTaskPrompt(text)
   if (text) {
     appendLog(FEEDBACK_LOG, "user", "prompt", text)
-    if (/\b(remember|memory|memories)\b/i.test(text)) {
+    if (typed && /\b(remember|memory|memories)\b/i.test(text)) {
       appendLog(MEMORY_LOG, "user", "intent", text)
       writeSessionBuffer(sid, "user memory intent", text)
     }
-    capturePromptLearning(rawInput, text, sid)
+    if (typed) capturePromptLearning(rawInput, text, sid)
   }
   if (!text) return ""
   // Before the curate gate on purpose: "that worked" is a short prompt that
   // shouldRecall() rejects and AKM_AUTO_CURATE=0 skips entirely, and neither
   // has anything to do with whether the user just handed us a feedback signal.
-  captureRetrospectiveFeedback(text, sid)
+  if (typed) captureRetrospectiveFeedback(text, sid)
   // AKM_AUTO_CURATE=0 disables prompt curation only. It deliberately sits below
   // the feedback/memory-intent logging above: an early return at the top of the
   // function would silently drop those writes too.

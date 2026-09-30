@@ -24,6 +24,7 @@ describe("AKM recall policy skips harness/tool envelopes (non-task prompts)", ()
   const envelopeTags = [
     "<task-notification>",
     "<agent-message",
+    "<cross-session-message",
     "<bash-input>",
     "<bash-stdout>",
     "<bash-stderr>",
@@ -52,6 +53,20 @@ describe("AKM recall policy skips harness/tool envelopes (non-task prompts)", ()
     // repo, truncated exactly as the harness's STASH_BOILERPLATE constant is.
     const boilerplate = "This is an **AKM stash** — a structured knowledge repository that stores reusable"
     const decision = shouldRecall(boilerplate)
+    expect(decision.shouldRecall).toBe(false)
+    expect(decision.reason).toBe("skip-nontask")
+  })
+
+  test("skips the post-compaction continuation message, which opens with prose instead of a tag", () => {
+    const continuation = [
+      "This session is being continued from a previous conversation that ran out of context.",
+      "The summary below covers the earlier portion of the conversation.",
+      "",
+      "Summary:",
+      "<analysis>fix the flaky retry logic in the deploy pipeline</analysis>",
+    ].join("\n")
+    expect(isNonTaskPrompt(continuation)).toBe(true)
+    const decision = shouldRecall(continuation)
     expect(decision.shouldRecall).toBe(false)
     expect(decision.reason).toBe("skip-nontask")
   })

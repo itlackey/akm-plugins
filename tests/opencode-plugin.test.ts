@@ -357,6 +357,30 @@ describe("akm-opencode plugin", () => {
       expect(ledger).toContain('"status":"submitted"')
     })
 
+    it("ignores the synthetic parts OpenCode adds when classifying what the user typed", async () => {
+      // chat.message receives the typed text plus parts the harness injected
+      // (synthetic: true): an @-attached file arrives as the Read tool call and
+      // the file's own contents. That text is not the user's own words, so a
+      // preference stated inside an attached file must not become a proposal.
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks["chat.message"]!(
+        { sessionID: "synthetic-parts-1", messageID: "message-1", agent: "build" } as any,
+        {
+          parts: [
+            { type: "text", text: "summarize the attached notes" },
+            { type: "text", synthetic: true, text: 'Called the Read tool with the following input: {"filePath":"/tmp/notes.md"}' },
+            { type: "text", synthetic: true, text: "I prefer pnpm instead of npm. Always run the smoke tests first." },
+          ],
+        } as any,
+      )
+
+      const proposals = mockSpawn.mock.calls.filter(([, args]: any[]) =>
+        Array.isArray(args) && args[0] === "proposal" && args[1] === "new")
+      expect(proposals).toHaveLength(0)
+      const signalLog = path.join(eventStateDir, "akm-opencode", "learning-signals.jsonl")
+      expect(existsSync(signalLog) ? readFileSync(signalLog, "utf8") : "").not.toContain("synthetic-parts-1")
+    })
+
     it("captures positive feedback without turning praise into a proposal", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks["chat.message"]!(

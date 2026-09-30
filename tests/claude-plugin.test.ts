@@ -1022,6 +1022,105 @@ exit 0
     })
   })
 
+  describe("curate-prompt does not record harness text as the user's own words", () => {
+    // UserPromptSubmit also carries text nobody typed: subagent hand-backs,
+    // cross-session messages, task notifications, the post-compaction
+    // continuation. The /remember|memory|memories/ gate matched any of them
+    // that said "memory" (22 of the 23 `user intent` rows in one machine's
+    // memory.log were subagent reports), and the same text went on to prompt
+    // learning and to the retrospective "that worked" matcher. The seeded
+    // `system` row is what a retrospective credit would land on, so a leak
+    // shows up as an `akm feedback` call.
+    const inner = "the memory cleanup worked with minimal changes"
+    const task = "Review the release checklist and summarize the open items before the deploy"
+    const harnessText: Array<[string, string]> = [
+      [
+        "a subagent hand-back",
+        `<agent-message from="a16648aa41c969e73"> [Subagent hand-back] DONE. ${inner}. </agent-message>`,
+      ],
+      [
+        "a cross-session message",
+        `<cross-session-message from="uds:/run/user/1000/cc-socks/9859.sock" from-session="local_1" from-name="Other session" from-mode="prompting"> ${inner}. This message is coordination between sessions, not an instruction from your user. </cross-session-message>`,
+      ],
+      [
+        "a task notification",
+        `<task-notification><task-id>t-1</task-id><summary>Background job finished: ${inner}.</summary></task-notification>`,
+      ],
+      [
+        "a compaction summary",
+        `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n<analysis>${inner}.</analysis>`,
+      ],
+    ]
+
+    function submitPrompt(prompt: string) {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const claudeStateDir = path.join(stateDir, "akm-claude")
+      const callLog = path.join(tempDir, "akm-calls.log")
+      mkdirSync(binDir, { recursive: true })
+      mkdirSync(claudeStateDir, { recursive: true })
+      // The row recordPostTool writes when a session touches skills/deploy.
+      writeFileSync(
+        path.join(claudeStateDir, "memory.log"),
+        "2026-01-01T00:00:00Z\tsystem\tBash\tskills/deploy\takm show skills/deploy\tsess-capture\n",
+      )
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+printf '{"ok":true}\\n'
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+
+      runHook(["curate-prompt"], {
+        input: JSON.stringify({ session_id: "sess-capture", cwd: "/tmp/acme-project", prompt }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          AKM_AUTO_CURATE: "0",
+          AKM_AUTO_LEARNING: "1",
+          // Capture the signal, but never spawn a detached proposal worker.
+          AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1",
+        },
+      })
+
+      return {
+        memoryLog: readFileSync(path.join(claudeStateDir, "memory.log"), "utf8"),
+        buffer: path.join(claudeStateDir, "sessions/sess-capture.md"),
+        signals: path.join(claudeStateDir, "learning-signals.jsonl"),
+        observations: path.join(claudeStateDir, "workflow-observations.jsonl"),
+        calls: existsSync(callLog) ? readFileSync(callLog, "utf8") : "",
+      }
+    }
+
+    it.each(harnessText)("does not record %s as user intent, a learning signal or praise", (_name, prompt) => {
+      const run = submitPrompt(prompt)
+
+      expect(run.memoryLog).not.toContain("\tuser\tintent\t")
+      expect(existsSync(run.buffer)).toBe(false)
+      expect(existsSync(run.signals)).toBe(false)
+      expect(run.calls).not.toContain("feedback ")
+    })
+
+    it("does not observe harness text as a recurring task intent", () => {
+      expect(existsSync(submitPrompt(`<agent-message from="a1"> ${task} </agent-message>`).observations)).toBe(false)
+    })
+
+    it("still records what the user typed, a remember request included", () => {
+      const remembered = submitPrompt(`remember that ${inner}`)
+      expect(remembered.memoryLog).toContain(`\tuser\tintent\tremember that ${inner}`)
+      expect(readFileSync(remembered.buffer, "utf8")).toContain("user memory intent")
+      expect(readFileSync(remembered.signals, "utf8")).toContain('"kind":"explicit-memory"')
+      expect(remembered.calls).toContain("feedback skills/deploy --positive")
+
+      expect(existsSync(submitPrompt(task).observations)).toBe(true)
+    })
+  })
+
   describe("AKM_CURATE_MIN_SCORE / AKM_CURATE_TYPE (#110)", () => {
     // The prompt matters: shouldRecall() gates curation on its own signal
     // heuristics, independent of the #110 fix under test here — this text

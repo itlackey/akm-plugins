@@ -2765,7 +2765,10 @@ function extractText(parts: unknown): string {
   if (!Array.isArray(parts)) return ""
   const segments: string[] = []
   for (const part of parts as Array<Record<string, unknown>>) {
-    if (part?.type === "text" && typeof part.text === "string") {
+    // `synthetic` parts are text OpenCode injected beside the prompt (an
+    // attached file's contents, the Read call that fetched it, an @agent
+    // mention's instructions), not what the user typed.
+    if (part?.type === "text" && !part.synthetic && typeof part.text === "string") {
       const raw = part.text.trim()
       // `opencode run "one argument"` persists that argument as a JSON string
       // literal (including its surrounding quotes) and forwards the same text

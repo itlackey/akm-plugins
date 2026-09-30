@@ -34,15 +34,19 @@ import { extractAkmRefsFromString } from "./ref-extraction"
 // does not count. Length is not a signal either: 24 of 30 judged prompts over
 // 2,000 characters had a relevant asset (retrieval eval plan §12).
 const STASH_BOILERPLATE = "This is an **AKM stash** — a structured knowledge repository that stores reusable"
+// Not part of akm's rule: the continuation Claude Code writes after a
+// compaction opens with prose, not a tag, so the tag test above cannot see it.
+const COMPACTION_CONTINUATION = "This session is being continued from a previous conversation"
 
 /**
- * True for a harness/tool envelope rather than a prompt a user typed as a
- * task: the text starts with a tag and contains a closing tag, or it is the
- * literal stash README line.
+ * True for text that is not a prompt the user typed: a harness/tool envelope
+ * (the text starts with a tag and contains a closing tag), the post-compaction
+ * continuation, or the literal stash README line. The Claude hook also asks
+ * this before recording a prompt as the user's own words.
  */
 export function isNonTaskPrompt(text: string): boolean {
   const stripped = text.trimStart()
-  if (stripped === STASH_BOILERPLATE) return true
+  if (stripped === STASH_BOILERPLATE || stripped.startsWith(COMPACTION_CONTINUATION)) return true
   return stripped.startsWith("<") && stripped.includes("</")
 }
 
