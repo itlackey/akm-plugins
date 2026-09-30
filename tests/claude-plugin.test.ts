@@ -55,7 +55,8 @@ function makeBundle(tempDir: string, conceptIds: string[] = []) {
   const bundleDir = path.join(tempDir, "bundle")
   mkdirSync(bundleDir, { recursive: true })
   for (const conceptId of conceptIds) {
-    const conceptPath = path.join(bundleDir, `${conceptId}.md`)
+    // A skill is a directory holding SKILL.md; every other concept is `<id>.md`.
+    const conceptPath = path.join(bundleDir, conceptId.startsWith("skills/") ? `${conceptId}/SKILL.md` : `${conceptId}.md`)
     mkdirSync(path.dirname(conceptPath), { recursive: true })
     writeFileSync(conceptPath, `# ${conceptId}\n`)
   }
@@ -1579,6 +1580,108 @@ exit 0
     expect(feedbackLog.some((line) => line.includes("system\tfeedback_failed\tworkflows/code-review\tsuccess"))).toBe(true)
     const sessionLog = readLogLines(path.join(stateDir, "akm-claude/session.log"))
     expect(sessionLog.some((line) => line.includes("akm_failed\tauto-feedback") && line.includes("feedback workflows/code-review"))).toBe(true)
+  })
+
+  it("auto-feedback spends no akm call on file paths that are not concept IDs", () => {
+    // Each of these exists under the bundle, and `akm show` / `akm feedback`
+    // answer "not in the index" for all of them: a task's ID drops `.yml`, and
+    // a skill is its directory, not the files inside it. 157 of the 238
+    // akm_failed rows on one machine came from this shape.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
+    const bundleDir = makeBundle(tempDir)
+    for (const file of ["tasks/nightly.yml", "skills/rollout/SKILL.md", "skills/rollout/scripts/run.py"]) {
+      mkdirSync(path.dirname(path.join(bundleDir, file)), { recursive: true })
+      writeFileSync(path.join(bundleDir, file), "")
+    }
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+printf '{"ok":true}\\n'
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    runHook(["auto-feedback", "success"], {
+      input: JSON.stringify({
+        session_id: "sess-auto-paths",
+        tool: "Bash",
+        input: { command: "akm improve tasks/nightly.yml skills/rollout/SKILL.md skills/rollout/scripts/run.py" },
+        output: "{\"ok\":true}",
+      }),
+      env: {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_BUNDLE_DIR: bundleDir,
+      },
+    })
+
+    expect(existsSync(callLog)).toBe(false)
+  })
+
+  it("auto-feedback skips a ref the quality probe cannot resolve, and probes it again next time", () => {
+    // akm prints nothing on stdout when it cannot resolve a ref: one written
+    // this session that the index has not caught up with, an ambiguous one, an
+    // unconfigured bundle, a timeout. `akm feedback` rejects the same ref, so
+    // the probe's answer is the answer. It is not cached: once the index
+    // catches up, the next use of the ref is credited.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
+    const indexed = path.join(tempDir, "indexed")
+    const bundleDir = makeBundle(tempDir, ["workflows/fresh"])
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+case "$*" in
+  *show*workflows/fresh*)
+    [ -f ${shellQuote(indexed)} ] || exit 1
+    echo '{"type":"workflow","ref":"workflows/fresh","quality":"curated"}'
+    exit 0
+    ;;
+esac
+printf '{"ok":true}\\n'
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+    const submit = () =>
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          session_id: "sess-auto-unresolved",
+          tool: "Bash",
+          input: { command: "akm workflow run workflows/fresh" },
+          output: "{\"workflowRef\":\"workflows/fresh\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          AKM_BUNDLE_DIR: bundleDir,
+        },
+      })
+
+    submit()
+    const before = readFileSync(callLog, "utf8")
+    expect(before).toContain("show workflows/fresh")
+    expect(before).not.toContain("feedback workflows/fresh")
+    const feedbackLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
+    expect(feedbackLog.some((line) => line.includes("system\tskip_unresolved\tworkflows/fresh"))).toBe(true)
+
+    writeFileSync(indexed, "")
+    submit()
+    expect(readFileSync(callLog, "utf8")).toContain("feedback workflows/fresh --positive")
   })
 
   it("post-tool recognizes lesson concept IDs", () => {

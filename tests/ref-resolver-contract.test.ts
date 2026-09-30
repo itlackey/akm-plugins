@@ -76,6 +76,40 @@ describe("AKM 0.9 ref-resolver contract", () => {
     ])
   })
 
+  test("does not resolve a file path AKM would reject as a ref", () => {
+    // Verified against akm-cli 0.9.20: a concept ID is the asset's path with
+    // the type's own extension dropped, and a skill is its directory. Only
+    // scripts/ and secrets/ IDs keep the file's name, and `.md` is tolerated on
+    // the markdown types. Every file below exists, and `akm show` /
+    // `akm feedback` answer "not found" / "not in the index" for each path that
+    // is not in the expected list (157 of the 238 auto-feedback failures on one
+    // machine were tasks/*.yml, files inside skills, and backup files).
+    const bundle = makeBundle()
+    touch(path.join(bundle, "tasks", "nightly.yml"))
+    touch(path.join(bundle, "skills", "rollout", "scripts", "run.py"))
+    touch(path.join(bundle, "skills", "rollout", "references", "notes.md"))
+    touch(path.join(bundle, "knowledge", "release-notes.md.bak"))
+    touch(path.join(bundle, "scripts", "deploy.sh"))
+    touch(path.join(bundle, "secrets", "api-token"))
+
+    expect(
+      validateRefCandidates(
+        [
+          "tasks/nightly.yml",
+          "skills/rollout/SKILL.md",
+          "skills/rollout/scripts/run.py",
+          "skills/rollout/references/notes.md",
+          "knowledge/release-notes.md.bak",
+          "skills/rollout",
+          "knowledge/release-notes.md",
+          "scripts/deploy.sh",
+          "secrets/api-token",
+        ],
+        [bundle],
+      ),
+    ).toEqual(["knowledge/release-notes.md", "scripts/deploy.sh", "secrets/api-token", "skills/rollout"])
+  })
+
   test("does not resolve concept roots the 0.9 bundle layout no longer defines", () => {
     // `wikis` was a 0.8-era root. A bundle upgraded in place may still carry
     // the directory, but 0.9 neither scaffolds it nor reports it in

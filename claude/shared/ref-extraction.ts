@@ -82,17 +82,31 @@ function isFile(file: string): boolean {
   }
 }
 
-/** Resolve a concept ID under any local bundle root without invoking AKM. */
+/**
+ * Resolve a concept ID under any local bundle root without invoking AKM.
+ *
+ * A concept ID is the asset's path with the type's own extension dropped, and a
+ * skill is its directory; only scripts/ and secrets/ IDs keep the file's name,
+ * and `.md` is tolerated on the rest. A file that merely exists is therefore
+ * not a ref: `akm show` and `akm feedback` reject tasks/x.yml, skills/x/SKILL.md
+ * and skills/x/scripts/run.py as not in the index (checked against 0.9.20).
+ */
 function conceptExistsInAnyBundle(conceptId: string, bundleRoots: readonly string[]): boolean {
+  const type = conceptId.split("/", 1)[0];
   for (const root of bundleRoots) {
     if (!root) continue;
     const resolvedRoot = path.resolve(root);
     const directPath = path.resolve(resolvedRoot, conceptId);
     if (directPath !== resolvedRoot && !directPath.startsWith(`${resolvedRoot}${path.sep}`)) continue;
 
-    if (isFile(directPath) || isFile(`${directPath}.md`)) return true;
-    if (isFile(path.join(directPath, "SKILL.md"))) return true;
-    if (conceptId.startsWith("memories/") && isFile(`${directPath}.derived.md`)) return true;
+    if (type === "skills") {
+      if (isFile(path.join(directPath, "SKILL.md"))) return true;
+    } else if (type === "scripts" || type === "secrets") {
+      if (isFile(directPath)) return true;
+    } else {
+      if (isFile(`${directPath}.md`) || (directPath.endsWith(".md") && isFile(directPath))) return true;
+      if (type === "memories" && isFile(`${directPath}.derived.md`)) return true;
+    }
   }
   return false;
 }

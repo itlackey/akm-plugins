@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm } from "../evals/lib/fake-akm"
@@ -163,6 +163,41 @@ describe("fake-akm envelope contract", () => {
     } finally {
       cleanup(real)
       cleanup(fake)
+    }
+  })
+
+  // The hook's quality probe (`akm show <ref>`) and the validator in front of it
+  // (claude/shared/ref-extraction.ts) both assume real akm's ref grammar, so it
+  // is pinned here instead of inferred from logs: a concept ID resolves, a file
+  // path that merely exists does not, and a refusal leaves stdout empty, which
+  // is how autoFeedback() reads "akm cannot resolve this ref".
+  test.skipIf(!akmAvailable)("show and feedback resolve concept IDs, not file paths, and refuse with an empty stdout", () => {
+    const real = makeRealEnv()
+    try {
+      const write = (file: string, body: string) => {
+        mkdirSync(path.dirname(path.join(real.AKM_BUNDLE_DIR, file)), { recursive: true })
+        writeFileSync(path.join(real.AKM_BUNDLE_DIR, file), body)
+      }
+      write("knowledge/guide.md", "# Guide\n")
+      write("tasks/nightly.yml", "version: 4\nname: nightly\nrun: echo hi\n")
+      write("skills/rollout/SKILL.md", "---\nname: rollout\ndescription: Roll out\nwhen_to_use: Rolling out\n---\n# Rollout\n")
+      write("skills/rollout/scripts/run.py", "print('hi')\n")
+      runReal(real, ["--format", "json", "-q", "index"])
+
+      const run = (...args: string[]) => runRaw(process.execPath, [REAL_AKM, ...args], realAkmEnv(real))
+      for (const ref of ["knowledge/guide", "knowledge/guide.md", "tasks/nightly", "skills/rollout"]) {
+        const shown = run("--format", "json", "-q", "show", ref)
+        expect(shown.exitCode).toBe(0)
+        expect(typeof (JSON.parse(shown.stdout) as { ref?: unknown }).ref).toBe("string")
+      }
+      for (const ref of ["tasks/nightly.yml", "skills/rollout/SKILL.md", "skills/rollout/scripts/run.py"]) {
+        const shown = run("--format", "json", "-q", "show", ref)
+        expect(shown.exitCode).not.toBe(0)
+        expect(shown.stdout.trim()).toBe("")
+        expect(run("feedback", ref, "--positive", "--format", "json", "-q").exitCode).not.toBe(0)
+      }
+    } finally {
+      cleanup(real)
     }
   })
 

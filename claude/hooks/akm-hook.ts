@@ -1076,6 +1076,10 @@ function refQuality(ref: string): string {
     }
   }
   const raw = akmRun(["--format", "json", "-q", "show", ref])
+  // akm prints nothing on stdout for a ref it cannot resolve (not indexed yet,
+  // ambiguous, an unconfigured bundle, a timeout), and `akm feedback` rejects
+  // the same ref. Not cached: once the index catches up the next use is credited.
+  if (!raw.trim()) return "unresolved"
   const quality = safeJsonParse<Record<string, unknown>>(raw)?.quality
   const resolved = typeof quality === "string" && quality ? quality : "unknown"
   appendLog(QUALITY_CACHE, ref, resolved)
@@ -1408,7 +1412,12 @@ function autoFeedback() {
   if (refs.length === 0) return
   for (const ref of refs) {
     if (NO_AUTO_FEEDBACK_REF_RE.test(ref)) continue
-    if (refQuality(ref) === "proposed") {
+    const quality = refQuality(ref)
+    if (quality === "unresolved") {
+      appendLog(FEEDBACK_LOG, "system", "skip_unresolved", ref, statusText)
+      continue
+    }
+    if (quality === "proposed") {
       appendLog(FEEDBACK_LOG, "system", "skip_proposed", ref, statusText)
       continue
     }
