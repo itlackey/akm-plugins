@@ -10,18 +10,18 @@
 // node_modules at hook-execution time.
 //
 // A single caret clause anchored at the stable release covers the supported
-// public CLI line: `^0.9.18` admits stable 0.9.18 and later 0.9.x releases.
-// 0.9.18 is a required compatibility floor, not a marketing version. The
+// public CLI line: `^0.9.19` admits stable 0.9.19 and later 0.9.x releases.
+// 0.9.19 is a required compatibility floor, not a marketing version. The
 // OpenCode plugin runs akm-cli in-process against the same `index.db` and
-// `state.db` as the installed CLI, and 0.9.18 fixes a SQLite lock loss:
-// before it, read snapshots copied a live database file inside the process,
-// which dropped that process's POSIX locks and let an older (< 3.51)
-// read-write SQLite peer delete the WAL under it. The in-process copy must
-// therefore be 0.9.18 or newer. 0.9.17 also migrated both databases forward
-// (index layout 26, the improve-ledger state migrations); an older in-process
-// akm-cli keeps writing to them on its own older schema. Before 0.9.16,
-// bundle activation and executable authority were not yet host-owned, so an
-// older binary would also restore a different trust model.
+// `state.db` as the installed CLI, so that copy must be the floor or newer.
+// 0.9.19 is the floor because improve now plans only the bundle it writes to
+// and proposal reads and judging changed (akm#997-#1000). Earlier floors
+// still hold: 0.9.18 fixed a SQLite lock loss (copying a live database file
+// in-process dropped its POSIX locks, so an older read-write SQLite peer could
+// delete the WAL; akm#995), 0.9.17 migrated both databases forward (index
+// layout 26, the improve-ledger state migrations), and before 0.9.16 bundle
+// activation and executable authority were not yet host-owned, so an older
+// binary would restore a different trust model.
 //
 // The gate reads the RELEASE CORE (major.minor.patch) and ignores a prerelease
 // tag. node-semver's default rule, which the vendored matcher reproduces, is
@@ -48,7 +48,7 @@
 // most deeply. 0.9.12 did change that envelope again (added `engine`,
 // `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
 // all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
-// The 0.9.18 compatibility review keeps the split explicit: keep the caret
+// The 0.9.19 compatibility review keeps the split explicit: keep the caret
 // range for Claude's stable CLI calls, but exact-pin OpenCode's package because
 // it imports private in-process modules and shares AKM's databases. The
 // #107/#108/#109 envelope hardening remains necessary on both surfaces: every
@@ -58,7 +58,7 @@
 
 import { satisfies, valid } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.18"
+export const AKM_VERSION_RANGE = "^0.9.19"
 
 /**
  * True when `version` is a valid semver string whose release core

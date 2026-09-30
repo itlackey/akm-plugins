@@ -178,7 +178,7 @@ let cachedAkmBundleDir: string | undefined
 // whitespace-token extractor and is the single source of truth here.
 const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
 const AKM_WORKFLOW_INSTRUCTION = [
-  "# AKM workflow (v0.9.18)",
+  "# AKM workflow (v0.9.19)",
   "",
   "Use AKM as a reusable knowledge and workflow bundle.",
   "",
