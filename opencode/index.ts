@@ -3278,6 +3278,12 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const allRefs = isAkmTool && parsedForRefs
           ? extractToolRefs(input.tool, input.args as Record<string, unknown>, parsedForRefs)
           : validateRefCandidates(candidateRefs, [await getAkmBundleDir(logClient) ?? ""])
+        // The ref of a failed akm call is only the one the model asked for, an
+        // asset akm never returned, and the failure says nothing about its
+        // content (akm#999). Observed and logged, but never remembered as a ref
+        // the session used: the session buffer and the recent-ref list are what
+        // "thanks, that worked" credits and "that's wrong" blames.
+        const failedCall = classifyToolFeedback(parsedForRefs) === "negative"
 
         if (allRefs.length > 0) {
           writeStructuredEvent({
@@ -3288,13 +3294,15 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             refs: allRefs,
             outcome: { status: "ok" },
           })
-          for (const ref of allRefs) {
-            addBufferEntry(input.sessionID, {
-              kind: "tool-ref",
-              toolName: input.tool,
-              ref,
-              status: "unknown",
-            })
+          if (!failedCall) {
+            for (const ref of allRefs) {
+              addBufferEntry(input.sessionID, {
+                kind: "tool-ref",
+                toolName: input.tool,
+                ref,
+                status: "unknown",
+              })
+            }
           }
         }
 
@@ -3367,7 +3375,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         if ((input.tool === "akm_show" || input.tool === "akm_curate") && feedback !== "negative") {
           noteShownRefs(input.sessionID, toolRefs)
         }
-        noteRecentRefs(input.sessionID, toolRefs)
+        if (!failedCall) noteRecentRefs(input.sessionID, toolRefs)
         writeStructuredEvent({
           event: "tool_observation",
           sessionId: input.sessionID,
@@ -3376,7 +3384,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           refs: toolRefs,
           outcome: { status: feedback === "negative" ? "failed" : "ok" },
         })
-        if (toolRefs.length > 0 && input.sessionID) {
+        if (toolRefs.length > 0 && input.sessionID && !failedCall) {
           for (const ref of toolRefs) {
             addBufferEntry(input.sessionID, {
               kind: "tool-ref",
