@@ -1127,6 +1127,44 @@ describe("akm-opencode plugin", () => {
       }
     })
 
+    it("never credits or blames a ref named only by a failed akm call", async () => {
+      // A failed akm call says nothing about the asset (akm#999), and the ref in
+      // its args is only the one the model asked for. tool.execute.after kept
+      // that ref in the session buffer whatever the outcome, so "thanks, that
+      // worked" credited an asset akm never returned, and a correction blamed
+      // it with `--negative`. A call that succeeded in the same session still
+      // counts.
+      const okOutput = (ref: string) => JSON.stringify({ ok: true, ref, content: "..." })
+      const failures: Array<[string, string]> = [
+        ["not found", JSON.stringify({ ok: false, error: "asset not found", ref: "knowledge/ghost" })],
+        ["timeout", JSON.stringify({ error: "akm timed out after 60000ms" })],
+      ]
+      for (const [index, [label, failure]] of failures.entries()) {
+        const praised = await AkmPlugin(createPluginInput())
+        await showTool(praised, `failed-ref-${index}`, "skills/review", okOutput("skills/review"))
+        await showTool(praised, `failed-ref-${index}`, "knowledge/ghost", failure)
+        await praised["chat.message"]!(
+          { sessionID: `failed-ref-${index}`, messageID: "message-1", agent: "build" } as any,
+          { parts: [{ type: "text", text: "thanks, that worked" }] } as any,
+        )
+        expect(feedbackCalls("--positive").map(([, args]: any[]) => args[1]), label).toEqual(["skills/review"])
+        mockSpawn.mockClear()
+
+        mockExecFileSync.mockClear()
+        const corrected = await AkmPlugin(createPluginInput())
+        await showTool(corrected, `failed-ref-negative-${index}`, "skills/review", okOutput("skills/review"))
+        await showTool(corrected, `failed-ref-negative-${index}`, "knowledge/ghost", failure)
+        await corrected["chat.message"]!(
+          { sessionID: `failed-ref-negative-${index}`, messageID: "message-2", agent: "build" } as any,
+          { parts: [{ type: "text", text: "that's wrong, use the other one" }] } as any,
+        )
+        const blamed = mockExecFileSync.mock.calls
+          .filter(([, args]: any[]) => Array.isArray(args) && args.includes("feedback") && args.includes("--negative"))
+          .map(([, args]: any[]) => args[1])
+        expect(blamed, label).toEqual(["skills/review"])
+      }
+    })
+
     it("keeps the session observation buffer across session.idle so a later confirmation still credits", async () => {
       // session.idle fires after EVERY turn. The buffer feeding retrospective
       // feedback used to be wiped there as soon as it held two entries, so

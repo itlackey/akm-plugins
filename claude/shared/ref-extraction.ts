@@ -82,30 +82,77 @@ function isFile(file: string): boolean {
   }
 }
 
+// The extensions akm indexes under scripts/ as a script (SCRIPT_EXTENSIONS in
+// core/recognition-util.js, 0.9.20). Any other file there is no asset: `akm show`
+// reads it off disk and answers without a `ref`, and `akm feedback` refuses it.
+const SCRIPT_EXTENSIONS = new Set([
+  ".sh", ".ts", ".js", ".ps1", ".cmd", ".bat", ".py", ".rb", ".go", ".pl", ".php", ".lua", ".r", ".swift", ".kt", ".kts",
+]);
+
+/** `<id>.md`, or the file itself when the ID spells the extension out (akm toggles it). */
+function markdownFile(directPath: string): boolean {
+  return isFile(`${directPath}.md`) || (directPath.endsWith(".md") && isFile(directPath));
+}
+
+/** Is there an asset of `type` at `directPath`, the path its concept ID names under some root? */
+function isAsset(type: string, directPath: string): boolean {
+  if (type === "skills") return isFile(path.join(directPath, "SKILL.md"));
+  if (type === "scripts") return SCRIPT_EXTENSIONS.has(path.extname(directPath).toLowerCase()) && isFile(directPath);
+  if (type === "secrets") return !/\.(lock|sensitive)$/.test(directPath) && isFile(directPath);
+  if (type === "tasks") return isFile(`${directPath}.yml`);
+  if (type === "env") {
+    return isFile(`${directPath}.env`) || (path.basename(directPath) === "default" && isFile(path.join(path.dirname(directPath), ".env")));
+  }
+  return markdownFile(directPath) || (type === "workflows" && isFile(`${directPath}.yml`));
+}
+
+// The types akm also resolves for a file kept outside the type's directory, by
+// its path from the bundle root: scripts (typed by extension) and the markdown
+// types (typed by content). A task, env, secret, workflow or skill needs a
+// directory of its type among the file's ancestors.
+const OUTSIDE_THEIR_DIRECTORY = new Set(["scripts", "agents", "commands", "facts", "instructions", "knowledge", "lessons", "memories", "sessions"]);
+
 /**
  * Resolve a concept ID under any local bundle root without invoking AKM.
  *
- * A concept ID is the asset's path with the type's own extension dropped, and a
- * skill is its directory; only scripts/ and secrets/ IDs keep the file's name,
- * and `.md` is tolerated on the rest. A file that merely exists is therefore
- * not a ref: `akm show` and `akm feedback` reject tasks/x.yml, skills/x/SKILL.md
- * and skills/x/scripts/run.py as not in the index (checked against 0.9.20).
+ * A concept ID is the asset's path with the extension its type owns dropped:
+ * `.md` for most types (tolerated in the ID too), `.yml` for a task, `.md` or
+ * `.yml` for a workflow, `.env` for an env (the default env of a directory is
+ * its `.env` file, ID env/default or env/<dir>/default). A skill is its
+ * directory. Only scripts/ and secrets/ IDs keep the file's name, a script
+ * needs one of akm's script extensions, and a secret is no `.lock` or
+ * `.sensitive` marker. This is akm's placement rule (asset-placement.js, 0.9.20),
+ * checked type by type against the real binary in fake-akm-contract.test.ts. A
+ * file that merely exists is therefore not a ref: `akm show` and `akm feedback`
+ * refuse tasks/x.yml, env/x.env, skills/x/SKILL.md, skills/x/scripts/run.py and
+ * scripts/x.html.
+ *
+ * A script or markdown file kept outside its type's directory is named by its
+ * path from the bundle root, as akm names it: a skill's script is
+ * scripts/skills/x/scripts/run.py, a page under wikis/ is knowledge/wikis/page.
+ * akm does not index a file at the bundle root, and an ID that repeats its type
+ * (knowledge/knowledge/x) names nothing. For markdown akm picks the type from
+ * the file's content, which a path rule cannot see, so the file existing is the
+ * whole check there; the other types are matched in their own directory only.
+ *
+ * It is a rule, not a second resolver. The index also leaves out what its walk
+ * skips (git-ignored files, dot-directories, bin/ and node_modules/, a reserved
+ * index.md or log.md) and what it cannot parse (a task or workflow); none of that
+ * is modelled here. A ref the walk or parser rejects costs one refused probe,
+ * since auto-feedback runs `akm show` before it submits.
  */
 function conceptExistsInAnyBundle(conceptId: string, bundleRoots: readonly string[]): boolean {
   const type = conceptId.split("/", 1)[0];
+  const rest = conceptId.slice(type.length + 1);
   for (const root of bundleRoots) {
     if (!root) continue;
     const resolvedRoot = path.resolve(root);
     const directPath = path.resolve(resolvedRoot, conceptId);
     if (directPath !== resolvedRoot && !directPath.startsWith(`${resolvedRoot}${path.sep}`)) continue;
+    if (isAsset(type, directPath)) return true;
 
-    if (type === "skills") {
-      if (isFile(path.join(directPath, "SKILL.md"))) return true;
-    } else if (type === "scripts" || type === "secrets") {
-      if (isFile(directPath)) return true;
-    } else {
-      if (isFile(`${directPath}.md`) || (directPath.endsWith(".md") && isFile(directPath))) return true;
-      if (type === "memories" && isFile(`${directPath}.derived.md`)) return true;
+    if (OUTSIDE_THEIR_DIRECTORY.has(type) && rest.includes("/") && !rest.startsWith(`${type}/`)) {
+      if (isAsset(type, path.resolve(resolvedRoot, rest))) return true;
     }
   }
   return false;

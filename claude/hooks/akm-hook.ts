@@ -26,7 +26,7 @@ import {
   reserveLearningProposal,
   type ProposalCandidate,
 } from "../shared/learning-signals"
-import { isNonTaskPrompt, shouldRecall } from "../shared/recall-policy"
+import { isNonTaskPrompt, shouldRecall, stripLeadingEnvelopes } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
 import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
 import { RUN_TIMED_OUT, runPlan } from "../shared/spawn-plan"
@@ -1120,12 +1120,15 @@ function refQuality(ref: string): string {
       break
     }
   }
-  const raw = akmRun(["--format", "json", "-q", "show", ref])
+  const shown = safeJsonParse<Record<string, unknown>>(akmRun(["--format", "json", "-q", "show", ref]))
   // akm prints nothing on stdout for a ref it cannot resolve (not indexed yet,
   // ambiguous, an unconfigured bundle, a timeout), and `akm feedback` rejects
-  // the same ref. Not cached: once the index catches up the next use is credited.
-  if (!raw.trim()) return "unresolved"
-  const quality = safeJsonParse<Record<string, unknown>>(raw)?.quality
+  // the same ref. So does a file that is no asset: `akm show scripts/x.html`
+  // reads it off disk, exits 0 and answers without a `ref`, which every asset's
+  // response carries (checked against 0.9.20). Not cached: once the index
+  // catches up the next use is credited.
+  if (typeof shown?.ref !== "string" || !shown.ref) return "unresolved"
+  const quality = shown.quality
   const resolved = typeof quality === "string" && quality ? quality : "unknown"
   appendLog(QUALITY_CACHE, ref, resolved)
   return resolved
@@ -1368,7 +1371,11 @@ function recordPostTool() {
   const rawInput = readStdin()
   const { toolName, commandText, outputText, statusText, refs, sid } = extractPostToolFields(rawInput, MODE)
   if (/akm|\/akm/.test(commandText)) appendLog(FEEDBACK_LOG, "system", statusText, toolName || "Bash", commandText)
-  for (const ref of refs) {
+  // These rows are what captureRetrospectiveFeedback replays as the refs the
+  // session used. A failed command names a ref only because the agent asked for
+  // it and says nothing about the asset (akm#999), so only a successful one is
+  // recorded; the failure stays in feedback.log and the tool_observation event.
+  for (const ref of MODE === "failure" ? [] : refs) {
     // The session id is the last column: captureRetrospectiveFeedback replays
     // this file from an unrelated hook process later in the session, and the
     // file is shared by every session on the machine — without the column a
@@ -1634,21 +1641,31 @@ function renderCuratedJson(raw: string, query: string): string {
 
 function curatePrompt(): string {
   const rawInput = readStdin()
-  const text = extractUserText(rawInput)
+  // Claude Code sometimes prepends a harness block (<system-reminder>…) to a
+  // prompt the user typed. What follows the blocks is the prompt: that is what
+  // is curated, logged and learned from. A prompt that is nothing but blocks
+  // keeps its whole text and is not typed, below.
+  const prompt = extractUserText(rawInput)
+  const text = stripLeadingEnvelopes(prompt) || prompt
   const sid = extractSessionId(rawInput)
   // UserPromptSubmit also carries text nobody typed: subagent hand-backs,
   // cross-session messages, task notifications, the post-compaction
   // continuation. Those are not the user's words, so they are never recorded as
   // user intent or memory intent, never learned from, and never read as praise
-  // for the assets the session touched.
-  const typed = !isNonTaskPrompt(text)
-  if (text) {
+  // for the assets the session touched. A prompt fired inside a subagent carries
+  // `agent_id`, which both Codex and Claude Code stamp on it, and it is the main
+  // agent's task for the subagent. Claude Code leaves `agent_id` off the main
+  // thread even in --agent sessions, which `agent_type` does not.
+  const agentId = safeJsonParse<{ agent_id?: unknown }>(rawInput)?.agent_id
+  const typed = !isNonTaskPrompt(text) && !(typeof agentId === "string" && agentId !== "")
+  // feedback.log labels a row `user prompt`, so it takes only what was typed.
+  if (text && typed) {
     appendLog(FEEDBACK_LOG, "user", "prompt", text)
-    if (typed && /\b(remember|memory|memories)\b/i.test(text)) {
+    if (/\b(remember|memory|memories)\b/i.test(text)) {
       appendLog(MEMORY_LOG, "user", "intent", text)
       writeSessionBuffer(sid, "user memory intent", text)
     }
-    if (typed) capturePromptLearning(rawInput, text, sid)
+    capturePromptLearning(rawInput, text, sid)
   }
   if (!text) return ""
   // Before the curate gate on purpose: "that worked" is a short prompt that

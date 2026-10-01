@@ -155,14 +155,16 @@ describe("validateRefCandidates", () => {
     ])
   })
 
-  it("supports explicit Markdown extensions and derived memories", () => {
+  it("supports explicit Markdown extensions and derived memories by their own ID", () => {
     const bundle = makeBundle()
     touch(path.join(bundle, "knowledge", "doc.md"))
     touch(path.join(bundle, "memories", "session-x.derived.md"))
 
-    expect(validateRefCandidates(["knowledge/doc.md", "memories/session-x"], [bundle])).toEqual([
+    // `<name>.derived.md` is the memory memories/<name>.derived; akm 0.9.20
+    // refuses memories/<name> when only the derived file exists.
+    expect(validateRefCandidates(["knowledge/doc.md", "memories/session-x.derived", "memories/session-x"], [bundle])).toEqual([
       "knowledge/doc.md",
-      "memories/session-x",
+      "memories/session-x.derived",
     ])
   })
 

@@ -38,20 +38,60 @@ const STASH_BOILERPLATE = "This is an **AKM stash** — a structured knowledge r
 // compaction opens with prose, not a tag, so the tag test above cannot see it.
 const COMPACTION_CONTINUATION = "This session is being continued from a previous conversation"
 
+// Every tag, opening or closing, with its name: `<name …>` / `</name>`.
+const TAG = /<(\/?)([A-Za-z][\w:.-]*)(?:\s[^<>]*)?>/g
+
+// Offset just past the `</name>` closing the block `text` opens with (a block
+// of the same name nested inside it is skipped), or -1 when `text` does not open
+// with a block or never closes it.
+function leadingBlockEnd(text: string): number {
+  const tags = new RegExp(TAG)
+  let name: string | undefined
+  let depth = 0
+  for (let tag = tags.exec(text); tag; tag = tags.exec(text)) {
+    if (name === undefined) {
+      if (tag.index !== 0 || tag[1]) return -1
+      name = tag[2]
+    } else if (tag[2] !== name) continue
+    depth += tag[1] ? -1 : 1
+    if (depth === 0) return tag.index + tag[0].length
+  }
+  return -1
+}
+
+/**
+ * `text` without the harness blocks that open it: each `<tag …>…</tag>`, one
+ * after another. Claude Code sometimes prepends a <system-reminder> block (a
+ * worktree notice, a background-task notice) to a prompt the user typed, so a
+ * text that starts with a tag is not always an envelope; what follows the
+ * blocks is what was typed. "" when nothing does: a task notification or a
+ * subagent hand-back is blocks and no more.
+ */
+export function stripLeadingEnvelopes(text: string): string {
+  let rest = text.trimStart()
+  for (let end = leadingBlockEnd(rest); end > 0; end = leadingBlockEnd(rest)) rest = rest.slice(end).trimStart()
+  return rest
+}
+
 /**
  * True for text that is not a prompt the user typed: a harness/tool envelope
- * (the text starts with a tag and contains a closing tag), the post-compaction
+ * (once the blocks leading the text are stripped, nothing is left, or what is
+ * left starts with a tag and contains a closing tag), the post-compaction
  * continuation, or the literal stash README line. The Claude hook also asks
  * this before recording a prompt as the user's own words.
  */
 export function isNonTaskPrompt(text: string): boolean {
-  const stripped = text.trimStart()
-  if (stripped === STASH_BOILERPLATE || stripped.startsWith(COMPACTION_CONTINUATION)) return true
-  return stripped.startsWith("<") && stripped.includes("</")
+  const typed = stripLeadingEnvelopes(text)
+  if (typed === STASH_BOILERPLATE || typed.startsWith(COMPACTION_CONTINUATION)) return true
+  return typed === "" ? text.trim() !== "" : typed.startsWith("<") && typed.includes("</")
 }
 
 export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolean; recentAssetFailure?: boolean }): RecallDecision {
-  const text = prompt.trim()
+  // What was typed, not the blocks that lead it: they would otherwise drive the
+  // keyword rules below and ride into the curate query. A prompt that is nothing
+  // but blocks keeps its whole text and is skipped as a non-task.
+  const trimmed = prompt.trim()
+  const text = stripLeadingEnvelopes(trimmed) || trimmed
   const lower = text.toLowerCase()
   const scopeHints: string[] = []
   if (!text) return { shouldRecall: false, reason: "skip-low-signal", query: "", scopeHints }

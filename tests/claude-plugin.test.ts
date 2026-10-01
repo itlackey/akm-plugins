@@ -34,6 +34,12 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`
 }
 
+// A fake akm's answer to `akm show <ref>` for a ref it resolves: real akm names
+// the asset in `ref`, and the hook's quality probe reads a show response without
+// one as "not an asset". A stub that prints one canned body for every call would
+// read that way for every ref.
+const SHOW_ECHOES_REF = `case "$*" in *" show "*) for last; do :; done; printf '{"ref":"%s"}\\n' "$last"; exit 0 ;; esac`
+
 function parseFrontmatter(filePath: string) {
   const body = readFileSync(filePath, "utf8")
   const match = body.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
@@ -1062,6 +1068,10 @@ exit 0
         "a compaction summary",
         `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n<analysis>${inner}.</analysis>`,
       ],
+      [
+        "a system reminder followed by a task notification",
+        `<system-reminder>${inner}.</system-reminder>\n<task-notification><summary>${inner}.</summary></task-notification>\n  `,
+      ],
     ]
 
     function submitPrompt(prompt: string) {
@@ -1100,8 +1110,10 @@ exit 0
         },
       })
 
+      const feedbackLog = path.join(claudeStateDir, "feedback.log")
       return {
         memoryLog: readFileSync(path.join(claudeStateDir, "memory.log"), "utf8"),
+        feedbackLog: existsSync(feedbackLog) ? readFileSync(feedbackLog, "utf8") : "",
         buffer: path.join(claudeStateDir, "sessions/sess-capture.md"),
         signals: path.join(claudeStateDir, "learning-signals.jsonl"),
         observations: path.join(claudeStateDir, "workflow-observations.jsonl"),
@@ -1112,6 +1124,8 @@ exit 0
     it.each(harnessText)("does not record %s as user intent, a learning signal or praise", (_name, prompt) => {
       const run = submitPrompt(prompt)
 
+      // feedback.log labels a row `user prompt`: only what the user typed.
+      expect(run.feedbackLog).not.toContain("\tuser\tprompt\t")
       expect(run.memoryLog).not.toContain("\tuser\tintent\t")
       expect(existsSync(run.buffer)).toBe(false)
       expect(existsSync(run.signals)).toBe(false)
@@ -1124,12 +1138,63 @@ exit 0
 
     itPosix("still records what the user typed, a remember request included", () => {
       const remembered = submitPrompt(`remember that ${inner}`)
+      expect(remembered.feedbackLog).toContain(`\tuser\tprompt\tremember that ${inner}`)
       expect(remembered.memoryLog).toContain(`\tuser\tintent\tremember that ${inner}`)
       expect(readFileSync(remembered.buffer, "utf8")).toContain("user memory intent")
       expect(readFileSync(remembered.signals, "utf8")).toContain('"kind":"explicit-memory"')
       expect(remembered.calls).toContain("feedback skills/deploy --positive")
 
       expect(existsSync(submitPrompt(task).observations)).toBe(true)
+    })
+
+    it("records what the user typed behind a leading <system-reminder> block, and not the block", () => {
+      // Claude Code sometimes prepends one to a prompt the user typed. The two
+      // real cases in one machine's feedback.log were dropped whole, because a
+      // text that starts with a tag and closes one reads as an envelope.
+      const reminder = "<system-reminder> You are operating in a git worktree. Worktree path: /tmp/wt </system-reminder>"
+      const behind = submitPrompt(`${reminder} remember that ${inner}`)
+
+      expect(behind.feedbackLog).toContain(`\tuser\tprompt\tremember that ${inner}`)
+      expect(behind.feedbackLog).not.toContain("system-reminder")
+      expect(behind.memoryLog).toContain(`\tuser\tintent\tremember that ${inner}`)
+      expect(behind.memoryLog).not.toContain("system-reminder")
+      const buffer = readFileSync(behind.buffer, "utf8")
+      expect(buffer).toContain("user memory intent")
+      expect(buffer).not.toContain("system-reminder")
+      expect(readFileSync(behind.signals, "utf8")).toContain('"kind":"explicit-memory"')
+      expect(behind.calls).toContain("feedback skills/deploy --positive")
+      expect(existsSync(submitPrompt(`${reminder} ${task}`).observations)).toBe(true)
+    })
+
+    it("curates what the user typed behind a leading block, not the block", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const callLog = path.join(tempDir, "akm-calls.log")
+      mkdirSync(binDir, { recursive: true })
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+echo "# curated"
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+      const submit = (prompt: string) => {
+        rmSync(callLog, { force: true })
+        runHook(["curate-prompt"], {
+          input: JSON.stringify({ session_id: "sess-block-curate", cwd: "/tmp/acme-project", prompt }),
+          env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: path.join(tempDir, "state") },
+        })
+        return existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+      }
+
+      const curateTask = "fix the flaky retry logic in the deploy pipeline"
+      const calls = submit(`<system-reminder> You are operating in a git worktree. </system-reminder> ${curateTask}`)
+      expect(calls).toContain(`curate ${curateTask} --limit`)
+      expect(calls).not.toContain("system-reminder")
+      // A prompt that is nothing but blocks is still not curated.
+      expect(submit("<system-reminder> You are operating in a git worktree. </system-reminder>")).toBe("")
     })
   })
 
@@ -1418,6 +1483,7 @@ if [ "$1" = "index" ]; then
   exit 0
 fi
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -1526,6 +1592,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -1693,6 +1760,62 @@ exit 0
     writeFileSync(indexed, "")
     submit()
     expect(readFileSync(callLog, "utf8")).toContain("feedback workflows/fresh --positive")
+  })
+
+  it("auto-feedback treats a show response without a ref as unresolved, and does not cache it", () => {
+    // `akm show scripts/x.html` reads a file that is no asset off disk and exits
+    // 0, printing a response with no `ref` (an asset's carries one, see
+    // fake-akm-contract.test.ts); `akm feedback` rejects the same ref. The
+    // quality probe took any non-empty answer as resolved, so the hook went on
+    // to submit that feedback and cached the ref as "unknown" for a day.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
+    const bundleDir = makeBundle(tempDir, ["knowledge/guide"])
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+case "$*" in
+  *show*knowledge/guide*)
+    echo '{"type":"script","name":"guide","action":"Review the script source below","content":"<html></html>","path":"/stash/scripts/guide.html"}'
+    exit 0
+    ;;
+esac
+printf '{"ok":true}\\n'
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+    const submit = () =>
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          session_id: "sess-auto-no-ref",
+          tool: "Bash",
+          input: { command: "akm improve knowledge/guide" },
+          output: "{\"ok\":true}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          AKM_BUNDLE_DIR: bundleDir,
+        },
+      })
+
+    submit()
+    submit()
+
+    const calls = readFileSync(callLog, "utf8")
+    expect(calls).not.toContain("feedback knowledge/guide")
+    // Not cached: the second use probed again instead of reading the first answer.
+    expect(calls.split("\n").filter((line) => line.includes("show knowledge/guide"))).toHaveLength(2)
+    expect(existsSync(path.join(stateDir, "akm-claude/quality-cache.tsv"))).toBe(false)
+    const feedbackLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
+    expect(feedbackLog.filter((line) => line.includes("system\tskip_unresolved\tknowledge/guide"))).toHaveLength(2)
   })
 
   it("post-tool recognizes lesson concept IDs", () => {
@@ -2062,6 +2185,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -2104,6 +2228,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -2156,6 +2281,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -2733,6 +2859,60 @@ exit 0
       expect(calls).toContain("feedback skills/deploy --positive")
       expect(calls.split("--positive").length - 1).toBe(1)
     })
+
+    it("does not credit a ref that only a failed command named", () => {
+      // PostToolUseFailure runs `post-tool failure`, and the row it wrote for a
+      // ref was replayed by the next "thanks, that worked" like any other. A
+      // command that failed names its ref only because the agent asked for it,
+      // and says nothing about the asset (akm#999): `akm show` timing out was
+      // credited with `akm feedback <ref> --positive` the next time the user
+      // said thanks. The success of another command in the session still counts.
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const callLog = path.join(tempDir, "akm-calls.log")
+      const bundleDir = makeBundle(tempDir, ["skills/deploy", "skills/elsewhere"])
+      mkdirSync(binDir, { recursive: true })
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+printf '{"ok":true}\\n'
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+      const env = {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_BUNDLE_DIR: bundleDir,
+      }
+
+      for (const [mode, ref] of [["failure", "skills/elsewhere"], ["success", "skills/deploy"]]) {
+        runHook(["post-tool", mode], {
+          input: JSON.stringify({
+            session_id: "sess-failed",
+            tool: "Bash",
+            input: { command: `akm show ${ref} --format json` },
+            output: mode === "failure" ? "error: timed out" : JSON.stringify({ type: "skill", ref, content: "..." }),
+          }),
+          env,
+        })
+      }
+      // The failure is still recorded, in the plugin's own log and as an event.
+      expect(readLogLines(path.join(stateDir, "akm-claude/feedback.log")).some((line) => line.includes("system\tfailure\tBash\takm show skills/elsewhere"))).toBe(true)
+      expect(readEvents(stateDir).some((event) => event.refs?.includes("skills/elsewhere") && event.outcome.status === "failed")).toBe(true)
+
+      runHook(["curate-prompt"], {
+        input: JSON.stringify({ session_id: "sess-failed", prompt: "thanks, that worked" }),
+        env,
+      })
+
+      const calls = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+      expect(calls).toContain("feedback skills/deploy --positive")
+      expect(calls).not.toContain("feedback skills/elsewhere")
+    })
   })
 
   describe("kill switches", () => {
@@ -2744,6 +2924,7 @@ printf '%s\\n' "$*" >> ${shellQuote(callLog)}
 case "$1" in
   --version) echo "akm 0.9.20"; exit 0 ;;
 esac
+${SHOW_ECHOES_REF}
 for arg in "$@"; do
   case "$arg" in
     hints) echo "# Bundle hints"; exit 0 ;;
@@ -3018,6 +3199,7 @@ exit 0
           path.join(binDir, "akm"),
           `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+${SHOW_ECHOES_REF}
 printf '{"ok":true,"quality":"curated"}\\n'
 exit 0
 `,

@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { availableParallelism, tmpdir } from "node:os"
 import path from "node:path"
-import { installFakeAkm } from "../evals/lib/fake-akm"
+import { installFakeAkm, type FakeAkmAsset } from "../evals/lib/fake-akm"
+import { validateRefCandidates } from "../claude/shared/ref-extraction"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
 // actually invoke (search, curate, info, workflow list --active, proposal
@@ -37,6 +38,14 @@ if (!akmAvailable) {
       `Run \`bun install\` in opencode/ to pull in the bundled akm-cli and re-run.`,
   )
 }
+
+// A test that runs the real akm spawns it several times (a bundle, an index, the
+// verbs under test): about 0.2 s a spawn here, about 0.5 s on a loaded CI runner.
+// bun's 5 s default per-test limit leaves no headroom for that, and one of them
+// timed out at 5.06 s there, so each says how long it may take. The ones that
+// probe many refs also overlap their spawns, up to this many at a time.
+const REAL_AKM_TIMEOUT_MS = 30_000
+const REAL_AKM_CONCURRENCY = Math.max(2, Math.min(6, availableParallelism()))
 
 /**
  * Shape fingerprint used for comparison: sorted top-level keys for a JSON
@@ -97,6 +106,25 @@ function runFake(akmPath: string, args: string[]): unknown {
   return JSON.parse(result.stdout)
 }
 
+/** The same as spawnSync(), for a test that probes many refs and runs them side by side. */
+async function runAsync(cmd: string, args: string[], env?: Record<string, string | undefined>): Promise<SpawnResult> {
+  const proc = Bun.spawn([cmd, ...args], { env: env ?? process.env, stdout: "pipe", stderr: "pipe" })
+  const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+  return { exitCode, stdout, stderr }
+}
+
+/** `fn` over `items`, at most `limit` at a time; results in the order of `items`. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (let index = next++; index < items.length; index = next++) results[index] = await fn(items[index] as T)
+    }),
+  )
+  return results
+}
+
 /**
  * Raw spawn for verbs whose FAILURE path is the contract. Returns the exit
  * code and both streams unparsed so a test can pin which stream the envelope
@@ -122,7 +150,7 @@ describe("fake-akm envelope contract", () => {
       cleanup(real)
       cleanup(fake)
     }
-  })
+  }, REAL_AKM_TIMEOUT_MS)
 
   test.skipIf(!akmAvailable)("curate envelope matches real akm, including the results alias", () => {
     const real = makeRealEnv()
@@ -138,7 +166,7 @@ describe("fake-akm envelope contract", () => {
       cleanup(real)
       cleanup(fake)
     }
-  })
+  }, REAL_AKM_TIMEOUT_MS)
 
   // `info` gates ALL ref validation on both plugins: they resolve their
   // bundle root from $AKM_BUNDLE_DIR, else `akm info --format json` →
@@ -164,14 +192,14 @@ describe("fake-akm envelope contract", () => {
       cleanup(real)
       cleanup(fake)
     }
-  })
+  }, REAL_AKM_TIMEOUT_MS)
 
   // The hook's quality probe (`akm show <ref>`) and the validator in front of it
   // (claude/shared/ref-extraction.ts) both assume real akm's ref grammar, so it
   // is pinned here instead of inferred from logs: a concept ID resolves, a file
   // path that merely exists does not, and a refusal leaves stdout empty, which
   // is how autoFeedback() reads "akm cannot resolve this ref".
-  test.skipIf(!akmAvailable)("show and feedback resolve concept IDs, not file paths, and refuse with an empty stdout", () => {
+  test.skipIf(!akmAvailable)("show and feedback resolve concept IDs, not file paths, and refuse with an empty stdout", async () => {
     const real = makeRealEnv()
     try {
       const write = (file: string, body: string) => {
@@ -184,22 +212,221 @@ describe("fake-akm envelope contract", () => {
       write("skills/rollout/scripts/run.py", "print('hi')\n")
       runReal(real, ["--format", "json", "-q", "index"])
 
-      const run = (...args: string[]) => runRaw(process.execPath, [REAL_AKM, ...args], realAkmEnv(real))
-      for (const ref of ["knowledge/guide", "knowledge/guide.md", "tasks/nightly", "skills/rollout"]) {
-        const shown = run("--format", "json", "-q", "show", ref)
-        expect(shown.exitCode).toBe(0)
-        expect(typeof (JSON.parse(shown.stdout) as { ref?: unknown }).ref).toBe("string")
-      }
-      for (const ref of ["tasks/nightly.yml", "skills/rollout/SKILL.md", "skills/rollout/scripts/run.py"]) {
-        const shown = run("--format", "json", "-q", "show", ref)
-        expect(shown.exitCode).not.toBe(0)
-        expect(shown.stdout.trim()).toBe("")
-        expect(run("feedback", ref, "--positive", "--format", "json", "-q").exitCode).not.toBe(0)
-      }
+      // Every call is independent of the others, so they overlap.
+      const concepts = ["knowledge/guide", "knowledge/guide.md", "tasks/nightly", "skills/rollout"]
+      const files = ["tasks/nightly.yml", "skills/rollout/SKILL.md", "skills/rollout/scripts/run.py"]
+      const calls = [
+        ...concepts.map((ref) => ["--format", "json", "-q", "show", ref]),
+        ...files.flatMap((ref) => [["--format", "json", "-q", "show", ref], ["feedback", ref, "--positive", "--format", "json", "-q"]]),
+      ]
+      const results = await mapLimit(calls, REAL_AKM_CONCURRENCY, (args) => runAsync(process.execPath, [REAL_AKM, ...args], realAkmEnv(real)))
+
+      concepts.forEach((_ref, index) => {
+        expect(results[index]?.exitCode).toBe(0)
+        expect(typeof (JSON.parse(results[index]?.stdout ?? "") as { ref?: unknown }).ref).toBe("string")
+      })
+      files.forEach((_ref, index) => {
+        const shown = results[concepts.length + 2 * index]
+        expect(shown?.exitCode).not.toBe(0)
+        expect(shown?.stdout.trim()).toBe("")
+        expect(results[concepts.length + 2 * index + 1]?.exitCode).not.toBe(0)
+      })
     } finally {
       cleanup(real)
     }
-  })
+  }, REAL_AKM_TIMEOUT_MS)
+
+  // The ref validator (claude/shared/ref-extraction.ts) is a path rule: a concept
+  // ID is the file's path with the extension its type owns dropped. Its source
+  // of truth is akm, so it is pinned here type by type against the real binary:
+  // `show` and `feedback` accept the canonical ref of every asset type, both
+  // refuse the spellings that merely name a file, and the validator says the same
+  // about every one of them (checked against 0.9.20).
+  test.skipIf(!akmAvailable)("show and feedback accept the canonical ref of every asset type, and the validator agrees", async () => {
+    const real = makeRealEnv()
+    try {
+      const bundle = real.AKM_BUNDLE_DIR
+      const write = (file: string, body: string) => {
+        mkdirSync(path.dirname(path.join(bundle, file)), { recursive: true })
+        writeFileSync(path.join(bundle, file), body)
+      }
+      // A new bundle git-ignores env/ and secrets/, and akm indexes what git
+      // lists, so a stash that keeps them (the documented opt-in) un-ignores them.
+      writeFileSync(path.join(bundle, ".gitignore"), "")
+      write("agents/reviewer.md", "---\ndescription: Reviewer\n---\nReview.\n")
+      write("commands/ship.md", "---\ndescription: Ship\n---\nShip it.\n")
+      write("env/staging.env", "STAGING_KEY=1\n")
+      write("env/.env", "DEFAULT_KEY=1\n")
+      write("env/team/.env", "TEAM_KEY=1\n")
+      write("facts/pricing.md", "---\ndescription: Pricing\n---\nTiers.\n")
+      write("instructions/review.md", "---\ndescription: Review\n---\nReview PRs.\n")
+      write("knowledge/guide.md", "# Guide\n")
+      write("knowledge/guide.md.bak", "# Guide\n")
+      write("lessons/rollback.md", "---\ndescription: Rollback\nwhen_to_use: Rolling back\n---\nRoll back.\n")
+      write("memories/notes.md", "---\ndescription: Notes\n---\nNotes.\n")
+      write("memories/solo.derived.md", "---\ndescription: Derived\n---\nDerived.\n")
+      write("scripts/deploy.sh", "echo deploy\n")
+      write("scripts/team/tool.py", "print('tool')\n")
+      write("scripts/page.html", "<html></html>\n")
+      write("scripts/data.json", "{}\n")
+      write("secrets/api-token", "token\n")
+      write("secrets/tls.pem", "pem\n")
+      write("secrets/old.lock", "lock\n")
+      write("sessions/retro.md", "---\ndescription: Retro\n---\nRetro.\n")
+      write("skills/rollout/SKILL.md", "---\nname: rollout\ndescription: Roll out\nwhen_to_use: Rolling out\n---\n# Rollout\n")
+      write("skills/rollout/scripts/run.py", "print('hi')\n")
+      write("skills/rollout/references/notes.md", "# Notes\n")
+      write("wikis/page.md", "# Page\n")
+      write("top.md", "# Top\n")
+      write("topscript.sh", "echo top\n")
+      write("tasks/nightly.yml", "version: 4\nname: nightly\nrun: echo hi\n")
+      write("tasks/legacy.yaml", "version: 4\nname: legacy\nrun: echo hi\n")
+      write("workflows/release.md", "---\ntype: workflow\ndescription: Release\nsteps:\n  - id: one\n---\n\n# Release\n\n## one\n\nDo one thing.\n")
+      write("workflows/ship.yml", "name: Ship\non:\n  workflow_dispatch: {}\njobs:\n  main:\n    runs-on: [self-hosted]\n    steps:\n      - id: one\n        run: echo hi\n")
+      runReal(real, ["--format", "json", "-q", "index"])
+
+      // One ref per type, in the spelling akm itself prints (plus `.md` where akm
+      // tolerates it), a derived memory by its own ID, and the refs of files kept
+      // outside their type's directory (a skill's script and reference page, a
+      // page under wikis/), which akm names by their path from the bundle root.
+      const canonical = [
+        "agents/reviewer",
+        "commands/ship",
+        "env/default",
+        "env/staging",
+        "env/team/default",
+        "facts/pricing",
+        "instructions/review",
+        "knowledge/guide",
+        "knowledge/guide.md",
+        "knowledge/skills/rollout/references/notes",
+        "knowledge/wikis/page",
+        "lessons/rollback",
+        "memories/notes",
+        "memories/solo.derived",
+        "scripts/deploy.sh",
+        "scripts/skills/rollout/scripts/run.py",
+        "scripts/team/tool.py",
+        "secrets/api-token",
+        "secrets/tls.pem",
+        "sessions/retro",
+        "skills/rollout",
+        "tasks/nightly",
+        "workflows/release",
+        "workflows/release.md",
+        "workflows/ship",
+      ]
+      // Each of these names a file akm has, and akm refuses it: `show` fails, or
+      // answers without a ref, or `feedback` fails (workflows/ship.yml). Files at
+      // the bundle root are not indexed, and an ID may not repeat its type.
+      const refused = [
+        "env/.env",
+        "env/staging.env",
+        "env/team/.env",
+        "knowledge/guide.md.bak",
+        "knowledge/knowledge/guide",
+        "knowledge/missing",
+        "knowledge/top",
+        "memories/solo",
+        "scripts/data.json",
+        "scripts/deploy",
+        "scripts/page.html",
+        "scripts/scripts/deploy.sh",
+        "scripts/topscript.sh",
+        "secrets/old.lock",
+        "skills/rollout/SKILL.md",
+        "skills/rollout/scripts/run.py",
+        "tasks/legacy",
+        "tasks/legacy.yaml",
+        "tasks/nightly.yml",
+        "workflows/ship.yml",
+      ]
+
+      const accepts = async (ref: string) => {
+        const show = await runAsync(process.execPath, [REAL_AKM, "--format", "json", "-q", "show", ref], realAkmEnv(real))
+        const named = show.exitCode === 0 && typeof (JSON.parse(show.stdout) as { ref?: unknown }).ref === "string"
+        if (!named) return false
+        return (await runAsync(process.execPath, [REAL_AKM, "feedback", ref, "--positive", "--format", "json", "-q"], realAkmEnv(real))).exitCode === 0
+      }
+      const refs = [...canonical, ...refused]
+      const answers = await mapLimit(refs, REAL_AKM_CONCURRENCY, accepts)
+      const accepted = new Map(refs.map((ref, index) => [ref, answers[index]] as const))
+
+      expect(canonical.filter((ref) => !accepted.get(ref))).toEqual([])
+      expect(refused.filter((ref) => accepted.get(ref))).toEqual([])
+      expect(validateRefCandidates([...canonical, ...refused], [bundle])).toEqual([...canonical].sort())
+    } finally {
+      cleanup(real)
+    }
+  }, REAL_AKM_TIMEOUT_MS)
+
+  // The hook's quality probe (refQuality in claude/hooks/akm-hook.ts) treats a
+  // show response without `ref` as "not an asset". That rests on this: a file
+  // under scripts/ whose extension is not a script extension is never indexed, so
+  // `show` reads it off disk and exits 0 with an envelope that names no `ref`,
+  // while `feedback` refuses it (checked against 0.9.20).
+  test.skipIf(!akmAvailable)("show answers a file that is no asset without a ref, and feedback refuses it", () => {
+    const real = makeRealEnv()
+    try {
+      mkdirSync(path.join(real.AKM_BUNDLE_DIR, "scripts"), { recursive: true })
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "scripts/health-report-template.html"), "<html></html>\n")
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "scripts/real.sh"), "echo hi\n")
+      runReal(real, ["--format", "json", "-q", "index"])
+
+      const run = (...args: string[]) => runRaw(process.execPath, [REAL_AKM, ...args], realAkmEnv(real))
+      const asset = run("--format", "json", "-q", "show", "scripts/real.sh")
+      expect(asset.exitCode).toBe(0)
+      expect((JSON.parse(asset.stdout) as { ref?: unknown }).ref).toBe("scripts/real.sh")
+
+      const file = run("--format", "json", "-q", "show", "scripts/health-report-template.html")
+      expect(file.exitCode).toBe(0)
+      const shown = JSON.parse(file.stdout) as Record<string, unknown>
+      expect(shown.type).toBe("script")
+      expect(shown.ref).toBeUndefined()
+      expect(run("feedback", "scripts/health-report-template.html", "--positive", "--format", "json", "-q").exitCode).not.toBe(0)
+    } finally {
+      cleanup(real)
+    }
+  }, REAL_AKM_TIMEOUT_MS)
+
+  // The same probe against the fake the tier-2 evals run the hook with: a ref it
+  // resolves comes back as an envelope that names it, and one it cannot resolve
+  // exits non-zero with nothing on stdout, exactly as real akm answers. A fake
+  // that acked every show with no `ref` read as "not an asset" and silently
+  // switched the hook's auto-feedback off (tier-2 claude_recall 1 -> 0).
+  test.skipIf(!akmAvailable)("show envelope names the asset like real akm, and refuses an unknown ref with an empty stdout", () => {
+    const real = makeRealEnv()
+    const fake = makeFakeEnv([
+      { ref: "knowledge/guide", type: "knowledge", name: "guide", description: "A guide", keywords: [] },
+    ])
+    try {
+      mkdirSync(path.join(real.AKM_BUNDLE_DIR, "knowledge"), { recursive: true })
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "knowledge/guide.md"), "# Guide\n")
+      runReal(real, ["--format", "json", "-q", "index"])
+
+      const showArgs = (ref: string) => ["--format", "json", "-q", "show", ref]
+      const resolves = (ref: string) => ({
+        real: runRaw(process.execPath, [REAL_AKM, ...showArgs(ref)], realAkmEnv(real)),
+        fake: runRaw(fake.akmPath, showArgs(ref)),
+      })
+
+      const known = resolves("knowledge/guide")
+      for (const run of [known.real, known.fake]) {
+        expect(run.exitCode).toBe(0)
+        const shown = JSON.parse(run.stdout) as { type?: unknown; name?: unknown; ref?: unknown }
+        expect([shown.type, shown.name, shown.ref]).toEqual(["knowledge", "guide", "knowledge/guide"])
+      }
+
+      const unknown = resolves("knowledge/missing")
+      expect(unknown.real.exitCode).not.toBe(0)
+      expect(unknown.fake.exitCode).toBe(unknown.real.exitCode)
+      expect(unknown.real.stdout.trim()).toBe("")
+      expect(unknown.fake.stdout.trim()).toBe("")
+    } finally {
+      cleanup(real)
+      cleanup(fake)
+    }
+  }, REAL_AKM_TIMEOUT_MS)
 
   test.skipIf(!akmAvailable)("workflow list --active envelope matches real akm", () => {
     const real = makeRealEnv()
@@ -212,7 +439,7 @@ describe("fake-akm envelope contract", () => {
       cleanup(real)
       cleanup(fake)
     }
-  })
+  }, REAL_AKM_TIMEOUT_MS)
 
   test.skipIf(!akmAvailable)("proposal list envelope matches real akm", () => {
     const real = makeRealEnv()
@@ -225,7 +452,7 @@ describe("fake-akm envelope contract", () => {
       cleanup(real)
       cleanup(fake)
     }
-  })
+  }, REAL_AKM_TIMEOUT_MS)
 
   test.skipIf(!akmAvailable)("extract envelope matches real akm with no LLM configured", () => {
     const real = makeRealEnv()
@@ -278,7 +505,7 @@ describe("fake-akm envelope contract", () => {
       cleanup(real)
       cleanup(fake)
     }
-  })
+  }, REAL_AKM_TIMEOUT_MS)
 })
 
 type RealEnv = {
@@ -308,11 +535,11 @@ function makeRealEnv(): RealEnv {
   return env
 }
 
-function makeFakeEnv() {
+function makeFakeEnv(assets: FakeAkmAsset[] = []) {
   const root = mkdtempSync(path.join(tmpdir(), "akm-contract-fake-"))
   const binDir = path.join(root, "bin")
   const callLog = path.join(root, "calls.log")
-  const fake = installFakeAkm({ binDir, callLog, assets: [] })
+  const fake = installFakeAkm({ binDir, callLog, assets })
   return { ...fake, root }
 }
 
