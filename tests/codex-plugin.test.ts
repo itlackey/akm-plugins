@@ -499,6 +499,25 @@ console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: {
     }
   })
 
+  it.skipIf(!IS_WINDOWS)("answers in JSON that survives PowerShell re-encoding a native command's output with a non-UTF-8 console code page", () => {
+    // PowerShell decodes what `bun` writes with [Console]::OutputEncoding (the OEM code page) and writes it back with
+    // the same one. Single-byte code pages return the bytes unchanged; double-byte ones (932 here, as on a Japanese
+    // Windows) turn a UTF-8 em dash into "?", and the primer and the curated text both contain one.
+    for (const shell of codexShells().filter((candidate) => candidate.name.includes("owershell") || candidate.name.startsWith("pwsh"))) {
+      const sandbox = makeSandbox()
+      const prompt = "help me plan the akm release rollout \u2014 \u65e5\u672c\u8a9e this afternoon"
+      const command = `[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(932); ${codexCommand("UserPromptSubmit")}`
+
+      const result = runCommand(command, sandbox, codexEvent("UserPromptSubmit", sandbox.project, { prompt }), {}, shell)
+
+      expect({ shell: shell.name, exitCode: result.exitCode, stderr: result.stderr }).toEqual({ shell: shell.name, exitCode: 0, stderr: "" })
+      const payload = expectCodexOutput(result.stdout, "UserPromptSubmit")
+      expect({ shell: shell.name, dash: payload.hookSpecificOutput.additionalContext.includes("\u2014") }).toEqual({ shell: shell.name, dash: true })
+      // What Codex sent on stdin arrived intact too.
+      expect(readCallLog(sandbox.callLog).find((call) => call.argv[0] === "curate")?.argv[1]).toBe(prompt)
+    }
+  })
+
   it.skipIf(IS_WINDOWS)("behaves the same through sh when it is handed the Windows command", () => {
     // commandWindows is plain `bun "..." <mode> --harness=codex`, valid in every shell, so POSIX CI can run the
     // Windows path of the hook (the --harness flag and PLUGIN_DATA as the state directory) too.
