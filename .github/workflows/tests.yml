@@ -57,3 +57,23 @@ jobs:
 
       - name: Run hook tests
         run: bun test --timeout 60000 tests/claude-plugin.test.ts tests/codex-plugin.test.ts tests/hook-commands.test.ts tests/akm-version-check.test.ts tests/ref-extraction.test.ts tests/ref-resolver-contract.test.ts tests/learning-signals.test.ts tests/recall-policy.test.ts tests/redaction.test.ts tests/vendor-semver.test.ts tests/version-policy.test.ts
+
+      # The real hosts, started offline against this checkout's plugin (tests/real-hosts.test.ts):
+      # no login and no model call. `claude -p` runs its SessionStart, UserPromptSubmit and SessionEnd
+      # hooks and stops at "Not logged in"; `codex exec` runs its two hooks and its model provider is a
+      # dead local port. Versions are pinned so a run can be compared with the last one.
+      - name: Install Claude Code and Codex with npm
+        shell: pwsh
+        run: |
+          node --version
+          $prefix = Join-Path $env:RUNNER_TEMP "hosts-npm"
+          npm install @anthropic-ai/claude-code@2.1.286 @openai/codex@0.159.3 --prefix $prefix --no-audit --no-fund
+          $claude = Join-Path $prefix 'node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+          $codex = (Get-ChildItem (Join-Path $prefix 'node_modules') -Recurse -Filter codex.exe | Where-Object { $_.FullName -match 'vendor' } | Select-Object -First 1).FullName
+          & $claude --version
+          & $codex --version
+          "AKM_REAL_CLAUDE_BIN=$claude" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "AKM_REAL_CODEX_BIN=$codex" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Run the real hosts
+        run: bun test --timeout 300000 tests/real-hosts.test.ts
