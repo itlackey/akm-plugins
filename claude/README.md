@@ -105,7 +105,7 @@ What differs from macOS and Linux:
 
 ### What was tested on Windows
 
-`.github/workflows/tests.yml` runs a `windows` job on `windows-latest` for every push and pull request. It runs:
+`.github/workflows/tests.yml` runs a `windows` job on `windows-latest` for every pull request and every push to `main`. It runs:
 
 - the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`, and once against the `akm-cli@0.9.20` npm itself installs;
 - the real Claude Code (2.1.286) and the real Codex (0.159.3), installed from npm and started with no credential. `claude -p` registers the manifest's 23 handlers and runs SessionStart, UserPromptSubmit and SessionEnd through exec form before it stops at "Not logged in". `codex exec` runs the two hooks, with the plugin installed from the checkout and trusted the way `/hooks` does, before its model provider, a dead local port, refuses the request.

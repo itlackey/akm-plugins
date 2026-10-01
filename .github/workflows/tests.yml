@@ -3,8 +3,7 @@ name: Tests
 on:
   pull_request:
   push:
-    # A branch only gets a run without a pull request if it is named here.
-    branches: [main, "ci/windows-*"]
+    branches: [main]
 
 jobs:
   test:
