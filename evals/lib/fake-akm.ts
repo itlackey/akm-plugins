@@ -686,7 +686,26 @@ if (verb === "remember") {
   process.exit(0)
 }
 
-if (verb === "feedback" || verb === "index" || verb === "show") {
+// --- show -------------------------------------------------------------------
+// The Claude hook probes \`akm show <ref>\` before it submits feedback and reads
+// the answer the way real akm gives it: a ref akm resolves comes back as the
+// asset's own envelope, \`ref\` included, and one it cannot resolve exits 1 with
+// nothing on stdout (the error goes to stderr). An ack with no \`ref\` reads as
+// "not an asset". tests/fake-akm-contract.test.ts pins this against the binary.
+if (verb === "show") {
+  const wanted = (nonFlagArgs()[0] || "").replace(/^[^/#]+\\/\\//, "").replace(/#.*$/, "")
+  const asset = idx.assets.find((a) => a.ref === wanted || a.ref + ".md" === wanted)
+  if (!asset) {
+    process.stderr.write(JSON.stringify({ ok: false, error: "Stash asset not found for ref: " + wanted, code: "ASSET_NOT_FOUND" }) + "\\n")
+    process.exit(1)
+  }
+  if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
+    process.stdout.write(JSON.stringify({ type: asset.type, name: asset.name, ref: asset.ref, origin: "bundle", description: asset.description }))
+  }
+  process.exit(0)
+}
+
+if (verb === "feedback" || verb === "index") {
   // The hooks call these for side effects; we just ack.
   if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
     process.stdout.write(JSON.stringify({ ok: true, verb, args: tail }))

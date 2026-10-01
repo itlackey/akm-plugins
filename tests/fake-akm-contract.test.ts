@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { installFakeAkm } from "../evals/lib/fake-akm"
+import { installFakeAkm, type FakeAkmAsset } from "../evals/lib/fake-akm"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
 // actually invoke (search, curate, info, workflow list --active, proposal
@@ -201,6 +201,74 @@ describe("fake-akm envelope contract", () => {
     }
   })
 
+  // The hook's quality probe (refQuality in claude/hooks/akm-hook.ts) treats a
+  // show response without `ref` as "not an asset". That rests on this: a file
+  // under scripts/ whose extension is not a script extension is never indexed, so
+  // `show` reads it off disk and exits 0 with an envelope that names no `ref`,
+  // while `feedback` refuses it (checked against 0.9.20).
+  test.skipIf(!akmAvailable)("show answers a file that is no asset without a ref, and feedback refuses it", () => {
+    const real = makeRealEnv()
+    try {
+      mkdirSync(path.join(real.AKM_BUNDLE_DIR, "scripts"), { recursive: true })
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "scripts/health-report-template.html"), "<html></html>\n")
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "scripts/real.sh"), "echo hi\n")
+      runReal(real, ["--format", "json", "-q", "index"])
+
+      const run = (...args: string[]) => runRaw(process.execPath, [REAL_AKM, ...args], realAkmEnv(real))
+      const asset = run("--format", "json", "-q", "show", "scripts/real.sh")
+      expect(asset.exitCode).toBe(0)
+      expect((JSON.parse(asset.stdout) as { ref?: unknown }).ref).toBe("scripts/real.sh")
+
+      const file = run("--format", "json", "-q", "show", "scripts/health-report-template.html")
+      expect(file.exitCode).toBe(0)
+      const shown = JSON.parse(file.stdout) as Record<string, unknown>
+      expect(shown.type).toBe("script")
+      expect(shown.ref).toBeUndefined()
+      expect(run("feedback", "scripts/health-report-template.html", "--positive", "--format", "json", "-q").exitCode).not.toBe(0)
+    } finally {
+      cleanup(real)
+    }
+  })
+
+  // The same probe against the fake the tier-2 evals run the hook with: a ref it
+  // resolves comes back as an envelope that names it, and one it cannot resolve
+  // exits non-zero with nothing on stdout, exactly as real akm answers. A fake
+  // that acked every show with no `ref` read as "not an asset" and silently
+  // switched the hook's auto-feedback off (tier-2 claude_recall 1 -> 0).
+  test.skipIf(!akmAvailable)("show envelope names the asset like real akm, and refuses an unknown ref with an empty stdout", () => {
+    const real = makeRealEnv()
+    const fake = makeFakeEnv([
+      { ref: "knowledge/guide", type: "knowledge", name: "guide", description: "A guide", keywords: [] },
+    ])
+    try {
+      mkdirSync(path.join(real.AKM_BUNDLE_DIR, "knowledge"), { recursive: true })
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "knowledge/guide.md"), "# Guide\n")
+      runReal(real, ["--format", "json", "-q", "index"])
+
+      const showArgs = (ref: string) => ["--format", "json", "-q", "show", ref]
+      const resolves = (ref: string) => ({
+        real: runRaw(process.execPath, [REAL_AKM, ...showArgs(ref)], realAkmEnv(real)),
+        fake: runRaw(fake.akmPath, showArgs(ref)),
+      })
+
+      const known = resolves("knowledge/guide")
+      for (const run of [known.real, known.fake]) {
+        expect(run.exitCode).toBe(0)
+        const shown = JSON.parse(run.stdout) as { type?: unknown; name?: unknown; ref?: unknown }
+        expect([shown.type, shown.name, shown.ref]).toEqual(["knowledge", "guide", "knowledge/guide"])
+      }
+
+      const unknown = resolves("knowledge/missing")
+      expect(unknown.real.exitCode).not.toBe(0)
+      expect(unknown.fake.exitCode).toBe(unknown.real.exitCode)
+      expect(unknown.real.stdout.trim()).toBe("")
+      expect(unknown.fake.stdout.trim()).toBe("")
+    } finally {
+      cleanup(real)
+      cleanup(fake)
+    }
+  })
+
   test.skipIf(!akmAvailable)("workflow list --active envelope matches real akm", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
@@ -308,11 +376,11 @@ function makeRealEnv(): RealEnv {
   return env
 }
 
-function makeFakeEnv() {
+function makeFakeEnv(assets: FakeAkmAsset[] = []) {
   const root = mkdtempSync(path.join(tmpdir(), "akm-contract-fake-"))
   const binDir = path.join(root, "bin")
   const callLog = path.join(root, "calls.log")
-  const fake = installFakeAkm({ binDir, callLog, assets: [] })
+  const fake = installFakeAkm({ binDir, callLog, assets })
   return { ...fake, root }
 }
 

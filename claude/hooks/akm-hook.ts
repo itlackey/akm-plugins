@@ -1084,12 +1084,15 @@ function refQuality(ref: string): string {
       break
     }
   }
-  const raw = akmRun(["--format", "json", "-q", "show", ref])
+  const shown = safeJsonParse<Record<string, unknown>>(akmRun(["--format", "json", "-q", "show", ref]))
   // akm prints nothing on stdout for a ref it cannot resolve (not indexed yet,
   // ambiguous, an unconfigured bundle, a timeout), and `akm feedback` rejects
-  // the same ref. Not cached: once the index catches up the next use is credited.
-  if (!raw.trim()) return "unresolved"
-  const quality = safeJsonParse<Record<string, unknown>>(raw)?.quality
+  // the same ref. So does a file that is no asset: `akm show scripts/x.html`
+  // reads it off disk, exits 0 and answers without a `ref`, which every asset's
+  // response carries (checked against 0.9.20). Not cached: once the index
+  // catches up the next use is credited.
+  if (typeof shown?.ref !== "string" || !shown.ref) return "unresolved"
+  const quality = shown.quality
   const resolved = typeof quality === "string" && quality ? quality : "unknown"
   appendLog(QUALITY_CACHE, ref, resolved)
   return resolved

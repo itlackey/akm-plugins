@@ -33,6 +33,12 @@ function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`
 }
 
+// A fake akm's answer to `akm show <ref>` for a ref it resolves: real akm names
+// the asset in `ref`, and the hook's quality probe reads a show response without
+// one as "not an asset". A stub that prints one canned body for every call would
+// read that way for every ref.
+const SHOW_ECHOES_REF = `case "$*" in *" show "*) for last; do :; done; printf '{"ref":"%s"}\\n' "$last"; exit 0 ;; esac`
+
 function parseFrontmatter(filePath: string) {
   const body = readFileSync(filePath, "utf8")
   const match = body.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
@@ -1407,6 +1413,7 @@ if [ "$1" = "index" ]; then
   exit 0
 fi
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -1515,6 +1522,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -1682,6 +1690,62 @@ exit 0
     writeFileSync(indexed, "")
     submit()
     expect(readFileSync(callLog, "utf8")).toContain("feedback workflows/fresh --positive")
+  })
+
+  it("auto-feedback treats a show response without a ref as unresolved, and does not cache it", () => {
+    // `akm show scripts/x.html` reads a file that is no asset off disk and exits
+    // 0, printing a response with no `ref` (an asset's carries one, see
+    // fake-akm-contract.test.ts); `akm feedback` rejects the same ref. The
+    // quality probe took any non-empty answer as resolved, so the hook went on
+    // to submit that feedback and cached the ref as "unknown" for a day.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
+    const bundleDir = makeBundle(tempDir, ["knowledge/guide"])
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+case "$*" in
+  *show*knowledge/guide*)
+    echo '{"type":"script","name":"guide","action":"Review the script source below","content":"<html></html>","path":"/stash/scripts/guide.html"}'
+    exit 0
+    ;;
+esac
+printf '{"ok":true}\\n'
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+    const submit = () =>
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          session_id: "sess-auto-no-ref",
+          tool: "Bash",
+          input: { command: "akm improve knowledge/guide" },
+          output: "{\"ok\":true}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          AKM_BUNDLE_DIR: bundleDir,
+        },
+      })
+
+    submit()
+    submit()
+
+    const calls = readFileSync(callLog, "utf8")
+    expect(calls).not.toContain("feedback knowledge/guide")
+    // Not cached: the second use probed again instead of reading the first answer.
+    expect(calls.split("\n").filter((line) => line.includes("show knowledge/guide"))).toHaveLength(2)
+    expect(existsSync(path.join(stateDir, "akm-claude/quality-cache.tsv"))).toBe(false)
+    const feedbackLog = readLogLines(path.join(stateDir, "akm-claude/feedback.log"))
+    expect(feedbackLog.filter((line) => line.includes("system\tskip_unresolved\tknowledge/guide"))).toHaveLength(2)
   })
 
   it("post-tool recognizes lesson concept IDs", () => {
@@ -2051,6 +2115,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -2093,6 +2158,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -2145,6 +2211,7 @@ exit 0
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${quotedLog}
+${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
 `,
@@ -2733,6 +2800,7 @@ printf '%s\\n' "$*" >> ${shellQuote(callLog)}
 case "$1" in
   --version) echo "akm 0.9.20"; exit 0 ;;
 esac
+${SHOW_ECHOES_REF}
 for arg in "$@"; do
   case "$arg" in
     hints) echo "# Bundle hints"; exit 0 ;;
@@ -3007,6 +3075,7 @@ exit 0
           path.join(binDir, "akm"),
           `#!/usr/bin/env sh
 printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+${SHOW_ECHOES_REF}
 printf '{"ok":true,"quality":"curated"}\\n'
 exit 0
 `,
