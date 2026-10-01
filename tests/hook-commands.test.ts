@@ -380,7 +380,7 @@ setTimeout(() => process.exit(0), 90_000)
       sandbox.binDir,
       `import { appendFileSync } from "node:fs"
 import { spawn } from "node:child_process"
-appendFileSync(${JSON.stringify(sandbox.callLog)}, args.join(" ") + "\\n")
+appendFileSync(${JSON.stringify(sandbox.callLog)}, [new Date().toISOString(), process.pid, ...args].join("\\t") + "\\n")
 if (args[0] === "--version") {
   console.log("akm 0.9.20")
   process.exit(0)
@@ -431,9 +431,11 @@ if (${hangsWhen}) {
     const sandbox = makeSandbox({ withAkm: false })
     const pids = installHangingAkm(sandbox, 'args.includes("hints")')
 
+    const started = Date.now()
     const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), { AKM_CURATE_TIMEOUT: "3" })
 
     expect(result.exitCode).toBe(0)
+    expect(Date.now() - started).toBeLessThan(30_000)
     expect(JSON.parse(result.stdout).hookSpecificOutput.hookEventName).toBe("SessionStart")
     await expectNothingLeftRunning(pids)
     await settle(sandbox, { index: 1 })
