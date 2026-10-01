@@ -2789,6 +2789,60 @@ exit 0
       expect(calls).toContain("feedback skills/deploy --positive")
       expect(calls.split("--positive").length - 1).toBe(1)
     })
+
+    it("does not credit a ref that only a failed command named", () => {
+      // PostToolUseFailure runs `post-tool failure`, and the row it wrote for a
+      // ref was replayed by the next "thanks, that worked" like any other. A
+      // command that failed names its ref only because the agent asked for it,
+      // and says nothing about the asset (akm#999): `akm show` timing out was
+      // credited with `akm feedback <ref> --positive` the next time the user
+      // said thanks. The success of another command in the session still counts.
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const stateDir = path.join(tempDir, "state")
+      const callLog = path.join(tempDir, "akm-calls.log")
+      const bundleDir = makeBundle(tempDir, ["skills/deploy", "skills/elsewhere"])
+      mkdirSync(binDir, { recursive: true })
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+printf '{"ok":true}\\n'
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+      const env = {
+        HOME: tempDir,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        XDG_STATE_HOME: stateDir,
+        AKM_BUNDLE_DIR: bundleDir,
+      }
+
+      for (const [mode, ref] of [["failure", "skills/elsewhere"], ["success", "skills/deploy"]]) {
+        runHook(["post-tool", mode], {
+          input: JSON.stringify({
+            session_id: "sess-failed",
+            tool: "Bash",
+            input: { command: `akm show ${ref} --format json` },
+            output: mode === "failure" ? "error: timed out" : JSON.stringify({ type: "skill", ref, content: "..." }),
+          }),
+          env,
+        })
+      }
+      // The failure is still recorded, in the plugin's own log and as an event.
+      expect(readLogLines(path.join(stateDir, "akm-claude/feedback.log")).some((line) => line.includes("system\tfailure\tBash\takm show skills/elsewhere"))).toBe(true)
+      expect(readEvents(stateDir).some((event) => event.refs?.includes("skills/elsewhere") && event.outcome.status === "failed")).toBe(true)
+
+      runHook(["curate-prompt"], {
+        input: JSON.stringify({ session_id: "sess-failed", prompt: "thanks, that worked" }),
+        env,
+      })
+
+      const calls = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+      expect(calls).toContain("feedback skills/deploy --positive")
+      expect(calls).not.toContain("feedback skills/elsewhere")
+    })
   })
 
   describe("kill switches", () => {

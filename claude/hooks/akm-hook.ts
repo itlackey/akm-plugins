@@ -1338,7 +1338,11 @@ function recordPostTool() {
   const rawInput = readStdin()
   const { toolName, commandText, outputText, statusText, refs, sid } = extractPostToolFields(rawInput, MODE)
   if (/akm|\/akm/.test(commandText)) appendLog(FEEDBACK_LOG, "system", statusText, toolName || "Bash", commandText)
-  for (const ref of refs) {
+  // These rows are what captureRetrospectiveFeedback replays as the refs the
+  // session used. A failed command names a ref only because the agent asked for
+  // it and says nothing about the asset (akm#999), so only a successful one is
+  // recorded; the failure stays in feedback.log and the tool_observation event.
+  for (const ref of MODE === "failure" ? [] : refs) {
     // The session id is the last column: captureRetrospectiveFeedback replays
     // this file from an unrelated hook process later in the session, and the
     // file is shared by every session on the machine — without the column a
