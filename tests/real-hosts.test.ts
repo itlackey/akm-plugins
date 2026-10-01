@@ -27,6 +27,21 @@ const claudeHandlerCount = Object.values(claudeManifest.hooks as Record<string, 
   0,
 )
 
+// What Codex hashes to decide whether the user already trusted a hook: the command for the platform (`command`, or
+// `commandWindows` on Windows) with the timeout and status message, not the version or the install path. Changing any
+// of them asks every Codex user to trust the hooks again, so a change here is a decision. The same on Codex 0.147.0,
+// 0.159.0 and 0.159.3.
+const TRUST_HASHES = {
+  posix: {
+    sessionStart: "sha256:179686e716a7d991572fa95bdb62da4ba36bdf04ccd5b51d9a06316270b7708f",
+    userPromptSubmit: "sha256:fd4b7b7159980e2bba6c702636a67a6e808c5e03236ab15cf1b998d88520a3b5",
+  },
+  windows: {
+    sessionStart: "sha256:e7e57212c07fed2b3a1379af5e9673427775519d8fc3a0a7956037eb63dc0e2b",
+    userPromptSubmit: "sha256:c66747d1d7ca0b86602c058a8b4d7c3b765e5826295de7abb5791d993e9c9d74",
+  },
+}
+
 const tempDirs: string[] = []
 
 afterEach(() => {
@@ -196,6 +211,7 @@ describe.skipIf(!codexBin)("the real Codex", () => {
       }
       expect(hooks.map((hook) => hook.eventName).sort()).toEqual(["sessionStart", "userPromptSubmit"])
       expect(hooks.every((hook) => hook.trustStatus === "untrusted")).toBe(true)
+      expect(Object.fromEntries(hooks.map((hook) => [hook.eventName, hook.currentHash]))).toEqual(TRUST_HASHES[IS_WINDOWS ? "windows" : "posix"])
       for (const hook of hooks) {
         expect(hook.command).toContain(IS_WINDOWS ? "--harness=codex" : "AKM_PLUGIN_HARNESS=codex")
         expect(hook.command).not.toContain("${")

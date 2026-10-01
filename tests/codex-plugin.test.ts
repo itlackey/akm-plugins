@@ -183,11 +183,11 @@ describe("Codex plugin metadata", () => {
     const modes: Record<string, string> = { SessionStart: "session-start", UserPromptSubmit: "curate-prompt" }
     for (const [event, mode] of Object.entries(modes)) {
       const handler = codex.hooks.hooks[event][0].hooks[0]
-      // Pinned whole: the harness label and state dir are part of the contract. This is the command Codex runs on
-      // macOS and Linux, and it is byte for byte the one Codex users already trusted: Codex hashes `command` and not
-      // `commandWindows`, so adding the Windows command did not ask anyone to trust these hooks again.
+      // Pinned whole: the harness label, the state dir and the guard are part of the contract. This is the command
+      // Codex runs on macOS and Linux, and Codex hashes it (not `commandWindows`): any edit to it asks every Codex
+      // user to trust the hook again, and real-hosts.test.ts pins the hashes this text produces.
       expect(handler.command).toBe(
-        `AKM_PLUGIN_HARNESS=codex AKM_PLUGIN_STATE_DIR="\${PLUGIN_DATA}" sh "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ${mode}`,
+        `[ -f "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ] || exit 0; AKM_PLUGIN_HARNESS=codex AKM_PLUGIN_STATE_DIR="\${PLUGIN_DATA}" sh "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ${mode}`,
       )
       expect(hookSource).toContain(`case "${mode}":`)
       const claudeHandler = claude.hooks[event][0].hooks[0]
@@ -197,6 +197,20 @@ describe("Codex plugin metadata", () => {
       // The hook budgets its own work against these (UserPromptSubmit's
       // retrospective and curate legs, SessionStart's version probe).
       expect(handler.timeout).toBe(claudeHandler.timeout)
+    }
+  })
+
+  it("guards the POSIX command against the plugin directory being deleted under a running session", () => {
+    const codex = readJson(codexManifestPath)
+    for (const event of ["SessionStart", "UserPromptSubmit"]) {
+      const handler = codex.hooks.hooks[event][0].hooks[0]
+      // Codex 0.147's start-up marketplace upgrade runs while the first session after a release is being created:
+      // that session starts with the previous version's absolute hook path, and the upgrade then deletes that
+      // version's directory. `sh <missing script>` exits 2, which Codex counts as a block (SessionStart Failed, the
+      // user's first prompt Blocked and never sent). The guard has to be the first thing the command does.
+      expect(handler.command.startsWith(`[ -f "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ] || exit 0; `)).toBe(true)
+      // Windows is left alone on purpose: `bun <missing script>` exits 1, which Codex reports as Failed, not Blocked.
+      expect(handler.commandWindows).not.toContain("exit 0")
     }
   })
 
@@ -515,6 +529,23 @@ console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: {
       expect({ shell: shell.name, dash: payload.hookSpecificOutput.additionalContext.includes("\u2014") }).toEqual({ shell: shell.name, dash: true })
       // What Codex sent on stdin arrived intact too.
       expect(readCallLog(sandbox.callLog).find((call) => call.argv[0] === "curate")?.argv[1]).toBe(prompt)
+    }
+  })
+
+  it.skipIf(IS_WINDOWS)("exits 0 and does nothing when the plugin directory it points at has been deleted", () => {
+    for (const event of ["SessionStart", "UserPromptSubmit"] as const) {
+      const sandbox = makeSandbox()
+      const deleted = path.join(sandbox.root, "plugins/cache/akm-plugins/akm/0.9.0-deleted-by-the-upgrade")
+      // The text Codex built when the session started; the directory is gone by the time the hook runs.
+      const command = codexCommand(event).replaceAll("${PLUGIN_ROOT}", deleted)
+      expect(existsSync(deleted)).toBe(false)
+
+      const result = runCommand(command, sandbox, codexEvent(event, sandbox.project, { prompt: "help me plan the akm release rollout this afternoon" }))
+
+      // Nothing on stdout or stderr, no block (exit 2) and no failure: the session runs without the AKM hooks.
+      expect({ event, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }).toEqual({ event, exitCode: 0, stdout: "", stderr: "" })
+      expect(existsSync(sandbox.dataDir)).toBe(false)
+      expect(readCallLog(sandbox.callLog)).toEqual([])
     }
   })
 
