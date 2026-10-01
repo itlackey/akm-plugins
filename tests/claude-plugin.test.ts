@@ -1147,7 +1147,7 @@ exit 0
       expect(existsSync(submitPrompt(task).observations)).toBe(true)
     })
 
-    it("records what the user typed behind a leading <system-reminder> block, and not the block", () => {
+    itPosix("records what the user typed behind a leading <system-reminder> block, and not the block", () => {
       // Claude Code sometimes prepends one to a prompt the user typed. The two
       // real cases in one machine's feedback.log were dropped whole, because a
       // text that starts with a tag and closes one reads as an envelope.
