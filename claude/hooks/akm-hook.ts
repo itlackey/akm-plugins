@@ -25,7 +25,7 @@ import {
   reserveLearningProposal,
   type ProposalCandidate,
 } from "../shared/learning-signals"
-import { isNonTaskPrompt, shouldRecall } from "../shared/recall-policy"
+import { isNonTaskPrompt, shouldRecall, stripLeadingEnvelopes } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
 import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
@@ -1608,7 +1608,12 @@ function renderCuratedJson(raw: string, query: string): string {
 
 function curatePrompt(): string {
   const rawInput = readStdin()
-  const text = extractUserText(rawInput)
+  // Claude Code sometimes prepends a harness block (<system-reminder>…) to a
+  // prompt the user typed. What follows the blocks is the prompt: that is what
+  // is curated, logged and learned from. A prompt that is nothing but blocks
+  // keeps its whole text and is not typed, below.
+  const prompt = extractUserText(rawInput)
+  const text = stripLeadingEnvelopes(prompt) || prompt
   const sid = extractSessionId(rawInput)
   // UserPromptSubmit also carries text nobody typed: subagent hand-backs,
   // cross-session messages, task notifications, the post-compaction

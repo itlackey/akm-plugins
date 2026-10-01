@@ -1057,6 +1057,10 @@ exit 0
         "a compaction summary",
         `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n<analysis>${inner}.</analysis>`,
       ],
+      [
+        "a system reminder followed by a task notification",
+        `<system-reminder>${inner}.</system-reminder>\n<task-notification><summary>${inner}.</summary></task-notification>\n  `,
+      ],
     ]
 
     function submitPrompt(prompt: string) {
@@ -1125,6 +1129,54 @@ exit 0
       expect(remembered.calls).toContain("feedback skills/deploy --positive")
 
       expect(existsSync(submitPrompt(task).observations)).toBe(true)
+    })
+
+    it("records what the user typed behind a leading <system-reminder> block, and not the block", () => {
+      // Claude Code sometimes prepends one to a prompt the user typed. The two
+      // real cases in one machine's feedback.log were dropped whole, because a
+      // text that starts with a tag and closes one reads as an envelope.
+      const reminder = "<system-reminder> You are operating in a git worktree. Worktree path: /tmp/wt </system-reminder>"
+      const behind = submitPrompt(`${reminder} remember that ${inner}`)
+
+      expect(behind.memoryLog).toContain(`\tuser\tintent\tremember that ${inner}`)
+      expect(behind.memoryLog).not.toContain("system-reminder")
+      const buffer = readFileSync(behind.buffer, "utf8")
+      expect(buffer).toContain("user memory intent")
+      expect(buffer).not.toContain("system-reminder")
+      expect(readFileSync(behind.signals, "utf8")).toContain('"kind":"explicit-memory"')
+      expect(behind.calls).toContain("feedback skills/deploy --positive")
+      expect(existsSync(submitPrompt(`${reminder} ${task}`).observations)).toBe(true)
+    })
+
+    it("curates what the user typed behind a leading block, not the block", () => {
+      const tempDir = makeTempDir()
+      const binDir = path.join(tempDir, "bin")
+      const callLog = path.join(tempDir, "akm-calls.log")
+      mkdirSync(binDir, { recursive: true })
+      writeFileSync(
+        path.join(binDir, "akm"),
+        `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+echo "# curated"
+exit 0
+`,
+      )
+      chmodSync(path.join(binDir, "akm"), 0o755)
+      const submit = (prompt: string) => {
+        rmSync(callLog, { force: true })
+        runHook(["curate-prompt"], {
+          input: JSON.stringify({ session_id: "sess-block-curate", cwd: "/tmp/acme-project", prompt }),
+          env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: path.join(tempDir, "state") },
+        })
+        return existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+      }
+
+      const curateTask = "fix the flaky retry logic in the deploy pipeline"
+      const calls = submit(`<system-reminder> You are operating in a git worktree. </system-reminder> ${curateTask}`)
+      expect(calls).toContain(`curate ${curateTask} --limit`)
+      expect(calls).not.toContain("system-reminder")
+      // A prompt that is nothing but blocks is still not curated.
+      expect(submit("<system-reminder> You are operating in a git worktree. </system-reminder>")).toBe("")
     })
   })
 
