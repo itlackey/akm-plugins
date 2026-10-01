@@ -1625,13 +1625,14 @@ function curatePrompt(): string {
   // thread even in --agent sessions, which `agent_type` does not.
   const agentId = safeJsonParse<{ agent_id?: unknown }>(rawInput)?.agent_id
   const typed = !isNonTaskPrompt(text) && !(typeof agentId === "string" && agentId !== "")
-  if (text) {
+  // feedback.log labels a row `user prompt`, so it takes only what was typed.
+  if (text && typed) {
     appendLog(FEEDBACK_LOG, "user", "prompt", text)
-    if (typed && /\b(remember|memory|memories)\b/i.test(text)) {
+    if (/\b(remember|memory|memories)\b/i.test(text)) {
       appendLog(MEMORY_LOG, "user", "intent", text)
       writeSessionBuffer(sid, "user memory intent", text)
     }
-    if (typed) capturePromptLearning(rawInput, text, sid)
+    capturePromptLearning(rawInput, text, sid)
   }
   if (!text) return ""
   // Before the curate gate on purpose: "that worked" is a short prompt that

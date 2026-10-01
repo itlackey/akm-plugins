@@ -394,6 +394,7 @@ describe("Codex hook runtime", () => {
     expect(typed.feedbackLog).toContain(`user\tprompt\t${prompt}`)
 
     const subagent = submit({ agent_id: "019c3f2e-7b00-7c11-8d3a-5e6f4a1b2c3d", agent_type: "worker" })
+    expect(subagent.feedbackLog).not.toContain("user\tprompt")
     expect(subagent.memoryLog).not.toContain("\tuser\tintent\t")
     expect(existsSync(subagent.buffer)).toBe(false)
     expect(existsSync(subagent.signals)).toBe(false)

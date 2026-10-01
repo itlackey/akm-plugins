@@ -1099,8 +1099,10 @@ exit 0
         },
       })
 
+      const feedbackLog = path.join(claudeStateDir, "feedback.log")
       return {
         memoryLog: readFileSync(path.join(claudeStateDir, "memory.log"), "utf8"),
+        feedbackLog: existsSync(feedbackLog) ? readFileSync(feedbackLog, "utf8") : "",
         buffer: path.join(claudeStateDir, "sessions/sess-capture.md"),
         signals: path.join(claudeStateDir, "learning-signals.jsonl"),
         observations: path.join(claudeStateDir, "workflow-observations.jsonl"),
@@ -1111,6 +1113,8 @@ exit 0
     it.each(harnessText)("does not record %s as user intent, a learning signal or praise", (_name, prompt) => {
       const run = submitPrompt(prompt)
 
+      // feedback.log labels a row `user prompt`: only what the user typed.
+      expect(run.feedbackLog).not.toContain("\tuser\tprompt\t")
       expect(run.memoryLog).not.toContain("\tuser\tintent\t")
       expect(existsSync(run.buffer)).toBe(false)
       expect(existsSync(run.signals)).toBe(false)
@@ -1123,6 +1127,7 @@ exit 0
 
     it("still records what the user typed, a remember request included", () => {
       const remembered = submitPrompt(`remember that ${inner}`)
+      expect(remembered.feedbackLog).toContain(`\tuser\tprompt\tremember that ${inner}`)
       expect(remembered.memoryLog).toContain(`\tuser\tintent\tremember that ${inner}`)
       expect(readFileSync(remembered.buffer, "utf8")).toContain("user memory intent")
       expect(readFileSync(remembered.signals, "utf8")).toContain('"kind":"explicit-memory"')
@@ -1138,6 +1143,8 @@ exit 0
       const reminder = "<system-reminder> You are operating in a git worktree. Worktree path: /tmp/wt </system-reminder>"
       const behind = submitPrompt(`${reminder} remember that ${inner}`)
 
+      expect(behind.feedbackLog).toContain(`\tuser\tprompt\tremember that ${inner}`)
+      expect(behind.feedbackLog).not.toContain("system-reminder")
       expect(behind.memoryLog).toContain(`\tuser\tintent\tremember that ${inner}`)
       expect(behind.memoryLog).not.toContain("system-reminder")
       const buffer = readFileSync(behind.buffer, "utf8")
