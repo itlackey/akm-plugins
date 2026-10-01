@@ -348,6 +348,115 @@ describe.skipIf(!IS_WINDOWS)("Claude hooks on Windows, with akm as npm installs 
   })
 })
 
+describe.skipIf(!IS_WINDOWS)("Claude hooks when akm hangs on Windows", () => {
+  // akm.cmd is cmd.exe starting node starting bun. A spawn's own timeout kills only the process it started, so the
+  // hook used to give up on a hung akm and leave everything below cmd.exe running. These start a chain of that shape
+  // (cmd.exe, a bun standing in for akm, a node standing in for akm's launcher, and a bun that just keeps running)
+  // and check that after the hook's timeout none of it is left. Each process notes its pid in a file; every one
+  // also exits by itself after 90 s, so a leak cannot outlive the runner's job.
+  const node = Bun.which("node") ?? process.execPath
+
+  function installHangingAkm(sandbox: Sandbox, hangsWhen: string) {
+    const pids = path.join(sandbox.root, "hung-processes.txt")
+    const sleeper = path.join(sandbox.binDir, "akm-sleeper.mjs")
+    writeFileSync(
+      sleeper,
+      `import { appendFileSync } from "node:fs"
+appendFileSync(${JSON.stringify(pids)}, "bun-sleeper " + process.pid + "\\n")
+setTimeout(() => process.exit(0), 90_000)
+`,
+    )
+    const launcher = path.join(sandbox.binDir, "akm-launcher.mjs")
+    writeFileSync(
+      launcher,
+      `import { spawn } from "node:child_process"
+import { appendFileSync } from "node:fs"
+appendFileSync(${JSON.stringify(pids)}, "node-launcher " + process.pid + "\\n")
+spawn(${JSON.stringify(process.execPath)}, [${JSON.stringify(sleeper)}], { stdio: "ignore" })
+setTimeout(() => process.exit(0), 90_000)
+`,
+    )
+    installScriptedAkm(
+      sandbox.binDir,
+      `import { appendFileSync } from "node:fs"
+import { spawn } from "node:child_process"
+appendFileSync(${JSON.stringify(sandbox.callLog)}, args.join(" ") + "\\n")
+if (args[0] === "--version") {
+  console.log("akm 0.9.20")
+  process.exit(0)
+}
+if (${hangsWhen}) {
+  appendFileSync(${JSON.stringify(pids)}, "bun-akm " + process.pid + "\\n")
+  spawn(${JSON.stringify(node)}, [${JSON.stringify(launcher)}], { stdio: "ignore" })
+  setTimeout(() => process.exit(0), 90_000)
+} else {
+  process.exit(0)
+}
+`,
+    )
+    return pids
+  }
+
+  const recorded = (pids: string) =>
+    (existsSync(pids) ? readLines(pids) : []).map((line) => {
+      const [role, pid] = line.split(" ")
+      return { role, pid: Number(pid) }
+    })
+  const running = (pids: string) =>
+    recorded(pids).filter(({ pid }) => Bun.spawnSync(["tasklist", "/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"]).stdout.toString().includes(`"${pid}"`))
+
+  /** After the hook has given up, the whole chain must have been started and none of it may still be running. */
+  async function expectNothingLeftRunning(pids: string) {
+    expect(recorded(pids).map(({ role }) => role).sort()).toEqual(["bun-akm", "bun-sleeper", "node-launcher"])
+    const deadline = Date.now() + 15_000
+    while (running(pids).length > 0 && Date.now() < deadline) await Bun.sleep(250)
+    expect(running(pids).map(({ role }) => role)).toEqual([])
+  }
+
+  it("curate-prompt: a timed-out akm leaves no process behind", async () => {
+    const sandbox = makeSandbox({ withAkm: false })
+    const pids = installHangingAkm(sandbox, 'args[0] === "curate"')
+
+    const started = Date.now()
+    const result = runHandler(handlerFor("curate-prompt"), sandbox, payloadFor("curate-prompt", sandbox), { AKM_CURATE_TIMEOUT: "3" })
+
+    expect(result.exitCode).toBe(0)
+    // The hook gave up after its 3 s, not after akm's 90.
+    expect(Date.now() - started).toBeLessThan(30_000)
+    expect(readLines(path.join(sandbox.stateDir, "session.log")).some((line) => line.includes("akm_failed"))).toBe(true)
+    await expectNothingLeftRunning(pids)
+  })
+
+  it("session-start: a timed-out akm in its parallel calls leaves no process behind", async () => {
+    const sandbox = makeSandbox({ withAkm: false })
+    const pids = installHangingAkm(sandbox, 'args.includes("hints")')
+
+    const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), { AKM_CURATE_TIMEOUT: "3" })
+
+    expect(result.exitCode).toBe(0)
+    expect(JSON.parse(result.stdout).hookSpecificOutput.hookEventName).toBe("SessionStart")
+    await expectNothingLeftRunning(pids)
+    await settle(sandbox, { index: 1 })
+  })
+
+  it("proposal worker: a timed-out `akm proposal new` leaves no process behind", async () => {
+    const sandbox = makeSandbox({ withAkm: false })
+    const pids = installHangingAkm(sandbox, 'args[0] === "proposal" && args[1] === "new"')
+
+    const result = runHandler(
+      handlerFor("curate-prompt"),
+      sandbox,
+      { ...(payloadFor("curate-prompt", sandbox) as object), prompt: "no, use pnpm not npm for this repository" },
+      { AKM_AUTO_LEARNING: "1", AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_LEARNING_PROPOSAL_TIMEOUT_MS: "3000" },
+    )
+
+    expect(result.exitCode).toBe(0)
+    // The worker is detached: it records the failure once its akm has been given up on.
+    await waitFor(() => (readFileSync(path.join(sandbox.stateDir, "learning-proposals.log"), "utf8").includes("\tfailed\t") ? true : undefined))
+    await expectNothingLeftRunning(pids)
+  })
+})
+
 describe("spawnPlan: how the hook starts akm", () => {
   const shim = "C:\\Users\\Jane Doe\\AppData\\Roaming\\npm\\akm.cmd"
 
