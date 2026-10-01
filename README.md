@@ -72,6 +72,12 @@ The Codex plugin is the same [`claude/`](./claude) directory with a second manif
 
 Codex does not run plugin hooks until you review and trust them: open `/hooks` in the Codex CLI and trust the two AKM hooks. See [claude/README.md](./claude/README.md#codex) for details. On Windows the hooks run through PowerShell with Bun on `PATH` (the manifest's `commandWindows`); [claude/README.md](./claude/README.md#windows) says what that needs and what is tested.
 
+## Updating
+
+- **Claude Code** does not auto-update third-party marketplaces by default. Turn it on in `/plugin` → Marketplaces → `akm-plugins` → Enable auto-update, or add `"autoUpdate": true` beside `source` in the `akm-plugins` entry of `extraKnownMarketplaces` in `settings.json`. The Claude desktop app starts Claude Code with `DISABLE_AUTOUPDATER=1`, which also switches plugin updates off, so desktop users also need `"env": { "FORCE_AUTOUPDATE_PLUGINS": "1" }` in `settings.json`. To update by hand: `claude plugin marketplace update akm-plugins`, then `claude plugin update akm@akm-plugins`.
+- **Codex** updates the plugin by itself every time it starts; `codex plugin marketplace upgrade akm-plugins` does it on demand. A release that changes a hook's command shows that hook as modified in `/hooks`, and it does not run until you trust it again.
+- **OpenCode** installs `akm-opencode` the first time and never checks for a newer version. To update, close OpenCode, delete `~/.cache/opencode/packages/akm-opencode@latest`, and start OpenCode again.
+
 ## Development
 
 To test against a local AKM build: the Claude hook reads
