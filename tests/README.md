@@ -6,7 +6,10 @@
 | --- | --- |
 | `opencode-plugin.test.ts` | Full integration coverage for the OpenCode plugin (`opencode/index.ts`): all tools, lifecycle hooks, proposal queue, improve/propose, env, secret, wiki, workflow, akm CLI resolution |
 | `claude-plugin.test.ts` | Claude Code plugin (`claude/hooks/akm-hook.ts`): hook wiring, command/doc parity assertions |
-| `codex-plugin.test.ts` | Codex plugin (`claude/.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`): manifest and marketplace checks, then the manifest's two hook commands run as Codex runs them — Codex's stdin and stdout shapes, state under `PLUGIN_DATA` rather than `akm-claude`, records labelled `codex` |
+| `codex-plugin.test.ts` | Codex plugin (`claude/.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`): manifest and marketplace checks, then the manifest's two hook commands run as Codex runs them (`commandWindows` on Windows, `command` elsewhere; through every shell Codex may use: `sh -c`, or `pwsh`, `powershell.exe` and `cmd.exe /C` on Windows) — Codex's stdin and stdout shapes, state under `PLUGIN_DATA` rather than `akm-claude`, records labelled `codex`, the Codex wording of the no-bun message |
+| `hook-commands.test.ts` | The Claude plugin's manifest handlers (all exec form) run the way Claude Code runs them, with the repo's fake akm on `PATH`, on every platform: every handler dispatches, session-start / curate-prompt / auto-feedback / session-end / extract-session end to end, prompts with spaces and shell metacharacters, HOME unset, a reindex that outlives the hook; `spawnPlan()` (how akm.cmd is started on Windows); on Windows the PATHEXT order and, when `AKM_REAL_NPM_BIN` is set, the akm-cli npm itself installed |
+| `real-hosts.test.ts` | The real Claude Code and the real Codex, started offline against this checkout's plugin (no login, no model call). Skipped unless `AKM_REAL_CLAUDE_BIN` / `AKM_REAL_CODEX_BIN` name their executables; the Windows CI job installs both from npm |
+| `host-runtime.ts` | Not a test: what each host does to run a hook (Claude's exec form, Codex's per-platform command and shell), a PATH and environment that are right on Windows, and `itPosix` |
 | `ref-extraction.test.ts` | `extractAkmRefs()` pattern matching: all ref shapes, edge cases |
 | `ref-resolver-contract.test.ts` | Ref resolver contract: resolve + feedback integration |
 | `opencode-eval-harness.test.ts` | Eval harness fixtures and score thresholds |
@@ -54,3 +57,9 @@ file presence.
 after `akm_proposal accept`, `akm_proposal reject`, and non-dry-run `akm_improve` so
 the next `getPendingProposalCount()` call re-fetches from the CLI rather than returning
 stale data.
+
+## Windows
+
+`.github/workflows/tests.yml` has a `windows` job (`windows-latest`) that runs the hook-side tests: `claude-plugin`, `codex-plugin`, `hook-commands`, `akm-version-check` and the pure shared-module tests, then `real-hosts`. The OpenCode tests and `fake-akm-contract` (which needs the `opencode/` dependencies and a POSIX shim) stay on Linux.
+
+The fake akm installs an `akm.cmd` beside its extensionless sh script on Windows, as npm does for the real one, and `PATH` there holds only the test's bin directory, Bun's directory and the system directories, so `sh` (Git Bash) is not resolvable. Tests that write their own fake akm as a POSIX `sh` script, check POSIX mode bits or run `akm-hook.sh` are registered with `itPosix` (from `host-runtime.ts`), which skips them on Windows and puts that in the test's name. The Windows-capable tests above cover the same hook modes and akm calls.

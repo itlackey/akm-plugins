@@ -57,7 +57,7 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-Claude receives the five slash commands, an AKM skill, and lifecycle hooks for scoped curation, feedback, and memory capture. See [claude/README.md](./claude/README.md) for details.
+Claude receives the five slash commands, an AKM skill, and lifecycle hooks for scoped curation, feedback, and memory capture. See [claude/README.md](./claude/README.md) for details. The hooks need Claude Code 2.1.139 or newer and Bun on `PATH`; on Windows that means `bun.exe`, and neither Git for Windows nor WSL ([details](./claude/README.md#windows)).
 
 ## Codex
 
@@ -70,7 +70,7 @@ codex plugin add akm@akm-plugins
 
 The Codex plugin is the same [`claude/`](./claude) directory with a second manifest, `.codex-plugin/plugin.json`, listed in [`.agents/plugins/marketplace.json`](./.agents/plugins/marketplace.json). Codex receives the AKM skill, which drives the `akm` CLI directly (there are no slash commands), and two hooks: `SessionStart` injects the AKM primer and checks the CLI version, and `UserPromptSubmit` curates context for each prompt. The Claude plugin's other hooks (feedback, session extraction, tool and subagent observations) are not part of it.
 
-Codex does not run plugin hooks until you review and trust them: open `/hooks` in the Codex CLI and trust the two AKM hooks. See [claude/README.md](./claude/README.md#codex) for details.
+Codex does not run plugin hooks until you review and trust them: open `/hooks` in the Codex CLI and trust the two AKM hooks. See [claude/README.md](./claude/README.md#codex) for details. On Windows the hooks run through PowerShell with Bun on `PATH` (the manifest's `commandWindows`); [claude/README.md](./claude/README.md#windows) says what that needs and what is tested.
 
 ## Development
 

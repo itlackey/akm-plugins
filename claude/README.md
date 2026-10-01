@@ -83,6 +83,36 @@ Codex skips plugin hooks until you review and trust them. Run `/hooks` in the Co
 
 Bun and AKM are required as above. Codex has no equivalent of the `/plugin` configuration dialog, so set the `AKM_*` variables below in the environment Codex starts in. The Codex hooks keep their state in Codex's plugin data directory (`$CODEX_HOME/plugins/data/akm-akm-plugins`, normally under `~/.codex`) and label their records `codex`, so Codex's state stays out of `$XDG_STATE_HOME/akm-claude`. On macOS and Linux the command sets `AKM_PLUGIN_STATE_DIR` and `AKM_PLUGIN_HARNESS=codex` in front of `sh`; on Windows `commandWindows` passes `--harness=codex` and the hook takes the directory from the `PLUGIN_DATA` variable Codex exports to it, since a `NAME=value command` prefix is not PowerShell or cmd.exe syntax. The files listed under Troubleshooting appear in that directory.
 
+## Windows
+
+The hooks run on native Windows for both hosts, with or without Git for Windows. WSL is not needed.
+
+| | Claude Code | Codex |
+| --- | --- | --- |
+| Needs | Claude Code 2.1.139 or newer, and `bun.exe` on `PATH` | A Codex that honours `commandWindows` (it has since May 2026), and `bun.exe` on `PATH` |
+| How a hook starts | Exec form: Claude Code spawns `bun` with `${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts <mode>` as its arguments. No shell is involved, so Git Bash, PowerShell and cmd.exe make no difference, and a shell profile that prints something cannot corrupt the hook's JSON | The manifest's `commandWindows`, which Codex hands to `pwsh` (else `powershell.exe`; `cmd.exe` when it knows no shell): `bun "<plugin root>/hooks/akm-hook.ts" <mode> --harness=codex` |
+| State | `%USERPROFILE%\.local\state\akm-claude` | The plugin data directory Codex exports as `PLUGIN_DATA` |
+
+What differs from macOS and Linux:
+
+- `bun` has to be a real `bun.exe` (the Bun installer, winget or scoop). Claude Code cannot start the `bun.cmd` shim that installing Bun with npm leaves behind, because it spawns the program without a shell.
+- akm may be npm's `akm.cmd` or Bun's `akm.exe`. The hook searches `PATH` for `.com`, `.exe`, `.bat` and `.cmd` in `PATHEXT` order, and never takes the extensionless `akm` shell script npm leaves beside `akm.cmd`. A `.cmd` is run through `cmd.exe`, which re-parses its command line, so `"`, `%`, `&`, `|`, `<`, `>`, `^` and line breaks in what the hook passes akm (the curate query is your prompt) become spaces first.
+- There is no friendly "Bun is not installed" message. `hooks/akm-hook.sh` used to answer once at session start when `bun` was missing; now only Codex's macOS and Linux command goes through it (it names Codex when it answers). Claude Code's hooks are exec form on every platform, so there is no wrapper to degrade through, and without `bun` the host reports a failed hook on each event until Bun is installed (for Codex on Windows, PowerShell's "bun is not recognized").
+- `akm index` and the session-end extraction run in a detached `bun` (`hooks/akm-detached.ts`) that runs akm and waits for it, with the log files as its output. A Windows child that is not detached is killed when the process that started it exits, and a detached `cmd.exe` loses its redirected output; this is the arrangement that keeps both.
+- When an akm call times out the hook stops waiting for it, but only `cmd.exe` is killed: the `node` and `bun` that `akm.cmd` started run on to completion.
+- The state directory's mode is not restricted: Windows has no POSIX modes, and the files inherit the permissions of your profile directory.
+
+### What was tested on Windows
+
+`.github/workflows/tests.yml` runs a `windows` job on `windows-latest` for every push and pull request. It runs:
+
+- the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`, and once against the `akm-cli@0.9.20` npm itself installs;
+- the real Claude Code (2.1.286) and the real Codex (0.159.3), installed from npm and started with no credential. `claude -p` registers the manifest's 23 handlers and runs SessionStart, UserPromptSubmit and SessionEnd through exec form before it stops at "Not logged in". `codex exec` runs the two hooks, with the plugin installed from the checkout and trusted the way `/hooks` does, before its model provider, a dead local port, refuses the request.
+
+Tests that write their fake akm as a POSIX `sh` script, assert POSIX mode bits or run `akm-hook.sh` are skipped there by name (`[skipped on Windows: ...]`): `tests/host-runtime.ts` explains why, and `tests/hook-commands.test.ts` and `tests/codex-plugin.test.ts` run the same hook modes against the Windows-capable fake.
+
+CI runs one Windows image (`windows-latest`, Bun's latest release), `claude -p` rather than Claude Code's interactive or desktop modes, and the runner's own locale and console code page. Windows 10 and Server images, ARM, and other Bun versions are not exercised. That `bun.cmd` cannot be started by Claude Code's exec form is Claude Code's documented behavior (`https://code.claude.com/docs/en/hooks#exec-form-and-shell-form`), not something CI checks.
+
 ## Locking down destructive commands
 
 The plugin does not gate destructive `akm` commands, and no hook inspects a Bash invocation to decide whether to block it. That gate was removed in 0.8.0: tokenized matching produced false positives on commit messages, heredoc bodies, and any other prose containing an `akm <verb>` substring, and deciding which shell calls to allow is the host platform's job, not a plugin's.
