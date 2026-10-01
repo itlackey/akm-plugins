@@ -54,7 +54,7 @@ describe("AKM 0.9 ref-resolver contract", () => {
       "knowledge/release-notes.md",
       "knowledge/projects/akm/deep-dive",
       "memories/rollout-notes",
-      "memories/session-derived",
+      "memories/session-derived.derived",
       "lessons/no-fine-tuning",
       "facts/pricing-tiers",
       "instructions/pr-review",
@@ -70,7 +70,7 @@ describe("AKM 0.9 ref-resolver contract", () => {
       "knowledge/release-notes.md",
       "lessons/no-fine-tuning",
       "memories/rollout-notes",
-      "memories/session-derived",
+      "memories/session-derived.derived",
       "sessions/2026-08-03-retro",
       "skills/rollout",
     ])
@@ -108,6 +108,107 @@ describe("AKM 0.9 ref-resolver contract", () => {
         [bundle],
       ),
     ).toEqual(["knowledge/release-notes.md", "scripts/deploy.sh", "secrets/api-token", "skills/rollout"])
+  })
+
+  test("resolves a task, a YAML workflow and an env file by the ID akm gives them", () => {
+    // Checked against akm-cli 0.9.20: a task is tasks/<id>.yml and its ID drops
+    // the extension; a workflow is <id>.md or <id>.yml, and the .md spelling is
+    // tolerated but the .yml one is not (`show` answers it, `feedback` refuses
+    // it); an env is <name>.env, and `.env` and `default.env` are the default of
+    // their directory, env/default or env/<dir>/default. `.yaml` is no task.
+    // fake-akm-contract.test.ts runs the same refs through the real binary.
+    const bundle = makeBundle()
+    touch(path.join(bundle, "tasks", "nightly.yml"))
+    touch(path.join(bundle, "tasks", "legacy.yaml"))
+    touch(path.join(bundle, "workflows", "ship.yml"))
+    touch(path.join(bundle, "workflows", "release.md"))
+    touch(path.join(bundle, "env", "staging.env"))
+    touch(path.join(bundle, "env", "prod.env.bak"))
+    touch(path.join(bundle, "env", ".env"))
+    touch(path.join(bundle, "env", "team", ".env"))
+
+    expect(
+      validateRefCandidates(
+        [
+          "tasks/nightly",
+          "workflows/ship",
+          "workflows/release",
+          "workflows/release.md",
+          "env/staging",
+          "env/default",
+          "env/team/default",
+          "tasks/nightly.yml",
+          "tasks/legacy",
+          "tasks/legacy.yaml",
+          "workflows/ship.yml",
+          "env/staging.env",
+          "env/prod.env.bak",
+          "env/prod",
+          "env/.env",
+          "env/team/.env",
+        ],
+        [bundle],
+      ),
+    ).toEqual([
+      "env/default",
+      "env/staging",
+      "env/team/default",
+      "tasks/nightly",
+      "workflows/release",
+      "workflows/release.md",
+      "workflows/ship",
+    ])
+  })
+
+  test("resolves a script only when its extension is one akm indexes as a script", () => {
+    // akm indexes scripts/ files with one of 16 extensions (.sh .ts .js .ps1
+    // .cmd .bat .py .rb .go .pl .php .lua .r .swift .kt .kts, any case) and
+    // keeps the extension in the ID. Anything else under scripts/ is no asset:
+    // `show` reads it off disk and answers without a ref, `feedback` refuses it.
+    const bundle = makeBundle()
+    for (const file of ["deploy.sh", "team/run.py", "build.TS", "page.html", "data.json", "notes.txt", "deploy"]) {
+      touch(path.join(bundle, "scripts", file))
+    }
+
+    expect(
+      validateRefCandidates(
+        [
+          "scripts/deploy.sh",
+          "scripts/team/run.py",
+          "scripts/build.TS",
+          "scripts/page.html",
+          "scripts/data.json",
+          "scripts/notes.txt",
+          "scripts/deploy",
+          "scripts/missing.sh",
+        ],
+        [bundle],
+      ),
+    ).toEqual(["scripts/build.TS", "scripts/deploy.sh", "scripts/team/run.py"])
+  })
+
+  test("resolves a secret by its file name, except akm's lock and sensitive-marker files", () => {
+    const bundle = makeBundle()
+    for (const file of ["api-token", "tls.pem", "api-token.lock", "api-token.sensitive"]) {
+      touch(path.join(bundle, "secrets", file))
+    }
+
+    expect(
+      validateRefCandidates(
+        ["secrets/api-token", "secrets/tls.pem", "secrets/api-token.lock", "secrets/api-token.sensitive"],
+        [bundle],
+      ),
+    ).toEqual(["secrets/api-token", "secrets/tls.pem"])
+  })
+
+  test("resolves a derived memory by its own ID, not by its parent's", () => {
+    // `<name>.derived.md` is a memory of its own, memories/<name>.derived. akm
+    // 0.9.20 refuses memories/<name> when only the derived file exists.
+    const bundle = makeBundle()
+
+    expect(validateRefCandidates(["memories/session-derived.derived", "memories/session-derived"], [bundle])).toEqual([
+      "memories/session-derived.derived",
+    ])
   })
 
   test("does not resolve concept roots the 0.9 bundle layout no longer defines", () => {

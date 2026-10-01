@@ -82,14 +82,40 @@ function isFile(file: string): boolean {
   }
 }
 
+// The extensions akm indexes under scripts/ as a script (SCRIPT_EXTENSIONS in
+// core/recognition-util.js, 0.9.20). Any other file there is no asset: `akm show`
+// reads it off disk and answers without a `ref`, and `akm feedback` refuses it.
+const SCRIPT_EXTENSIONS = new Set([
+  ".sh", ".ts", ".js", ".ps1", ".cmd", ".bat", ".py", ".rb", ".go", ".pl", ".php", ".lua", ".r", ".swift", ".kt", ".kts",
+]);
+
+/** `<id>.md`, or the file itself when the ID spells the extension out (akm toggles it). */
+function markdownFile(directPath: string): boolean {
+  return isFile(`${directPath}.md`) || (directPath.endsWith(".md") && isFile(directPath));
+}
+
 /**
  * Resolve a concept ID under any local bundle root without invoking AKM.
  *
- * A concept ID is the asset's path with the type's own extension dropped, and a
- * skill is its directory; only scripts/ and secrets/ IDs keep the file's name,
- * and `.md` is tolerated on the rest. A file that merely exists is therefore
- * not a ref: `akm show` and `akm feedback` reject tasks/x.yml, skills/x/SKILL.md
- * and skills/x/scripts/run.py as not in the index (checked against 0.9.20).
+ * A concept ID is the asset's path with the extension its type owns dropped:
+ * `.md` for most types (tolerated in the ID too), `.yml` for a task, `.md` or
+ * `.yml` for a workflow, `.env` for an env (the default env of a directory is
+ * its `.env` file, ID env/default or env/<dir>/default). A skill is its
+ * directory. Only scripts/ and secrets/ IDs keep the file's name, a script
+ * needs one of akm's script extensions, and a secret is no `.lock` or
+ * `.sensitive` marker. This is akm's placement rule (asset-placement.js, 0.9.20),
+ * checked type by type against the real binary in fake-akm-contract.test.ts. A
+ * file that merely exists is therefore not a ref: `akm show` and `akm feedback`
+ * refuse tasks/x.yml, env/x.env, skills/x/SKILL.md, skills/x/scripts/run.py and
+ * scripts/x.html.
+ *
+ * It is a rule, not a second resolver. The index also leaves out what its walk
+ * skips (git-ignored files, dot-directories, bin/ and node_modules/, a reserved
+ * index.md or log.md) and what it cannot parse (a task or workflow), and it
+ * names a file kept outside its type's directory by its path from the bundle
+ * root (scripts/skills/x/scripts/run.py); none of that is modelled here. A ref
+ * the walk or parser rejects costs one refused probe, since auto-feedback runs
+ * `akm show` before it submits.
  */
 function conceptExistsInAnyBundle(conceptId: string, bundleRoots: readonly string[]): boolean {
   const type = conceptId.split("/", 1)[0];
@@ -101,11 +127,18 @@ function conceptExistsInAnyBundle(conceptId: string, bundleRoots: readonly strin
 
     if (type === "skills") {
       if (isFile(path.join(directPath, "SKILL.md"))) return true;
-    } else if (type === "scripts" || type === "secrets") {
-      if (isFile(directPath)) return true;
+    } else if (type === "scripts") {
+      if (SCRIPT_EXTENSIONS.has(path.extname(directPath).toLowerCase()) && isFile(directPath)) return true;
+    } else if (type === "secrets") {
+      if (!/\.(lock|sensitive)$/.test(directPath) && isFile(directPath)) return true;
+    } else if (type === "tasks") {
+      if (isFile(`${directPath}.yml`)) return true;
+    } else if (type === "env") {
+      if (isFile(`${directPath}.env`)) return true;
+      if (path.basename(directPath) === "default" && isFile(path.join(path.dirname(directPath), ".env"))) return true;
     } else {
-      if (isFile(`${directPath}.md`) || (directPath.endsWith(".md") && isFile(directPath))) return true;
-      if (type === "memories" && isFile(`${directPath}.derived.md`)) return true;
+      if (markdownFile(directPath)) return true;
+      if (type === "workflows" && isFile(`${directPath}.yml`)) return true;
     }
   }
   return false;

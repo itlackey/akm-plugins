@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, type FakeAkmAsset } from "../evals/lib/fake-akm"
+import { validateRefCandidates } from "../claude/shared/ref-extraction"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
 // actually invoke (search, curate, info, workflow list --active, proposal
@@ -95,6 +96,13 @@ function runFake(akmPath: string, args: string[]): unknown {
     throw new Error(`fake akm ${args.join(" ")} exited ${result.exitCode}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`)
   }
   return JSON.parse(result.stdout)
+}
+
+/** The same as spawnSync(), for a test that probes many refs and runs them side by side. */
+async function runAsync(cmd: string, args: string[], env?: Record<string, string | undefined>): Promise<SpawnResult> {
+  const proc = Bun.spawn([cmd, ...args], { env: env ?? process.env, stdout: "pipe", stderr: "pipe" })
+  const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+  return { exitCode, stdout, stderr }
 }
 
 /**
@@ -200,6 +208,120 @@ describe("fake-akm envelope contract", () => {
       cleanup(real)
     }
   })
+
+  // The ref validator (claude/shared/ref-extraction.ts) is a path rule: a concept
+  // ID is the file's path with the extension its type owns dropped. Its source
+  // of truth is akm, so it is pinned here type by type against the real binary:
+  // `show` and `feedback` accept the canonical ref of every asset type, both
+  // refuse the spellings that merely name a file, and the validator says the same
+  // about every one of them (checked against 0.9.20).
+  test.skipIf(!akmAvailable)("show and feedback accept the canonical ref of every asset type, and the validator agrees", async () => {
+    const real = makeRealEnv()
+    try {
+      const bundle = real.AKM_BUNDLE_DIR
+      const write = (file: string, body: string) => {
+        mkdirSync(path.dirname(path.join(bundle, file)), { recursive: true })
+        writeFileSync(path.join(bundle, file), body)
+      }
+      // A new bundle git-ignores env/ and secrets/, and akm indexes what git
+      // lists, so a stash that keeps them (the documented opt-in) un-ignores them.
+      writeFileSync(path.join(bundle, ".gitignore"), "")
+      write("agents/reviewer.md", "---\ndescription: Reviewer\n---\nReview.\n")
+      write("commands/ship.md", "---\ndescription: Ship\n---\nShip it.\n")
+      write("env/staging.env", "STAGING_KEY=1\n")
+      write("env/.env", "DEFAULT_KEY=1\n")
+      write("env/team/.env", "TEAM_KEY=1\n")
+      write("facts/pricing.md", "---\ndescription: Pricing\n---\nTiers.\n")
+      write("instructions/review.md", "---\ndescription: Review\n---\nReview PRs.\n")
+      write("knowledge/guide.md", "# Guide\n")
+      write("knowledge/guide.md.bak", "# Guide\n")
+      write("lessons/rollback.md", "---\ndescription: Rollback\nwhen_to_use: Rolling back\n---\nRoll back.\n")
+      write("memories/notes.md", "---\ndescription: Notes\n---\nNotes.\n")
+      write("memories/solo.derived.md", "---\ndescription: Derived\n---\nDerived.\n")
+      write("scripts/deploy.sh", "echo deploy\n")
+      write("scripts/team/tool.py", "print('tool')\n")
+      write("scripts/page.html", "<html></html>\n")
+      write("scripts/data.json", "{}\n")
+      write("secrets/api-token", "token\n")
+      write("secrets/tls.pem", "pem\n")
+      write("secrets/old.lock", "lock\n")
+      write("sessions/retro.md", "---\ndescription: Retro\n---\nRetro.\n")
+      write("skills/rollout/SKILL.md", "---\nname: rollout\ndescription: Roll out\nwhen_to_use: Rolling out\n---\n# Rollout\n")
+      write("skills/rollout/scripts/run.py", "print('hi')\n")
+      write("tasks/nightly.yml", "version: 4\nname: nightly\nrun: echo hi\n")
+      write("tasks/legacy.yaml", "version: 4\nname: legacy\nrun: echo hi\n")
+      write("workflows/release.md", "---\ntype: workflow\ndescription: Release\nsteps:\n  - id: one\n---\n\n# Release\n\n## one\n\nDo one thing.\n")
+      write("workflows/ship.yml", "name: Ship\non:\n  workflow_dispatch: {}\njobs:\n  main:\n    runs-on: [self-hosted]\n    steps:\n      - id: one\n        run: echo hi\n")
+      runReal(real, ["--format", "json", "-q", "index"])
+
+      // One ref per type, in the spelling akm itself prints (plus `.md` where akm
+      // tolerates it), and a derived memory by its own ID.
+      const canonical = [
+        "agents/reviewer",
+        "commands/ship",
+        "env/default",
+        "env/staging",
+        "env/team/default",
+        "facts/pricing",
+        "instructions/review",
+        "knowledge/guide",
+        "knowledge/guide.md",
+        "lessons/rollback",
+        "memories/notes",
+        "memories/solo.derived",
+        "scripts/deploy.sh",
+        "scripts/team/tool.py",
+        "secrets/api-token",
+        "secrets/tls.pem",
+        "sessions/retro",
+        "skills/rollout",
+        "tasks/nightly",
+        "workflows/release",
+        "workflows/release.md",
+        "workflows/ship",
+      ]
+      // Each of these names a file akm has, and akm refuses it: `show` fails, or
+      // answers without a ref, or `feedback` fails (workflows/ship.yml).
+      const refused = [
+        "env/.env",
+        "env/staging.env",
+        "env/team/.env",
+        "knowledge/guide.md.bak",
+        "knowledge/missing",
+        "memories/solo",
+        "scripts/data.json",
+        "scripts/deploy",
+        "scripts/page.html",
+        "secrets/old.lock",
+        "skills/rollout/SKILL.md",
+        "skills/rollout/scripts/run.py",
+        "tasks/legacy",
+        "tasks/legacy.yaml",
+        "tasks/nightly.yml",
+        "workflows/ship.yml",
+      ]
+
+      const accepts = async (ref: string) => {
+        const show = await runAsync(process.execPath, [REAL_AKM, "--format", "json", "-q", "show", ref], realAkmEnv(real))
+        const named = show.exitCode === 0 && typeof (JSON.parse(show.stdout) as { ref?: unknown }).ref === "string"
+        if (!named) return false
+        return (await runAsync(process.execPath, [REAL_AKM, "feedback", ref, "--positive", "--format", "json", "-q"], realAkmEnv(real))).exitCode === 0
+      }
+      const accepted = new Map<string, boolean>()
+      const queue = [...canonical, ...refused]
+      await Promise.all(
+        Array.from({ length: 6 }, async () => {
+          for (let ref = queue.shift(); ref !== undefined; ref = queue.shift()) accepted.set(ref, await accepts(ref))
+        }),
+      )
+
+      expect(canonical.filter((ref) => !accepted.get(ref))).toEqual([])
+      expect(refused.filter((ref) => accepted.get(ref))).toEqual([])
+      expect(validateRefCandidates([...canonical, ...refused], [bundle])).toEqual([...canonical].sort())
+    } finally {
+      cleanup(real)
+    }
+  }, 60_000)
 
   // The hook's quality probe (refQuality in claude/hooks/akm-hook.ts) treats a
   // show response without `ref` as "not an asset". That rests on this: a file
