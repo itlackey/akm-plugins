@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.20`. The OpenCode and Claude integrations expose exactly five public AKM surfaces:
+Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.21`. The OpenCode and Claude integrations expose exactly five public AKM surfaces:
 
 | Capability | OpenCode tool | Claude slash command |
 | --- | --- | --- |
@@ -96,8 +96,8 @@ OpenCode guard reads the manifest of the dependency it actually imported;
 requesting a newer API against an older exact-pinned dependency returns a
 structured error instead of silently returning exact content.
 
-Release-order gate: publish `akm-cli@0.9.20` first, then update OpenCode's exact
-dependency and lockfile and Claude's compatibility floor to 0.9.20, run the
+Release-order gate: publish `akm-cli@0.9.21` first, then update OpenCode's exact
+dependency and lockfile and Claude's compatibility floor to 0.9.21, run the
 real-package contract suite, and only then publish the plugins. Do not fabricate
 the unpublished registry lock entry on this branch.
 
@@ -105,11 +105,11 @@ the unpublished registry lock entry on this branch.
 
 The plugins keep **MAJOR.MINOR in sync with the AKM CLI line they target, and let PATCH diverge** inside that minor. While AKM is on `0.9.x`, the plugins release `0.9.0`, `0.9.1`, `0.9.2`, … independently of AKM's own patch number.
 
-The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.9.20` means `>=0.9.20 <0.10.0`. OpenCode exact-pins that floor (`akm-cli@0.9.20`) because it imports AKM's in-process `dist/` modules; allowing an untested patch to resolve at user install time would make one plugin release execute different private APIs on different machines.
+The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.9.21` means `>=0.9.21 <0.10.0`. OpenCode exact-pins that floor (`akm-cli@0.9.21`) because it imports AKM's in-process `dist/` modules; allowing an untested patch to resolve at user install time would make one plugin release execute different private APIs on different machines.
 
 Patch divergence is deliberate: a plugin-only fix has to be shippable without waiting for an AKM release, which is impossible if the patch component is spent mirroring AKM's.
 
-Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A four-component string such as `0.9.20.20260929.1` is not semver and npm rejects it on publish. For dated snapshot builds use a prerelease of the *next* patch — `0.9.21-20260929.1`, which sorts above `0.9.20` and below `0.9.21` — rather than a prerelease of the current one, which would sort *below* the version already published. Note that no prerelease satisfies a stable range like `^0.9.20`, so snapshots reach users only through an explicit npm dist-tag.
+Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A four-component string such as `0.9.21.20260929.1` is not semver and npm rejects it on publish. For dated snapshot builds use a prerelease of the *next* patch — `0.9.22-20260929.1`, which sorts above `0.9.21` and below `0.9.22` — rather than a prerelease of the current one, which would sort *below* the version already published. Note that no prerelease satisfies a stable range like `^0.9.21`, so snapshots reach users only through an explicit npm dist-tag.
 
 Both rules are enforced, not conventional:
 
