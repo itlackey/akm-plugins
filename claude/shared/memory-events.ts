@@ -35,7 +35,7 @@ export type AkmMemoryEventType =
 export type AkmMemoryEvent = {
   version: 1
   timestamp: string
-  harness: "claude-code" | "opencode"
+  harness: "claude-code" | "opencode" | "codex"
   event: AkmMemoryEventType
   eventId?: string
   sessionId?: string

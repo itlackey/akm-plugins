@@ -6,6 +6,7 @@
 | --- | --- |
 | `opencode-plugin.test.ts` | Full integration coverage for the OpenCode plugin (`opencode/index.ts`): all tools, lifecycle hooks, proposal queue, improve/propose, env, secret, wiki, workflow, akm CLI resolution |
 | `claude-plugin.test.ts` | Claude Code plugin (`claude/hooks/akm-hook.ts`): hook wiring, command/doc parity assertions |
+| `codex-plugin.test.ts` | Codex plugin (`claude/.codex-plugin/plugin.json`, `.agents/plugins/marketplace.json`): manifest and marketplace checks, then the manifest's two hook commands run as Codex runs them — Codex's stdin and stdout shapes, state under `PLUGIN_DATA` rather than `akm-claude`, records labelled `codex` |
 | `ref-extraction.test.ts` | `extractAkmRefs()` pattern matching: all ref shapes, edge cases |
 | `ref-resolver-contract.test.ts` | Ref resolver contract: resolve + feedback integration |
 | `opencode-eval-harness.test.ts` | Eval harness fixtures and score thresholds |

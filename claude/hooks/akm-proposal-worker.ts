@@ -58,7 +58,7 @@ function emitOutcome(
   appendMemoryEvent(job.eventLog, {
     version: 1,
     timestamp: new Date().toISOString(),
-    harness: "claude-code",
+    harness: job.candidate.harness,
     event: "learning_proposal",
     sessionId: job.candidate.sessionId,
     project: job.candidate.project,

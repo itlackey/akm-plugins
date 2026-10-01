@@ -14,7 +14,7 @@ import path from "node:path"
 import { redactSecrets } from "./redaction"
 import { chmodSafe, rotateIfOversized } from "./state-files"
 
-export type LearningHarness = "claude-code" | "opencode"
+export type LearningHarness = "claude-code" | "opencode" | "codex"
 export type LearningSignalKind =
   | "explicit-memory"
   | "guardrail"

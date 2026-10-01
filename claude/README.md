@@ -68,6 +68,21 @@ The prompt hook uses a conservative local classifier as a fast first pass. Expli
 
 Positive feedback is retained as evidence and continues to drive feedback for recently used assets, but praise by itself does not create a content-free proposal. Separately, short task intents are compared within the project. A similar intent must occur in at least three distinct sessions before the plugin submits a cross-platform `skill` proposal. Exact and near-duplicate submissions are suppressed by the durable ledger under the plugin state directory.
 
+## Codex
+
+The same directory is also a Codex plugin: `.codex-plugin/plugin.json` is its Codex manifest, and the repo's `.agents/plugins/marketplace.json` lists it.
+
+```sh
+codex plugin marketplace add itlackey/akm-plugins
+codex plugin add akm@akm-plugins
+```
+
+Codex gets the AKM skill and two hooks that run the same `hooks/akm-hook.sh` modes as above: `SessionStart` (`session-start`) and `UserPromptSubmit` (`curate-prompt`, including the prompt-signal learning capture). Nothing else in the Lifecycle Hooks table is registered there, and there are no slash commands; the skill uses the `akm` CLI forms. The Codex manifest registers no `PostToolUse` hook, so nothing records which concepts a session used and no automatic or retrospective feedback is submitted.
+
+Codex skips plugin hooks until you review and trust them. Run `/hooks` in the Codex CLI and trust the two AKM hooks; Codex asks again when a plugin update changes a hook.
+
+Bun and AKM are required as above. Codex has no equivalent of the `/plugin` configuration dialog, so set the `AKM_*` variables below in the environment Codex starts in. The Codex hook commands also set `AKM_PLUGIN_STATE_DIR` to Codex's plugin data directory (`$CODEX_HOME/plugins/data/akm-akm-plugins`, normally under `~/.codex`) and `AKM_PLUGIN_HARNESS=codex`, so Codex's state stays out of `$XDG_STATE_HOME/akm-claude` and its records are labelled `codex`. The files listed under Troubleshooting appear in that directory.
+
 ## Locking down destructive commands
 
 The plugin does not gate destructive `akm` commands, and no hook inspects a Bash invocation to decide whether to block it. That gate was removed in 0.8.0: tokenized matching produced false positives on commit messages, heredoc bodies, and any other prose containing an `akm <verb>` substring, and deciding which shell calls to allow is the host platform's job, not a plugin's.
@@ -99,6 +114,7 @@ The most useful settings are also exposed in Claude Code's `/plugin` configurati
 | `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to a locally built AKM CLI entry point. |
 | `AKM_PACKAGE_REF` | `akm-cli@^0.9.20` | Package specification shown when AKM is unavailable. It is never installed automatically. |
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Local plugin state directory. |
+| `AKM_PLUGIN_HARNESS` | `claude-code` | Host the hook labels its records with. The Codex manifest sets it to `codex`; leave it alone otherwise. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. |
 | `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. This does not disable native session extraction; use `AKM_AUTO_MEMORY=0` for that. |

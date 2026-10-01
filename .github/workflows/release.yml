@@ -202,6 +202,7 @@ jobs:
           updateJsonFile('opencode/package.json', (pkg) => ({ ...pkg, version }))
           updateJsonFile('claude/package.json', (pkg) => ({ ...pkg, version }))
           updateJsonFile('claude/.claude-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
+          updateJsonFile('claude/.codex-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
           updateJsonFile('.claude-plugin/marketplace.json', (marketplace) => ({
             ...marketplace,
             plugins: marketplace.plugins.map((plugin, index) => index === 0 ? { ...plugin, version } : plugin),
@@ -213,7 +214,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add claude/package.json opencode/package.json claude/.claude-plugin/plugin.json .claude-plugin/marketplace.json
+          git add claude/package.json opencode/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json .claude-plugin/marketplace.json
 
           if ! git diff --cached --quiet; then
             git commit -m "chore: bump version to ${{ steps.derive.outputs.version }}"

@@ -1,0 +1,71 @@
+{
+  "name": "akm",
+  "version": "0.9.20202609302253",
+  "description": "Search, show, and curate AKM concepts, record feedback, and turn corrections, preferences, memories, and recurring workflows into reviewable AKM proposals.",
+  "author": {
+    "name": "itlackey",
+    "url": "https://github.com/itlackey"
+  },
+  "homepage": "https://github.com/itlackey/akm-plugins#readme",
+  "repository": "https://github.com/itlackey/akm-plugins",
+  "license": "MPL-2.0",
+  "keywords": [
+    "akm",
+    "bundle",
+    "skills",
+    "commands",
+    "agents",
+    "scripts",
+    "registry",
+    "plugin",
+    "compound-engineering",
+    "self-evolving"
+  ],
+  "skills": "./skills/",
+  "hooks": {
+    "hooks": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "AKM_PLUGIN_HARNESS=codex AKM_PLUGIN_STATE_DIR=\"${PLUGIN_DATA}\" sh \"${PLUGIN_ROOT}/hooks/akm-hook.sh\" session-start",
+              "timeout": 120,
+              "statusMessage": "Checking the AKM CLI and loading bundle hints..."
+            }
+          ]
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "AKM_PLUGIN_HARNESS=codex AKM_PLUGIN_STATE_DIR=\"${PLUGIN_DATA}\" sh \"${PLUGIN_ROOT}/hooks/akm-hook.sh\" curate-prompt",
+              "timeout": 15
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "interface": {
+    "displayName": "AKM",
+    "shortDescription": "Search, curate, and learn from your AKM bundles",
+    "longDescription": "Search, show, and curate concepts from your AKM bundles and registries, record whether they helped, and save durable knowledge. Lifecycle hooks add the AKM primer at session start and curated context for each prompt, and turn explicit memories, corrections, and preferences into reviewable AKM proposals.",
+    "developerName": "itlackey",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Search bundles",
+      "Curate context",
+      "Record feedback",
+      "Save memories"
+    ],
+    "websiteURL": "https://github.com/itlackey/akm-plugins",
+    "defaultPrompt": [
+      "Curate AKM concepts for this task",
+      "Search my AKM bundles for a concept",
+      "Remember this decision with AKM"
+    ]
+  }
+}

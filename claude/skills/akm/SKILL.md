@@ -5,7 +5,9 @@ description: Search, show, and curate AKM concepts, record feedback, and remembe
 
 # AKM
 
-AKM `^0.9.20` exposes exactly five public plugin surfaces:
+AKM `^0.9.20` exposes exactly five public plugin surfaces. The `/akm-*` slash
+commands exist only in Claude Code; in any other host, such as Codex, run the
+`akm` CLI forms:
 
 - `/akm-search` or `akm search` searches configured bundles or registries.
 - `/akm-show` or `akm show` retrieves a concept.

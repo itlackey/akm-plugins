@@ -38,6 +38,13 @@ const MODE = process.argv[3] ?? ""
 // is a separate concern: the single package range passed to Bun/npm.
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.20"
 const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
+// Claude Code unless a host says otherwise. The Codex manifest's hook commands
+// (.codex-plugin/plugin.json) run this same hook with AKM_PLUGIN_HARNESS=codex
+// and AKM_PLUGIN_STATE_DIR set to Codex's plugin data directory, so what it
+// records is labelled Codex and never lands in Claude's state. The auto-feedback
+// paths below keep the literal "claude-code": the Codex manifest registers no
+// PostToolUse hook, so nothing records a ref for them to credit there.
+const HARNESS = process.env.AKM_PLUGIN_HARNESS === "codex" ? "codex" : "claude-code"
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
 const FEEDBACK_LOG = path.join(STATE_DIR, "feedback.log")
@@ -53,7 +60,9 @@ const LEARNING_PROPOSAL_LOG = path.join(STATE_DIR, "learning-proposals.log")
 // SessionEnd's `akm index` is detached for the same reason and lands here for
 // the same reason — see runIndexOnSessionEnd().
 const INDEX_LOG = path.join(STATE_DIR, "index.log")
-const EVENT_LOG = getEventLogPath("claude-code")
+// getEventLogPath() is keyed on XDG_STATE_HOME, not AKM_PLUGIN_STATE_DIR, so a
+// Codex run would still write events.jsonl into akm-claude/.
+const EVENT_LOG = HARNESS === "codex" ? path.join(STATE_DIR, "events.jsonl") : getEventLogPath("claude-code")
 const QUALITY_CACHE = path.join(STATE_DIR, "quality-cache.tsv")
 // `?? pluginOption(...)` here and below reads the matching plugin.json
 // userConfig option — see pluginOption() for the resolution order.
@@ -294,7 +303,7 @@ function writeMemoryEvent(event: Omit<import("../shared/memory-events").AkmMemor
   const result = appendMemoryEvent(EVENT_LOG, {
     version: 1,
     timestamp: timestamp(),
-    harness: "claude-code",
+    harness: HARNESS,
     ...event,
   })
   if (!result.ok) appendLog(SESSION_LOG, "event_write_failed", event.event, result.error)
@@ -383,7 +392,7 @@ function capturePromptLearning(rawInput: string, text: string, sid: string): voi
   const project = promptProject(rawInput)
   const signal = captureLearningSignal({
     text,
-    harness: "claude-code",
+    harness: HARNESS,
     project,
     ...(sid ? { sessionId: sid } : {}),
   })
@@ -420,7 +429,7 @@ function capturePromptLearning(rawInput: string, text: string, sid: string): voi
     const workflow = observeRecurringWorkflow({
       stateDir: STATE_DIR,
       text,
-      harness: "claude-code",
+      harness: HARNESS,
       project,
       ...(sid ? { sessionId: sid } : {}),
       ...(signal ? { signal } : {}),

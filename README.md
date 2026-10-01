@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.20`. Both integrations expose exactly five public AKM surfaces:
+Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.20`. The OpenCode and Claude integrations expose exactly five public AKM surfaces:
 
 | Capability | OpenCode tool | Claude slash command |
 | --- | --- | --- |
@@ -59,6 +59,19 @@ claude plugin install akm@akm-plugins
 
 Claude receives the five slash commands, an AKM skill, and lifecycle hooks for scoped curation, feedback, and memory capture. See [claude/README.md](./claude/README.md) for details.
 
+## Codex
+
+Add the marketplace and install the plugin:
+
+```sh
+codex plugin marketplace add itlackey/akm-plugins
+codex plugin add akm@akm-plugins
+```
+
+The Codex plugin is the same [`claude/`](./claude) directory with a second manifest, `.codex-plugin/plugin.json`, listed in [`.agents/plugins/marketplace.json`](./.agents/plugins/marketplace.json). Codex receives the AKM skill, which drives the `akm` CLI directly (there are no slash commands), and two hooks: `SessionStart` injects the AKM primer and checks the CLI version, and `UserPromptSubmit` curates context for each prompt. The Claude plugin's other hooks (feedback, session extraction, tool and subagent observations) are not part of it.
+
+Codex does not run plugin hooks until you review and trust them: open `/hooks` in the Codex CLI and trust the two AKM hooks. See [claude/README.md](./claude/README.md#codex) for details.
+
 ## Development
 
 To test against a local AKM build: the Claude hook reads
@@ -94,7 +107,7 @@ Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A
 
 Both rules are enforced, not conventional:
 
-- [`tests/version-policy.test.ts`](./tests/version-policy.test.ts) pins all four version fields to each other and to the `AKM_VERSION_RANGE` minor line, keeps Claude's install ref equal to that range, and requires OpenCode's dependency and lockfile to equal the range floor exactly.
+- [`tests/version-policy.test.ts`](./tests/version-policy.test.ts) pins all five version fields to each other and to the `AKM_VERSION_RANGE` minor line, keeps Claude's install ref equal to that range, and requires OpenCode's dependency and lockfile to equal the range floor exactly.
 - `.github/workflows/release.yml` validates the requested version *before* it stamps manifests, commits, and pushes a tag — npm would otherwise be the first thing to reject a bad version, long after the tag exists.
 
 ## Links
@@ -102,3 +115,5 @@ Both rules are enforced, not conventional:
 - [AKM CLI](https://github.com/itlackey/akm)
 - [OpenCode plugins](https://opencode.ai/docs/plugins/)
 - [Claude Code plugins](https://code.claude.com/docs/en/plugins)
+- [Codex plugins](https://developers.openai.com/plugins/build/plugins)
+- [Codex hooks](https://learn.chatgpt.com/docs/hooks)

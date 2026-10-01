@@ -4,7 +4,7 @@
 // The sync point is AKM_VERSION_RANGE in claude/shared/akm-version.ts. On a 0.x
 // version a caret range is exactly a minor line (`^0.9.20` == `>=0.9.20 <0.10.0`),
 // so "plugins are 0.9.x while akm is 0.9.x" is already what that constant says.
-// This file makes the invariant enforced rather than conventional: four version
+// This file makes the invariant enforced rather than conventional: five version
 // fields, Claude's install ref, and OpenCode's exact package/lockfile pins all
 // restate the same fact by hand, and nothing previously stopped them drifting.
 //
@@ -41,6 +41,7 @@ const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
   { file: "opencode/package.json", read: () => readJson("opencode/package.json").version },
   { file: "claude/package.json", read: () => readJson("claude/package.json").version },
   { file: "claude/.claude-plugin/plugin.json", read: () => readJson("claude/.claude-plugin/plugin.json").version },
+  { file: "claude/.codex-plugin/plugin.json", read: () => readJson("claude/.codex-plugin/plugin.json").version },
   { file: ".claude-plugin/marketplace.json", read: () => readJson(".claude-plugin/marketplace.json").plugins[0].version },
 ]
 
@@ -65,12 +66,23 @@ describe("version policy", () => {
     }
   })
 
-  test("all four manifests carry the identical version", () => {
-    // release.yml writes one string into all four; they can only diverge
+  test("all five manifests carry the identical version", () => {
+    // release.yml writes one string into all five; they can only diverge
     // through a hand edit, which is exactly when nobody is checking.
     const seen = VERSION_FIELDS.map(({ file, read }) => `${file} -> ${read()}`)
     const versions = new Set(VERSION_FIELDS.map(({ read }) => read()))
     expect(`${[...versions].join(", ")} | ${seen.join(" ; ")}`).toBe(`${VERSION_FIELDS[0].read()} | ${seen.join(" ; ")}`)
+  })
+
+  test("the release workflow stamps and stages every manifest listed here", () => {
+    // The test above only proves the files agree today. A manifest the bump step
+    // never rewrites agrees until the first release and drifts at it.
+    const workflow = readText(".github/workflows/release.yml")
+    const staged = (workflow.split("\n").find((line) => line.trim().startsWith("git add ")) ?? "").split(/\s+/)
+    for (const { file } of VERSION_FIELDS) {
+      expect(`${file} stamped: ${workflow.includes(`updateJsonFile('${file}'`)}`).toBe(`${file} stamped: true`)
+      expect(`${file} staged: ${staged.includes(file)}`).toBe(`${file} staged: true`)
+    }
   })
 
   test("the plugin minor line matches the akm line the plugins target", () => {
