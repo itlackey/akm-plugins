@@ -275,6 +275,10 @@ describe("fake-akm envelope contract", () => {
       write("sessions/retro.md", "---\ndescription: Retro\n---\nRetro.\n")
       write("skills/rollout/SKILL.md", "---\nname: rollout\ndescription: Roll out\nwhen_to_use: Rolling out\n---\n# Rollout\n")
       write("skills/rollout/scripts/run.py", "print('hi')\n")
+      write("skills/rollout/references/notes.md", "# Notes\n")
+      write("wikis/page.md", "# Page\n")
+      write("top.md", "# Top\n")
+      write("topscript.sh", "echo top\n")
       write("tasks/nightly.yml", "version: 4\nname: nightly\nrun: echo hi\n")
       write("tasks/legacy.yaml", "version: 4\nname: legacy\nrun: echo hi\n")
       write("workflows/release.md", "---\ntype: workflow\ndescription: Release\nsteps:\n  - id: one\n---\n\n# Release\n\n## one\n\nDo one thing.\n")
@@ -282,7 +286,9 @@ describe("fake-akm envelope contract", () => {
       runReal(real, ["--format", "json", "-q", "index"])
 
       // One ref per type, in the spelling akm itself prints (plus `.md` where akm
-      // tolerates it), and a derived memory by its own ID.
+      // tolerates it), a derived memory by its own ID, and the refs of files kept
+      // outside their type's directory (a skill's script and reference page, a
+      // page under wikis/), which akm names by their path from the bundle root.
       const canonical = [
         "agents/reviewer",
         "commands/ship",
@@ -293,10 +299,13 @@ describe("fake-akm envelope contract", () => {
         "instructions/review",
         "knowledge/guide",
         "knowledge/guide.md",
+        "knowledge/skills/rollout/references/notes",
+        "knowledge/wikis/page",
         "lessons/rollback",
         "memories/notes",
         "memories/solo.derived",
         "scripts/deploy.sh",
+        "scripts/skills/rollout/scripts/run.py",
         "scripts/team/tool.py",
         "secrets/api-token",
         "secrets/tls.pem",
@@ -308,17 +317,22 @@ describe("fake-akm envelope contract", () => {
         "workflows/ship",
       ]
       // Each of these names a file akm has, and akm refuses it: `show` fails, or
-      // answers without a ref, or `feedback` fails (workflows/ship.yml).
+      // answers without a ref, or `feedback` fails (workflows/ship.yml). Files at
+      // the bundle root are not indexed, and an ID may not repeat its type.
       const refused = [
         "env/.env",
         "env/staging.env",
         "env/team/.env",
         "knowledge/guide.md.bak",
+        "knowledge/knowledge/guide",
         "knowledge/missing",
+        "knowledge/top",
         "memories/solo",
         "scripts/data.json",
         "scripts/deploy",
         "scripts/page.html",
+        "scripts/scripts/deploy.sh",
+        "scripts/topscript.sh",
         "secrets/old.lock",
         "skills/rollout/SKILL.md",
         "skills/rollout/scripts/run.py",

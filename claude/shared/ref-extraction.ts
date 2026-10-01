@@ -94,6 +94,24 @@ function markdownFile(directPath: string): boolean {
   return isFile(`${directPath}.md`) || (directPath.endsWith(".md") && isFile(directPath));
 }
 
+/** Is there an asset of `type` at `directPath`, the path its concept ID names under some root? */
+function isAsset(type: string, directPath: string): boolean {
+  if (type === "skills") return isFile(path.join(directPath, "SKILL.md"));
+  if (type === "scripts") return SCRIPT_EXTENSIONS.has(path.extname(directPath).toLowerCase()) && isFile(directPath);
+  if (type === "secrets") return !/\.(lock|sensitive)$/.test(directPath) && isFile(directPath);
+  if (type === "tasks") return isFile(`${directPath}.yml`);
+  if (type === "env") {
+    return isFile(`${directPath}.env`) || (path.basename(directPath) === "default" && isFile(path.join(path.dirname(directPath), ".env")));
+  }
+  return markdownFile(directPath) || (type === "workflows" && isFile(`${directPath}.yml`));
+}
+
+// The types akm also resolves for a file kept outside the type's directory, by
+// its path from the bundle root: scripts (typed by extension) and the markdown
+// types (typed by content). A task, env, secret, workflow or skill needs a
+// directory of its type among the file's ancestors.
+const OUTSIDE_THEIR_DIRECTORY = new Set(["scripts", "agents", "commands", "facts", "instructions", "knowledge", "lessons", "memories", "sessions"]);
+
 /**
  * Resolve a concept ID under any local bundle root without invoking AKM.
  *
@@ -109,36 +127,32 @@ function markdownFile(directPath: string): boolean {
  * refuse tasks/x.yml, env/x.env, skills/x/SKILL.md, skills/x/scripts/run.py and
  * scripts/x.html.
  *
+ * A script or markdown file kept outside its type's directory is named by its
+ * path from the bundle root, as akm names it: a skill's script is
+ * scripts/skills/x/scripts/run.py, a page under wikis/ is knowledge/wikis/page.
+ * akm does not index a file at the bundle root, and an ID that repeats its type
+ * (knowledge/knowledge/x) names nothing. For markdown akm picks the type from
+ * the file's content, which a path rule cannot see, so the file existing is the
+ * whole check there; the other types are matched in their own directory only.
+ *
  * It is a rule, not a second resolver. The index also leaves out what its walk
  * skips (git-ignored files, dot-directories, bin/ and node_modules/, a reserved
- * index.md or log.md) and what it cannot parse (a task or workflow), and it
- * names a file kept outside its type's directory by its path from the bundle
- * root (scripts/skills/x/scripts/run.py); none of that is modelled here. A ref
- * the walk or parser rejects costs one refused probe, since auto-feedback runs
- * `akm show` before it submits.
+ * index.md or log.md) and what it cannot parse (a task or workflow); none of that
+ * is modelled here. A ref the walk or parser rejects costs one refused probe,
+ * since auto-feedback runs `akm show` before it submits.
  */
 function conceptExistsInAnyBundle(conceptId: string, bundleRoots: readonly string[]): boolean {
   const type = conceptId.split("/", 1)[0];
+  const rest = conceptId.slice(type.length + 1);
   for (const root of bundleRoots) {
     if (!root) continue;
     const resolvedRoot = path.resolve(root);
     const directPath = path.resolve(resolvedRoot, conceptId);
     if (directPath !== resolvedRoot && !directPath.startsWith(`${resolvedRoot}${path.sep}`)) continue;
+    if (isAsset(type, directPath)) return true;
 
-    if (type === "skills") {
-      if (isFile(path.join(directPath, "SKILL.md"))) return true;
-    } else if (type === "scripts") {
-      if (SCRIPT_EXTENSIONS.has(path.extname(directPath).toLowerCase()) && isFile(directPath)) return true;
-    } else if (type === "secrets") {
-      if (!/\.(lock|sensitive)$/.test(directPath) && isFile(directPath)) return true;
-    } else if (type === "tasks") {
-      if (isFile(`${directPath}.yml`)) return true;
-    } else if (type === "env") {
-      if (isFile(`${directPath}.env`)) return true;
-      if (path.basename(directPath) === "default" && isFile(path.join(path.dirname(directPath), ".env"))) return true;
-    } else {
-      if (markdownFile(directPath)) return true;
-      if (type === "workflows" && isFile(`${directPath}.yml`)) return true;
+    if (OUTSIDE_THEIR_DIRECTORY.has(type) && rest.includes("/") && !rest.startsWith(`${type}/`)) {
+      if (isAsset(type, path.resolve(resolvedRoot, rest))) return true;
     }
   }
   return false;

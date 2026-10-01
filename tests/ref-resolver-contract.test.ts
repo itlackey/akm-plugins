@@ -160,6 +160,45 @@ describe("AKM 0.9 ref-resolver contract", () => {
     ])
   })
 
+  test("resolves a script or markdown file kept outside its type's directory by its path from the bundle root", () => {
+    // akm resolves a concept ID against its type's directory and, for a file
+    // kept elsewhere in the bundle, against the bundle root: a skill's script is
+    // scripts/skills/x/scripts/run.py and its reference page knowledge/skills/x/
+    // references/notes, a page under wikis/ is knowledge/wikis/page (checked
+    // against 0.9.20, where fake-akm-contract.test.ts runs the same refs through
+    // the real binary). Not a file at the bundle root, which akm does not index,
+    // and not an ID that repeats its type's directory.
+    const bundle = makeBundle()
+    for (const file of ["skills/rollout/scripts/run.py", "skills/rollout/references/notes.md", "wikis/page.md", "eval/check.ts", "top.md", "topscript.sh"]) {
+      touch(path.join(bundle, file))
+    }
+    touch(path.join(bundle, "scripts", "deploy.sh"))
+
+    expect(
+      validateRefCandidates(
+        [
+          "scripts/skills/rollout/scripts/run.py",
+          "knowledge/skills/rollout/references/notes",
+          "knowledge/wikis/page",
+          "knowledge/wikis/page.md",
+          "scripts/eval/check.ts",
+          "scripts/skills/rollout/references/notes.md",
+          "knowledge/top",
+          "scripts/topscript.sh",
+          "scripts/scripts/deploy.sh",
+          "knowledge/knowledge/release-notes",
+        ],
+        [bundle],
+      ),
+    ).toEqual([
+      "knowledge/skills/rollout/references/notes",
+      "knowledge/wikis/page",
+      "knowledge/wikis/page.md",
+      "scripts/eval/check.ts",
+      "scripts/skills/rollout/scripts/run.py",
+    ])
+  })
+
   test("resolves a script only when its extension is one akm indexes as a script", () => {
     // akm indexes scripts/ files with one of 16 extensions (.sh .ts .js .ps1
     // .cmd .bat .py .rb .go .pl .php .lua .r .swift .kt .kts, any case) and
