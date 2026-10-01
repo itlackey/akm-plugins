@@ -29,7 +29,7 @@ import {
 import { isNonTaskPrompt, shouldRecall } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
 import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
-import { spawnPlan } from "../shared/spawn-plan"
+import { RUN_TIMED_OUT, runPlan } from "../shared/spawn-plan"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
 // `<command> [mode]`, plus one optional flag: `--harness=codex`, which a host
@@ -518,21 +518,12 @@ type AkmCommandSpec = {
 // associations for the shell, not programs.
 const WINDOWS_PROGRAM_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"])
 
-// The fire-and-forget akm children (index, extract) outlive the hook. On POSIX
-// that is a detached spawn of akm itself. On Windows it cannot be: libuv, which
-// is what Bun spawns with, puts every child that is not detached in a job that is
-// killed when this process exits, and the hook exits right after starting them;
-// and a detached cmd.exe (what akm.cmd needs, see spawnPlan) has no console, so
-// the programs it starts lose the redirect to the log file. A detached bun runs
-// akm-detached.ts instead, which runs akm and waits for it with the log as its own
-// stdout and stderr.
-const DETACHED_LAUNCHER = path.join(path.dirname(fileURLToPath(import.meta.url)), "akm-detached.ts")
-
+// The fire-and-forget akm children (index, extract) outlive the hook, so they are
+// detached. On Windows runPlan() puts a detached bun (hooks/akm-run.ts) in front
+// of akm: see spawn-plan.ts for why akm.cmd cannot be detached directly.
 function spawnDetachedAkm(command: string, args: string[], stdio: "ignore" | ["ignore", number | "ignore", number | "ignore"]) {
-  if (process.platform === "win32") {
-    return spawn(process.execPath, [DETACHED_LAUNCHER, command, ...args], { detached: true, stdio, windowsHide: true })
-  }
-  return spawn(command, args, { detached: true, stdio })
+  const plan = runPlan(command, args, 0)
+  return spawn(plan.command, plan.args, { detached: true, stdio, windowsHide: true })
 }
 
 function findCommandOnPath(command: string): string | undefined {
@@ -618,19 +609,22 @@ function akmVersionSatisfies(commandSpec: AkmCommandSpec): { ok: boolean; versio
 // already wants — a timed-out akm has produced no usable result.
 function runCommand(command: string, args: string[], options?: { input?: string; suppressStderr?: boolean; timeoutMs?: number }): { ok: boolean; stdout: string; stderr: string } {
   try {
-    const plan = spawnPlan(command, args)
+    const timeoutMs = options?.timeoutMs ?? CURATE_TIMEOUT * 1000
+    const plan = runPlan(command, args, timeoutMs)
     const result = spawnSync(plan.command, plan.args, {
       encoding: "utf8",
       input: options?.input,
-      timeout: options?.timeoutMs ?? CURATE_TIMEOUT * 1000,
+      timeout: plan.timeoutMs,
       stdio: ["pipe", "pipe", options?.suppressStderr === false ? "pipe" : "ignore"],
       windowsHide: true,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
     })
     return {
       ok: result.status === 0 && !result.error,
       stdout: typeof result.stdout === "string" ? result.stdout : "",
-      stderr: typeof result.stderr === "string" ? result.stderr : result.error?.message ?? "",
+      // On Windows the runner owns the timeout (see runPlan) and says so with a status.
+      stderr: plan.supervised && result.status === RUN_TIMED_OUT
+        ? `akm timed out after ${timeoutMs}ms`
+        : typeof result.stderr === "string" ? result.stderr : result.error?.message ?? "",
     }
   } catch (error: unknown) {
     return {
@@ -680,14 +674,13 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
   if (!akm) return ""
   const fullArgs = [...akm.argsPrefix, ...args]
   try {
-    const plan = spawnPlan(akm.command, fullArgs)
+    const plan = runPlan(akm.command, fullArgs, CURATE_TIMEOUT * 1000)
     const proc = Bun.spawn([plan.command, ...plan.args], {
       stdin: input !== undefined ? new TextEncoder().encode(input) : "ignore",
       stdout: "pipe",
       stderr: "pipe",
-      timeout: CURATE_TIMEOUT * 1000,
+      timeout: plan.timeoutMs,
       windowsHide: true,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
     })
     const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
     const exitCode = await proc.exited
@@ -695,7 +688,7 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
       logSubprocessFailure("akm_failed", {
         command: akm.command,
         args: fullArgs.join(" "),
-        error: `akm invocation failed (exit ${exitCode})`,
+        error: plan.supervised && exitCode === RUN_TIMED_OUT ? `akm timed out after ${CURATE_TIMEOUT * 1000}ms` : `akm invocation failed (exit ${exitCode})`,
         stderr: sanitize(stderr),
       })
     }

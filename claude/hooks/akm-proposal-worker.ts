@@ -9,7 +9,7 @@ import {
   removeLearningProposalJob,
 } from "../shared/learning-signals"
 import { redactSecrets } from "../shared/redaction"
-import { spawnPlan } from "../shared/spawn-plan"
+import { RUN_TIMED_OUT, runPlan } from "../shared/spawn-plan"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
 const OUTPUT_LIMIT = 8_000
@@ -89,7 +89,7 @@ function run(): void {
     if (job.version !== 1 || !job.command || !job.taskFile) return
     const timeoutRaw = Number(process.env.AKM_LEARNING_PROPOSAL_TIMEOUT_MS)
     const timeout = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : DEFAULT_TIMEOUT_MS
-    const plan = spawnPlan(job.command, [
+    const plan = runPlan(job.command, [
       ...job.argsPrefix,
       "proposal",
       "new",
@@ -102,14 +102,13 @@ function run(): void {
       "-q",
       "--timeout-ms",
       String(timeout),
-    ])
+    ], timeout)
     const child = spawnSync(plan.command, plan.args, {
       encoding: "utf8",
-      timeout,
+      timeout: plan.timeoutMs,
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 1024 * 1024,
       windowsHide: true,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
     })
     const stdout = typeof child.stdout === "string" ? child.stdout.trim() : ""
     const stderr = typeof child.stderr === "string" ? child.stderr.trim() : ""
@@ -129,6 +128,7 @@ function run(): void {
     } else {
       const error = parsed.error
         ?? ((child.error instanceof Error ? child.error.message : "")
+          || (plan.supervised && child.status === RUN_TIMED_OUT ? `akm proposal new timed out after ${timeout}ms` : "")
           || stderr
           || `akm proposal new exited with status ${child.status}`)
       recordLearningProposalStatus({

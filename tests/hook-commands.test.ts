@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
-import { spawnPlan } from "../claude/shared/spawn-plan"
+import { runPlan, spawnPlan } from "../claude/shared/spawn-plan"
 import { IS_WINDOWS, hostEnv, installScriptedAkm, makeBinDir, runClaudeHandler, sandboxPath, whichOn, type ClaudeHandler } from "./host-runtime"
 
 // The Claude Code hooks, run the way Claude Code runs them: every handler in
@@ -485,6 +485,43 @@ describe("spawnPlan: how the hook starts akm", () => {
     expect(line).toBe(`""${shim}" "a  b    c   d   e   f   g 100 " "line1  line2" "C:\\dir\\\\""`)
     // Every argument sits between quotes, and none of those characters is left inside them.
     for (const token of line.slice(1, -1).match(/"[^"]*"/g) ?? []) expect(token.slice(1, -1)).not.toMatch(/["%&|<>^\r\n]/)
+  })
+})
+
+describe("runPlan: how the hook runs akm and gives up on it", () => {
+  it("is the command itself and the spawn's own timeout outside Windows, as it always was", () => {
+    for (const platform of ["linux", "darwin"]) {
+      expect(runPlan("/usr/local/bin/akm", ["curate", "a b"], 8000, platform)).toEqual({
+        command: "/usr/local/bin/akm",
+        args: ["curate", "a b"],
+        timeoutMs: 8000,
+        supervised: false,
+      })
+    }
+  })
+
+  it("puts akm-run.ts between the hook and akm on Windows, which owns the timeout and the process tree", () => {
+    const shim = "C:\\Users\\Jane Doe\\AppData\\Roaming\\npm\\akm.cmd"
+    const plan = runPlan(shim, ["curate", 'a "b" & c'], 8000, "win32")
+
+    expect(plan.supervised).toBe(true)
+    expect(plan.command).toBe(process.execPath)
+    // The runner is handed the timeout, the real akm and its untouched arguments (it applies spawnPlan itself).
+    const [runner, ...rest] = plan.args
+    expect(rest).toEqual(["8000", shim, "curate", 'a "b" & c'])
+    expect(path.basename(runner)).toBe("akm-run.ts")
+    expect(path.basename(path.dirname(runner))).toBe("hooks")
+    expect(existsSync(runner)).toBe(true)
+    // The spawn's own timeout only backstops a runner that hangs: later than the runner's own.
+    expect(plan.timeoutMs).toBeGreaterThan(8000)
+    expect(plan.timeoutMs).toBeLessThanOrEqual(8000 + 10_000)
+  })
+
+  it("passes a detached akm (no timeout) through the runner with no limit of its own", () => {
+    const plan = runPlan("C:\\bun\\akm.exe", ["index"], 0, "win32")
+
+    expect(plan.args.slice(1)).toEqual(["0", "C:\\bun\\akm.exe", "index"])
+    expect(plan.timeoutMs).toBe(0)
   })
 })
 
