@@ -179,7 +179,7 @@ const INDEX_ON_SESSION_END = flagSetting("AKM_INDEX_ON_SESSION_END", "INDEX_ON_S
 const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM bundle - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM bundle - assets relevant to this session"
-const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content, and record `akm feedback <ref> --positive|--negative` once you know whether the asset helped."
+const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content. If an asset is wrong, stale or incomplete, run `akm feedback <ref> --negative --reason \"<what is wrong and what should change>\"`: that queues it for review and a fix. Use `--positive` when it helped."
 
 /**
  * 07 hardening: provenance banner prepended to recalled/curated bundle content
@@ -213,7 +213,7 @@ const SESSION_START_HEADER = [
   '- **`akm search "<known name>"`** — exact lookup when you already know a concept exists.',
   '- **`akm show <ref>`** — inspect a `[bundle//]conceptId[#fragment]` before relying on it.',
   "",
-  'Record `akm feedback <ref> --positive|--negative` whenever an asset\'s content materially helps, or proves wrong, stale or unhelpful (a failed akm command is not feedback on the asset), and use `akm remember` to persist durable learnings so future sessions inherit them.',
+  'When an asset\'s content is wrong, stale or incomplete, record `akm feedback <ref> --negative --reason "<what is wrong and what should change>"`: negative feedback is what triggers a review and fix of the asset, so make the reason specific. Record `--positive` when an asset materially helped (it only improves ranking). A failed akm command is not feedback on the asset. Use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
 // There is deliberately no local ref regex in this file. Every ref observed by
 // a hook goes through ../shared/ref-extraction, whose concept-root allowlist

@@ -2006,12 +2006,12 @@ const AKM_HINTS_PREFIX = [
   "- **`akm_search` (known name)** — use ONLY when you already know an asset exists (e.g. after `akm_show` returned \"not found\") and need to locate its exact ref. Do not use as a discovery tool.",
   "- **`akm_show <bundle>//meta`** — when working in or with an unfamiliar bundle, read its optional `.meta/` orientation (purpose, key assets, conventions, maintainer) before diving in. `akm_show meta` reads your working bundle's `.meta/index.md`; `akm_show meta:<name>` reads other `.meta/` docs (e.g. `meta:about`). These docs are direct-read and never appear in `akm_search`.",
   "",
-  "Record `akm_feedback <ref> positive|negative` whenever an asset's content materially helps, or proves wrong, stale or unhelpful (a failed akm call is not feedback on the asset), and use `akm_remember` to persist durable learnings so future sessions inherit them.",
+  "When an asset's content is wrong, stale or incomplete, call `akm_feedback <ref> negative` with a note saying <what is wrong and what should change>: negative feedback is what triggers a review and fix of the asset, so make the note specific. Call it with `positive` when an asset materially helped (it only improves ranking). A failed akm call is not feedback on the asset. Use `akm_remember` to persist durable learnings so future sessions inherit them.",
   "",
   AKM_WORKFLOW_INSTRUCTION,
 ].join("\n")
 
-const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content, and record `akm_feedback <ref> positive|negative` once you know whether the asset helped."
+const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content. If an asset is wrong, stale or incomplete, call `akm_feedback <ref> negative` with a note saying <what is wrong and what should change>: that queues it for review and a fix. Use `positive` when it helped."
 const AKM_CONTEXT_TRUNCATED_MARKER = "\n\n[truncated for context]"
 
 function getContextBudgetChars(): number {
@@ -3487,11 +3487,11 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         },
       }),
       akm_feedback: tool({
-        description: "Record positive or negative feedback for a bundle asset so AKM can improve future ranking. Call it after akm_show whenever the asset's content materially helped, or proved wrong, stale or unhelpful. A failed akm call is not feedback on the asset.",
+        description: "Record feedback for a bundle asset. Negative feedback with a note queues the asset for review: the next improve run proposes a fix based on the note, so say what is wrong and what should change. Positive feedback raises the asset's ranking and never triggers a rewrite. Call it after akm_show when the asset's content materially helped, or proved wrong, stale or incomplete. A failed akm call is not feedback on the asset.",
         args: {
           ref: tool.schema.string().describe("Asset ref to record feedback for."),
           sentiment: tool.schema.enum(["positive", "negative"]).describe("Whether the feedback is positive or negative."),
-          note: tool.schema.string().optional().describe("Optional note to attach to the feedback."),
+          note: tool.schema.string().optional().describe("What is wrong and what should change. Required for negative feedback; it guides the fix."),
         },
         async execute({ ref, sentiment, note }, context) {
           const args = ["feedback", ref, sentiment === "positive" ? "--positive" : "--negative"]

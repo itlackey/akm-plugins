@@ -11,4 +11,4 @@ The 0.9.14 `--pack` response already contains the selected local assets' full pa
 - when it fits this task
 - how it should be applied
 
-After using an asset, record `akm feedback <ref> --positive` (or `--negative --reason "<note>"` when its content was wrong, stale or unhelpful) so the bundle learns from this outcome. A failed akm command is not feedback on the asset.
+After using an asset, record `akm feedback <ref> --positive` if it helped. If its content was wrong, stale or incomplete, record `akm feedback <ref> --negative --reason "<what is wrong and what should change>"`: negative feedback queues the asset for review and a fix, so be specific. A failed akm command is not feedback on the asset.

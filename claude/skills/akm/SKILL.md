@@ -12,7 +12,7 @@ commands exist only in Claude Code; in any other host, such as Codex, run the
 - `/akm-search` or `akm search` searches configured bundles or registries.
 - `/akm-show` or `akm show` retrieves a concept.
 - `/akm-curate` or `akm curate` ranks concepts for a task.
-- `/akm-feedback` or `akm feedback` records whether a concept helped.
+- `/akm-feedback` or `akm feedback` records whether a concept helped; negative feedback with a reason queues it for review and a fix.
 - `/akm-remember` or `akm remember` stores durable knowledge.
 
 Claude can also dispatch a configured AKM agent through the existing Bash tool.
@@ -123,11 +123,11 @@ Preserve relevant structured fields such as `prompt`, `template`, `run`, `origin
 
 ## Feedback
 
-After the outcome is known, record whether the concept's content materially helped, or proved wrong, stale or unhelpful:
+After the outcome is known, record whether the concept's content materially helped, or proved wrong, stale or incomplete. Negative feedback is what gets a concept reviewed and fixed: the next improve run proposes a change based on your reason, so say what is wrong and what should change. Positive feedback only improves ranking:
 
 ```sh
 akm feedback "<ref>" --positive --format json -q
-akm feedback "<ref>" --negative --reason "<what was wrong>" --format json -q
+akm feedback "<ref>" --negative --reason "<what is wrong and what should change>" --format json -q
 ```
 
 Negative feedback requires a reason. A failed akm command (for example `akm show` erroring) is not feedback on the asset — do not record it. Do not submit feedback for a reference AKM reports as ineligible.
