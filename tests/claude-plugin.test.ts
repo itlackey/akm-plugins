@@ -1166,7 +1166,7 @@ exit 0
       expect(existsSync(submitPrompt(`${reminder} ${task}`).observations)).toBe(true)
     })
 
-    it("curates what the user typed behind a leading block, not the block", () => {
+    itPosix("curates what the user typed behind a leading block, not the block", () => {
       const tempDir = makeTempDir()
       const binDir = path.join(tempDir, "bin")
       const callLog = path.join(tempDir, "akm-calls.log")
@@ -1762,7 +1762,7 @@ exit 0
     expect(readFileSync(callLog, "utf8")).toContain("feedback workflows/fresh --positive")
   })
 
-  it("auto-feedback treats a show response without a ref as unresolved, and does not cache it", () => {
+  itPosix("auto-feedback treats a show response without a ref as unresolved, and does not cache it", () => {
     // `akm show scripts/x.html` reads a file that is no asset off disk and exits
     // 0, printing a response with no `ref` (an asset's carries one, see
     // fake-akm-contract.test.ts); `akm feedback` rejects the same ref. The
@@ -2860,7 +2860,7 @@ exit 0
       expect(calls.split("--positive").length - 1).toBe(1)
     })
 
-    it("does not credit a ref that only a failed command named", () => {
+    itPosix("does not credit a ref that only a failed command named", () => {
       // PostToolUseFailure runs `post-tool failure`, and the row it wrote for a
       // ref was replayed by the next "thanks, that worked" like any other. A
       // command that failed names its ref only because the agent asked for it,
