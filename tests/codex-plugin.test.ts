@@ -353,6 +353,53 @@ describe("Codex hook runtime", () => {
     expect(existsSync(path.join(sandbox.dataDir, "memory.log"))).toBe(false)
   })
 
+  it("does not take a prompt a subagent received for the user's own words", () => {
+    // Codex stamps `agent_id` (and `agent_type`) on the input of a hook that
+    // fires inside a subagent; both are optional properties of its
+    // user-prompt-submit.command.input schema (0.147.0). The prompt such an event
+    // carries is the main agent's task for the subagent, not something the user
+    // typed, so it is no memory intent, no learning signal and no praise for the
+    // concepts the session touched.
+    const prompt = "remember that the memory cleanup worked with minimal changes"
+    const submit = (extra: Record<string, unknown>) => {
+      const sandbox = makeSandbox()
+      // The row a PostToolUse hook would leave for a concept the session used,
+      // which a retrospective "that worked" would credit.
+      mkdirSync(sandbox.dataDir, { recursive: true })
+      writeFileSync(
+        path.join(sandbox.dataDir, "memory.log"),
+        `2026-01-01T00:00:00Z\tsystem\tBash\tskills/code-review\takm show skills/code-review\t${SESSION_ID}\n`,
+      )
+      runCodexHook(
+        "UserPromptSubmit",
+        sandbox,
+        { prompt, ...extra },
+        // Capture the signal, but never spawn a detached proposal worker.
+        { AKM_AUTO_LEARNING: "1", AKM_AUTO_CURATE: "0", AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1" },
+      )
+      return {
+        memoryLog: readFileSync(path.join(sandbox.dataDir, "memory.log"), "utf8"),
+        feedbackLog: existsSync(path.join(sandbox.dataDir, "feedback.log")) ? readFileSync(path.join(sandbox.dataDir, "feedback.log"), "utf8") : "",
+        buffer: path.join(sandbox.dataDir, "sessions", `${SESSION_ID}.md`),
+        signals: path.join(sandbox.dataDir, "learning-signals.jsonl"),
+        feedbackCalls: readCallLog(sandbox.callLog).filter((call) => call.argv[0] === "feedback"),
+      }
+    }
+
+    const typed = submit({})
+    expect(typed.memoryLog).toContain(`\tuser\tintent\t${prompt}`)
+    expect(readFileSync(typed.buffer, "utf8")).toContain("user memory intent")
+    expect(readFileSync(typed.signals, "utf8")).toContain('"kind":"explicit-memory"')
+    expect(typed.feedbackCalls.map((call) => call.argv[1])).toEqual(["skills/code-review"])
+    expect(typed.feedbackLog).toContain(`user\tprompt\t${prompt}`)
+
+    const subagent = submit({ agent_id: "019c3f2e-7b00-7c11-8d3a-5e6f4a1b2c3d", agent_type: "worker" })
+    expect(subagent.memoryLog).not.toContain("\tuser\tintent\t")
+    expect(existsSync(subagent.buffer)).toBe(false)
+    expect(existsSync(subagent.signals)).toBe(false)
+    expect(subagent.feedbackCalls).toEqual([])
+  })
+
   it("SessionStart prints the primer for Codex's stdin and keeps its state in PLUGIN_DATA", () => {
     const sandbox = makeSandbox()
     writeFileSync(path.join(sandbox.project, "package.json"), JSON.stringify({ name: "release-tooling", description: "Release tooling" }))

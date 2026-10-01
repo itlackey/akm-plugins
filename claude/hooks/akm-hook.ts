@@ -1614,8 +1614,12 @@ function curatePrompt(): string {
   // cross-session messages, task notifications, the post-compaction
   // continuation. Those are not the user's words, so they are never recorded as
   // user intent or memory intent, never learned from, and never read as praise
-  // for the assets the session touched.
-  const typed = !isNonTaskPrompt(text)
+  // for the assets the session touched. A prompt fired inside a subagent carries
+  // `agent_id`, which both Codex and Claude Code stamp on it, and it is the main
+  // agent's task for the subagent. Claude Code leaves `agent_id` off the main
+  // thread even in --agent sessions, which `agent_type` does not.
+  const agentId = safeJsonParse<{ agent_id?: unknown }>(rawInput)?.agent_id
+  const typed = !isNonTaskPrompt(text) && !(typeof agentId === "string" && agentId !== "")
   if (text) {
     appendLog(FEEDBACK_LOG, "user", "prompt", text)
     if (typed && /\b(remember|memory|memories)\b/i.test(text)) {
