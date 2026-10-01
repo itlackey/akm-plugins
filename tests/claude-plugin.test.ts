@@ -147,10 +147,9 @@ function runShellShim(args: string[], options?: { input?: string; env?: Record<s
   })
 }
 
-afterEach(async () => {
+afterEach(() => {
   // A detached child may still hold a file for a moment, and Windows will not
-  // delete an open one; a leftover temp directory is not a test failure.
-  if (IS_WINDOWS) await Bun.sleep(300)
+  // delete an open one: retry, and a leftover temp directory is not a test failure.
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()
     if (!dir) continue

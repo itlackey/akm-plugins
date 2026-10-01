@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
 import { spawnPlan } from "../claude/shared/spawn-plan"
-import { IS_WINDOWS, hostEnv, makeBinDir, runClaudeHandler, sandboxPath, whichOn, type ClaudeHandler } from "./host-runtime"
+import { IS_WINDOWS, hostEnv, installScriptedAkm, makeBinDir, runClaudeHandler, sandboxPath, whichOn, type ClaudeHandler } from "./host-runtime"
 
 // The Claude Code hooks, run the way Claude Code runs them: every handler in
 // .claude-plugin/plugin.json is exec form, so there is no shell between the host and
@@ -31,10 +31,9 @@ function makeTempDir() {
   return dir
 }
 
-afterEach(async () => {
+afterEach(() => {
   // A detached akm child may still hold a file for a moment; Windows will not
-  // delete an open file, and a leftover temp directory is not a test failure.
-  if (IS_WINDOWS) await Bun.sleep(300)
+  // delete an open file: retry, and a leftover temp directory is not a test failure.
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()
     if (!dir) continue
@@ -278,6 +277,29 @@ describe("Claude hooks through the manifest commands", () => {
     expect(readCallLog(sandbox.callLog).some((call) => call.argv.join(" ") === `proposal extract --type claude --session-id ${SESSION_ID}`)).toBe(true)
     // akm wrote that to its stderr, which the hook pointed at the log file.
     expect(extract).toContain("proposal_extract\t" + SESSION_ID)
+  })
+
+  it("session-end's akm index is still running when the hook has gone, and finishes", async () => {
+    // The hook exits as soon as it has started the reindex. On Windows a child that is not detached is killed
+    // with the process that started it, so a reindex that outlasts the hook (every real one does) needs more
+    // than the instant fake: this one takes a couple of seconds.
+    const sandbox = makeSandbox({ withAkm: false })
+    const finished = path.join(sandbox.root, "index-finished.txt")
+    installScriptedAkm(
+      sandbox.binDir,
+      `import { appendFileSync } from "node:fs"
+if (args[0] === "index") {
+  await Bun.sleep(2500)
+  appendFileSync(${JSON.stringify(finished)}, "finished\\n")
+}
+`,
+    )
+
+    const result = runHandler(handlerFor("session-end"), sandbox, payloadFor("session-end", sandbox))
+
+    expect(result.exitCode).toBe(0)
+    expect(existsSync(finished)).toBe(false)
+    await waitFor(() => (existsSync(finished) ? true : undefined))
   })
 
   it("keeps its state under the home directory, never the project, when no state directory is configured", () => {

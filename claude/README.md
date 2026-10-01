@@ -21,7 +21,7 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.20` (judged on `major.minor.patch`, so a prerelease of a newer 0.9.x build such as `0.9.21-alpha.3` passes); the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically.
+The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.20` (judged on `major.minor.patch`, so a prerelease of a newer 0.9.x build such as `0.9.21-alpha.3` passes); the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically. Claude Code must be 2.1.139 or newer, the first release that can start a hook without a shell (see [Windows](#windows) for why that matters). On Windows, neither Git for Windows nor WSL is needed.
 
 ## Slash Commands
 
@@ -77,11 +77,11 @@ codex plugin marketplace add itlackey/akm-plugins
 codex plugin add akm@akm-plugins
 ```
 
-Codex gets the AKM skill and two hooks that run the same `hooks/akm-hook.sh` modes as above: `SessionStart` (`session-start`) and `UserPromptSubmit` (`curate-prompt`, including the prompt-signal learning capture). Nothing else in the Lifecycle Hooks table is registered there, and there are no slash commands; the skill uses the `akm` CLI forms. The Codex manifest registers no `PostToolUse` hook, so nothing records which concepts a session used and no automatic or retrospective feedback is submitted.
+Codex gets the AKM skill and two hooks that run the same hook modes as above: `SessionStart` (`session-start`) and `UserPromptSubmit` (`curate-prompt`, including the prompt-signal learning capture). On macOS and Linux they go through `hooks/akm-hook.sh`; on Windows each hook's `commandWindows` runs `hooks/akm-hook.ts` directly (see [Windows](#windows)). Nothing else in the Lifecycle Hooks table is registered there, and there are no slash commands; the skill uses the `akm` CLI forms. The Codex manifest registers no `PostToolUse` hook, so nothing records which concepts a session used and no automatic or retrospective feedback is submitted.
 
 Codex skips plugin hooks until you review and trust them. Run `/hooks` in the Codex CLI and trust the two AKM hooks; Codex asks again when a plugin update changes a hook.
 
-Bun and AKM are required as above. Codex has no equivalent of the `/plugin` configuration dialog, so set the `AKM_*` variables below in the environment Codex starts in. The Codex hook commands also set `AKM_PLUGIN_STATE_DIR` to Codex's plugin data directory (`$CODEX_HOME/plugins/data/akm-akm-plugins`, normally under `~/.codex`) and `AKM_PLUGIN_HARNESS=codex`, so Codex's state stays out of `$XDG_STATE_HOME/akm-claude` and its records are labelled `codex`. The files listed under Troubleshooting appear in that directory.
+Bun and AKM are required as above. Codex has no equivalent of the `/plugin` configuration dialog, so set the `AKM_*` variables below in the environment Codex starts in. The Codex hooks keep their state in Codex's plugin data directory (`$CODEX_HOME/plugins/data/akm-akm-plugins`, normally under `~/.codex`) and label their records `codex`, so Codex's state stays out of `$XDG_STATE_HOME/akm-claude`. On macOS and Linux the command sets `AKM_PLUGIN_STATE_DIR` and `AKM_PLUGIN_HARNESS=codex` in front of `sh`; on Windows `commandWindows` passes `--harness=codex` and the hook takes the directory from the `PLUGIN_DATA` variable Codex exports to it, since a `NAME=value command` prefix is not PowerShell or cmd.exe syntax. The files listed under Troubleshooting appear in that directory.
 
 ## Locking down destructive commands
 
@@ -113,8 +113,8 @@ The most useful settings are also exposed in Claude Code's `/plugin` configurati
 | `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. Set this. When it is unset the hooks discover the bundle by spawning `akm info`, which adds a subprocess to every file-tool hook that sees a concept-like token; setting it removes that spawn entirely. The session-start hook tells you to set it when no bundle is configured. |
 | `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to a locally built AKM CLI entry point. |
 | `AKM_PACKAGE_REF` | `akm-cli@^0.9.20` | Package specification shown when AKM is unavailable. It is never installed automatically. |
-| `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` | Local plugin state directory. |
-| `AKM_PLUGIN_HARNESS` | `claude-code` | Host the hook labels its records with. The Codex manifest sets it to `codex`; leave it alone otherwise. |
+| `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` (`~/.local/state/akm-claude`; under Codex, its plugin data directory) | Local plugin state directory. The home directory is `os.homedir()`, so on Windows it is `%USERPROFILE%\.local\state\akm-claude`. |
+| `AKM_PLUGIN_HARNESS` | `claude-code` | Host the hook labels its records with. The Codex manifest sets it to `codex` on macOS and Linux (on Windows it passes `--harness=codex` instead); leave it alone otherwise. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. |
 | `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. This does not disable native session extraction; use `AKM_AUTO_MEMORY=0` for that. |

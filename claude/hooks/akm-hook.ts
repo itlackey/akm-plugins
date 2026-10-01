@@ -518,13 +518,22 @@ type AkmCommandSpec = {
 // associations for the shell, not programs.
 const WINDOWS_PROGRAM_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"])
 
-// The fire-and-forget akm children (index, extract) outlive the hook by leaving
-// its process group on POSIX. On Windows `detached` means DETACHED_PROCESS, no
-// console at all, and akm.cmd run that way (through cmd.exe, see spawnPlan) loses
-// its redirected output: the console programs it starts get a console of their
-// own instead of the log file. A hidden console (windowsHide) keeps the
-// redirect, and a Windows child outlives its parent without being detached.
-const DETACH_CHILDREN = process.platform !== "win32"
+// The fire-and-forget akm children (index, extract) outlive the hook. On POSIX
+// that is a detached spawn of akm itself. On Windows it cannot be: libuv, which
+// is what Bun spawns with, puts every child that is not detached in a job that is
+// killed when this process exits, and the hook exits right after starting them;
+// and a detached cmd.exe (what akm.cmd needs, see spawnPlan) has no console, so
+// the programs it starts lose the redirect to the log file. A detached bun runs
+// akm-detached.ts instead, which runs akm and waits for it with the log as its own
+// stdout and stderr.
+const DETACHED_LAUNCHER = path.join(path.dirname(fileURLToPath(import.meta.url)), "akm-detached.ts")
+
+function spawnDetachedAkm(command: string, args: string[], stdio: "ignore" | ["ignore", number | "ignore", number | "ignore"]) {
+  if (process.platform === "win32") {
+    return spawn(process.execPath, [DETACHED_LAUNCHER, command, ...args], { detached: true, stdio, windowsHide: true })
+  }
+  return spawn(command, args, { detached: true, stdio })
+}
 
 function findCommandOnPath(command: string): string | undefined {
   const isWindows = process.platform === "win32"
@@ -1161,13 +1170,7 @@ function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   }
 
   try {
-    const plan = spawnPlan(akm.command, [...akm.argsPrefix, "index"])
-    const child = spawn(plan.command, plan.args, {
-      detached: DETACH_CHILDREN,
-      stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
-      windowsHide: true,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    })
+    const child = spawnDetachedAkm(akm.command, [...akm.argsPrefix, "index"], ["ignore", logFd ?? "ignore", logFd ?? "ignore"])
     child.unref()
     appendLog(SESSION_LOG, "index_spawned", reason, sid, ref, logFd === undefined ? "unlogged" : INDEX_LOG)
   } catch (error: unknown) {
@@ -1748,13 +1751,7 @@ async function sessionStart(): Promise<string> {
   const akm = resolveAkmCommandSpec()
   if (akm) {
     try {
-      const plan = spawnPlan(akm.command, [...akm.argsPrefix, "index"])
-      const child = spawn(plan.command, plan.args, {
-        detached: DETACH_CHILDREN,
-        stdio: "ignore",
-        windowsHide: true,
-        windowsVerbatimArguments: plan.windowsVerbatimArguments,
-      })
+      const child = spawnDetachedAkm(akm.command, [...akm.argsPrefix, "index"], "ignore")
       child.unref()
     } catch {
       // best-effort only
@@ -1942,13 +1939,11 @@ function extractSession(): string {
   // lastExtractFailureWarning() — which is why that message must name the real
   // warning (#107) rather than guess a cause.
   try {
-    const plan = spawnPlan(akm.command, [...akm.argsPrefix, "proposal", "extract", "--type", "claude", "--session-id", sid])
-    const child = spawn(plan.command, plan.args, {
-      detached: DETACH_CHILDREN,
-      stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
-      windowsHide: true,
-      windowsVerbatimArguments: plan.windowsVerbatimArguments,
-    })
+    const child = spawnDetachedAkm(
+      akm.command,
+      [...akm.argsPrefix, "proposal", "extract", "--type", "claude", "--session-id", sid],
+      ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
+    )
     child.unref()
     appendLog(SESSION_LOG, "extract_spawned", sid, logFd === undefined ? "unlogged" : EXTRACT_LOG)
   } catch (error: unknown) {
