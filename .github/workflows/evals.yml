@@ -3,7 +3,8 @@ name: Evals
 on:
   pull_request:
   push:
-    branches: [main]
+    # A branch only gets a run without a pull request if it is named here.
+    branches: [main, "ci/windows-*"]
   workflow_dispatch:
     inputs:
       tier:

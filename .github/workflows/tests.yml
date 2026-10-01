@@ -3,7 +3,8 @@ name: Tests
 on:
   pull_request:
   push:
-    branches: [main]
+    # A branch only gets a run without a pull request if it is named here.
+    branches: [main, "ci/windows-*"]
 
 jobs:
   test:
@@ -31,3 +32,28 @@ jobs:
 
       - name: Run unit tests
         run: bun test tests/
+
+  # The hooks also run on Windows (see claude/README.md, "Windows"). This job runs the
+  # hook-side tests there: the manifests' own commands, executed the way each host
+  # executes them (Claude Code spawns `bun` with no shell; Codex hands the Windows
+  # command to PowerShell or cmd.exe), against a fake akm that is akm.cmd. Tests that
+  # need a POSIX sh fake are skipped by name; see tests/host-runtime.ts. The OpenCode
+  # plugin and the real-akm contract test are not hook tests and stay on Linux.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      # npm's own shims for akm (akm.cmd beside an extensionless sh script), so the
+      # hook is also run against the real thing rather than only against the fake.
+      - name: Install akm-cli with npm
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:RUNNER_TEMP "akm-npm"
+          npm install akm-cli@0.9.20 --prefix $prefix --omit=optional --ignore-scripts --no-audit --no-fund
+          "AKM_REAL_NPM_BIN=$(Join-Path $prefix 'node_modules/.bin')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Run hook tests
+        run: bun test --timeout 60000 tests/claude-plugin.test.ts tests/codex-plugin.test.ts tests/hook-commands.test.ts tests/akm-version-check.test.ts tests/ref-extraction.test.ts tests/ref-resolver-contract.test.ts tests/learning-signals.test.ts tests/recall-policy.test.ts tests/redaction.test.ts tests/vendor-semver.test.ts tests/version-policy.test.ts

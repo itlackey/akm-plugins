@@ -1,0 +1,5 @@
+# Every text file is checked out with LF, whatever core.autocrlf says. The hooks and
+# manifests are read byte for byte: akm-hook.sh fails under sh with a CR on each line
+# (a Windows clone with autocrlf=true), and tests/codex-plugin.test.ts compares the
+# manifests to JSON.stringify output.
+* text=auto eol=lf
