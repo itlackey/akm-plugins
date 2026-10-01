@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
 import path from "node:path"
 import { redactObject } from "./redaction"
 // Memory events log session activity (refs touched, outcomes, scope). Even
@@ -66,7 +67,7 @@ export type AkmMemoryEvent = {
 }
 
 export function getHarnessStateDir(harness: "claude-code" | "opencode"): string {
-  const root = process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state")
+  const root = process.env.XDG_STATE_HOME ?? path.join(homedir(), ".local", "state")
   return path.join(root, harness === "claude-code" ? "akm-claude" : "akm-opencode")
 }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
@@ -28,23 +29,38 @@ import {
 import { isNonTaskPrompt, shouldRecall } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
 import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
+import { spawnPlan } from "../shared/spawn-plan"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
-const COMMAND = process.argv[2] ?? ""
-const MODE = process.argv[3] ?? ""
+// `<command> [mode]`, plus one optional flag: `--harness=codex`, which a host
+// puts in its hook command instead of setting AKM_PLUGIN_HARNESS (see HARNESS).
+// Flags are skipped when picking the positional arguments, so it may sit anywhere.
+const POSITIONAL = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
+const COMMAND = POSITIONAL[0] ?? ""
+const MODE = POSITIONAL[1] ?? ""
+const HARNESS_ARG = process.argv.find((arg) => arg.startsWith("--harness="))?.slice("--harness=".length)
 
 // AKM_REQUIRED_RANGE is the single shared version contract imported from
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
 // is a separate concern: the single package range passed to Bun/npm.
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.20"
-const STATE_DIR = process.env.AKM_PLUGIN_STATE_DIR ?? path.join(process.env.XDG_STATE_HOME ?? path.join(process.env.HOME ?? ".", ".local", "state"), "akm-claude")
 // Claude Code unless a host says otherwise. The Codex manifest's hook commands
-// (.codex-plugin/plugin.json) run this same hook with AKM_PLUGIN_HARNESS=codex
-// and AKM_PLUGIN_STATE_DIR set to Codex's plugin data directory, so what it
-// records is labelled Codex and never lands in Claude's state. The auto-feedback
-// paths below keep the literal "claude-code": the Codex manifest registers no
-// PostToolUse hook, so nothing records a ref for them to credit there.
-const HARNESS = process.env.AKM_PLUGIN_HARNESS === "codex" ? "codex" : "claude-code"
+// (.codex-plugin/plugin.json) run this same hook as Codex: on POSIX with
+// AKM_PLUGIN_HARNESS=codex and AKM_PLUGIN_STATE_DIR set in front of the command,
+// on Windows with `--harness=codex`. Codex runs a Windows hook through
+// PowerShell (or cmd.exe), where a `NAME=value command` prefix is not syntax at
+// all. Either way a Codex run keeps its state in PLUGIN_DATA, the plugin data
+// directory Codex exports to its hooks, so what it records is labelled Codex and
+// never lands in Claude's state. The auto-feedback paths below keep the literal
+// "claude-code": the Codex manifest registers no PostToolUse hook, so nothing
+// records a ref for them to credit there.
+const HARNESS = (HARNESS_ARG ?? process.env.AKM_PLUGIN_HARNESS) === "codex" ? "codex" : "claude-code"
+const CODEX_DATA_DIR = HARNESS === "codex" ? process.env.PLUGIN_DATA?.trim() : undefined
+// os.homedir() rather than $HOME: Windows sets no HOME (USERPROFILE instead), and
+// falling back to "." would put the state directory in the project's cwd.
+const STATE_DIR =
+  process.env.AKM_PLUGIN_STATE_DIR ??
+  (CODEX_DATA_DIR || path.join(process.env.XDG_STATE_HOME ?? path.join(homedir(), ".local", "state"), "akm-claude"))
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
 const FEEDBACK_LOG = path.join(STATE_DIR, "feedback.log")
@@ -91,8 +107,10 @@ const CURATE_TYPE = (process.env.AKM_CURATE_TYPE ?? pluginOption("CURATE_TYPE") 
 // `akm --version` is a local print with no stash, embedding or LLM work behind
 // it, and it is the FIRST thing SessionStart runs. It gets its own much tighter
 // cap so a wedged binary cannot spend the whole CURATE_TIMEOUT budget before a
-// single useful call has been issued.
-const VERSION_TIMEOUT_MS = 3000
+// single useful call has been issued. On Windows akm is akm.cmd, which is cmd.exe
+// starting node starting bun: the first call after boot took 2.9 s on a CI runner
+// (0.4 s after that), too close to 3 s to tell a cold start from a wedged binary.
+const VERSION_TIMEOUT_MS = process.platform === "win32" ? 10_000 : 3000
 const CONTEXT_BUDGET_CHARS = Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000
 /**
  * Every AKM kill switch is opt-OUT and reads the same way: only the literal
@@ -362,6 +380,7 @@ function submitLearningProposal(candidate: ProposalCandidate): void {
     const child = spawn(process.execPath, [workerPath, jobFile], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
     })
     child.unref()
     appendLog(
@@ -495,22 +514,31 @@ type AkmCommandSpec = {
   displayPath: string
 }
 
+// The PATHEXT extensions CreateProcess can start. The rest (.JS, .VBS, ...) are
+// associations for the shell, not programs.
+const WINDOWS_PROGRAM_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"])
+
+// The fire-and-forget akm children (index, extract) outlive the hook by leaving
+// its process group on POSIX. On Windows `detached` means DETACHED_PROCESS, no
+// console at all, and akm.cmd run that way (through cmd.exe, see spawnPlan) loses
+// its redirected output: the console programs it starts get a console of their
+// own instead of the log file. A hidden console (windowsHide) keeps the
+// redirect, and a Windows child outlives its parent without being detached.
+const DETACH_CHILDREN = process.platform !== "win32"
+
 function findCommandOnPath(command: string): string | undefined {
   const isWindows = process.platform === "win32"
   const searchPath = process.env.PATH ?? ""
   const separator = isWindows ? ";" : ":"
-  // On Windows PATHEXT controls which extensions are tried; default to the
-  // documented stock set. We try the bare name first (some installers drop
-  // a side-by-side `akm` shim) and then each extension in turn. On POSIX
-  // we only try the bare name with an executable-bit check.
+  // On Windows PATHEXT controls which extensions are tried, in its order, and the
+  // bare name is never one of them: npm drops an extensionless `akm` sh script
+  // beside `akm.cmd`, and that script is not a program there. On POSIX we only
+  // try the bare name with an executable-bit check.
   const extensions = isWindows
-    ? [
-        "",
-        ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-          .split(";")
-          .map((entry) => entry.trim())
-          .filter(Boolean),
-      ]
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+        .split(";")
+        .map((entry) => entry.trim())
+        .filter((entry) => WINDOWS_PROGRAM_EXTENSIONS.has(entry.toLowerCase()))
     : [""]
   for (const entry of searchPath.split(separator)) {
     if (!entry) continue
@@ -581,11 +609,14 @@ function akmVersionSatisfies(commandSpec: AkmCommandSpec): { ok: boolean; versio
 // already wants — a timed-out akm has produced no usable result.
 function runCommand(command: string, args: string[], options?: { input?: string; suppressStderr?: boolean; timeoutMs?: number }): { ok: boolean; stdout: string; stderr: string } {
   try {
-    const result = spawnSync(command, args, {
+    const plan = spawnPlan(command, args)
+    const result = spawnSync(plan.command, plan.args, {
       encoding: "utf8",
       input: options?.input,
       timeout: options?.timeoutMs ?? CURATE_TIMEOUT * 1000,
       stdio: ["pipe", "pipe", options?.suppressStderr === false ? "pipe" : "ignore"],
+      windowsHide: true,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
     })
     return {
       ok: result.status === 0 && !result.error,
@@ -640,11 +671,14 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
   if (!akm) return ""
   const fullArgs = [...akm.argsPrefix, ...args]
   try {
-    const proc = Bun.spawn([akm.command, ...fullArgs], {
+    const plan = spawnPlan(akm.command, fullArgs)
+    const proc = Bun.spawn([plan.command, ...plan.args], {
       stdin: input !== undefined ? new TextEncoder().encode(input) : "ignore",
       stdout: "pipe",
       stderr: "pipe",
       timeout: CURATE_TIMEOUT * 1000,
+      windowsHide: true,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
     })
     const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
     const exitCode = await proc.exited
@@ -1127,9 +1161,12 @@ function runIndexOnSessionEnd(reason: string, sid: string, ref: string) {
   }
 
   try {
-    const child = spawn(akm.command, [...akm.argsPrefix, "index"], {
-      detached: true,
+    const plan = spawnPlan(akm.command, [...akm.argsPrefix, "index"])
+    const child = spawn(plan.command, plan.args, {
+      detached: DETACH_CHILDREN,
       stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
+      windowsHide: true,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
     })
     child.unref()
     appendLog(SESSION_LOG, "index_spawned", reason, sid, ref, logFd === undefined ? "unlogged" : INDEX_LOG)
@@ -1711,7 +1748,13 @@ async function sessionStart(): Promise<string> {
   const akm = resolveAkmCommandSpec()
   if (akm) {
     try {
-      const child = spawn(akm.command, [...akm.argsPrefix, "index"], { detached: true, stdio: "ignore" })
+      const plan = spawnPlan(akm.command, [...akm.argsPrefix, "index"])
+      const child = spawn(plan.command, plan.args, {
+        detached: DETACH_CHILDREN,
+        stdio: "ignore",
+        windowsHide: true,
+        windowsVerbatimArguments: plan.windowsVerbatimArguments,
+      })
       child.unref()
     } catch {
       // best-effort only
@@ -1899,14 +1942,13 @@ function extractSession(): string {
   // lastExtractFailureWarning() — which is why that message must name the real
   // warning (#107) rather than guess a cause.
   try {
-    const child = spawn(
-      akm.command,
-      [...akm.argsPrefix, "proposal", "extract", "--type", "claude", "--session-id", sid],
-      {
-        detached: true,
-        stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
-      },
-    )
+    const plan = spawnPlan(akm.command, [...akm.argsPrefix, "proposal", "extract", "--type", "claude", "--session-id", sid])
+    const child = spawn(plan.command, plan.args, {
+      detached: DETACH_CHILDREN,
+      stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
+      windowsHide: true,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
+    })
     child.unref()
     appendLog(SESSION_LOG, "extract_spawned", sid, logFd === undefined ? "unlogged" : EXTRACT_LOG)
   } catch (error: unknown) {

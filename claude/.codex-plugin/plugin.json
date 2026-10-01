@@ -30,6 +30,7 @@
             {
               "type": "command",
               "command": "AKM_PLUGIN_HARNESS=codex AKM_PLUGIN_STATE_DIR=\"${PLUGIN_DATA}\" sh \"${PLUGIN_ROOT}/hooks/akm-hook.sh\" session-start",
+              "commandWindows": "bun \"${PLUGIN_ROOT}/hooks/akm-hook.ts\" session-start --harness=codex",
               "timeout": 120,
               "statusMessage": "Checking the AKM CLI and loading bundle hints..."
             }
@@ -42,6 +43,7 @@
             {
               "type": "command",
               "command": "AKM_PLUGIN_HARNESS=codex AKM_PLUGIN_STATE_DIR=\"${PLUGIN_DATA}\" sh \"${PLUGIN_ROOT}/hooks/akm-hook.sh\" curate-prompt",
+              "commandWindows": "bun \"${PLUGIN_ROOT}/hooks/akm-hook.ts\" curate-prompt --harness=codex",
               "timeout": 15
             }
           ]

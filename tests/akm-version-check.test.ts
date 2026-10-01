@@ -8,6 +8,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { satisfiesAkmVersionRange, AKM_VERSION_RANGE } from "../claude/shared/akm-version"
+import { IS_WINDOWS, hostEnv, itPosix } from "./host-runtime"
 
 const repoRoot = path.resolve(import.meta.dir, "..")
 const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.ts")
@@ -20,10 +21,16 @@ function makeTempDir() {
   return dir
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // A detached child may still hold a file for a moment, and Windows will not
+  // delete an open one; a leftover temp directory is not a test failure.
+  if (IS_WINDOWS) await Bun.sleep(300)
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()
-    if (dir) rmSync(dir, { recursive: true, force: true })
+    if (!dir) continue
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    } catch {}
   }
 })
 
@@ -97,10 +104,9 @@ exit 0
     ...opts.env,
   }
 
-  const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("AKM_")))
   const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
     cwd: repoRoot,
-    env: { ...baseEnv, ...env },
+    env: hostEnv(env, (key) => key.startsWith("AKM_")),
     stdio: ["ignore", "pipe", "pipe"],
   })
 
@@ -163,7 +169,7 @@ describe("AKM_VERSION_RANGE contract", () => {
 // and the one on which checkAkmVersion() runs. The former `ensure-akm` /
 // `check-akm` entry points existed only for these tests.
 describe("checkAkmVersion", () => {
-  it("returns ok, logs readiness, and stays silent on stderr for a compatible CLI", () => {
+  itPosix("returns ok, logs readiness, and stays silent on stderr for a compatible CLI", () => {
     const result = runHookSandboxed(["session-start"], { akmVersion: "0.9.20" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
@@ -172,7 +178,7 @@ describe("checkAkmVersion", () => {
     expect(result.installLog).toBe("")
   })
 
-  it("accepts 0.9.x at or above the floor, prerelease included", () => {
+  itPosix("accepts 0.9.x at or above the floor, prerelease included", () => {
     for (const version of ["0.9.20", "0.9.21", "0.9.21-alpha.3"]) {
       const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
@@ -186,7 +192,7 @@ describe("checkAkmVersion", () => {
     }
   })
 
-  it("rejects every tested build outside the range", () => {
+  itPosix("rejects every tested build outside the range", () => {
     for (const version of ["0.8.3", "0.9.0", "0.9.7", "0.9.8", "0.9.9", "0.9.18", "0.9.19", "0.9.19-rc.1", "0.10.0-beta.1"]) {
       const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
@@ -225,7 +231,7 @@ describe("checkAkmVersion", () => {
     expect(result.installLog).toBe("")
   })
 
-  it("logs an incompatible CLI without writing to stderr", () => {
+  itPosix("logs an incompatible CLI without writing to stderr", () => {
     const result = runHookSandboxed(["session-start"], { akmVersion: "0.9.19" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
@@ -256,7 +262,7 @@ describe("checkAkmVersion", () => {
     expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.9.20")
   })
 
-  it("session-start ships the header and footer on a healthy CLI with a completely quiet stash", () => {
+  itPosix("session-start ships the header and footer on a healthy CLI with a completely quiet stash", () => {
     // The most common profile there is: akm installed and in range, bundle
     // present, but nothing curated, no hints and no pending proposals. This
     // test used to assert only that stdout did NOT contain "AKM is NOT
@@ -280,7 +286,7 @@ describe("checkAkmVersion", () => {
     expect(context).not.toContain("AKM is NOT available")
   })
 
-  it("session-start reports a missing bundle through context and the state log, not stderr", () => {
+  itPosix("session-start reports a missing bundle through context and the state log, not stderr", () => {
     const missingBundleDir = path.join(makeTempDir(), "definitely-not-here")
     const result = runHookSandboxed(["session-start"], {
       akmVersion: "0.9.20",

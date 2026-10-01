@@ -20,10 +20,15 @@ append_log() {
 }
 
 if ! command -v bun >/dev/null 2>&1; then
-  append_log "$SESSION_LOG" "runtime_disabled" "bun_unavailable" "Claude AKM hooks are disabled until Bun is installed and on PATH."
+  # The Codex manifest runs this wrapper with AKM_PLUGIN_HARNESS=codex. Name the
+  # host that is actually running it: "Claude hooks are disabled" is wrong advice
+  # in a Codex session.
+  host=Claude
+  [ "${AKM_PLUGIN_HARNESS:-}" = "codex" ] && host=Codex
+  append_log "$SESSION_LOG" "runtime_disabled" "bun_unavailable" "$host AKM hooks are disabled until Bun is installed and on PATH."
   case "$1" in
     session-start)
-      printf '%s' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"AKM Claude hooks are currently disabled because the Bun runtime is not available on PATH. Install Bun from https://bun.sh to re-enable AKM hook automation and logging."},"systemMessage":"AKM Claude hooks are disabled: the Bun runtime is not on PATH. Install it from https://bun.sh to re-enable them."}'
+      printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"AKM %s hooks are currently disabled because the Bun runtime is not available on PATH. Install Bun from https://bun.sh to re-enable AKM hook automation and logging."},"systemMessage":"AKM %s hooks are disabled: the Bun runtime is not on PATH. Install it from https://bun.sh to re-enable them."}' "$host" "$host"
       ;;
   esac
   exit 0

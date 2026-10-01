@@ -9,6 +9,7 @@ import {
   removeLearningProposalJob,
 } from "../shared/learning-signals"
 import { redactSecrets } from "../shared/redaction"
+import { spawnPlan } from "../shared/spawn-plan"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
 const OUTPUT_LIMIT = 8_000
@@ -88,29 +89,28 @@ function run(): void {
     if (job.version !== 1 || !job.command || !job.taskFile) return
     const timeoutRaw = Number(process.env.AKM_LEARNING_PROPOSAL_TIMEOUT_MS)
     const timeout = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : DEFAULT_TIMEOUT_MS
-    const child = spawnSync(
-      job.command,
-      [
-        ...job.argsPrefix,
-        "proposal",
-        "new",
-        job.reservation.proposalType,
-        job.reservation.proposalName,
-        "--file",
-        job.taskFile,
-        "--format",
-        "json",
-        "-q",
-        "--timeout-ms",
-        String(timeout),
-      ],
-      {
-        encoding: "utf8",
-        timeout,
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 1024 * 1024,
-      },
-    )
+    const plan = spawnPlan(job.command, [
+      ...job.argsPrefix,
+      "proposal",
+      "new",
+      job.reservation.proposalType,
+      job.reservation.proposalName,
+      "--file",
+      job.taskFile,
+      "--format",
+      "json",
+      "-q",
+      "--timeout-ms",
+      String(timeout),
+    ])
+    const child = spawnSync(plan.command, plan.args, {
+      encoding: "utf8",
+      timeout,
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
+    })
     const stdout = typeof child.stdout === "string" ? child.stdout.trim() : ""
     const stderr = typeof child.stderr === "string" ? child.stderr.trim() : ""
     const parsed = parseResult(stdout)

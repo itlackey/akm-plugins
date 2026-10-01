@@ -228,6 +228,12 @@ exec "$RUNTIME" "$HELPER" "$INDEX" "$@"
 `,
   )
   chmodSync(akmPath, 0o755)
+  // On Windows npm installs `akm` as `akm.cmd`, beside an extensionless sh script
+  // that Windows cannot run. The shim gets the same pair, so a hook that took the
+  // wrong file would fail here as it would on a real install.
+  if (process.platform === "win32") {
+    writeFileSync(path.join(config.binDir, "akm.cmd"), `@"${process.execPath}" "${helperPath}" "${indexPath}" %*\r\n`)
+  }
   return {
     binDir: config.binDir,
     akmPath,

@@ -1,15 +1,30 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
+import {
+  IS_WINDOWS,
+  codexEffectiveCommand,
+  codexShells,
+  hostEnv,
+  installScriptedAkm,
+  makeBinDir,
+  runClaudeHandler,
+  sandboxPath,
+  substituteCodexPlaceholders,
+  whichOn,
+} from "./host-runtime"
 
 // The Codex plugin is the Claude plugin directory with a second manifest
 // (claude/.codex-plugin/plugin.json) and a marketplace file at the repo root
 // (.agents/plugins/marketplace.json). It registers two of the Claude hook's
 // modes and nothing else, so these tests pin the manifests, then run the
-// manifests' own hook commands the way Codex does: through `sh`, in the session
-// cwd, with PLUGIN_ROOT / PLUGIN_DATA set and the event as JSON on stdin.
+// manifests' own hook commands the way Codex does: through the session's shell
+// (`sh -c`; on Windows PowerShell, with cmd.exe as the fallback), in the session
+// cwd, with PLUGIN_ROOT / PLUGIN_DATA set and the event as JSON on stdin. Codex
+// takes `commandWindows` over `command` on Windows, so that is the command run
+// there. POSIX CI also runs `commandWindows` through sh: it is plain `bun ...`.
 
 const repoRoot = path.resolve(import.meta.dir, "..")
 const pluginDir = path.join(repoRoot, "claude")
@@ -40,7 +55,7 @@ function readLines(filePath: string) {
  * Poll until `probe` returns a value. The proposal worker is detached and
  * unref'd, so the hook returns before it has written anything.
  */
-async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise<T> {
+async function waitFor<T>(probe: () => T | undefined, timeoutMs = IS_WINDOWS ? 30_000 : 5000): Promise<T> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     try {
@@ -54,10 +69,16 @@ async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
+  // A detached child may still hold a file for a moment, and Windows will not
+  // delete an open one; a leftover temp directory is not a test failure.
+  if (IS_WINDOWS) await Bun.sleep(300)
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop()
-    if (dir) rmSync(dir, { recursive: true, force: true })
+    if (!dir) continue
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    } catch {}
   }
 })
 
@@ -163,16 +184,35 @@ describe("Codex plugin metadata", () => {
     const modes: Record<string, string> = { SessionStart: "session-start", UserPromptSubmit: "curate-prompt" }
     for (const [event, mode] of Object.entries(modes)) {
       const handler = codex.hooks.hooks[event][0].hooks[0]
-      // Pinned whole: the harness label and state dir are part of the contract.
+      // Pinned whole: the harness label and state dir are part of the contract. This is the command Codex runs on
+      // macOS and Linux, and it is byte for byte the one Codex users already trusted: Codex hashes `command` and not
+      // `commandWindows`, so adding the Windows command did not ask anyone to trust these hooks again.
       expect(handler.command).toBe(
         `AKM_PLUGIN_HARNESS=codex AKM_PLUGIN_STATE_DIR="\${PLUGIN_DATA}" sh "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ${mode}`,
       )
       expect(hookSource).toContain(`case "${mode}":`)
       const claudeHandler = claude.hooks[event][0].hooks[0]
-      expect(claudeHandler.command).toBe(`sh "\${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.sh" ${mode}`)
+      // Claude's own handler is exec form, so it needs neither sh nor a Windows variant.
+      expect(claudeHandler.command).toBe("bun")
+      expect(claudeHandler.args).toEqual(["\${CLAUDE_PLUGIN_ROOT}/hooks/akm-hook.ts", mode])
       // The hook budgets its own work against these (UserPromptSubmit's
       // retrospective and curate legs, SessionStart's version probe).
       expect(handler.timeout).toBe(claudeHandler.timeout)
+    }
+  })
+
+  it("gives Windows a command that is plain `bun`, with the harness as an argument", () => {
+    const codex = readJson(codexManifestPath)
+    const modes: Record<string, string> = { SessionStart: "session-start", UserPromptSubmit: "curate-prompt" }
+    for (const [event, mode] of Object.entries(modes)) {
+      const handler = codex.hooks.hooks[event][0].hooks[0]
+      // Codex runs a Windows hook through PowerShell (pwsh, else powershell.exe) and, when it knows no shell, cmd.exe:
+      // `NAME=value command` and `sh` are not either's syntax, and Git Bash is not something a Windows machine has.
+      // One quoted path and bare words is valid in PowerShell, cmd.exe and sh alike.
+      expect(handler.commandWindows).toBe(`bun "\${PLUGIN_ROOT}/hooks/akm-hook.ts" ${mode} --harness=codex`)
+      // The state directory comes from PLUGIN_DATA, which Codex exports to the hook, not from a variable set in the command.
+      expect(handler.commandWindows).not.toMatch(/AKM_|\bsh\b|&&|\|\||;/)
+      expect(handler.timeout).toBeGreaterThan(0)
     }
   })
 
@@ -186,8 +226,9 @@ describe("Codex plugin metadata", () => {
 describe("Codex hook runtime", () => {
   const SESSION_ID = "019c3f2e-7a41-7d10-b8a5-0f3c2d9e6b14"
 
+  /** The command Codex runs for `event` on this platform: `commandWindows` on Windows, `command` elsewhere. */
   function codexCommand(event: "SessionStart" | "UserPromptSubmit") {
-    return readJson(codexManifestPath).hooks.hooks[event][0].hooks[0].command as string
+    return codexEffectiveCommand(readJson(codexManifestPath).hooks.hooks[event][0].hooks[0])
   }
 
   /** The stdin Codex sends a hook: the common fields plus the event's own. */
@@ -220,7 +261,7 @@ describe("Codex hook runtime", () => {
    * holding `bun` (the wrapper needs it) and, unless `withAkm` is false, the
    * repo's fake akm over the eval fixture stash.
    */
-  function makeSandbox(options: { withAkm?: boolean } = {}): Sandbox {
+  function makeSandbox(options: { withAkm?: boolean; withBun?: boolean } = {}): Sandbox {
     const root = makeTempDir()
     const sandbox: Sandbox = {
       root,
@@ -231,8 +272,8 @@ describe("Codex hook runtime", () => {
       binDir: path.join(root, "bin"),
       callLog: path.join(root, "akm-calls.log"),
     }
-    for (const dir of [sandbox.home, sandbox.xdgState, sandbox.project, sandbox.binDir]) mkdirSync(dir, { recursive: true })
-    symlinkSync(process.execPath, path.join(sandbox.binDir, "bun"))
+    for (const dir of [sandbox.home, sandbox.xdgState, sandbox.project]) mkdirSync(dir, { recursive: true })
+    sandbox.binDir = makeBinDir(root, "bin", options.withBun !== false)
     if (options.withAkm !== false) {
       installFakeAkm({ binDir: sandbox.binDir, callLog: sandbox.callLog, assets: { stashDir: fixtureStash } })
     }
@@ -240,28 +281,34 @@ describe("Codex hook runtime", () => {
   }
 
   /**
-   * Run a manifest hook command as Codex does: through `sh -c` in the session
-   * cwd, event JSON on stdin, PLUGIN_ROOT / PLUGIN_DATA (and the Claude-named
-   * aliases Codex also sets) in the environment. Codex also substitutes the
-   * ${PLUGIN_ROOT} / ${PLUGIN_DATA} placeholders in the command text itself, so
-   * both are done here and the shell sees the same command either way.
+   * Run a manifest hook command as Codex does: through the session's shell in the
+   * session cwd, event JSON on stdin, PLUGIN_ROOT / PLUGIN_DATA (and the
+   * Claude-named aliases Codex also sets) in the environment. Codex also
+   * substitutes the ${PLUGIN_ROOT} / ${PLUGIN_DATA} placeholders in the command
+   * text itself, so both are done here and the shell sees the same command
+   * either way. `shell` is the one Codex prefers on this OS unless a test
+   * names another.
    */
-  function runCommand(command: string, sandbox: Sandbox, payload: unknown, env: Record<string, string> = {}) {
+  function runCommand(
+    command: string,
+    sandbox: Sandbox,
+    payload: unknown,
+    env: Record<string, string | undefined> = {},
+    shell = codexShells()[0],
+  ) {
     const inputPath = path.join(makeTempDir(), "stdin.json")
     writeFileSync(inputPath, JSON.stringify(payload))
-    const baseEnv = Object.fromEntries(
-      Object.entries(process.env).filter(
-        ([key]) => !key.startsWith("AKM_") && !key.startsWith("XDG_") && !key.startsWith("CLAUDE_PLUGIN_") && !key.startsWith("PLUGIN_"),
-      ),
-    )
-    const substituted = command.replaceAll("${PLUGIN_ROOT}", pluginDir).replaceAll("${PLUGIN_DATA}", sandbox.dataDir)
-    const result = Bun.spawnSync(["sh", "-c", substituted], {
-      cwd: sandbox.project,
-      env: {
-        ...baseEnv,
+    const substituted = substituteCodexPlaceholders(command, { pluginRoot: pluginDir, pluginData: sandbox.dataDir })
+    return shell.run(substituted, { cwd: sandbox.project, env: codexEnv(sandbox, env), stdin: Bun.file(inputPath) })
+  }
+
+  /** The environment Codex gives a plugin hook: the exported plugin variables, over a sandboxed home and PATH. */
+  function codexEnv(sandbox: Sandbox, env: Record<string, string | undefined> = {}) {
+    return hostEnv(
+      {
         HOME: sandbox.home,
         XDG_STATE_HOME: sandbox.xdgState,
-        PATH: `${sandbox.binDir}:/usr/bin:/bin`,
+        PATH: sandboxPath(sandbox.binDir),
         PLUGIN_ROOT: pluginDir,
         PLUGIN_DATA: sandbox.dataDir,
         CLAUDE_PLUGIN_ROOT: pluginDir,
@@ -270,9 +317,8 @@ describe("Codex hook runtime", () => {
         AKM_AUTO_LEARNING: "0",
         ...env,
       },
-      stdio: [Bun.file(inputPath), "pipe", "pipe"],
-    })
-    return { exitCode: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() }
+      (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name),
+    )
   }
 
   function runCodexHook(
@@ -387,17 +433,18 @@ describe("Codex hook runtime", () => {
 
   it("labels learning signals and their proposal outcomes as Codex", async () => {
     const sandbox = makeSandbox({ withAkm: false })
-    // The same fake the Claude proposal test uses: log calls, accept `proposal new`.
-    writeFileSync(
-      path.join(sandbox.binDir, "akm"),
-      `#!/usr/bin/env sh
-printf '%s\\n' "$*" >> '${sandbox.callLog}'
-if [ "$1" = "--version" ]; then echo "akm 0.9.20"; exit 0; fi
-printf '{"ok":true,"ref":"instructions/use-pnpm","proposal":{"id":"proposal-1","ref":"instructions/use-pnpm"}}\\n'
-exit 0
+    // The same kind of fake the Claude proposal test uses: log calls, accept `proposal new`.
+    installScriptedAkm(
+      sandbox.binDir,
+      `import { appendFileSync } from "node:fs"
+appendFileSync(${JSON.stringify(sandbox.callLog)}, args.join(" ") + "\\n")
+if (args[0] === "--version") {
+  console.log("akm 0.9.20")
+  process.exit(0)
+}
+console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: { id: "proposal-1", ref: "instructions/use-pnpm" } }))
 `,
     )
-    chmodSync(path.join(sandbox.binDir, "akm"), 0o755)
 
     runCodexHook(
       "UserPromptSubmit",
@@ -420,18 +467,71 @@ exit 0
 
   it("leaves the Claude plugin's labels and state directory alone", () => {
     const sandbox = makeSandbox()
-    const claude = readJson(claudeManifestPath)
-    const command = claude.hooks.UserPromptSubmit[0].hooks[0].command as string
-    const inputPayload = codexEvent("UserPromptSubmit", sandbox.project, { prompt: "help me plan the akm release rollout this afternoon" })
+    const handler = readJson(claudeManifestPath).hooks.UserPromptSubmit[0].hooks[0]
+    const inputPath = path.join(makeTempDir(), "stdin.json")
+    writeFileSync(inputPath, JSON.stringify(codexEvent("UserPromptSubmit", sandbox.project, { prompt: "help me plan the akm release rollout this afternoon" })))
 
-    // Claude's own manifest command, with only its own placeholder substituted:
-    // no AKM_PLUGIN_HARNESS and no AKM_PLUGIN_STATE_DIR, as a Claude Code install runs it.
-    const result = runCommand(command.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginDir), sandbox, inputPayload)
+    // Claude's own manifest handler, run as Claude Code runs it, in an environment that also carries the Codex
+    // plugin variables: no --harness and no AKM_PLUGIN_*, so PLUGIN_DATA must not become its state directory.
+    const result = runClaudeHandler(handler, { pluginRoot: pluginDir, cwd: sandbox.project, env: codexEnv(sandbox), stdin: Bun.file(inputPath) })
 
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout).hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")
     const events = readEvents(path.join(sandbox.xdgState, "akm-claude"))
     expect(events.map((event) => event.harness)).toEqual(["claude-code"])
     expect(existsSync(sandbox.dataDir)).toBe(false)
+  })
+
+  it("runs both hooks under every shell Codex may use on this OS", () => {
+    // Windows: pwsh and powershell.exe as `-NoProfile -Command`, and cmd.exe as `/C "<line>"` when Codex knows no shell.
+    // Elsewhere: sh. Each gets its own sandbox, so each proves its own state, labels and output.
+    for (const shell of codexShells()) {
+      const sandbox = makeSandbox()
+      const command = (event: "SessionStart" | "UserPromptSubmit") => codexCommand(event)
+      const session = runCommand(command("SessionStart"), sandbox, codexEvent("SessionStart", sandbox.project), {}, shell)
+      const prompt = runCommand(command("UserPromptSubmit"), sandbox, codexEvent("UserPromptSubmit", sandbox.project, { prompt: "help me plan the akm release rollout this afternoon" }), {}, shell)
+
+      expect({ shell: shell.name, exitCode: session.exitCode, stderr: session.stderr }).toEqual({ shell: shell.name, exitCode: 0, stderr: "" })
+      expect({ shell: shell.name, exitCode: prompt.exitCode, stderr: prompt.stderr }).toEqual({ shell: shell.name, exitCode: 0, stderr: "" })
+      expectCodexOutput(session.stdout, "SessionStart")
+      expect(expectCodexOutput(prompt.stdout, "UserPromptSubmit").hookSpecificOutput.additionalContext).toContain("commands/bump-version")
+      expect(readEvents(sandbox.dataDir).map((event) => `${event.harness}:${event.event}`)).toEqual(["codex:session_started", "codex:prompt_recall"])
+      expectNoClaudeState(sandbox)
+    }
+  })
+
+  it.skipIf(IS_WINDOWS)("behaves the same through sh when it is handed the Windows command", () => {
+    // commandWindows is plain `bun "..." <mode> --harness=codex`, valid in every shell, so POSIX CI can run the
+    // Windows path of the hook (the --harness flag and PLUGIN_DATA as the state directory) too.
+    const codex = readJson(codexManifestPath)
+    for (const [event, mode] of [["SessionStart", "session-start"], ["UserPromptSubmit", "curate-prompt"]] as const) {
+      const sandbox = makeSandbox()
+      const command = codex.hooks.hooks[event][0].hooks[0].commandWindows as string
+      expect(command).toContain(` ${mode} --harness=codex`)
+      const result = runCommand(command, sandbox, codexEvent(event, sandbox.project, { prompt: "help me plan the akm release rollout this afternoon" }))
+
+      expect(result.exitCode).toBe(0)
+      expectCodexOutput(result.stdout, event)
+      const events = readEvents(sandbox.dataDir)
+      expect(events.every((entry) => entry.harness === "codex")).toBe(true)
+      expect(existsSync(path.join(sandbox.dataDir, "session.log")) || existsSync(path.join(sandbox.dataDir, "feedback.log"))).toBe(true)
+      expectNoClaudeState(sandbox)
+    }
+  })
+
+  it.skipIf(IS_WINDOWS)("says Codex, not Claude, when bun is missing, and stays silent for other modes", () => {
+    // The POSIX command goes through akm-hook.sh, which answers when bun is not on PATH. A Windows machine without
+    // bun gets the shell's own error instead: there is no wrapper to degrade through there.
+    const sandbox = makeSandbox({ withBun: false })
+    expect(whichOn("bun", sandboxPath(sandbox.binDir))).toBeUndefined()
+
+    const payload = expectCodexOutput(runCodexHook("SessionStart", sandbox), "SessionStart")
+
+    expect(payload.hookSpecificOutput.additionalContext).toContain("AKM Codex hooks are currently disabled because the Bun runtime is not available on PATH.")
+    expect(payload.systemMessage).toContain("AKM Codex hooks are disabled: the Bun runtime is not on PATH.")
+    expect(JSON.stringify(payload)).not.toContain("Claude")
+    expect(readLines(path.join(sandbox.dataDir, "session.log"))[0]).toContain("runtime_disabled\tbun_unavailable\tCodex AKM hooks are disabled until Bun is installed and on PATH.")
+    expect(runCodexHook("UserPromptSubmit", sandbox, { prompt: "help me plan the akm release rollout this afternoon" })).toBe("")
+    expectNoClaudeState(sandbox)
   })
 })
