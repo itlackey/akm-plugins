@@ -17,7 +17,7 @@ Add the plugin to `opencode.json`:
 | Tool | Description |
 | --- | --- |
 | `akm_search` | Search configured bundles or registries. `source` accepts `local`, `registry`, `all`, or a configured bundle name. |
-| `akm_show` | Show a concept by `[bundle//]conceptId[#fragment]`. Reads are exact by default; for an opaque search fragment, `context: "lead"` adds bounded indexed-safe lead context. |
+| `akm_show` | Show a concept by `[bundle//]conceptId[#fragment]`. |
 | `akm_curate` | Return ranked concepts for a task or topic. Optional `pack` is a token budget that returns the selected local assets' full content in one response; registry hits are omitted from packed items. |
 | `akm_feedback` | Record positive or negative feedback for a concept. |
 | `akm_remember` | Save durable knowledge as a searchable memory. |
@@ -26,13 +26,7 @@ Add the plugin to `opencode.json`:
 
 Use the `ref` returned by search or curate directly with show or feedback. When `akm_curate.pack` is set, the response already includes packed local content, so a separate show call is only needed for omitted or registry-only hits. Concept IDs look like `skills/code-review`, `memories/release-retro`, or `team-playbook//knowledge/deploy#Rollback`.
 
-For `akm_show`, `context` accepts `exact` or `lead`. Exact is the default and
-preserves the existing selected-fragment behavior. For an opaque fragment ref
-returned by search, lead context puts the indexed-safe first fragment before
-an explicitly labelled selected match and uses a 3,200-character default hard
-bound. Friendly authored heading selectors retain their existing source-live
-behavior. Set either `max_tokens` (estimated at four characters per token) or
-`max_chars`, never both. Search and show
+Search and show
 responses preserve canonical `ref` while exposing `selectedRef`, `parentRef`,
 fragment ordinal/count and lines, previous/next refs, separate fragment/parent
 estimates, and context truncation metadata.
@@ -137,7 +131,7 @@ These three are read once, when the plugin module is imported, so they must be s
 
 1. Start with `akm_curate` for task-oriented discovery; set `pack` when you want the selected local content immediately.
 2. Use `akm_search` when you know the concept name and need its exact ID.
-3. Fetch a concept with `akm_show` before relying on it; opt into bounded lead context only when a selected fragment needs it.
+3. Fetch a concept with `akm_show` before relying on it.
 4. Record whether the concept helped with `akm_feedback`; a failed akm call is not feedback on the asset.
 5. Use `akm_remember` for durable knowledge that should be available to future sessions.
 

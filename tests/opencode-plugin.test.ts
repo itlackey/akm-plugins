@@ -4,7 +4,6 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createRequire } from "node:module"
 import type { PluginInput } from "@opencode-ai/plugin"
-import { normalizeFragmentShowInput } from "../opencode/fragment-context"
 
 // The plugin captures its structured-event log path at module load
 // (OPENCODE_EVENT_LOG = getEventLogPath("opencode")), so this redirect has to
@@ -433,67 +432,6 @@ describe("akm-opencode plugin", () => {
       expect(JSON.parse(result).ref).toBe("knowledge/deploy#akm-fragment-3-1138d4941c9a")
     })
 
-    it("maps bounded lead context onto the in-process 0.9.15 show API", () => {
-      expect(normalizeFragmentShowInput({
-        ref: "memories/timeline#akm-fragment-7-1138d4941c9a",
-        context: "lead",
-        max_tokens: 200,
-      }, "0.9.15")).toEqual({
-        ref: "memories/timeline#akm-fragment-7-1138d4941c9a",
-        contextMode: "lead",
-        maxContextChars: 800,
-      })
-    })
-
-    it("maps an exact character budget without changing the default exact surface", () => {
-      expect(normalizeFragmentShowInput({
-        ref: "memories/timeline#akm-fragment-7-1138d4941c9a",
-        context: "lead",
-        max_chars: 700,
-      }, "0.9.15")).toEqual({
-        ref: "memories/timeline#akm-fragment-7-1138d4941c9a",
-        contextMode: "lead",
-        maxContextChars: 700,
-      })
-    })
-
-    it("returns a structured error for conflicting context budgets", async () => {
-      const client = createMockClient()
-      const hooks = await AkmPlugin(createPluginInput(client))
-      const result = await hooks.tool!.akm_show.execute({
-        ref: "memories/timeline#akm-fragment-7-1138d4941c9a",
-        context: "lead",
-        max_tokens: 200,
-        max_chars: 700,
-      } as any, createToolContext())
-
-      expect(JSON.parse(result)).toEqual({ ok: false, error: "max_tokens and max_chars are mutually exclusive" })
-      expect(mockAkmShowUnified).not.toHaveBeenCalled()
-      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
-        body: expect.objectContaining({ message: "AKM in-process call failed" }),
-      }))
-    })
-
-    it("rejects a context budget unless lead mode is explicit", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
-      const result = await hooks.tool!.akm_show.execute({
-        ref: "memories/timeline#akm-fragment-7-1138d4941c9a",
-        max_chars: 700,
-      } as any, createToolContext())
-
-      expect(JSON.parse(result)).toEqual({ ok: false, error: "max_tokens and max_chars require context='lead'" })
-      expect(mockAkmShowUnified).not.toHaveBeenCalled()
-    })
-
-    it("fails explicitly when lead context is requested from an older loaded API", () => {
-      expect(() => normalizeFragmentShowInput({
-        ref: "memories/timeline#akm-fragment-7-1138d4941c9a",
-        context: "lead",
-      }, "0.9.14")).toThrow(
-        "context='lead' requires akm-cli >=0.9.15; this plugin bundles 0.9.14. Install the plugin release whose exact akm-cli pin is 0.9.15 or newer.",
-      )
-    })
-
     it("preserves fragment provenance returned by 0.9.15", async () => {
       mockAkmShowUnified.mockImplementationOnce(async (input: Record<string, unknown>) => ({
         ref: "memories/timeline",
@@ -522,7 +460,6 @@ describe("akm-opencode plugin", () => {
         parentRef: "memories/timeline",
         fragmentOrdinal: 7,
         fragmentCount: 9,
-        contextMode: "exact",
         contextMaxChars: 3200,
       }))
     })
