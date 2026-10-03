@@ -34,7 +34,6 @@ const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 const AKM_AUTO_LEARNING = (process.env.AKM_AUTO_LEARNING ?? "1") !== "0"
 const AKM_AUTO_SKILL_PROPOSALS = (process.env.AKM_AUTO_SKILL_PROPOSALS ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
-const AKM_AUTO_HINTS = (process.env.AKM_AUTO_HINTS ?? "1") !== "0"
 const AKM_PENDING_PROPOSAL_TIMEOUT_MS = Math.max(500, (Number(process.env.AKM_PENDING_PROPOSAL_TIMEOUT ?? "2") || 2) * 1_000)
 const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
@@ -177,19 +176,6 @@ let cachedAkmBundleDir: string | undefined
 // `instructions/`, or `sessions/`). extractAkmRefsFromString() is the shared
 // whitespace-token extractor and is the single source of truth here.
 const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
-const AKM_WORKFLOW_INSTRUCTION = [
-  "# AKM workflow (v0.9.21)",
-  "",
-  "Use AKM as a reusable knowledge and workflow bundle.",
-  "",
-  "Before writing or editing anything whose exact syntax or keys you are not certain of (a file already in the workspace included):",
-  "1. Use `akm_curate` with a query that includes the current project name/domain (primary discovery). Fall back to `akm_search` only when you already know an asset exists and need its exact ref.",
-  "2. Use `akm_show <ref>` before relying on an asset.",
-  "3. Record `akm_feedback` after the result is known.",
-  "4. Use `akm_remember` to preserve durable project knowledge.",
-  `5. ${PROPOSED_QUALITY_WARNING}`,
-].join("\n")
-
 function readPackageVersion(): string {
   try {
     const raw = readFileSync(path.join(moduleDir, "package.json"), "utf8")
@@ -1984,31 +1970,17 @@ function warnIfWriteGateInert(client: LogCapableClient): void {
 // future opencode build changes how a thrown hook error is surfaced. It is NOT
 // implemented; one comment, not a second mechanism.
 
-// The trigger sentence used to read "Before writing anything from scratch",
-// which literally excludes the largest class of tasks retrieval helps with:
-// editing a file whose conventions the model does not know. Measured across
-// 138 Harbor A/B trials (issue #94), engagement on edit-shaped tasks was
-// 0/24 (eval) and 3/57 (train) versus 48% and 38% on create-shaped tasks from
-// the same families — three edit tasks scored 0.00 on BOTH arms because the
-// model invented keys for a file it had just read. A visible file makes a task
-// look self-sufficient, so the trigger has to say outright that seeing a file
-// is not knowing its schema.
+// What every session's system prompt says about AKM: a few rules, with
+// `akm hints` and `akm help` for the rest. The 2.5 KiB doctrine this replaces
+// sent small models searching the stash instead of doing their task. The
+// trigger says "writing or editing" on purpose: with "from scratch", edit-shaped
+// tasks never engaged (issue #94).
 const AKM_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
-  "You have an AKM bundle on this machine. Before writing **or editing** a config file, manifest, schema, or command for any tool, format, or API whose exact syntax or keys you are not certain of, call `akm_curate` with a task description to find relevant assets with LLM-reranked relevance scores. A file already being present in the workspace is not evidence that you know its schema — the values may be given to you while the key names and nesting are not, so check the bundle for that format's conventions before you edit it.",
-  "",
-  "**Choosing the right lookup command:**",
-  "",
-  "- **`akm_curate`** — use this when starting any new task, looking for patterns, docs, skills, or workflows. This is the PRIMARY lookup command. akm automatically boosts assets that match the current project (cwd-anchored project-context ranking), so an explicit project name in the query is not required for ranking — but it still helps the reranker frame intent.",
-  '  - Good: `akm_curate("akm CLI improve command performance analysis")` (explicit framing, still ideal)',
-  '  - Bad: `akm_curate("improve performance analysis")` (too generic — the reranker has less to work with even with auto-boost)',
-  "- **`akm_search` (known name)** — use ONLY when you already know an asset exists (e.g. after `akm_show` returned \"not found\") and need to locate its exact ref. Do not use as a discovery tool.",
-  "- **`akm_show <bundle>//meta`** — when working in or with an unfamiliar bundle, read its optional `.meta/` orientation (purpose, key assets, conventions, maintainer) before diving in. `akm_show meta` reads your working bundle's `.meta/index.md`; `akm_show meta:<name>` reads other `.meta/` docs (e.g. `meta:about`). These docs are direct-read and never appear in `akm_search`.",
-  "",
-  "When an asset's content is wrong, stale or incomplete, call `akm_feedback <ref> negative` with a note saying <what is wrong and what should change>: negative feedback is what triggers a review and fix of the asset, so make the note specific. Call it with `positive` when an asset materially helped (it only improves ranking). A failed akm call is not feedback on the asset. Use `akm_remember` to persist durable learnings so future sessions inherit them.",
-  "",
-  AKM_WORKFLOW_INSTRUCTION,
+  "- Assets for this project (skills, knowledge, memories, workflows) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
+  "- Record `akm_feedback` on an asset once you know whether it helped; keep durable project knowledge with `akm_remember`.",
+  "- `akm hints` has this bundle's conventions; `akm help` has the CLI.",
 ].join("\n")
 
 const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content. If an asset is wrong, stale or incomplete, call `akm_feedback <ref> negative` with a note saying <what is wrong and what should change>: that queues it for review and a fix. Use `positive` when it helped."
@@ -2904,11 +2876,8 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             }
           }
           if (!sessionHints.has(sid)) {
-            // The missing-bundle warning is NOT gated on AKM_AUTO_HINTS:
-            // that flag governs the `akm hints` call, not the diagnostic that
-            // explains why the whole stash is empty.
             const bundleWarning = await getAkmBundleWarning(logClient)
-            const hints = AKM_AUTO_HINTS ? await runHintsForSession(logClient, sid) : null
+            const hints = await runHintsForSession(logClient, sid)
             const body = [bundleWarning, hints].filter(Boolean).join("\n\n")
             if (body) sessionHints.set(sid, body)
           }
@@ -3009,21 +2978,13 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const blocks = [
           // Payload before framing. applyContextBudget() truncates the first
           // block that overflows and then stops, so whatever leads this array
-          // is the thing that cannot be starved. AKM_HINTS_PREFIX is ~2 KiB on
-          // its own and `akm hints` output is unbounded stash-authored text, so
-          // leading with doctrine let a large hints payload silently drop the
-          // curated-stash pointer — the plugin's actual deliverable — for a
-          // whole session. Degrading framing before payload is the right way
-          // round, and it restores the starvation-immunity the pointer had when
-          // it was budgeted through its own applyContextBudget() call.
+          // is the thing that cannot be starved: `akm hints` output is
+          // unbounded stash-authored text, and a large one must not drop the
+          // curated-stash pointer, the plugin's actual deliverable.
           curatedFile
             ? `AKM bundle curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${AKM_CURATED_TAIL}`
             : "",
-          // The doctrine block is deliberately NOT gated on dynamic hints:
-          // `akm hints` is empty on a fresh stash, and gating on it dropped
-          // the "curate first, then show, then feedback" framing on precisely
-          // the installs that need it most. Mirrors the Claude hook, which
-          // appends hints to a SessionStart header it always emits.
+          // The rules go in with or without `akm hints` output, which is empty on a fresh stash.
           hints ? `${AKM_HINTS_PREFIX}\n\n${hints}` : AKM_HINTS_PREFIX,
           sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
           !proposalSummary.unsupported && proposalSummary.count > 0 ? formatPendingProposalContext(proposalSummary.count) : "",

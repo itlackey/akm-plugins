@@ -729,8 +729,6 @@ describe("akm-opencode plugin", () => {
 
       expect(injected).toContain("# AKM is available in this session")
       expect(injected).toContain("editing")
-      expect(injected).toMatch(/not certain of/)
-      expect(injected).toMatch(/already being present in the workspace is not evidence/)
       expect(injected).not.toContain("from scratch")
     })
 
