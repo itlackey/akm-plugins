@@ -877,17 +877,17 @@ async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: 
   retrospectiveState.set(sessionID, { recentRefs })
 }
 
+// Positive feedback only. A failed tool call is not feedback on the asset
+// (akm#999), and a correction goes through recordRetrospectiveFeedback().
 function queueFeedback(
   client: LogCapableClient,
   ref: string,
-  sentiment: "positive" | "negative",
   note: string,
   meta: CliLogMeta,
   dedupe?: Set<string>,
 ): boolean {
-  const dedupeKey = `${ref}:${sentiment}`
-  if (dedupe?.has(dedupeKey)) return true
-  dedupe?.add(dedupeKey)
+  if (dedupe?.has(ref)) return true
+  dedupe?.add(ref)
 
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) {
@@ -897,7 +897,6 @@ function queueFeedback(
       sessionID: meta.sessionID,
       directory: meta.directory,
       ref,
-      sentiment,
       error: command.error,
     })
     return false
@@ -910,7 +909,7 @@ function queueFeedback(
         ...command.argsPrefix,
         "feedback",
         ref,
-        sentiment === "positive" ? "--positive" : "--negative",
+        "--positive",
         "--reason",
         note,
         "--format",
@@ -930,7 +929,6 @@ function queueFeedback(
           sessionID: meta.sessionID,
           directory: meta.directory,
           ref,
-          sentiment,
           error: signal
             ? `akm feedback exited via signal ${signal}`
             : `akm feedback exited with code ${code}`,
@@ -944,7 +942,6 @@ function queueFeedback(
         sessionID: meta.sessionID,
         directory: meta.directory,
         ref,
-        sentiment,
         error: formatCliError(error),
       })
     })
@@ -957,7 +954,6 @@ function queueFeedback(
       sessionID: meta.sessionID,
       directory: meta.directory,
       ref,
-      sentiment,
       error: formatCliError(error),
     })
     return false
@@ -3144,7 +3140,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
               note: "opencode retrospective: user confirmed it worked",
             })
             if (!shouldSubmitAutomaticFeedback(signal)) continue
-            queueFeedback(logClient, ref, "positive", signal.note, {
+            queueFeedback(logClient, ref, signal.note, {
               toolName: "chat.message",
               sessionID: input.sessionID,
               agent: input.agent,
@@ -3293,6 +3289,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             sessionID: input.sessionID,
             callID: input.callID,
             title: output.title,
+            refs: allRefs,
             error: typeof (parsed as { error?: unknown }).error === "string" ? (parsed as { error?: string }).error : undefined,
           })
         }
@@ -3357,8 +3354,9 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // using), the other akm tools write memories or are feedback themselves,
         // and a FAILED akm call says nothing about the asset's content (akm#999):
         // submitting `--negative` for it made akm's distill write lessons about
-        // the error. OpenCode's automatic feedback is the retrospective channel
-        // in chat.message — the user saying it worked.
+        // the error. The failure is logged above as a warning that names its
+        // refs. OpenCode's automatic feedback is the retrospective channel in
+        // chat.message — the user saying it worked.
       } catch (error: unknown) {
         await writePluginLog(logClient, "error", "AKM tool.execute.after hook failed", {
           subsystem: "hook",

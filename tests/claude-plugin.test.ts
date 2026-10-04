@@ -632,7 +632,7 @@ exit 0
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemories/release-retro\takm show memories/release-retro --format json")
   })
 
-  it("records failed system feedback for akm Bash failures", () => {
+  it("logs the outcome of a failed akm Bash call in feedback.log", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
     mkdirSync(stateDir, { recursive: true })
@@ -651,6 +651,56 @@ exit 0
     })
 
     expect(getFirstLogEntry(stateDir, "feedback.log")).toContain("system\tfailure\tBash\takm feedback skills/release --negative --reason stale")
+  })
+
+  itPosix("a failed akm Bash call logs a warning naming its refs and the error, and submits no feedback", () => {
+    // A failed akm command is a warning about the call, not feedback on the asset
+    // (akm#999). The payload is the one Claude Code sends for PostToolUseFailure:
+    // the reason is in `error`, and there is no output field. `workflow run` is a
+    // use-shaped verb: a read-only one (show, search, curate) is skipped by
+    // auto-feedback whatever its outcome, so it could not tell the guard is there.
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
+    const bundleDir = makeBundle(tempDir, ["workflows/release"])
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+${SHOW_ECHOES_REF}
+printf '{"ok":true}\\n'
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+    const input = JSON.stringify({
+      session_id: "sess-warn",
+      hook_event_name: "PostToolUseFailure",
+      tool_name: "Bash",
+      tool_input: { command: "akm workflow run workflows/release" },
+      error: "Command exited with non-zero status code 1",
+      is_interrupt: false,
+    })
+    const env = {
+      HOME: tempDir,
+      PATH: `${binDir}:/usr/bin:/bin`,
+      XDG_STATE_HOME: stateDir,
+      AKM_BUNDLE_DIR: bundleDir,
+    }
+
+    // The manifest wires only `post-tool failure`; auto-feedback is run as well
+    // because it must refuse a failure if it is ever wired.
+    runHook(["post-tool", "failure"], { input, env })
+    runHook(["auto-feedback", "failure"], { input, env })
+
+    const sessionLog = path.join(stateDir, "akm-claude/session.log")
+    const warnings = (existsSync(sessionLog) ? readLogLines(sessionLog) : []).filter((line) => line.includes("akm_tool_failed"))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain("akm_tool_failed\tBash\tworkflows/release\tCommand exited with non-zero status code 1")
+    expect(existsSync(callLog) ? readFileSync(callLog, "utf8") : "").not.toContain("feedback")
   })
 
   describe("Agent-tool model remap was deleted (release blocker #5)", () => {

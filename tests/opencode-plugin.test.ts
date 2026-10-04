@@ -1036,7 +1036,7 @@ describe("akm-opencode plugin", () => {
       expect(feedbackCalls()).toHaveLength(0)
     })
 
-    it("submits nothing when an akm tool call fails, and keeps the failure in the plugin log", async () => {
+    it("submits nothing when an akm tool call fails, and logs a warning naming its ref and the error", async () => {
       // A failed akm call says nothing about the asset's content, so it is not
       // feedback on the asset (akm#999): a not-found ref, an ambiguous ref,
       // duplicate physical owners and a timeout all look the same to the asset.
@@ -1054,10 +1054,12 @@ describe("akm-opencode plugin", () => {
         await showTool(hooks, `ro-2-${index}`, "skills/review", JSON.stringify(envelope))
 
         expect(feedbackCalls(), label).toHaveLength(0)
-        // The failure stays visible, in the plugin's own log, and is not
-        // described as feedback.
+        // The failure is a warning in the plugin's own log that names the ref the
+        // call touched and the error, and is not described as feedback.
         const logged = client.app.log.mock.calls.map(([entry]: any[]) => entry.body as { level: string; message: string; extra: Record<string, unknown> })
-        expect(logged.some((entry) => entry.level === "warn" && entry.extra.toolName === "akm_show" && typeof entry.extra.error === "string"), label).toBe(true)
+        const warning = logged.find((entry) => entry.level === "warn" && entry.extra.toolName === "akm_show")
+        expect(warning?.extra.refs, label).toEqual(["skills/review"])
+        expect(typeof warning?.extra.error, label).toBe("string")
         expect(logged.some((entry) => /feedback/i.test(entry.message)), label).toBe(false)
       }
     })

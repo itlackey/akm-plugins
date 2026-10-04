@@ -1370,7 +1370,15 @@ function gatherSessionStartWarnings(bundleRoots: readonly string[]): string[] {
 function recordPostTool() {
   const rawInput = readStdin()
   const { toolName, commandText, outputText, statusText, refs, sid } = extractPostToolFields(rawInput, MODE)
-  if (/akm|\/akm/.test(commandText)) appendLog(FEEDBACK_LOG, "system", statusText, toolName || "Bash", commandText)
+  const akmCommand = /akm|\/akm/.test(commandText)
+  if (akmCommand) appendLog(FEEDBACK_LOG, "system", statusText, toolName || "Bash", commandText)
+  // A failed akm command is a warning about the call, not feedback on the
+  // asset (akm#999): name the concepts it touched and why it failed. Claude Code
+  // reports the reason in PostToolUseFailure's `error`, not in an output field.
+  if (MODE === "failure" && akmCommand && refs.length > 0) {
+    const reason = sanitize(getText(safeJsonParse<Record<string, unknown>>(rawInput)?.error))
+    appendLog(SESSION_LOG, "akm_tool_failed", toolName || "Bash", refs.join(" "), reason.slice(0, 200))
+  }
   // These rows are what captureRetrospectiveFeedback replays as the refs the
   // session used. A failed command names a ref only because the agent asked for
   // it and says nothing about the asset (akm#999), so only a successful one is
