@@ -41,6 +41,19 @@ jobs:
       - name: Run integration tests
         run: bun test tests/
 
+      # The real Codex, offline, against this checkout's plugin (tests/real-hosts.test.ts): no login and no model call.
+      # The version tests.yml pins (tests/version-policy.test.ts keeps them together).
+      - name: Install Codex with npm
+        run: |
+          prefix="$RUNNER_TEMP/hosts-npm"
+          npm install @openai/codex@0.160.0 --prefix "$prefix" --no-audit --no-fund
+          codex="$(find "$prefix/node_modules" -type f -name codex -path '*/vendor/*' | head -n 1)"
+          "$codex" --version
+          echo "AKM_REAL_CODEX_BIN=$codex" >> "$GITHUB_ENV"
+
+      - name: Run the real Codex
+        run: bun test --timeout 300000 tests/real-hosts.test.ts
+
       - name: Run tier-2 evals against checked-in baseline
         working-directory: evals
         run: bun tier2/runner.ts --baseline tier2/baseline/tier2.json --out ../eval-results/release

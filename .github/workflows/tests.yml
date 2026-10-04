@@ -32,6 +32,20 @@ jobs:
       - name: Run unit tests
         run: bun test tests/
 
+      # The real Codex, started offline against this checkout's plugin (tests/real-hosts.test.ts): no login and no
+      # model call. Pinned so a run can be compared with the last one, and the same version as the windows job below
+      # and release.yml (tests/version-policy.test.ts keeps them together).
+      - name: Install Codex with npm
+        run: |
+          prefix="$RUNNER_TEMP/hosts-npm"
+          npm install @openai/codex@0.160.0 --prefix "$prefix" --no-audit --no-fund
+          codex="$(find "$prefix/node_modules" -type f -name codex -path '*/vendor/*' | head -n 1)"
+          "$codex" --version
+          echo "AKM_REAL_CODEX_BIN=$codex" >> "$GITHUB_ENV"
+
+      - name: Run the real Codex
+        run: bun test --timeout 300000 tests/real-hosts.test.ts
+
   # The hooks also run on Windows (see claude/README.md, "Windows"). This job runs the
   # hook-side tests there: the manifests' own commands, executed the way each host
   # executes them (Claude Code spawns `bun` with no shell; Codex hands the Windows
@@ -66,7 +80,7 @@ jobs:
         run: |
           node --version
           $prefix = Join-Path $env:RUNNER_TEMP "hosts-npm"
-          npm install @anthropic-ai/claude-code@2.1.286 @openai/codex@0.159.3 --prefix $prefix --no-audit --no-fund
+          npm install @anthropic-ai/claude-code@2.1.286 @openai/codex@0.160.0 --prefix $prefix --no-audit --no-fund
           $claude = Join-Path $prefix 'node_modules/@anthropic-ai/claude-code/bin/claude.exe'
           $codex = (Get-ChildItem (Join-Path $prefix 'node_modules') -Recurse -Filter codex.exe | Where-Object { $_.FullName -match 'vendor' } | Select-Object -First 1).FullName
           & $claude --version

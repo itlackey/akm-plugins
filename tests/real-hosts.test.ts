@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
@@ -15,7 +15,8 @@ import { IS_WINDOWS, hostEnv, makeBinDir, sandboxPath } from "./host-runtime"
 //   provider here is a dead local port, so the request is refused on the machine.
 //
 // Skipped unless AKM_REAL_CLAUDE_BIN / AKM_REAL_CODEX_BIN point at the host's executable (the Windows CI job installs
-// both from npm). The state they write goes under a temp tree; nothing outside it is read or written.
+// both from npm; the Linux jobs in tests.yml and release.yml install Codex). The state they write goes under a temp
+// tree; nothing outside it is read or written.
 
 const repoRoot = path.resolve(import.meta.dir, "..")
 const fixtureStash = path.join(repoRoot, "evals/fixtures/stash")
@@ -30,7 +31,7 @@ const claudeHandlerCount = Object.values(claudeManifest.hooks as Record<string, 
 // What Codex hashes to decide whether the user already trusted a hook: the command for the platform (`command`, or
 // `commandWindows` on Windows) with the timeout and status message, not the version or the install path. Changing any
 // of them asks every Codex user to trust the hooks again, so a change here is a decision. The same on Codex 0.147.0,
-// 0.159.0 and 0.159.3.
+// 0.159.0 and 0.159.3; 0.160.0 hashes with the same sources (hooks/src/engine/discovery.rs, config/src/fingerprint.rs).
 const TRUST_HASHES = {
   posix: {
     sessionStart: "sha256:179686e716a7d991572fa95bdb62da4ba36bdf04ccd5b51d9a06316270b7708f",
@@ -186,7 +187,7 @@ function startAppServer(env: Record<string, string>, cwd: string): RpcClient {
 
 describe.skipIf(!codexBin)("the real Codex", () => {
   it(
-    "installs the plugin from this checkout and runs both hooks, offline, with the Windows command on Windows",
+    "installs the plugin from this checkout, lists its skills and runs both hooks, offline, with the Windows command on Windows",
     async () => {
       const sandbox = makeSandbox()
       const codexHome = path.join(sandbox.root, "codex-home")
@@ -202,10 +203,12 @@ describe.skipIf(!codexBin)("the real Codex", () => {
       // Exactly the two hooks, untrusted until reviewed, with this platform's command: Codex hashes the effective one.
       const server = startAppServer(env, sandbox.project)
       let hooks: Array<{ eventName: string; key: string; trustStatus: string; currentHash: string; command: string }>
+      let skills: Array<{ name: string; pluginId: string | null }>
       try {
         await server.request("initialize", { clientInfo: { name: "akm-plugins-test", version: "0.0.0" } })
         server.notify("initialized")
         hooks = (await server.request("hooks/list", { cwds: [sandbox.project] })).result.data[0].hooks
+        skills = (await server.request("skills/list", { cwds: [sandbox.project] })).result.data[0].skills
       } finally {
         server.close()
       }
@@ -216,6 +219,11 @@ describe.skipIf(!codexBin)("the real Codex", () => {
         expect(hook.command).toContain(IS_WINDOWS ? "--harness=codex" : "AKM_PLUGIN_HARNESS=codex")
         expect(hook.command).not.toContain("${")
       }
+
+      // The skill, and the five commands, which Codex turned into skills when it installed the plugin. It drops a command
+      // it cannot carry over (one with $ARGUMENTS, say): codex-plugin.test.ts mirrors its rules.
+      const commandSkills = readdirSync(path.join(repoRoot, "claude/commands")).map((file) => `akm:source-command-${file.replace(/\.md$/, "")}`)
+      expect(skills.filter((skill) => skill.pluginId === "akm@akm-plugins").map((skill) => skill.name).sort()).toEqual(["akm:akm", ...commandSkills].sort())
 
       // Trust them the way /hooks does, and point the model provider at a port nothing listens on. Top-level keys
       // go first: after a table header they would belong to that table.

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
@@ -34,6 +34,7 @@ const codexMarketplacePath = path.join(repoRoot, ".agents/plugins/marketplace.js
 const claudeMarketplacePath = path.join(repoRoot, ".claude-plugin/marketplace.json")
 const hookSourcePath = path.join(pluginDir, "hooks/akm-hook.ts")
 const fixtureStash = path.join(repoRoot, "evals/fixtures/stash")
+const commandsDir = path.join(pluginDir, "commands")
 
 const tempDirs: string[] = []
 
@@ -67,6 +68,36 @@ async function waitFor<T>(probe: () => T | undefined, timeoutMs = IS_WINDOWS ? 3
     if (Date.now() >= deadline) throw new Error("waitFor timed out")
     await Bun.sleep(25)
   }
+}
+
+/**
+ * Why Codex's install-time conversion of a plugin command into a skill would skip `text`, or undefined when it converts.
+ * A mirror of command_migration.rs and command_migration/plugin.rs in codex-rs/core-plugins (rust-v0.160.0; the same in
+ * 0.159.3): a command that fails any check is dropped without a word. `file` is the command's file name, and the text has
+ * LF line endings, which .gitattributes guarantees.
+ */
+function codexSkipReason(file: string, text: string): string | undefined {
+  const source = file.replace(/\.md$/, "")
+  const parsed = /^---\n([\s\S]*?)\n---(?:\n|$)([\s\S]*)$/.exec(text)
+  let description: unknown
+  try {
+    description = parsed ? Bun.YAML.parse(parsed[1])?.description : undefined
+  } catch {}
+  const body = (parsed ? parsed[2] : text).trim()
+  const name = `source-command-${source}`.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase()
+  const quoted = (value: string) => `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`
+  const rendered = `---\nname: ${quoted(name)}\ndescription: ${quoted(String(description))}\n---\n\n# ${name}\n\nUse this skill when the user asks to run the migrated source command \`${source}\`.\n\n## Command Template\n\n${body}\n`
+
+  if (source === "README") return "a README is not a command"
+  if (typeof description !== "string" || !description.trim()) return "no description in the frontmatter"
+  if (name.length > 64) return "skill name over 64 characters"
+  if (/\$ARGUMENTS|\$\d/.test(body)) return "argument placeholder"
+  if (body.includes("{{") && body.includes("}}")) return "{{ }} template"
+  if (body.includes("!`") || body.includes("! `")) return "shell expansion"
+  if (body.split(/\s+/).some((token) => token.length > 1 && token.startsWith("@"))) return "@file reference"
+  // Only plugin commands are held to a size: the rendered skill, frontmatter and heading included.
+  if (new TextEncoder().encode(rendered).length > 4000) return "rendered skill over 4,000 bytes"
+  return undefined
 }
 
 afterEach(() => {
@@ -234,6 +265,46 @@ describe("Codex plugin metadata", () => {
     expect(skill).toMatch(/`\/akm-\*` slash\s+commands exist only in Claude Code/)
     expect(skill).toMatch(/such as Codex, run the\s+`akm` CLI forms/)
   })
+
+  it("keeps every command free of argument placeholders, which Codex cannot expand and Claude Code does not need", () => {
+    // Codex turns a plugin's commands/*.md into skills when it installs the plugin, and drops any command whose body has
+    // $ARGUMENTS or a $1-style placeholder. Claude Code does not need one: when no placeholder in a command receives the
+    // user's input it appends "ARGUMENTS: <what the user typed>" to the end of the command (code.claude.com/docs/en/skills,
+    // "Pass arguments to skills"). So each command points at that line instead, and in Codex at the user's request.
+    const files = readdirSync(commandsDir).filter((file) => file.endsWith(".md")).sort()
+    expect(files.length).toBeGreaterThan(0)
+    for (const file of files) {
+      const text = readFileSync(path.join(commandsDir, file), "utf8")
+      expect({ file, placeholder: /\$ARGUMENTS|\$\d/.test(text) }).toEqual({ file, placeholder: false })
+      expect({ file, pointsAtAppendedLine: text.includes("`ARGUMENTS:`") }).toEqual({ file, pointsAtAppendedLine: true })
+    }
+  })
+
+  it("keeps every command one that Codex converts into a skill when it installs the plugin", () => {
+    // tests/real-hosts.test.ts checks the same against the real Codex; this runs everywhere and says why a command is dropped.
+    for (const file of readdirSync(commandsDir).filter((name) => name.endsWith(".md")).sort()) {
+      const skipped = codexSkipReason(file, readFileSync(path.join(commandsDir, file), "utf8"))
+      expect({ file, skipped }).toEqual({ file, skipped: undefined })
+    }
+
+    // The mirror is not a no-op: it skips each thing Codex skips.
+    const command = (body: string, frontmatter = "description: A command") => `---\n${frontmatter}\n---\n\n${body}\n`
+    expect(codexSkipReason("akm-x.md", command("Run `akm search x`."))).toBeUndefined()
+    for (const [file, text] of [
+      ["README.md", command("Run it.")],
+      ["akm-x.md", "Run it.\n"],
+      ["akm-x.md", command("Run it.", "argument-hint: x")],
+      ["akm-x.md", command('Run `akm search "$ARGUMENTS"`.')],
+      ["akm-x.md", command("Run `akm show $1`.")],
+      ["akm-x.md", command("Run {{query}}.")],
+      ["akm-x.md", command("Run !`akm info`.")],
+      ["akm-x.md", command("Read @notes.md first.")],
+      [`${"a".repeat(60)}.md`, command("Run it.")],
+      ["akm-x.md", command("x".repeat(4000))],
+    ]) {
+      expect({ file, skipped: codexSkipReason(file, text) !== undefined }).toEqual({ file, skipped: true })
+    }
+  })
 })
 
 describe("Codex hook runtime", () => {
@@ -400,16 +471,33 @@ describe("Codex hook runtime", () => {
     expectNoClaudeState(sandbox)
   })
 
-  it("credits nothing when the user praises the session: no hook records concept use under Codex", () => {
+  it("submits no feedback under Codex: not for a tool result, not when the user says it worked", () => {
+    // Codex's PostToolUse gives a Bash command's output but no exit status, and it has no failure event, so a failed akm
+    // command cannot be told from a successful one. The manifest registers no tool hook, and the hook submits no feedback
+    // even when it is handed what makes it submit under Claude Code. Both submitters are driven with that here: the
+    // PostToolUse event auto-feedback takes (the Windows command's shape, plain bun, with its mode swapped), and the row a
+    // post-tool hook leaves in memory.log for a retrospective "that worked" to credit.
     const sandbox = makeSandbox()
+    mkdirSync(sandbox.dataDir, { recursive: true })
+    writeFileSync(
+      path.join(sandbox.dataDir, "memory.log"),
+      `2026-01-01T00:00:00Z\tsystem\tBash\tworkflows/release\takm workflow run workflows/release\t${SESSION_ID}\n`,
+    )
+    const env = { AKM_BUNDLE_DIR: fixtureStash }
+    const toolEvent = {
+      session_id: SESSION_ID,
+      cwd: sandbox.project,
+      tool_name: "Bash",
+      tool_input: { command: "akm workflow run workflows/release" },
+      tool_response: "",
+    }
+    const autoFeedback = readJson(codexManifestPath).hooks.hooks.UserPromptSubmit[0].hooks[0].commandWindows.replace("curate-prompt", "auto-feedback success")
 
-    // "that worked" is the retrospective-feedback trigger. On Claude it credits
-    // refs the PostToolUse hook logged for the session; Codex registers no such
-    // hook, so there is nothing to credit and akm must never be asked to.
-    runCodexHook("UserPromptSubmit", sandbox, { prompt: "thanks, that worked great for the release" })
+    expect(runCommand(autoFeedback, sandbox, toolEvent, env).exitCode).toBe(0)
+    runCodexHook("UserPromptSubmit", sandbox, { prompt: "thanks, that worked great for the release" }, env)
 
     expect(readCallLog(sandbox.callLog).filter((call) => call.argv[0] === "feedback")).toEqual([])
-    expect(existsSync(path.join(sandbox.dataDir, "memory.log"))).toBe(false)
+    expect(readEvents(sandbox.dataDir).filter((event) => event.event === "feedback_recorded")).toEqual([])
   })
 
   it("does not take a prompt a subagent received for the user's own words", () => {
@@ -417,18 +505,12 @@ describe("Codex hook runtime", () => {
     // fires inside a subagent; both are optional properties of its
     // user-prompt-submit.command.input schema (0.147.0). The prompt such an event
     // carries is the main agent's task for the subagent, not something the user
-    // typed, so it is no memory intent, no learning signal and no praise for the
-    // concepts the session touched.
+    // typed, so it is no memory intent and no learning signal. (Nor praise for the
+    // concepts the session touched, which Claude Code's hook is tested for in
+    // claude-plugin.test.ts: Codex's submits no feedback at all.)
     const prompt = "remember that the memory cleanup worked with minimal changes"
     const submit = (extra: Record<string, unknown>) => {
       const sandbox = makeSandbox()
-      // The row a PostToolUse hook would leave for a concept the session used,
-      // which a retrospective "that worked" would credit.
-      mkdirSync(sandbox.dataDir, { recursive: true })
-      writeFileSync(
-        path.join(sandbox.dataDir, "memory.log"),
-        `2026-01-01T00:00:00Z\tsystem\tBash\tskills/code-review\takm show skills/code-review\t${SESSION_ID}\n`,
-      )
       runCodexHook(
         "UserPromptSubmit",
         sandbox,
@@ -437,11 +519,10 @@ describe("Codex hook runtime", () => {
         { AKM_AUTO_LEARNING: "1", AKM_AUTO_CURATE: "0", AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1" },
       )
       return {
-        memoryLog: readFileSync(path.join(sandbox.dataDir, "memory.log"), "utf8"),
+        memoryLog: existsSync(path.join(sandbox.dataDir, "memory.log")) ? readFileSync(path.join(sandbox.dataDir, "memory.log"), "utf8") : "",
         feedbackLog: existsSync(path.join(sandbox.dataDir, "feedback.log")) ? readFileSync(path.join(sandbox.dataDir, "feedback.log"), "utf8") : "",
         buffer: path.join(sandbox.dataDir, "sessions", `${SESSION_ID}.md`),
         signals: path.join(sandbox.dataDir, "learning-signals.jsonl"),
-        feedbackCalls: readCallLog(sandbox.callLog).filter((call) => call.argv[0] === "feedback"),
       }
     }
 
@@ -449,7 +530,6 @@ describe("Codex hook runtime", () => {
     expect(typed.memoryLog).toContain(`\tuser\tintent\t${prompt}`)
     expect(readFileSync(typed.buffer, "utf8")).toContain("user memory intent")
     expect(readFileSync(typed.signals, "utf8")).toContain('"kind":"explicit-memory"')
-    expect(typed.feedbackCalls.map((call) => call.argv[1])).toEqual(["skills/code-review"])
     expect(typed.feedbackLog).toContain(`user\tprompt\t${prompt}`)
 
     const subagent = submit({ agent_id: "019c3f2e-7b00-7c11-8d3a-5e6f4a1b2c3d", agent_type: "worker" })
@@ -457,7 +537,6 @@ describe("Codex hook runtime", () => {
     expect(subagent.memoryLog).not.toContain("\tuser\tintent\t")
     expect(existsSync(subagent.buffer)).toBe(false)
     expect(existsSync(subagent.signals)).toBe(false)
-    expect(subagent.feedbackCalls).toEqual([])
   })
 
   it("SessionStart prints the primer for Codex's stdin and keeps its state in PLUGIN_DATA", () => {

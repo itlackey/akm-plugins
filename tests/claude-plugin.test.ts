@@ -2727,7 +2727,7 @@ exit 0
       return `2026-01-01T00:00:00Z\tsystem\tBash\t${ref}\takm show ${ref}\t${sessionId}`
     }
 
-    function runRetrospective(prompt: string, rows: string[], sessionId = "sess-retro") {
+    function runRetrospective(prompt: string, rows: string[], sessionId = "sess-retro", extra: Record<string, unknown> = {}) {
       const tempDir = makeTempDir()
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
@@ -2747,7 +2747,7 @@ exit 0
       chmodSync(path.join(binDir, "akm"), 0o755)
 
       runHook(["curate-prompt"], {
-        input: JSON.stringify({ session_id: sessionId, prompt }),
+        input: JSON.stringify({ session_id: sessionId, prompt, ...extra }),
         env: {
           HOME: tempDir,
           PATH: `${binDir}:/usr/bin:/bin`,
@@ -2823,6 +2823,16 @@ exit 0
       // ambiguous, not praise, so it must produce no signal at all.
       expect(runRetrospective("thanks, but it did not work", [systemRow("skills/deploy")])).not.toContain("feedback ")
       expect(runRetrospective("perfect, except that was wrong", [systemRow("skills/deploy")])).not.toContain("feedback ")
+    })
+
+    itPosix("does not read a prompt a subagent received as praise", () => {
+      // Claude Code and Codex stamp `agent_id` on the input of a hook that fires inside a subagent. That prompt is the main
+      // agent's task for the subagent, not the user's words, so a "that worked" in it credits nothing. (The Codex hook
+      // submits no feedback at all: codex-plugin.test.ts.)
+      const rows = [systemRow("skills/deploy")]
+
+      expect(runRetrospective("thanks, that worked", rows)).toContain("feedback skills/deploy --positive")
+      expect(runRetrospective("thanks, that worked", rows, "sess-retro", { agent_id: "agent-1", agent_type: "worker" })).not.toContain("feedback ")
     })
 
     itPosix("never submits retrospective feedback for excluded ref prefixes", () => {

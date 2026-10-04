@@ -185,4 +185,18 @@ describe("version policy", () => {
     expect(workflow).toContain("does not equal AKM_VERSION_RANGE floor")
     expect(workflow).toContain("must exact-pin akm-cli")
   })
+
+  test("every CI install of the real Codex pins one version, which claude/README.md names", () => {
+    // tests/real-hosts.test.ts pins the trust hashes the real Codex computes for the two hooks, so a Codex that moves has
+    // to move everywhere it runs, and be written down: tests.yml installs it for Linux and for Windows, release.yml for
+    // the release gate.
+    const [tests, release] = [".github/workflows/tests.yml", ".github/workflows/release.yml"]
+    const pins = [tests, release].flatMap((file) => [...readText(file).matchAll(/@openai\/codex@(\S+)/g)].map((match) => ({ file, version: match[1] })))
+    expect(pins.map(({ file }) => file)).toEqual([tests, tests, release])
+
+    const { version } = pins[0]
+    expect(valid(version)).toBe(version)
+    expect(pins.map((pin) => `${pin.file}: ${pin.version}`)).toEqual(pins.map((pin) => `${pin.file}: ${version}`))
+    expect(`claude/README.md names ${version}: ${readText("claude/README.md").includes(`real Codex (${version})`)}`).toBe(`claude/README.md names ${version}: true`)
+  })
 })

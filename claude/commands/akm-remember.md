@@ -6,7 +6,7 @@ allowed-tools: Bash(akm remember *)
 
 Distill the most reusable learning from the current conversation into a concise markdown memory. Prefer durable knowledge (invariants, non-obvious constraints, gotchas, decisions with rationale) over ephemeral chat.
 
-Use `"$ARGUMENTS"` — if provided — as the memory name or topic hint. Otherwise choose a short kebab-case slug that future searches will match.
+Use the text the user gave with this command (in Claude Code it follows below as `ARGUMENTS:`; in Codex it is the user's request) — if provided — as the memory name or topic hint. Otherwise choose a short kebab-case slug that future searches will match.
 
 `akm remember` reads the memory body from stdin. Persist it with a quoted heredoc so the markdown reaches AKM unexpanded:
 

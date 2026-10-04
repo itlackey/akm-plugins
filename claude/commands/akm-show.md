@@ -4,14 +4,15 @@ argument-hint: <[bundle//]conceptId[#fragment]> [--context exact|lead] [--max-to
 allowed-tools: Bash(akm show *) Bash(akm search *)
 ---
 
-Parse `"$ARGUMENTS"` as one required reference followed by optional flags.
-The reference cannot contain spaces. Supported flags are `--context exact|lead`,
-`--max-tokens <positive integer>`, `--max-chars <positive integer>`, and
-`--detail brief|normal|full`. Never pass both budget flags. A budget requires
-`--context lead`.
+Parse the text the user gave with this command (in Claude Code it follows
+below as `ARGUMENTS:`; in Codex it is the user's request) as one required
+reference followed by optional flags. The reference cannot contain spaces.
+Supported flags are `--context exact|lead`, `--max-tokens <positive integer>`,
+`--max-chars <positive integer>`, and `--detail brief|normal|full`. Never pass
+both budget flags. A budget requires `--context lead`.
 
 Quote the reference, but keep each flag and its separately quoted value as its
-own shell argument. Quoting the entire argument string turns the flags into
+own shell argument. Quoting the entire text turns the flags into
 part of the ref. Run:
 
 ```sh

@@ -42,6 +42,8 @@ first fragment followed by an explicitly labelled selected match, bounded to
 3,200 characters unless overridden. Friendly authored heading selectors retain
 their existing source-live behavior.
 
+The commands take their input as "the text the user gave with the command", never through a `$ARGUMENTS` placeholder. Claude Code appends that text as an `ARGUMENTS:` line when no placeholder in a command receives it, and Codex, which converts a plugin's commands into skills when it installs the plugin, skips any command that has a placeholder ([Codex](#codex)).
+
 ## Lifecycle Hooks
 
 Hooks are non-blocking and keep local, redacted state for feedback and memory capture.
@@ -77,13 +79,44 @@ codex plugin marketplace add itlackey/akm-plugins
 codex plugin add akm@akm-plugins
 ```
 
-Codex gets the AKM skill and two hooks that run the same hook modes as above: `SessionStart` (`session-start`) and `UserPromptSubmit` (`curate-prompt`, including the prompt-signal learning capture). On macOS and Linux they go through `hooks/akm-hook.sh`; on Windows each hook's `commandWindows` runs `hooks/akm-hook.ts` directly (see [Windows](#windows)). Nothing else in the Lifecycle Hooks table is registered there, and there are no slash commands; the skill uses the `akm` CLI forms. The Codex manifest registers no `PostToolUse` hook, so nothing records which concepts a session used and no automatic or retrospective feedback is submitted.
+Bun 1.0 or newer and AKM satisfying `^0.9.21` must be on `PATH`, as [above](#installation); nothing installs them for you. Codex skips plugin hooks until you review and trust them: run `/hooks` in the Codex CLI and trust the two AKM hooks. Codex asks again when a plugin update changes a hook.
 
-Codex skips plugin hooks until you review and trust them. Run `/hooks` in the Codex CLI and trust the two AKM hooks; Codex asks again when a plugin update changes a hook.
+Codex gets:
+
+- the AKM skill, which drives the `akm` CLI;
+- the five commands, as skills. Codex converts a plugin's `commands/*.md` into skills when it installs the plugin; they are listed as `akm:source-command-akm-search` and so on (type `$` or run `/skills` to pick one). It skips a command that has a `$ARGUMENTS` or `$1` placeholder, so the commands take their input as the text the user gave with them: in Codex that is the request, in Claude Code an `ARGUMENTS:` line it appends to the command;
+- the `SessionStart` hook (`session-start`): checks Bun and AKM, warms AKM data, and injects the AKM primer with hints, pending proposals, active workflows and curated context when available. It tells you and the model when AKM or its bundle is missing;
+- the `UserPromptSubmit` hook (`curate-prompt`): curates substantive prompts and adds the result as context. It also captures explicit memories, corrections, guardrails and preferences, which become reviewable proposals ([Automatic learning proposals](#automatic-learning-proposals)).
+
+On macOS and Linux the hooks go through `hooks/akm-hook.sh`; on Windows each hook's `commandWindows` runs `hooks/akm-hook.ts` directly (see [Windows](#windows)).
+
+**No tool feedback.** Codex's `PostToolUse` gives a Bash command's output but no exit status, and it has no failure event, so a failed `akm` command cannot be told from a successful one. The Codex manifest registers no `PostToolUse` hook (nor any other hook of the Lifecycle Hooks table), and the hook submits no feedback under Codex whatever `AKM_AUTO_FEEDBACK` says: nothing is recorded as used, and no feedback is sent, neither after a tool call nor for a "that worked". Record feedback yourself, with `akm feedback` or the `akm-feedback` command.
+
+**Updates.** Codex updates the plugin by itself every time it starts; `codex plugin marketplace upgrade akm-plugins` does it on demand. A release that changes a hook's command shows that hook as modified in `/hooks`, and it does not run until you trust it again.
 
 On macOS and Linux each hook's command starts with `[ -f "${PLUGIN_ROOT}/hooks/akm-hook.sh" ] || exit 0;`. In Codex 0.147 the start-up marketplace upgrade runs while the first session after a plugin release is being created: that session starts with the previous version's absolute hook path, and the upgrade then deletes that version's directory. `sh` on the missing script exits 2, which Codex counts as a block (`SessionStart` Failed, and the first prompt Blocked and never sent). With the guard that session simply runs without the AKM hooks. Codex 0.159 refreshes its hook runtime after the upgrade and is not affected. The guard protects the upgrade *from* a release that has it, so an install that predates the guard still hits the race once more. Windows has no guard: `bun` on a missing script exits 1, which Codex reports as Failed, not Blocked.
 
-Bun and AKM are required as above. Codex has no equivalent of the `/plugin` configuration dialog, so set the `AKM_*` variables below in the environment Codex starts in. The Codex hooks keep their state in Codex's plugin data directory (`$CODEX_HOME/plugins/data/akm-akm-plugins`, normally under `~/.codex`) and label their records `codex`, so Codex's state stays out of `$XDG_STATE_HOME/akm-claude`. On macOS and Linux the command sets `AKM_PLUGIN_STATE_DIR` and `AKM_PLUGIN_HARNESS=codex` in front of `sh`; on Windows `commandWindows` passes `--harness=codex` and the hook takes the directory from the `PLUGIN_DATA` variable Codex exports to it, since a `NAME=value command` prefix is not PowerShell or cmd.exe syntax. The files listed under Troubleshooting appear in that directory.
+Codex has no equivalent of the `/plugin` configuration dialog, so set the `AKM_*` variables below in the environment Codex starts in. The Codex hooks keep their state in Codex's plugin data directory (`$CODEX_HOME/plugins/data/akm-akm-plugins`, normally under `~/.codex`) and label their records `codex`, so Codex's state stays out of `$XDG_STATE_HOME/akm-claude`. On macOS and Linux the command sets `AKM_PLUGIN_STATE_DIR` and `AKM_PLUGIN_HARNESS=codex` in front of `sh`; on Windows `commandWindows` passes `--harness=codex` and the hook takes the directory from the `PLUGIN_DATA` variable Codex exports to it, since a `NAME=value command` prefix is not PowerShell or cmd.exe syntax. The files listed under Troubleshooting appear in that directory.
+
+**Blocking destructive commands.** No hook gates `akm` commands ([Locking down destructive commands](#locking-down-destructive-commands)); Codex's own rules do. A `prefix_rule` in `~/.codex/rules/default.rules` matches the start of a command and either asks first (`prompt`) or refuses it (`forbidden`, with the justification shown to the model):
+
+```python
+prefix_rule(
+    pattern = ["akm", "proposal", "accept"],
+    decision = "prompt",
+    justification = "Accepting a proposal changes the bundle",
+)
+
+prefix_rule(
+    pattern = ["akm", ["remove", "upgrade"]],
+    decision = "forbidden",
+    justification = "Run this yourself, outside the session",
+)
+```
+
+Try one with `codex execpolicy check --pretty --rules ~/.codex/rules/default.rules -- akm remove skills/old`. A pattern matches the command's leading words only: `["akm", "sync", "--push"]` matches `akm sync --push -m msg` but not `akm sync -m msg --push`.
+
+CI installs the real Codex on Linux and on Windows and runs `tests/real-hosts.test.ts` against it ([What was tested on Windows](#what-was-tested-on-windows)).
 
 ## Windows
 
@@ -108,7 +141,7 @@ What differs from macOS and Linux:
 `.github/workflows/tests.yml` runs a `windows` job on `windows-latest` for every pull request and every push to `main`. It runs:
 
 - the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`, and once against the `akm-cli@0.9.21` npm itself installs;
-- the real Claude Code (2.1.286) and the real Codex (0.159.3), installed from npm and started with no credential. `claude -p` registers the manifest's 23 handlers and runs SessionStart, UserPromptSubmit and SessionEnd through exec form before it stops at "Not logged in". `codex exec` runs the two hooks, with the plugin installed from the checkout and trusted the way `/hooks` does, before its model provider, a dead local port, refuses the request.
+- the real Claude Code (2.1.286) and the real Codex (0.160.0), installed from npm and started with no credential. `claude -p` registers the manifest's 23 handlers and runs SessionStart, UserPromptSubmit and SessionEnd through exec form before it stops at "Not logged in". `codex exec` runs the two hooks, with the plugin installed from the checkout and trusted the way `/hooks` does, before its model provider, a dead local port, refuses the request.
 
 Tests that write their fake akm as a POSIX `sh` script, assert POSIX mode bits or run `akm-hook.sh` are skipped there by name (`[skipped on Windows: ...]`): `tests/host-runtime.ts` explains why, and `tests/hook-commands.test.ts` and `tests/codex-plugin.test.ts` run the same hook modes against the Windows-capable fake.
 
@@ -147,7 +180,7 @@ The most useful settings are also exposed in Claude Code's `/plugin` configurati
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` (`~/.local/state/akm-claude`; under Codex, its plugin data directory) | Local plugin state directory. The home directory is `os.homedir()`, so on Windows it is `%USERPROFILE%\.local\state\akm-claude`. |
 | `AKM_PLUGIN_HARNESS` | `claude-code` | Host the hook labels its records with. The Codex manifest sets it to `codex` on macOS and Linux (on Windows it passes `--harness=codex` instead); leave it alone otherwise. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working. |
-| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. |
+| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. Always off under Codex. |
 | `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. This does not disable native session extraction; use `AKM_AUTO_MEMORY=0` for that. |
 | `AKM_AUTO_HINTS` | `1` | Set to `0` to skip the session-start `akm hints` call. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable native-session extraction through `akm proposal extract`. The OpenCode plugin honours the same variable for its interval-gated extraction. |

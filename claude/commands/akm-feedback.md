@@ -4,7 +4,7 @@ argument-hint: <ref> <+|-> [note]
 allowed-tools: Bash(akm feedback *) Bash(akm show *)
 ---
 
-Parse `"$ARGUMENTS"` as three parts: an asset concept-ID `ref` (e.g. `skills/code-review`), a sentiment token (`+`, `-`, `positive`, `negative`), and an optional free-form note describing what worked or fell short. A negative signal requires a note.
+Parse the text the user gave with this command (in Claude Code it follows below as `ARGUMENTS:`; in Codex it is the user's request) as three parts: an asset concept-ID `ref` (e.g. `skills/code-review`), a sentiment token (`+`, `-`, `positive`, `negative`), and an optional free-form note describing what worked or fell short. A negative signal requires a note.
 
 Negative feedback is how an asset gets fixed: the next `akm improve` run reviews it and proposes a change based on the note, so the note must say what is wrong and what should change (for example: `the deploy step uses --prod, but the flag is now --env production`). Positive feedback raises the asset's ranking and never triggers a rewrite.
 

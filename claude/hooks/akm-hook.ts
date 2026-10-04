@@ -52,8 +52,7 @@ const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.21"
 // all. Either way a Codex run keeps its state in PLUGIN_DATA, the plugin data
 // directory Codex exports to its hooks, so what it records is labelled Codex and
 // never lands in Claude's state. The auto-feedback paths below keep the literal
-// "claude-code": the Codex manifest registers no PostToolUse hook, so nothing
-// records a ref for them to credit there.
+// "claude-code": they never run under Codex (see AUTO_FEEDBACK).
 const HARNESS = (HARNESS_ARG ?? process.env.AKM_PLUGIN_HARNESS) === "codex" ? "codex" : "claude-code"
 const CODEX_DATA_DIR = HARNESS === "codex" ? process.env.PLUGIN_DATA?.trim() : undefined
 // os.homedir() rather than $HOME: Windows sets no HOME (USERPROFILE instead), and
@@ -158,7 +157,12 @@ function flagSetting(envName: string, optionKey: string, defaultOn: boolean): bo
   return defaultOn
 }
 
-const AUTO_FEEDBACK = flagSetting("AKM_AUTO_FEEDBACK", "AUTO_FEEDBACK", true)
+// Never under Codex, whatever AKM_AUTO_FEEDBACK says: its PostToolUse gives a
+// Bash command's output but no exit status (and it has no failure event), so a
+// failed akm command cannot be told from a successful one. The Codex manifest
+// registers no PostToolUse hook; this keeps the hook itself from submitting
+// feedback, for a tool event or for the session's log under a "that worked".
+const AUTO_FEEDBACK = HARNESS !== "codex" && flagSetting("AKM_AUTO_FEEDBACK", "AUTO_FEEDBACK", true)
 const AUTO_LEARNING = flagSetting("AKM_AUTO_LEARNING", "AUTO_LEARNING", true)
 const AUTO_SKILL_PROPOSALS = envFlag("AKM_AUTO_SKILL_PROPOSALS", true)
 // AKM_AUTO_MEMORY gates native-transcript extraction. That path is exactly one

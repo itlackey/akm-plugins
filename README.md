@@ -1,14 +1,18 @@
 # AKM Plugins
 
-Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.21`. The OpenCode and Claude integrations expose exactly five public AKM surfaces:
+Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.21`. The OpenCode, Claude, and Codex integrations expose exactly five public AKM surfaces:
 
-| Capability | OpenCode tool | Claude slash command |
-| --- | --- | --- |
-| Search configured bundles or registries | `akm_search` | `/akm-search` |
-| Show a concept | `akm_show` | `/akm-show` |
-| Curate concepts for a task | `akm_curate` | `/akm-curate` |
-| Record an outcome | `akm_feedback` | `/akm-feedback` |
-| Save durable knowledge | `akm_remember` | `/akm-remember` |
+| | OpenCode | Claude Code | Codex |
+| --- | --- | --- | --- |
+| Search configured bundles or registries | `akm_search` | `/akm-search` | `akm-search` skill |
+| Show a concept | `akm_show` | `/akm-show` | `akm-show` skill |
+| Curate concepts for a task | `akm_curate` | `/akm-curate` | `akm-curate` skill |
+| Record an outcome | `akm_feedback` | `/akm-feedback` | `akm-feedback` skill |
+| Save durable knowledge | `akm_remember` | `/akm-remember` | `akm-remember` skill |
+| Curated context at session start | yes | yes | yes |
+| Curated context for each prompt | yes | yes | yes |
+| AKM skill | no | yes | yes |
+| Feedback from tool results | no | yes | no |
 
 AKM references are concept IDs in the form `[bundle//]conceptId[#fragment]`, for example `skills/code-review`, `team-playbook//knowledge/deploy#Rollback`, or the opaque 0.9.14 selector `knowledge/long-guide#akm-fragment-3-1138d4941c9a`. The CLI search and curate commands use `--from local`, `--from registry`, `--from all`, or `--from <bundle-name>`. Curate can also pack ranked local assets' full content into one token-budgeted response; OpenCode exposes that as `akm_curate.pack`, and Claude's `/akm-curate` uses it directly.
 
@@ -68,7 +72,7 @@ codex plugin marketplace add itlackey/akm-plugins
 codex plugin add akm@akm-plugins
 ```
 
-The Codex plugin is the same [`claude/`](./claude) directory with a second manifest, `.codex-plugin/plugin.json`, listed in [`.agents/plugins/marketplace.json`](./.agents/plugins/marketplace.json). Codex receives the AKM skill, which drives the `akm` CLI directly (there are no slash commands), and two hooks: `SessionStart` injects the AKM primer and checks the CLI version, and `UserPromptSubmit` curates context for each prompt. The Claude plugin's other hooks (feedback, session extraction, tool and subagent observations) are not part of it.
+The Codex plugin is the same [`claude/`](./claude) directory with a second manifest, `.codex-plugin/plugin.json`, listed in [`.agents/plugins/marketplace.json`](./.agents/plugins/marketplace.json). Codex receives the AKM skill, which drives the `akm` CLI directly; the five commands, which Codex converts into skills when it installs the plugin; and two hooks: `SessionStart` injects the AKM primer and checks the CLI version, and `UserPromptSubmit` curates context for each prompt. The Claude plugin's other hooks (session extraction, tool and subagent observations) are not part of it, and neither is tool feedback: Codex's `PostToolUse` reports a Bash command's output but no exit status, so a failed `akm` command could not be told from a successful one, and the plugin submits no feedback under Codex.
 
 Codex does not run plugin hooks until you review and trust them: open `/hooks` in the Codex CLI and trust the two AKM hooks. See [claude/README.md](./claude/README.md#codex) for details. On Windows the hooks run through PowerShell with Bun on `PATH` (the manifest's `commandWindows`); [claude/README.md](./claude/README.md#windows) says what that needs and what is tested.
 

@@ -4,7 +4,7 @@ argument-hint: "[query] [flags]"
 allowed-tools: Bash(akm search *)
 ---
 
-Parse `"$ARGUMENTS"` as two parts: the free-text query, then any flags the user typed. The first token starting with `--` begins the flag section; everything before it is the query. Quote only the query — quoting the whole argument string turns every flag into a search term.
+Parse the text the user gave with this command (in Claude Code it follows below as `ARGUMENTS:`; in Codex it is the user's request) as two parts: the free-text query, then any flags the user typed. The first token starting with `--` begins the flag section; everything before it is the query. Quote only the query — quoting the whole text turns every flag into a search term.
 
 Supported flags: `--from local|registry|all|<bundle-name>`, `--type <asset-type>`, and `--include-proposed`. Pass anything else the user typed through verbatim. When the user supplied no query, drop the quoted query argument entirely and browse.
 
