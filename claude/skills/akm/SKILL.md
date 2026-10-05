@@ -5,7 +5,7 @@ description: Search, show, and curate AKM concepts, record feedback, and remembe
 
 # AKM
 
-AKM `^0.9.21` exposes exactly five public plugin surfaces. The `/akm-*` slash
+AKM `^0.9.25` exposes exactly five public plugin surfaces. The `/akm-*` slash
 commands exist only in Claude Code; in any other host, such as Codex, run the
 `akm` CLI forms:
 

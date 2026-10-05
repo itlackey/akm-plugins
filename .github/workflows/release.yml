@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI compatibility floor these plugins target (e.g. 0.9.21). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp."
+        description: "The exact akm CLI compatibility floor these plugins target (e.g. 0.9.25). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp."
         required: true
         type: string
 
@@ -133,7 +133,7 @@ jobs:
           const parsedAkm = SEMVER.exec(akmVersion)
           if (!parsedAkm) {
             console.error(`akm_version "${akmVersion}" is not valid semver (MAJOR.MINOR.PATCH).`)
-            console.error('Supply the exact akm CLI version these plugins target, e.g. 0.9.21 -- the workflow appends the timestamp.')
+            console.error('Supply the exact akm CLI version these plugins target, e.g. 0.9.25 -- the workflow appends the timestamp.')
             process.exit(1)
           }
 
