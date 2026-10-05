@@ -11,4 +11,4 @@ The 0.9.14 `--pack` response already contains the selected local assets' full pa
 - when it fits this task
 - how it should be applied
 
-After using an asset, record `akm feedback <ref> --positive` if it helped. If its content was wrong, stale or incomplete, record `akm feedback <ref> --negative --reason "<what is wrong and what should change>"`: negative feedback queues the asset for review and a fix, so be specific. A failed akm command is not feedback on the asset.
+After using an asset, record `akm feedback <ref> --positive` if it helped. If its content was wrong, stale or incomplete, record `akm feedback <ref> --negative --reason "<what is wrong and what should change>"`: that lowers its ranking, and a later improve run reads your reason, so be specific. To correct a fact you have verified (ran the command, read the official doc or the source file), also pass `--replace "<exact current text>" --with "<corrected text>" --source "<URL, command or file>"`, copying the `--replace` text verbatim from the asset's file and changing only the wrong words. A failed akm command is not feedback on the asset.

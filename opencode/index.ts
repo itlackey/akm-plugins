@@ -1978,7 +1978,7 @@ const AKM_HINTS_PREFIX = [
   "- `akm hints` has this bundle's conventions; `akm help` has the CLI.",
 ].join("\n")
 
-const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content. If an asset is wrong, stale or incomplete, call `akm_feedback <ref> negative` with a note saying <what is wrong and what should change>: that queues it for review and a fix. Use `positive` when it helped."
+const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content. If an asset is wrong, stale or incomplete, call `akm_feedback <ref> negative` with a note saying <what is wrong and what should change>: that lowers its ranking. To correct a fact you have verified, also pass `replace`, `with` and `source`. Use `positive` when it helped."
 const AKM_CONTEXT_TRUNCATED_MARKER = "\n\n[truncated for context]"
 
 function getContextBudgetChars(): number {
@@ -3433,15 +3433,43 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         },
       }),
       akm_feedback: tool({
-        description: "Record feedback for a bundle asset. Negative feedback with a note queues the asset for review: the next improve run proposes a fix based on the note, so say what is wrong and what should change. Positive feedback raises the asset's ranking and never triggers a rewrite. Call it after akm_show when the asset's content materially helped, or proved wrong, stale or incomplete. A failed akm call is not feedback on the asset.",
+        description: "Record feedback for a bundle asset. Negative feedback with a note flags the asset and lowers its ranking; the next improve run may repair only its description, title or when_to_use from the note, so say what is wrong and what should change. To correct a wrong fact in its text, also pass replace, with and source: akm checks the fix and queues it as a proposal for review. Attach a fix only when you have verified the correct fact (ran the command, read the official doc or the source file), otherwise record the note only. Positive feedback only raises the asset's ranking. Call it after akm_show when the asset's content materially helped, or proved wrong, stale or incomplete. A failed akm call is not feedback on the asset.",
         args: {
           ref: tool.schema.string().describe("Asset ref to record feedback for."),
           sentiment: tool.schema.enum(["positive", "negative"]).describe("Whether the feedback is positive or negative."),
-          note: tool.schema.string().optional().describe("What is wrong and what should change. Required for negative feedback; it guides the fix."),
+          note: tool.schema.string().optional().describe("What is wrong and what should change. Required for negative feedback."),
+          replace: tool.schema.array(tool.schema.string()).optional().describe("Exact current text to correct, copied verbatim from the asset's file (akm_show returns its path). Each must appear exactly once there. Pair each with a with entry, in order. Negative feedback only."),
+          with: tool.schema.array(tool.schema.string()).optional().describe("The corrected text for each replace entry, in order. Change only the wrong words or lines: no rewording, no added headings or intros."),
+          source: tool.schema.string().optional().describe("The URL, command or file that shows the correct fact. Required with replace."),
         },
-        async execute({ ref, sentiment, note }, context) {
+        async execute({ ref, sentiment, note, replace, with: corrections, source }, context) {
+          // The pairs below are built by index, so lists of different lengths are
+          // refused here. So are the two fixes akm would refuse anyway, without
+          // starting it. Every other check on a fix is akm's own.
+          const fixes = replace?.length ?? 0
+          const corrected = corrections?.length ?? 0
+          let refusal: string | undefined
+          if (fixes !== corrected) refusal = `Each replace needs one with (got ${fixes} replace and ${corrected} with).`
+          else if (fixes > 0 && sentiment !== "negative") refusal = "replace, with and source are only for negative feedback."
+          else if (fixes > 0 && !source?.trim()) refusal = "A fix needs source: the URL, command or file that shows the correct fact."
+          if (refusal) {
+            await writePluginLog(logClient, "warn", "AKM feedback refused", {
+              subsystem: "feedback",
+              toolName: "akm_feedback",
+              sessionID: context.sessionID,
+              directory: context.directory,
+              ref,
+              sentiment,
+              error: refusal,
+            })
+            return JSON.stringify({ ok: false, error: refusal })
+          }
           const args = ["feedback", ref, sentiment === "positive" ? "--positive" : "--negative"]
           if (note) args.push("--reason", note)
+          // `--with=` and not `--with <text>`: a corrected text that starts with `-`
+          // would otherwise be read as the next flag.
+          for (let i = 0; i < fixes; i++) args.push("--replace", replace![i], `--with=${corrections![i]}`)
+          if (source) args.push("--source", source)
           const raw = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_feedback", sessionID: context.sessionID, directory: context.directory })
           const parsed = safeJsonParse<{ ok?: boolean; error?: string }>(raw)
           if (parsed?.ok === false) {

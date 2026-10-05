@@ -1,12 +1,14 @@
 ---
-description: Record feedback on an AKM bundle asset; negative feedback with a reason queues it for review and a fix.
+description: Record feedback on an AKM bundle asset; negative feedback with a reason lowers its ranking, and an exact fix can be attached.
 argument-hint: <ref> <+|-> [note]
 allowed-tools: Bash(akm feedback *) Bash(akm show *)
 ---
 
 Parse the text the user gave with this command (in Claude Code it follows below as `ARGUMENTS:`; in Codex it is the user's request) as three parts: an asset concept-ID `ref` (e.g. `skills/code-review`), a sentiment token (`+`, `-`, `positive`, `negative`), and an optional free-form note describing what worked or fell short. A negative signal requires a note.
 
-Negative feedback is how an asset gets fixed: the next `akm improve` run reviews it and proposes a change based on the note, so the note must say what is wrong and what should change (for example: `the deploy step uses --prod, but the flag is now --env production`). Positive feedback raises the asset's ranking and never triggers a rewrite.
+Negative feedback flags the asset and lowers its ranking; the next `akm improve` run may repair its description, title or `when_to_use` from the note, but it does not rewrite the text. So the note must say what is wrong and what should change (for example: `the deploy step uses --prod, but the flag is now --env production`). Positive feedback only raises the asset's ranking.
+
+To correct a wrong fact in the asset's text, attach the exact fix, but only when you have verified the correct fact (ran the command, read the official doc or the source file) and can cite it in `--source`. Copy each `--replace` verbatim from the asset's file (`akm show <ref> --format json` gives its `path`) and change only the wrong words or lines: no rewording, no added headings or intros. `--replace` and `--with` repeat, paired in order; write `--with=<text>` when the text starts with `-`. akm checks that each `--replace` text appears exactly once and that the frontmatter still parses. If a check fails it records nothing and says why, so fix the text and retry. A valid fix is queued as a proposal for review, showing the reason and source. Without a verified fix, record the note only.
 
 A failed akm command (for example `akm show` erroring) is not feedback on the asset — do not record it.
 
@@ -16,6 +18,12 @@ Run:
 
 ```sh
 akm feedback <ref> --positive|--negative --reason "<note>" --format json -q
+```
+
+With a verified fix:
+
+```sh
+akm feedback <ref> --negative --reason "<what is wrong>" --replace "<exact current text>" --with "<corrected text>" --source "<URL, command or file that shows it>" --format json -q
 ```
 
 If the ref looks ambiguous, first confirm it with `akm show <ref> --format json` and abort if the ref does not resolve. After recording, confirm the outcome to the user and, when negative, suggest finding a replacement via `/akm-curate`.

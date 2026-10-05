@@ -284,6 +284,12 @@ describe("checkAkmVersion", () => {
     expect(context).toContain('akm curate "<task>"')
     expect(context).toContain("The public plugin surface is limited to search, show, curate, feedback, and remember.")
     expect(context).not.toContain("AKM is NOT available")
+    // Negative feedback flags an asset and lowers its ranking; a verified fix is attached with --replace/--with/--source.
+    expect(context).toContain("that flags it and lowers its ranking")
+    expect(context).toContain("--replace")
+    expect(context).toContain("--with")
+    expect(context).toContain("--source")
+    expect(context).not.toContain("triggers a review and fix")
   })
 
   itPosix("session-start reports a missing bundle through context and the state log, not stderr", () => {

@@ -307,6 +307,25 @@ describe("Claude plugin metadata", () => {
     expect(skill).toContain("the `Agent` tool")
   })
 
+  it("tells agents to attach an exact, verified fix to negative feedback, and not that improve proposes one", () => {
+    const skill = readFileSync(akmSkillPath, "utf8")
+    const feedbackCommand = readFileSync(path.join(repoRoot, "claude/commands/akm-feedback.md"), "utf8")
+    const curateCommand = readFileSync(path.join(repoRoot, "claude/commands/akm-curate.md"), "utf8")
+
+    for (const text of [skill, feedbackCommand]) {
+      for (const flag of ["--replace", "--with", "--source"]) expect(text).toContain(flag)
+      expect(text).toContain("verified")
+      expect(text).toContain("verbatim")
+      expect(text).toContain("`--with=<text>`")
+      expect(text).toContain("records nothing")
+    }
+    expect(curateCommand).toContain("--replace")
+    // The next improve run repairs a description, title or when_to_use at most; it proposes no fix from the reason.
+    for (const text of [skill, feedbackCommand, curateCommand]) {
+      expect(text).not.toMatch(/proposes a (fix|change)|queues (it|the asset) for review and a fix/)
+    }
+  })
+
   it("claude/shared contains real implementations — no re-export shims", () => {
     // claude/shared/ is the canonical source for shared modules. Files must
     // never be re-export shims: the plugin cache only contains claude/, so
@@ -874,6 +893,11 @@ exit 0
     // the budget it saves, and is routinely never followed.
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM PROVENANCE")
     expect(payload.hookSpecificOutput.additionalContext).not.toContain("AKM bundle curation written to")
+    // The tip says what negative feedback does and how to attach a verified fix.
+    expect(payload.hookSpecificOutput.additionalContext).toContain("that lowers its ranking. To correct a fact you have verified, also pass `--replace")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("--with")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("--source")
+    expect(payload.hookSpecificOutput.additionalContext).not.toContain("queues it for review and a fix")
     // 07 hardening: the prompt-recall path also provenance-tags the recalled content.
     const curatedContent = readFileSync(
       path.join(stateDir, "akm-claude", "curated", "prompt-sess-curate-2.md"),

@@ -12,7 +12,7 @@ commands exist only in Claude Code; in any other host, such as Codex, run the
 - `/akm-search` or `akm search` searches configured bundles or registries.
 - `/akm-show` or `akm show` retrieves a concept.
 - `/akm-curate` or `akm curate` ranks concepts for a task.
-- `/akm-feedback` or `akm feedback` records whether a concept helped; negative feedback with a reason queues it for review and a fix.
+- `/akm-feedback` or `akm feedback` records whether a concept helped; negative feedback with a reason lowers its ranking, and an exact fix can be attached.
 - `/akm-remember` or `akm remember` stores durable knowledge.
 
 Claude can also dispatch a configured AKM agent through the existing Bash tool.
@@ -123,7 +123,7 @@ Preserve relevant structured fields such as `prompt`, `template`, `run`, `origin
 
 ## Feedback
 
-After the outcome is known, record whether the concept's content materially helped, or proved wrong, stale or incomplete. Negative feedback is what gets a concept reviewed and fixed: the next improve run proposes a change based on your reason, so say what is wrong and what should change. Positive feedback only improves ranking:
+After the outcome is known, record whether the concept's content materially helped, or proved wrong, stale or incomplete. Negative feedback flags the concept and lowers its ranking; the next improve run may repair its description, title or `when_to_use` from your reason, but it does not rewrite the concept's text, so say what is wrong and what should change. Positive feedback only improves ranking:
 
 ```sh
 akm feedback "<ref>" --positive --format json -q
@@ -131,6 +131,16 @@ akm feedback "<ref>" --negative --reason "<what is wrong and what should change>
 ```
 
 Negative feedback requires a reason. A failed akm command (for example `akm show` erroring) is not feedback on the asset — do not record it. Do not submit feedback for a reference AKM reports as ineligible.
+
+To correct a wrong fact in the concept's text, attach the exact fix. akm queues it as a proposal for review, showing your reason and source:
+
+```sh
+akm feedback "<ref>" --negative --reason "<what is wrong>" \
+  --replace "<exact current text>" --with "<corrected text>" \
+  --source "<URL, command or file that shows it>" --format json -q
+```
+
+Attach a fix only when you have verified the correct fact (ran the command, read the official doc or the source file), and cite it in `--source`. Copy each `--replace` verbatim from the concept's file (`akm show "<ref>" --format json` gives its `path`) and change only the wrong words or lines: no rewording, no added headings or intros. `--replace` and `--with` repeat, paired in order; write `--with=<text>` when the text starts with `-`. akm checks that each `--replace` text appears exactly once and that the frontmatter still parses. If a check fails it records nothing and says why, so fix the text and retry. Without a verified fix, record the reason only.
 
 ## Remember
 

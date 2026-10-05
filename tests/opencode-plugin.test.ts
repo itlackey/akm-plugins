@@ -547,6 +547,107 @@ describe("akm-opencode plugin", () => {
       )
     })
 
+    it("passes an exact fix through to the CLI: each --replace with its own --with=, then --source", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_feedback.execute({
+        ref: "skills/review",
+        sentiment: "negative",
+        note: "the deploy flag was renamed",
+        replace: ["--prod", "- run it with -x"],
+        with: ["--env production", "- run it with -y"],
+        source: "deploy --help",
+      } as any, createToolContext())
+
+      // `--with=<text>`, never `--with <text>`: a corrected text that starts
+      // with `-` would be read as the next flag.
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        akmBin,
+        [
+          "feedback",
+          "skills/review",
+          "--negative",
+          "--reason",
+          "the deploy flag was renamed",
+          "--replace",
+          "--prod",
+          "--with=--env production",
+          "--replace",
+          "- run it with -x",
+          "--with=- run it with -y",
+          "--source",
+          "deploy --help",
+          "--format",
+          "json",
+        ],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("treats empty replace and with lists as no fix", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_feedback.execute({
+        ref: "skills/review",
+        sentiment: "negative",
+        note: "stale",
+        replace: [],
+        with: [],
+      } as any, createToolContext())
+
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        akmBin,
+        ["feedback", "skills/review", "--negative", "--reason", "stale", "--format", "json"],
+        expect.objectContaining({ encoding: "utf8" }),
+      )
+    })
+
+    it("refuses a fix without starting akm when replace and with differ in length, source is missing, or the feedback is positive", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput(client))
+      const needsSource = "A fix needs source: the URL, command or file that shows the correct fact."
+      const refused: Array<[Record<string, unknown>, string]> = [
+        [{ sentiment: "negative", replace: ["a", "b"], with: ["x"], source: "doc" }, "Each replace needs one with (got 2 replace and 1 with)."],
+        [{ sentiment: "negative", replace: ["a"], source: "doc" }, "Each replace needs one with (got 1 replace and 0 with)."],
+        [{ sentiment: "negative", with: ["x"], source: "doc" }, "Each replace needs one with (got 0 replace and 1 with)."],
+        [{ sentiment: "negative", replace: ["a"], with: ["x"] }, needsSource],
+        [{ sentiment: "negative", replace: ["a"], with: ["x"], source: "  " }, needsSource],
+        [{ sentiment: "positive", replace: ["a"], with: ["x"], source: "doc" }, "replace, with and source are only for negative feedback."],
+      ]
+
+      for (const [fix, error] of refused) {
+        mockExecFileSync.mockClear()
+        const result = await hooks.tool!.akm_feedback.execute({ ref: "skills/review", note: "wrong", ...fix } as any, createToolContext())
+
+        expect(JSON.parse(result)).toEqual({ ok: false, error })
+        expect(mockExecFileSync.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === "feedback")).toHaveLength(0)
+      }
+      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
+        body: expect.objectContaining({ message: "AKM feedback refused" }),
+      }))
+    })
+
+    it("publishes the fix arguments as optional, and describes negative feedback as flagging rather than rewriting", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const feedback = hooks.tool!.akm_feedback as unknown as {
+        description: string
+        args: Record<string, { safeParse: (v: unknown) => { success: boolean } }>
+      }
+
+      for (const name of ["replace", "with"]) {
+        expect({ name, absent: feedback.args[name]!.safeParse(undefined).success }).toEqual({ name, absent: true })
+        expect({ name, list: feedback.args[name]!.safeParse(["x"]).success }).toEqual({ name, list: true })
+        expect({ name, text: feedback.args[name]!.safeParse("x").success }).toEqual({ name, text: false })
+      }
+      expect(feedback.args.source!.safeParse(undefined).success).toBe(true)
+      expect(feedback.args.source!.safeParse("deploy --help").success).toBe(true)
+      expect(feedback.args.source!.safeParse(["deploy --help"]).success).toBe(false)
+
+      // Improve repairs at most a description, title or when_to_use from the note; it proposes no fix of its own.
+      expect(feedback.description).toContain("lowers its ranking")
+      expect(feedback.description).toContain("replace, with and source")
+      expect(feedback.description).toContain("verified")
+      expect(feedback.description).not.toMatch(/proposes a (fix|change)|queues the asset for review/)
+    })
+
     it("publishes the AKM 0.9 asset-type vocabulary on both type filters", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       // `akm info --format json` -> .assetTypes (singular, as `--type` accepts),
@@ -667,6 +768,17 @@ describe("akm-opencode plugin", () => {
       expect(injected).toContain("# AKM is available in this session")
       expect(injected).toContain("editing")
       expect(injected).not.toContain("from scratch")
+    })
+
+    it("tells the model what negative feedback does, and that a verified fix goes in replace, with and source", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "feedback-tail-1" } } } as any)
+      const output: { system: string[] } = { system: [] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "feedback-tail-1" } as any, output as any)
+      const injected = output.system.join("\n")
+
+      expect(injected).toContain("that lowers its ranking. To correct a fact you have verified, also pass `replace`, `with` and `source`.")
+      expect(injected).not.toContain("queues it for review and a fix")
     })
 
     it("does not run curate at all when the directory yields no context", async () => {
