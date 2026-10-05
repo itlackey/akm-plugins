@@ -34,7 +34,7 @@ akm search "<query>" --from <name>     # scope to a single configured source nam
 akm search "<query>" --include-proposed  # Merge proposed-quality drafts into hits (default search hides them)
 ```
 
-Project-context ranking is automatic — assets matching the current cwd get a small ranking boost, and usage signals are scoped per-project (no cross-project pollution). Pass `--no-project-context` to disable the boost and the scoped-utility signal for one search, or `--no-track-usage` for a read-only search that does not influence future ranking.
+Project-context ranking is automatic — assets matching the current cwd get a small ranking boost, and usage signals are scoped per-project (no cross-project pollution). Pass `--no-project-context` to disable the boost and the scoped-utility signal for one search.
 Each hit includes a `ref` you use to retrieve the full asset, plus optional `quality?` (`curated`/`generated`/`proposed`/unknown) and `warnings?` fields.
 
 **Using assets:**
