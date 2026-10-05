@@ -1974,7 +1974,7 @@ const AKM_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
   "- Assets for this project (skills, knowledge, memories, workflows) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
-  "- Record `akm_feedback` on an asset once you know whether it helped; keep durable project knowledge with `akm_remember`.",
+  "- Record `akm_feedback` on an asset when it helped, or when its content proved wrong or stale; keep durable project knowledge with `akm_remember`.",
   "- `akm hints` has this bundle's conventions; `akm help` has the CLI.",
 ].join("\n")
 
@@ -3403,7 +3403,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         },
       }),
       akm_show: tool({
-        description: "Show an AKM asset by [bundle//]conceptId[#fragment]. Read an asset this way before relying on it, then record akm_feedback once you know whether it helped.",
+        description: "Show an AKM asset by [bundle//]conceptId[#fragment]. Read an asset this way before relying on it, then record akm_feedback when it helped, or when its content proved wrong or stale.",
         args: {
           ref: tool.schema.string().describe("Asset ref returned by akm_curate or akm_search, optionally with a #fragment — e.g. `skills/code-review` or `local//knowledge/deploy#Rollback`."),
           detail: tool.schema.enum(["brief", "summary", "normal", "full"]).optional().describe("Response detail level. Defaults to 'normal'."),
