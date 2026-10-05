@@ -290,6 +290,10 @@ describe("checkAkmVersion", () => {
     expect(context).toContain("--with")
     expect(context).toContain("--source")
     expect(context).not.toContain("triggers a review and fix")
+    // Negative feedback is only for wrong or stale content; an asset that merely did not fit the task records nothing.
+    expect(context).toContain("only when an asset's content is wrong or stale")
+    expect(context).toContain("is not negative feedback: record nothing")
+    expect(context).not.toMatch(/incomplete|unhelpful/)
   })
 
   itPosix("session-start reports a missing bundle through context and the state log, not stderr", () => {

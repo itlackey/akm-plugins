@@ -1978,7 +1978,7 @@ const AKM_HINTS_PREFIX = [
   "- `akm hints` has this bundle's conventions; `akm help` has the CLI.",
 ].join("\n")
 
-const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content. If an asset is wrong, stale or incomplete, call `akm_feedback <ref> negative` with a note saying <what is wrong and what should change>: that lowers its ranking. To correct a fact you have verified, also pass `replace`, `with` and `source`. Use `positive` when it helped."
+const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content. Only if an asset is wrong or stale, call `akm_feedback <ref> negative` with a note saying <what is wrong and what it should say>: that lowers its ranking. To correct a fact you have verified, also pass `replace`, `with` and `source`. Use `positive` when it helped. An asset that simply didn't fit your task is not negative feedback: record nothing."
 const AKM_CONTEXT_TRUNCATED_MARKER = "\n\n[truncated for context]"
 
 function getContextBudgetChars(): number {
@@ -3433,11 +3433,11 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         },
       }),
       akm_feedback: tool({
-        description: "Record feedback for a bundle asset. Negative feedback with a note flags the asset and lowers its ranking; the next improve run may repair only its description, title or when_to_use from the note, so say what is wrong and what should change. To correct a wrong fact in its text, also pass replace, with and source: akm checks the fix and queues it as a proposal for review. Attach a fix only when you have verified the correct fact (ran the command, read the official doc or the source file), otherwise record the note only. Positive feedback only raises the asset's ranking. Call it after akm_show when the asset's content materially helped, or proved wrong, stale or incomplete. A failed akm call is not feedback on the asset.",
+        description: "Record feedback for a bundle asset. Negative feedback is only for content that is wrong or stale. With a note it flags the asset and lowers its ranking; the next improve run may repair only its description, title or when_to_use from the note, so say what is wrong and what it should say. To correct a wrong fact in its text, also pass replace, with and source: akm checks the fix and queues it as a proposal for review. Attach a fix only when you have verified the correct fact (ran the command, read the official doc or the source file), otherwise record the note only. Positive feedback only raises the asset's ranking. An asset that simply didn't fit your task is not negative feedback: record nothing. Call it after akm_show when the asset's content materially helped, or proved wrong or stale. A failed akm call is not feedback on the asset.",
         args: {
           ref: tool.schema.string().describe("Asset ref to record feedback for."),
           sentiment: tool.schema.enum(["positive", "negative"]).describe("Whether the feedback is positive or negative."),
-          note: tool.schema.string().optional().describe("What is wrong and what should change. Required for negative feedback."),
+          note: tool.schema.string().optional().describe("What is wrong and what it should say. Required for negative feedback."),
           replace: tool.schema.array(tool.schema.string()).optional().describe("Exact current text to correct, copied verbatim from the asset's file (akm_show returns its path). Each must appear exactly once there. Pair each with a with entry, in order. Negative feedback only."),
           with: tool.schema.array(tool.schema.string()).optional().describe("The corrected text for each replace entry, in order. Change only the wrong words or lines: no rewording, no added headings or intros."),
           source: tool.schema.string().optional().describe("The URL, command or file that shows the correct fact. Required with replace."),

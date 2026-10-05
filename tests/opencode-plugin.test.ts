@@ -625,7 +625,7 @@ describe("akm-opencode plugin", () => {
       }))
     })
 
-    it("publishes the fix arguments as optional, and describes negative feedback as flagging rather than rewriting", async () => {
+    it("publishes the fix arguments as optional, and describes negative feedback as flagging rather than rewriting, for wrong or stale content only", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const feedback = hooks.tool!.akm_feedback as unknown as {
         description: string
@@ -646,6 +646,10 @@ describe("akm-opencode plugin", () => {
       expect(feedback.description).toContain("replace, with and source")
       expect(feedback.description).toContain("verified")
       expect(feedback.description).not.toMatch(/proposes a (fix|change)|queues the asset for review/)
+      // Negative feedback is only for wrong or stale content; an asset that merely did not fit the task records nothing.
+      expect(feedback.description).toContain("only for content that is wrong or stale")
+      expect(feedback.description).toContain("is not negative feedback: record nothing")
+      expect(feedback.description).not.toMatch(/incomplete|unhelpful/)
     })
 
     it("publishes the AKM 0.9 asset-type vocabulary on both type filters", async () => {
@@ -770,7 +774,7 @@ describe("akm-opencode plugin", () => {
       expect(injected).not.toContain("from scratch")
     })
 
-    it("tells the model what negative feedback does, and that a verified fix goes in replace, with and source", async () => {
+    it("tells the model what negative feedback does and is for, and that a verified fix goes in replace, with and source", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.event!({ event: { type: "session.created", properties: { sessionID: "feedback-tail-1" } } } as any)
       const output: { system: string[] } = { system: [] }
@@ -779,6 +783,10 @@ describe("akm-opencode plugin", () => {
 
       expect(injected).toContain("that lowers its ranking. To correct a fact you have verified, also pass `replace`, `with` and `source`.")
       expect(injected).not.toContain("queues it for review and a fix")
+      // Negative feedback is only for wrong or stale content; an asset that merely did not fit the task records nothing.
+      expect(injected).toContain("Only if an asset is wrong or stale, call `akm_feedback <ref> negative`")
+      expect(injected).toContain("is not negative feedback: record nothing")
+      expect(injected).not.toMatch(/incomplete|unhelpful/)
     })
 
     it("does not run curate at all when the directory yields no context", async () => {

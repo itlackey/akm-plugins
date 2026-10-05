@@ -326,6 +326,22 @@ describe("Claude plugin metadata", () => {
     }
   })
 
+  it("tells agents negative feedback is only for wrong or stale content, and that an asset which did not fit records nothing", () => {
+    const skill = readFileSync(akmSkillPath, "utf8")
+    const feedbackCommand = readFileSync(path.join(repoRoot, "claude/commands/akm-feedback.md"), "utf8")
+    const curateCommand = readFileSync(path.join(repoRoot, "claude/commands/akm-curate.md"), "utf8")
+
+    for (const text of [skill, feedbackCommand, curateCommand]) {
+      expect(text).toContain("wrong or stale")
+      expect(text).toContain("simply didn't fit")
+      expect(text).toContain("is not negative feedback: record nothing")
+      expect(text).toContain("what is wrong and what it should say")
+      expect(text).not.toContain("what should change")
+      // These words read as a trigger for negative feedback, which lowered good assets' ranking for a mere misfit.
+      expect(text).not.toMatch(/incomplete|unhelpful|fell short/)
+    }
+  })
+
   it("claude/shared contains real implementations — no re-export shims", () => {
     // claude/shared/ is the canonical source for shared modules. Files must
     // never be re-export shims: the plugin cache only contains claude/, so
@@ -898,6 +914,10 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toContain("--with")
     expect(payload.hookSpecificOutput.additionalContext).toContain("--source")
     expect(payload.hookSpecificOutput.additionalContext).not.toContain("queues it for review and a fix")
+    // Negative feedback is only for wrong or stale content; an asset that merely did not fit the task records nothing.
+    expect(payload.hookSpecificOutput.additionalContext).toContain("Only if an asset is wrong or stale, run `akm feedback <ref> --negative")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("is not negative feedback: record nothing")
+    expect(payload.hookSpecificOutput.additionalContext).not.toMatch(/incomplete|unhelpful/)
     // 07 hardening: the prompt-recall path also provenance-tags the recalled content.
     const curatedContent = readFileSync(
       path.join(stateDir, "akm-claude", "curated", "prompt-sess-curate-2.md"),

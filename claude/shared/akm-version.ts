@@ -21,10 +21,14 @@
 // plugins pass. OpenCode imports only akm's curate, search and show modules;
 // its exact pin follows the floor because the release workflow requires the
 // two to match.
-// Earlier floors still hold: 0.9.21 made `akm improve` rewrite an asset only
-// from negative feedback (akm#1010), which is what both plugins tell agents
-// when they record feedback (claude/skills/akm/SKILL.md,
-// claude/commands/akm-feedback.md, OpenCode's akm_feedback tool), 0.9.20
+// 0.9.25 limits reflect to an asset's frontmatter, so the plugins tell agents
+// that negative feedback flags an asset and lowers its ranking, not that
+// improve rewrites its text (claude/skills/akm/SKILL.md,
+// claude/commands/akm-feedback.md, OpenCode's akm_feedback tool). 0.9.26 adds
+// the exact-fix flags `--replace`, `--with` and `--source`, which that guidance
+// now uses to correct a verified fact in an asset's text.
+// Earlier floors still hold: 0.9.21 made `akm improve` reflect on an asset only
+// from negative feedback (akm#1010), 0.9.20
 // stopped a dispatching command killed by SIGTERM or SIGINT from leaving the
 // `opencode serve` it started running (akm#1005; `akm agent --prompt`
 // reproduced it, and Claude's skill dispatches agents by running `akm agent`

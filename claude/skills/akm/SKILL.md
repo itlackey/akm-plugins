@@ -12,7 +12,7 @@ commands exist only in Claude Code; in any other host, such as Codex, run the
 - `/akm-search` or `akm search` searches configured bundles or registries.
 - `/akm-show` or `akm show` retrieves a concept.
 - `/akm-curate` or `akm curate` ranks concepts for a task.
-- `/akm-feedback` or `akm feedback` records whether a concept helped; negative feedback with a reason lowers its ranking, and an exact fix can be attached.
+- `/akm-feedback` or `akm feedback` records whether a concept helped; negative feedback is only for wrong or stale content, lowers its ranking, and can carry an exact fix.
 - `/akm-remember` or `akm remember` stores durable knowledge.
 
 Claude can also dispatch a configured AKM agent through the existing Bash tool.
@@ -123,14 +123,14 @@ Preserve relevant structured fields such as `prompt`, `template`, `run`, `origin
 
 ## Feedback
 
-After the outcome is known, record whether the concept's content materially helped, or proved wrong, stale or incomplete. Negative feedback flags the concept and lowers its ranking; the next improve run may repair its description, title or `when_to_use` from your reason, but it does not rewrite the concept's text, so say what is wrong and what should change. Positive feedback only improves ranking:
+After the outcome is known, record whether the concept's content materially helped, or proved wrong or stale. Negative feedback is only for content that is wrong or stale. It flags the concept and lowers its ranking; the next improve run may repair its description, title or `when_to_use` from your reason, but it does not rewrite the concept's text, so say what is wrong and what it should say. Positive feedback only improves ranking:
 
 ```sh
 akm feedback "<ref>" --positive --format json -q
-akm feedback "<ref>" --negative --reason "<what is wrong and what should change>" --format json -q
+akm feedback "<ref>" --negative --reason "<what is wrong and what it should say>" --format json -q
 ```
 
-Negative feedback requires a reason. A failed akm command (for example `akm show` erroring) is not feedback on the asset — do not record it. Do not submit feedback for a reference AKM reports as ineligible.
+Negative feedback requires a reason. A concept that simply didn't fit your task is not negative feedback: record nothing. A failed akm command (for example `akm show` erroring) is not feedback on the asset — do not record it. Do not submit feedback for a reference AKM reports as ineligible.
 
 To correct a wrong fact in the concept's text, attach the exact fix. akm queues it as a proposal for review, showing your reason and source:
 

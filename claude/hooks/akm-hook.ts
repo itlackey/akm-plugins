@@ -183,7 +183,7 @@ const INDEX_ON_SESSION_END = flagSetting("AKM_INDEX_ON_SESSION_END", "INDEX_ON_S
 const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM bundle - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM bundle - assets relevant to this session"
-const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content. If an asset is wrong, stale or incomplete, run `akm feedback <ref> --negative --reason \"<what is wrong and what should change>\"`: that lowers its ranking. To correct a fact you have verified, also pass `--replace \"<exact current text>\" --with \"<corrected text>\" --source \"<URL, command or file>\"`. Use `--positive` when it helped."
+const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content. Only if an asset is wrong or stale, run `akm feedback <ref> --negative --reason \"<what is wrong and what it should say>\"`: that lowers its ranking. To correct a fact you have verified, also pass `--replace \"<exact current text>\" --with \"<corrected text>\" --source \"<URL, command or file>\"`. Use `--positive` when it helped. An asset that simply didn't fit your task is not negative feedback: record nothing."
 
 /**
  * 07 hardening: provenance banner prepended to recalled/curated bundle content
@@ -217,7 +217,7 @@ const SESSION_START_HEADER = [
   '- **`akm search "<known name>"`** — exact lookup when you already know a concept exists.',
   '- **`akm show <ref>`** — inspect a `[bundle//]conceptId[#fragment]` before relying on it.',
   "",
-  'When an asset\'s content is wrong, stale or incomplete, record `akm feedback <ref> --negative --reason "<what is wrong and what should change>"`: that flags it and lowers its ranking, and a later improve run reads your reason, so make it specific. To correct a fact you have verified (ran the command, read the official doc or the source file), also pass `--replace "<exact current text>" --with "<corrected text>" --source "<URL, command or file>"`, copying the `--replace` text verbatim from the asset\'s file (`akm show <ref> --format json` gives its `path`) and changing only the wrong words. Record `--positive` when an asset materially helped (it only improves ranking). A failed akm command is not feedback on the asset. Use `akm remember` to persist durable learnings so future sessions inherit them.',
+  'Record `akm feedback <ref> --negative --reason "<what is wrong and what it should say>"` only when an asset\'s content is wrong or stale: that flags it and lowers its ranking, and a later improve run reads your reason, so make it specific. To correct a fact you have verified (ran the command, read the official doc or the source file), also pass `--replace "<exact current text>" --with "<corrected text>" --source "<URL, command or file>"`, copying the `--replace` text verbatim from the asset\'s file (`akm show <ref> --format json` gives its `path`) and changing only the wrong words. Record `--positive` when an asset materially helped (it only improves ranking). An asset that simply didn\'t fit your task is not negative feedback: record nothing. A failed akm command is not feedback on the asset. Use `akm remember` to persist durable learnings so future sessions inherit them.',
 ].join("\n")
 // There is deliberately no local ref regex in this file. Every ref observed by
 // a hook goes through ../shared/ref-extraction, whose concept-root allowlist
