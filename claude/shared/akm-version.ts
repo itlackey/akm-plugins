@@ -10,36 +10,38 @@
 // node_modules at hook-execution time.
 //
 // A single caret clause anchored at the stable release covers the supported
-// public CLI line: `^0.9.25` admits stable 0.9.25 and later 0.9.x releases.
-// 0.9.25 is a required compatibility floor, not a marketing version. The
+// public CLI line: `^0.9.26` admits stable 0.9.26 and later 0.9.x releases.
+// 0.9.26 is a required compatibility floor, not a marketing version. The
 // OpenCode plugin runs akm-cli in-process against the same `index.db` and
 // `state.db` as the installed CLI, so that copy must be the floor or newer.
-// 0.9.25 is the floor because it is the stable release whose reflect edits
-// only an asset's frontmatter, whose quality judge was retuned for that, and
-// which reads Codex sessions; the plugins are released against it. It adds no
-// migration, and the one flag it removes, `--track-usage`, is not one the
+// 0.9.26 is the floor because the plugins' guidance tells agents to correct a
+// verified fact in an asset's text by attaching an exact fix to negative
+// feedback: `akm feedback --negative --replace "<exact current text>" --with
+// "<corrected text>" --source "<evidence>"` (claude/skills/akm/SKILL.md,
+// claude/commands/akm-feedback.md, OpenCode's akm_feedback tool). Those flags
+// are new in 0.9.26, and an older CLI rejects them as unknown flags, so the
+// feedback call fails outright. 0.9.26 also adds `--outdated` and
+// `--superseded-by`, which the plugins do not pass. It adds no database
+// migration, and the one flag it removes, `--failure-mode`, is not one the
 // plugins pass. OpenCode imports only akm's curate, search and show modules;
 // its exact pin follows the floor because the release workflow requires the
 // two to match.
-// 0.9.25 limits reflect to an asset's frontmatter, so the plugins tell agents
-// that negative feedback flags an asset and lowers its ranking, not that
-// improve rewrites its text (claude/skills/akm/SKILL.md,
-// claude/commands/akm-feedback.md, OpenCode's akm_feedback tool). 0.9.26 adds
-// the exact-fix flags `--replace`, `--with` and `--source`, which that guidance
-// now uses to correct a verified fact in an asset's text.
-// Earlier floors still hold: 0.9.21 made `akm improve` reflect on an asset only
-// from negative feedback (akm#1010), 0.9.20
-// stopped a dispatching command killed by SIGTERM or SIGINT from leaving the
-// `opencode serve` it started running (akm#1005; `akm agent --prompt`
-// reproduced it, and Claude's skill dispatches agents by running `akm agent`
-// through Bash), 0.9.19 made improve plan only the bundle it writes to and
-// changed proposal reads and judging (akm#997-#1000), 0.9.18 fixed a SQLite
-// lock loss (copying a live database file in-process dropped its POSIX locks,
-// so an older read-write SQLite peer could delete the WAL; akm#995), 0.9.17
-// migrated both databases forward (index layout 26, the improve-ledger state
-// migrations), and before 0.9.16 bundle activation and executable authority
-// were not yet host-owned, so an older binary would restore a different trust
-// model.
+// Earlier floors still hold: 0.9.25 limited reflect to an asset's frontmatter,
+// retuned its quality judge for that and read Codex sessions, so the plugins
+// tell agents that negative feedback flags an asset and lowers its ranking,
+// not that improve rewrites its text (the same guidance), 0.9.21 made
+// `akm improve` reflect on an asset only from negative feedback (akm#1010),
+// 0.9.20 stopped a dispatching command killed by SIGTERM or SIGINT from
+// leaving the `opencode serve` it started running (akm#1005; `akm agent
+// --prompt` reproduced it, and Claude's skill dispatches agents by running
+// `akm agent` through Bash), 0.9.19 made improve plan only the bundle it writes
+// to and changed proposal reads and judging (akm#997-#1000), 0.9.18 fixed a
+// SQLite lock loss (copying a live database file in-process dropped its POSIX
+// locks, so an older read-write SQLite peer could delete the WAL; akm#995),
+// 0.9.17 migrated both databases forward (index layout 26, the improve-ledger
+// state migrations), and before 0.9.16 bundle activation and executable
+// authority were not yet host-owned, so an older binary would restore a
+// different trust model.
 //
 // The gate reads the RELEASE CORE (major.minor.patch) and ignores a prerelease
 // tag. node-semver's default rule, which the vendored matcher reproduces, is
@@ -66,7 +68,7 @@
 // most deeply. 0.9.12 did change that envelope again (added `engine`,
 // `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
 // all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
-// The 0.9.25 compatibility review keeps the split explicit: keep the caret
+// The 0.9.26 compatibility review keeps the split explicit: keep the caret
 // range for Claude's stable CLI calls, but exact-pin OpenCode's package because
 // it imports private in-process modules and shares AKM's databases. The
 // #107/#108/#109 envelope hardening remains necessary on both surfaces: every
@@ -76,7 +78,7 @@
 
 import { satisfies, valid } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.25"
+export const AKM_VERSION_RANGE = "^0.9.26"
 
 /**
  * True when `version` is a valid semver string whose release core

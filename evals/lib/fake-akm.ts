@@ -472,7 +472,7 @@ if (verb === "info") {
     JSON.stringify({
       ok: true,
       schemaVersion: 1,
-      version: "0.9.25",
+      version: "0.9.26",
       bundleDir,
       cacheDir: xdgDir("AKM_CACHE_DIR", "XDG_CACHE_HOME", ".cache"),
       configDir: xdgDir("AKM_CONFIG_DIR", "XDG_CONFIG_HOME", ".config"),
@@ -729,7 +729,7 @@ if (verb === "--version" || verb === "-V") {
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers
   // always receive the semver that governs the compatibility gate.
-  writeFileSync(1, "fake-akm 0.9.25\\n")
+  writeFileSync(1, "fake-akm 0.9.26\\n")
   process.exit(0)
 }
 
