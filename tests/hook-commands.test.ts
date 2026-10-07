@@ -382,7 +382,7 @@ setTimeout(() => process.exit(0), 90_000)
 import { spawn } from "node:child_process"
 appendFileSync(${JSON.stringify(sandbox.callLog)}, [new Date().toISOString(), process.pid, ...args].join("\\t") + "\\n")
 if (args[0] === "--version") {
-  console.log("akm 0.9.26")
+  console.log("akm 0.9.27")
   process.exit(0)
 }
 if (${hangsWhen}) {
@@ -543,6 +543,6 @@ describe.skipIf(!IS_WINDOWS || !process.env.AKM_REAL_NPM_BIN)("Claude hooks agai
 
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toContain("# AKM is available in this session")
-    expect(readLines(path.join(sandbox.stateDir, "session.log"))[0].toLowerCase()).toContain(`akm_ready\tpath\t${path.join(realBin, "akm.cmd")}\t0.9.26`.toLowerCase())
+    expect(readLines(path.join(sandbox.stateDir, "session.log"))[0].toLowerCase()).toContain(`akm_ready\tpath\t${path.join(realBin, "akm.cmd")}\t0.9.27`.toLowerCase())
   })
 })
