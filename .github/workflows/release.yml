@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI compatibility floor these plugins target (e.g. 0.9.27). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp."
+        description: "The exact akm CLI compatibility floor these plugins target (e.g. 0.9.27). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp. A prerelease (e.g. 0.9.28-alpha.4, already on npm) makes this a `next` release, derived as <akm_version>.<UTC yyyymmddhhmm>."
         required: true
         type: string
 
@@ -65,6 +65,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.derive.outputs.version }}
+      next: ${{ steps.derive.outputs.next }}
       tag: ${{ steps.tag.outputs.tag }}
       tag_exists: ${{ steps.tag.outputs.tag_exists }}
     steps:
@@ -75,6 +76,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
 
       # Derive the release version, then fail before anything is written.
       #
@@ -92,6 +95,11 @@ jobs:
       # two ways that matter: within one akm patch the timestamp increases, and
       # a bump in akm's patch increases the numeric prefix. It also clears the
       # typo'd 202808* patches already published.
+      #
+      # A prerelease akm_version (0.9.28-alpha.4) is a `next` release instead:
+      # <akm_version>.<yyyymmddhhmm> is 0.9.28-alpha.4.202610080512, a valid
+      # semver prerelease that sorts above 0.9.28-alpha.4 and below 0.9.28.
+      # It publishes under the npm `next` tag, and nothing is committed to main.
       - name: Derive release version
         id: derive
         env:
@@ -99,8 +107,15 @@ jobs:
         run: |
           AKM_VERSION="$(echo "$AKM_VERSION" | tr -d '[:space:]')"
           TIMESTAMP="$(date -u +%Y%m%d%H%M)"
-          VERSION="${AKM_VERSION}${TIMESTAMP}"
+          if [[ "$AKM_VERSION" == *-* ]]; then
+            NEXT=true
+            VERSION="${AKM_VERSION}.${TIMESTAMP}"
+          else
+            NEXT=false
+            VERSION="${AKM_VERSION}${TIMESTAMP}"
+          fi
           echo "akm_version=$AKM_VERSION" >> "$GITHUB_OUTPUT"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Targeting akm $AKM_VERSION; releasing plugins as $VERSION"
 
@@ -110,10 +125,17 @@ jobs:
       # exactly match the Claude compatibility floor, OpenCode must exact-pin
       # that same version, and the derived version must sort ABOVE whatever npm
       # currently calls `latest`.
+      #
+      # A `next` release changes three of them: the akm prerelease must only
+      # share the floor's minor line and not fall below its patch (the floor
+      # stays at the stable line), the pin is set in the build and not read
+      # from main, so instead akm-cli@<akm_version> must already be on npm, and
+      # the version must sort above whatever npm calls `next`.
       - name: Validate release version
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
           VERSION: ${{ steps.derive.outputs.version }}
+          NEXT: ${{ steps.derive.outputs.next }}
         run: |
           node <<'EOF'
           const fs = require('fs')
@@ -121,6 +143,7 @@ jobs:
 
           const akmVersion = process.env.AKM_VERSION
           const version = process.env.VERSION
+          const next = process.env.NEXT === 'true'
           const source = fs.readFileSync('claude/shared/akm-version.ts', 'utf8')
           const opencodePackage = JSON.parse(fs.readFileSync('opencode/package.json', 'utf8'))
           const range = /AKM_VERSION_RANGE\s*=\s*"([^"]+)"/.exec(source)?.[1]
@@ -129,7 +152,7 @@ jobs:
             process.exit(1)
           }
 
-          const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+          const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
           const parsedAkm = SEMVER.exec(akmVersion)
           if (!parsedAkm) {
             console.error(`akm_version "${akmVersion}" is not valid semver (MAJOR.MINOR.PATCH).`)
@@ -150,7 +173,14 @@ jobs:
           }
 
           const floorVersion = `${floor[1]}.${floor[2]}.${floor[3]}`
-          if (akmVersion !== floorVersion) {
+          if (next) {
+            // Claude's range check judges the release core, so an akm prerelease
+            // satisfies ^0.9.27 exactly when its core does.
+            if (parsedAkm[1] !== floor[1] || parsedAkm[2] !== floor[2] || Number(parsedAkm[3]) < Number(floor[3])) {
+              console.error(`akm_version "${akmVersion}" is outside AKM_VERSION_RANGE ${range}: its release core must be ${floor[1]}.${floor[2]}.${floor[3]} or later on the ${floor[1]}.${floor[2]} line.`)
+              process.exit(1)
+            }
+          } else if (akmVersion !== floorVersion) {
             console.error(`akm_version "${akmVersion}" does not equal AKM_VERSION_RANGE floor "${floorVersion}" (${range}).`)
             console.error('Move AKM_VERSION_RANGE first and validate that exact CLI version before publishing.')
             process.exit(1)
@@ -162,7 +192,15 @@ jobs:
           // the tested floor. Claude only shells out through public CLI verbs
           // and deliberately retains the stable caret range.
           const opencodeAkm = opencodePackage.dependencies?.['akm-cli']
-          if (opencodeAkm !== akmVersion) {
+          if (next) {
+            // The build pins this exact prerelease, so it has to be installable.
+            try {
+              execFileSync('npm', ['view', `akm-cli@${akmVersion}`, 'version'], { encoding: 'utf8', stdio: 'pipe' })
+            } catch {
+              console.error(`akm-cli@${akmVersion} is not on npm. Publish that akm prerelease first; the OpenCode build exact-pins it.`)
+              process.exit(1)
+            }
+          } else if (opencodeAkm !== akmVersion) {
             console.error(`opencode/package.json must exact-pin akm-cli to "${akmVersion}"; found "${opencodeAkm ?? '<missing>'}".`)
             process.exit(1)
           }
@@ -171,11 +209,16 @@ jobs:
           // had: publishing a version that sorts below `latest` succeeds on npm
           // and silently leaves `latest` pointing at the OLDER release, so every
           // consumer keeps installing the previous build.
+          //
+          // A `next` release is held to the same rule against the `next` tag,
+          // which is where its prerelease versions are compared (semver order:
+          // a prerelease sorts below its core, identifiers compared in turn).
+          const channel = next ? 'next' : 'latest'
           let published = ''
           try {
-            published = execFileSync('npm', ['view', 'akm-opencode', 'version'], { encoding: 'utf8' }).trim()
+            published = execFileSync('npm', ['view', 'akm-opencode', `dist-tags.${channel}`], { encoding: 'utf8' }).trim()
           } catch {
-            console.log('No published akm-opencode version to compare against; skipping the monotonicity check.')
+            console.log(`No published akm-opencode ${channel} version to compare against; skipping the monotonicity check.`)
           }
           if (published) {
             const prev = SEMVER.exec(published)
@@ -183,20 +226,32 @@ jobs:
               console.error(`Published version "${published}" is not plain semver; cannot compare. Investigate before releasing.`)
               process.exit(1)
             }
-            const ordered = [parsed, prev].map((m) => [Number(m[1]), Number(m[2]), Number(m[3])])
-            const [next, current] = ordered
-            const higher = next[0] !== current[0] ? next[0] > current[0]
-              : next[1] !== current[1] ? next[1] > current[1]
-              : next[2] > current[2]
-            if (!higher) {
-              console.error(`Derived version "${version}" does NOT sort above the published latest "${published}".`)
-              console.error('npm would accept the publish and leave `latest` on the older release. Refusing.')
+            const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+            const compare = (a, b) => {
+              for (const i of [1, 2, 3]) {
+                if (Number(a[i]) !== Number(b[i])) return cmp(Number(a[i]), Number(b[i]))
+              }
+              const pa = a[4]?.split('.')
+              const pb = b[4]?.split('.')
+              if (!pa || !pb) return pa ? -1 : pb ? 1 : 0
+              for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+                const [x, y] = [pa[i], pb[i]]
+                if (x === undefined || y === undefined) return x === undefined ? -1 : 1
+                const numeric = /^\d+$/.test(x) && /^\d+$/.test(y)
+                const order = numeric ? cmp(Number(x), Number(y)) : /^\d+$/.test(x) ? -1 : /^\d+$/.test(y) ? 1 : cmp(x, y)
+                if (order !== 0) return order
+              }
+              return 0
+            }
+            if (compare(parsed, prev) <= 0) {
+              console.error(`Derived version "${version}" does NOT sort above the published ${channel} "${published}".`)
+              console.error(`npm would accept the publish and leave \`${channel}\` on the older release. Refusing.`)
               process.exit(1)
             }
-            console.log(`${version} sorts above the published latest ${published}.`)
+            console.log(`${version} sorts above the published ${channel} ${published}.`)
           }
 
-          console.log(`Version ${version} is valid semver; Claude targets ${range} and OpenCode exact-pins akm-cli ${opencodeAkm}.`)
+          console.log(`Version ${version} is valid semver; Claude targets ${range} and OpenCode exact-pins akm-cli ${next ? akmVersion : opencodeAkm}.`)
           EOF
 
       - name: Bump versions
@@ -222,6 +277,19 @@ jobs:
           }))
           EOF
 
+      # `next` only: OpenCode imports akm's dist in process, so its build pins
+      # the exact akm prerelease. The pin and the regenerated lockfile live in
+      # the tagged commit alone, never on main, where the pin stays at the floor.
+      - name: Pin akm-cli to the akm prerelease
+        if: ${{ steps.derive.outputs.next == 'true' }}
+        working-directory: opencode
+        env:
+          AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
+        run: |
+          npm pkg set "dependencies.akm-cli=$AKM_VERSION"
+          bun install
+          bun run typecheck
+
       - name: Commit and tag
         id: tag
         run: |
@@ -229,7 +297,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add claude/package.json opencode/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json .claude-plugin/marketplace.json
 
-          if ! git diff --cached --quiet; then
+          if [ "${{ steps.derive.outputs.next }}" = "true" ]; then
+            # Committed locally and reachable only from the tag; main is not pushed.
+            git add opencode/bun.lock
+            git commit -m "chore: next build ${{ steps.derive.outputs.version }}"
+          elif ! git diff --cached --quiet; then
             git commit -m "chore: bump version to ${{ steps.derive.outputs.version }}"
             git push
           fi
@@ -285,13 +357,12 @@ jobs:
       - name: Derive npm publish args
         id: publish_args
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          NEXT: ${{ needs.version.outputs.next }}
         run: |
           PUBLISH_ARGS="--provenance --access public"
-          NPM_TAG=$(VERSION="$VERSION" node -p "const version = process.env.VERSION; const prerelease = version.match(/^\d+\.\d+\.\d+-([0-9A-Za-z.-]+)$/)?.[1] ?? ''; if (!prerelease) { '' } else if (/^(beta|rc)(?:[.-]?\d.*)?$/i.test(prerelease)) { 'next' } else { prerelease.split(/[.-]/)[0] }")
 
-          if [ -n "$NPM_TAG" ]; then
-            PUBLISH_ARGS="$PUBLISH_ARGS --tag $NPM_TAG"
+          if [ "$NEXT" = "true" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --tag next"
           fi
 
           echo "publish_args=$PUBLISH_ARGS" >> "$GITHUB_OUTPUT"
@@ -313,6 +384,11 @@ jobs:
 
       - name: Create GitHub release
         run: |
+          PRERELEASE=""
+          if [ "${{ needs.version.outputs.next }}" = "true" ]; then
+            PRERELEASE="--prerelease"
+          fi
+
           if gh release view "${{ needs.version.outputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             exit 0
           fi
@@ -320,6 +396,6 @@ jobs:
           gh release create "${{ needs.version.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --title "${{ needs.version.outputs.tag }}" \
-            --generate-notes
+            --generate-notes $PRERELEASE
         env:
           GH_TOKEN: ${{ github.token }}
