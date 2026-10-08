@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.27`. The OpenCode, Claude, and Codex integrations expose exactly five public AKM surfaces:
+Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.28`. The OpenCode, Claude, and Codex integrations expose exactly five public AKM surfaces:
 
 | | OpenCode | Claude Code | Codex |
 | --- | --- | --- | --- |
@@ -100,8 +100,8 @@ OpenCode guard reads the manifest of the dependency it actually imported;
 requesting a newer API against an older exact-pinned dependency returns a
 structured error instead of silently returning exact content.
 
-Release-order gate: publish `akm-cli@0.9.27` first, then update OpenCode's exact
-dependency and lockfile and Claude's compatibility floor to 0.9.27, run the
+Release-order gate: publish `akm-cli@0.9.28` first, then update OpenCode's exact
+dependency and lockfile and Claude's compatibility floor to 0.9.28, run the
 real-package contract suite, and only then publish the plugins. Do not fabricate
 the unpublished registry lock entry on this branch.
 
@@ -109,13 +109,13 @@ the unpublished registry lock entry on this branch.
 
 The plugins keep **MAJOR.MINOR in sync with the AKM CLI line they target, and let PATCH diverge** inside that minor. While AKM is on `0.9.x`, the plugins release `0.9.0`, `0.9.1`, `0.9.2`, … independently of AKM's own patch number.
 
-The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.9.27` means `>=0.9.27 <0.10.0`. OpenCode exact-pins that floor (`akm-cli@0.9.27`) because it imports AKM's in-process `dist/` modules; allowing an untested patch to resolve at user install time would make one plugin release execute different private APIs on different machines.
+The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.9.28` means `>=0.9.28 <0.10.0`. OpenCode exact-pins that floor (`akm-cli@0.9.28`) because it imports AKM's in-process `dist/` modules; allowing an untested patch to resolve at user install time would make one plugin release execute different private APIs on different machines.
 
 Patch divergence is deliberate: a plugin-only fix has to be shippable without waiting for an AKM release, which is impossible if the patch component is spent mirroring AKM's.
 
-Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A four-component string such as `0.9.27.20260929.1` is not semver and npm rejects it on publish. For dated snapshot builds use a prerelease of the *next* patch — `0.9.28-20260929.1`, which sorts above `0.9.27` and below `0.9.28` — rather than a prerelease of the current one, which would sort *below* the version already published. Note that no prerelease satisfies a stable range like `^0.9.27`, so snapshots reach users only through an explicit npm dist-tag.
+Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A four-component string such as `0.9.28.20260929.1` is not semver and npm rejects it on publish. For dated snapshot builds use a prerelease of the *next* patch — `0.9.29-20260929.1`, which sorts above `0.9.28` and below `0.9.29` — rather than a prerelease of the current one, which would sort *below* the version already published. Note that no prerelease satisfies a stable range like `^0.9.28`, so snapshots reach users only through an explicit npm dist-tag.
 
-**Prerelease channel (`next`).** When the AKM CLI publishes a prerelease to its npm `next` dist-tag (say `0.9.28-alpha.4`), the release workflow can be run with that as `akm_version`. A prerelease `akm_version` makes it a `next` release: the plugin version is `<akm_version>.<UTC yyyymmddhhmm>` (`0.9.28-alpha.4.202610080512`, which sorts above `0.9.28-alpha.4` and below `0.9.28`), `akm-opencode` is published with `--tag next`, and the GitHub release is marked a prerelease. The `akm-cli@<akm_version>` it names must already be on npm. The OpenCode build exact-pins that prerelease and regenerates `opencode/bun.lock` against it, but only in the commit the `v<version>` tag points at: nothing is committed to `main`, and the stable floor (`AKM_VERSION_RANGE`, the pin on `main`) does not move. Claude's range check reads the release core, so an akm prerelease already satisfies `^0.9.27`. To follow the channel in OpenCode, set `"plugin": ["akm-opencode@next"]` in `opencode.json`; `akm-opencode@latest` stays on the stable line.
+**Prerelease channel (`next`).** When the AKM CLI publishes a prerelease to its npm `next` dist-tag (say `0.9.29-alpha.4`), the release workflow can be run with that as `akm_version`. A prerelease `akm_version` makes it a `next` release: the plugin version is `<akm_version>.<UTC yyyymmddhhmm>` (`0.9.29-alpha.4.202610080512`, which sorts above `0.9.29-alpha.4` and below `0.9.29`), `akm-opencode` is published with `--tag next`, and the GitHub release is marked a prerelease. The `akm-cli@<akm_version>` it names must already be on npm. The OpenCode build exact-pins that prerelease and regenerates `opencode/bun.lock` against it, but only in the commit the `v<version>` tag points at: nothing is committed to `main`, and the stable floor (`AKM_VERSION_RANGE`, the pin on `main`) does not move. Claude's range check reads the release core, so an akm prerelease already satisfies `^0.9.28`. To follow the channel in OpenCode, set `"plugin": ["akm-opencode@next"]` in `opencode.json`; `akm-opencode@latest` stays on the stable line.
 
 Both rules are enforced, not conventional:
 
