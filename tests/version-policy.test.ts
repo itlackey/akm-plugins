@@ -138,7 +138,7 @@ describe("version policy", () => {
     expect(workflow).toContain('VERSION="${AKM_VERSION}${TIMESTAMP}"')
 
     // ...and a publish that would leave `latest` pointing backwards is refused.
-    expect(workflow).toContain("does NOT sort above the published latest")
+    expect(workflow).toContain("does NOT sort above the published ${channel}")
   })
 
   test("the derived version shape stays on the akm minor line and sorts forward", () => {
@@ -159,6 +159,52 @@ describe("version policy", () => {
     expect(patchOf(derive("0.9.1", "202608242013"))).toBeGreaterThan(patchOf(derive("0.9.1", "202608242012")))
     expect(patchOf(derive("0.9.14", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.1", "202612312359")))
     expect(patchOf(derive("0.9.27", "202601010000"))).toBeGreaterThan(patchOf(derive("0.9.26", "202612312359")))
+  })
+
+  test("an akm prerelease derives a next version that npm accepts and that sorts between its neighbours", () => {
+    // A prerelease akm_version (0.9.28-alpha.4) is a `next` release, derived as
+    // <akm_version>.<UTC yyyymmddhhmm> so the whole string stays a valid semver
+    // prerelease. Gluing the stamp on without the dot would read as part of the
+    // last identifier (alpha.4202610080512) and sort by its text, not its time.
+    const derive = (akm: string, stamp: string): string => (akm.includes("-") ? `${akm}.${stamp}` : `${akm}${stamp}`)
+    const order = (a: string, b: string): number => Bun.semver.order(a, b)
+
+    const next = derive("0.9.28-alpha.4", "202610080512")
+    expect(next).toBe("0.9.28-alpha.4.202610080512")
+    expect(valid(next)).toBe(next)
+    expect(satisfiesAkmVersionRange(next)).toBe(true)
+
+    // Below the stable it precedes, above the akm prerelease it targets, and
+    // above the previous next (including the stale 0.8.0-rc.8 on npm today).
+    expect(order(next, "0.9.28")).toBe(-1)
+    expect(order(next, "0.9.28-alpha.4")).toBe(1)
+    expect(order(next, derive("0.9.28-alpha.3", "202610090000"))).toBe(1)
+    expect(order(next, "0.8.0-rc.8")).toBe(1)
+    // Monotonic within one akm prerelease.
+    expect(order(derive("0.9.28-alpha.4", "202610080513"), next)).toBe(1)
+  })
+
+  test("the release workflow publishes a prerelease akm_version as a next release without touching main", () => {
+    const workflow = readText(".github/workflows/release.yml")
+
+    // Derivation and validation; the monotonicity guard runs against the `next` tag.
+    expect(workflow).toContain('VERSION="${AKM_VERSION}.${TIMESTAMP}"')
+    expect(workflow).toContain("`dist-tags.${channel}`")
+    expect(workflow).toContain("is outside AKM_VERSION_RANGE")
+    expect(workflow).toContain("is not on npm. Publish that akm prerelease first")
+
+    // The pin and lockfile are build-only: staged and committed in the next
+    // branch, which never reaches `git push`; the stable branch is unchanged.
+    const commit = workflow.slice(workflow.indexOf("- name: Commit and tag"), workflow.indexOf("publish-opencode:"))
+    const [nextBranch, stableBranch] = commit.split("elif ! git diff --cached --quiet; then")
+    expect(nextBranch).toContain("git add opencode/bun.lock")
+    expect(nextBranch).not.toContain("git push\n")
+    expect(stableBranch).toContain("git push\n")
+    expect(workflow).toContain('npm pkg set "dependencies.akm-cli=$AKM_VERSION"')
+
+    // Published under `next`, and released as a prerelease.
+    expect(workflow).toContain("--tag next")
+    expect(workflow).toContain("--prerelease")
   })
 
   test("Claude follows the range and OpenCode exact-pins its floor", () => {
