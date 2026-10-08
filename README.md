@@ -78,6 +78,10 @@ Codex does not run plugin hooks until you review and trust them: open `/hooks` i
 
 ## Updating
 
+From akm 0.9.28, run `akm upgrade`. After it updates the CLI, it updates the akm plugin of each harness it finds: Claude Code and Codex when the `akm-plugins` marketplace is configured and the plugin is installed, and OpenCode when `akm-opencode` is cached (deferred while OpenCode is running). It only updates; it never installs a plugin, and `akm upgrade --check` reports what is pending without changing anything. With the OpenCode plugin present it also moves the CLI only to the `akm-cli` version `akm-opencode@latest` pins. In a headless container, run `akm upgrade -q` from the entrypoint; Codex hooks still need their one-time trust entries baked into `~/.codex/config.toml` (see the `akm upgrade` entry in the akm CLI reference).
+
+To update by hand, or with an akm older than 0.9.28:
+
 - **Claude Code** does not auto-update third-party marketplaces by default. Turn it on in `/plugin` → Marketplaces → `akm-plugins` → Enable auto-update, or add `"autoUpdate": true` beside `source` in the `akm-plugins` entry of `extraKnownMarketplaces` in `settings.json`. The Claude desktop app starts Claude Code with `DISABLE_AUTOUPDATER=1`, which also switches plugin updates off, so desktop users also need `"env": { "FORCE_AUTOUPDATE_PLUGINS": "1" }` in `settings.json`. To update by hand: `claude plugin marketplace update akm-plugins`, then `claude plugin update akm@akm-plugins`.
 - **Codex** updates the plugin by itself every time it starts; `codex plugin marketplace upgrade akm-plugins` does it on demand. A release that changes a hook's command shows that hook as modified in `/hooks`, and it does not run until you trust it again.
 - **OpenCode** installs `akm-opencode` the first time and never checks for a newer version. To update, close OpenCode, delete `~/.cache/opencode/packages/akm-opencode@latest`, and start OpenCode again.
