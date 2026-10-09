@@ -271,11 +271,11 @@ describe("akm-opencode-v2 plugin", () => {
   })
 
   describe("automatic recall through akm-cli/api", () => {
-    it("asks the in-process curate for the contract's options: limit, text format, the project as cwd", async () => {
+    it("asks the in-process curate for the contract's options: limit and text format, no cwd", async () => {
       host = await startPlugin(project)
       await host.runPrompt("ses_opts", PROMPT)
       expect(curateCalls).toHaveLength(1)
-      expect(curateCalls[0].options).toEqual({ limit: 5, format: "text", cwd: project })
+      expect(curateCalls[0].options).toEqual({ limit: 5, format: "text" })
       // Recall starts no `akm curate` process: the in-process call replaced it.
       expect(fake.calls().some((a) => a.includes("curate"))).toBe(false)
     })

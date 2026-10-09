@@ -227,7 +227,7 @@ export function createCore(options: CoreOptions) {
     const owner = sessions.get(sessionID)
     owner?.controllers.add(controller)
     try {
-      const outcome = await recallCurate(query, { cwd: options.directory, timeoutMs: CURATE_TIMEOUT_MS(), signal: controller.signal })
+      const outcome = await recallCurate(query, { timeoutMs: CURATE_TIMEOUT_MS(), signal: controller.signal })
       if (outcome.ok) return outcome.text
       if (!outcome.aborted) log("warn", "AKM recall failed", { operation, sessionID, subsystem: "curation", error: outcome.error })
       return null

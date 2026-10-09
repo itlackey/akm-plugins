@@ -105,12 +105,11 @@ export function buildScopedArgs(context: Record<string, unknown> | undefined): s
 // `text` only when the AKM_CURATE_MIN_SCORE floor is enabled, since per-item
 // `score`/`type` are only needed then. With the floor disabled this is the
 // request recall has always made, so that (default, tested) path is unchanged.
-export function buildCurateOptions(cwd?: string): CurateOptions {
+export function buildCurateOptions(): CurateOptions {
   return {
     limit: AKM_CURATE_LIMIT,
     ...(AKM_CURATE_TYPE ? { type: AKM_CURATE_TYPE } : {}),
     format: AKM_CURATE_MIN_SCORE > 0 ? "json" : "text",
-    ...(cwd ? { cwd } : {}),
   }
 }
 
@@ -129,7 +128,7 @@ export type RecallOutcome =
  */
 export async function recallCurate(
   query: string,
-  options: { cwd?: string; timeoutMs: number; signal?: AbortSignal },
+  options: { timeoutMs: number; signal?: AbortSignal },
 ): Promise<RecallOutcome> {
   const { signal } = options
   if (signal?.aborted) return { ok: false, error: "recall was aborted", aborted: true }
@@ -144,7 +143,7 @@ export async function recallCurate(
     onAbort = () => resolve({ ok: false, error: "recall was aborted", aborted: true })
     signal?.addEventListener("abort", onAbort, { once: true })
   })
-  const call = loadCurate().then((curate) => curate(query, buildCurateOptions(options.cwd)))
+  const call = loadCurate().then((curate) => curate(query, buildCurateOptions()))
   const finished = call.then(
     (raw): RecallOutcome => {
       const body = String(raw ?? "").trim()

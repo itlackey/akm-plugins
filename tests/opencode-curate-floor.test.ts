@@ -42,7 +42,7 @@ type Probe = { options: { limit?: number; type?: string; format?: string; cwd?: 
 function probe(env: Record<string, string>): Probe {
   const script = `
     const { AkmPlugin } = await import(${JSON.stringify(path.join(repoRoot, "opencode/index.ts"))})
-    const options = AkmPlugin.__buildCurateOptionsForTests("/work/project")
+    const options = AkmPlugin.__buildCurateOptionsForTests()
     const rendered = AkmPlugin.__renderCuratedJsonResponseForTests(${JSON.stringify(CURATE_JSON)}, "some prompt text")
     process.stdout.write(JSON.stringify({ options, rendered }))
   `
@@ -66,7 +66,7 @@ describe("#110 opencode curate floor and type filter", () => {
     // The pre-#110 request, unchanged: no type, and text rather than json.
     expect(options.format).toBe("text")
     expect(options).not.toHaveProperty("type")
-    expect(options.cwd).toBe("/work/project")
+    expect(options).not.toHaveProperty("cwd")
     expect(options.limit).toBe(5)
   })
 

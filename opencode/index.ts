@@ -403,7 +403,7 @@ async function runRecall(
   query: string,
   meta: CliLogMeta & { operation: string },
 ): Promise<string | null> {
-  const outcome = await recallCurate(query, { cwd: meta.directory, timeoutMs: AKM_CURATE_TIMEOUT_MS })
+  const outcome = await recallCurate(query, { timeoutMs: AKM_CURATE_TIMEOUT_MS })
   if (outcome.ok) return outcome.text
   await writePluginLog(client, "warn", "AKM recall failed", {
     subsystem: "curation",
