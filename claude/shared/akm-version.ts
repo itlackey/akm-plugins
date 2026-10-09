@@ -10,19 +10,20 @@
 // node_modules at hook-execution time.
 //
 // A single caret clause anchored at the stable release covers the supported
-// public CLI line: `^0.9.29` admits stable 0.9.29 and later 0.9.x releases.
-// 0.9.29 is a required compatibility floor, not a marketing version. The
+// public CLI line: `^0.9.30` admits stable 0.9.30 and later 0.9.x releases.
+// 0.9.30 is a required compatibility floor, not a marketing version. The
 // OpenCode plugin runs akm-cli in-process against the same `index.db` and
 // `state.db` as the installed CLI, so that copy must be the floor or newer.
-// 0.9.29 is the floor because it is the stable release the plugins are
+// 0.9.30 is the floor because it is the stable release the plugins are
 // released against: OpenCode exact-pins akm-cli, and `akm upgrade` holds the
-// CLI to that pin, so the pin must move for users to reach 0.9.29, whose plain
-// `akm upgrade` no longer breaks an OpenCode that follows `akm-opencode@next`
-// (akm#1115). Its release notes list no change to a command or flag the plugins
-// pass, and OpenCode imports only akm's curate, search and show modules; its
-// exact pin follows the floor because the release workflow requires the two to
-// match. 0.9.28 made `akm upgrade` update each installed harness's akm plugin,
-// which the README's Updating section tells users to run.
+// CLI to that pin, so the pin must move for users to reach 0.9.30, whose
+// `akm upgrade` acts only on the `akm-opencode` spec OpenCode's config names
+// (akm#1117; 0.9.29 did so for `@next` only, akm#1115). Its release notes
+// list no change to a command or flag the plugins pass, and OpenCode imports
+// only akm's curate, search and show modules; its exact pin follows the floor
+// because the release workflow requires the two to match. 0.9.28 made
+// `akm upgrade` update each installed harness's akm plugin, which the README's
+// Updating section tells users to run.
 // 0.9.27 rebuilt the FTS table when rows had left it and recreated an index
 // that 0.9.1 wrote (akm#1055, akm#1057), which the OpenCode plugin's in-process
 // search runs over.
@@ -73,7 +74,7 @@
 // most deeply. 0.9.12 did change that envelope again (added `engine`,
 // `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
 // all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
-// The 0.9.29 compatibility review keeps the split explicit: keep the caret
+// The 0.9.30 compatibility review keeps the split explicit: keep the caret
 // range for Claude's stable CLI calls, but exact-pin OpenCode's package because
 // it imports private in-process modules and shares AKM's databases. The
 // #107/#108/#109 envelope hardening remains necessary on both surfaces: every
@@ -83,7 +84,7 @@
 
 import { satisfies, valid } from "./vendor-semver"
 
-export const AKM_VERSION_RANGE = "^0.9.29"
+export const AKM_VERSION_RANGE = "^0.9.30"
 
 /**
  * True when `version` is a valid semver string whose release core
