@@ -21,6 +21,10 @@ jobs:
         working-directory: opencode
         run: bun install --frozen-lockfile
 
+      - name: Install opencode-v2 plugin deps
+        working-directory: opencode-v2
+        run: bun install --frozen-lockfile
+
       - name: Typecheck claude plugin
         working-directory: claude
         run: bun run typecheck
@@ -28,6 +32,20 @@ jobs:
       - name: Typecheck opencode plugin
         working-directory: opencode
         run: bun run typecheck
+
+      - name: Typecheck opencode-v2 plugin
+        working-directory: opencode-v2
+        run: bun run typecheck
+
+      # The published artifact is dist/, built by prepack. Build both OpenCode packages the way
+      # `npm publish` does and load the result, so a bundling regression (a missing external, a
+      # deep import) fails here and not at a user's first session.
+      - name: Build both OpenCode packages and load their dist
+        run: |
+          (cd opencode && bun run build)
+          (cd opencode-v2 && bun run build)
+          bun -e 'const v1 = await import("./opencode/dist/index.js"); if (typeof v1.AkmPlugin !== "function" || Object.keys(v1).join() !== "AkmPlugin") throw new Error("akm-opencode: expected a single AkmPlugin export"); const v2 = await import("./opencode-v2/dist/index.js"); if (v2.default?.id !== "akm-opencode-v2" || typeof v2.default.effect !== "function") throw new Error("akm-opencode-v2: expected a default Plugin.define entrypoint"); console.log("both dist bundles load")'
+          if grep -q "akm-cli/dist" opencode/dist/index.js opencode-v2/dist/index.js; then echo "a dist bundle deep-imports akm-cli internals"; exit 1; fi
 
       - name: Run unit tests
         run: bun test tests/

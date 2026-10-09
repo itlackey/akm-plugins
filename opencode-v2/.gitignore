@@ -1,0 +1,4 @@
+# Built by `bun run build` at prepack; the published tarball ships dist/ only.
+dist/
+# Pack artifacts.
+*.tgz

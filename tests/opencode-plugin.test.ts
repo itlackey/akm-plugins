@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock, setSystemTime } from "bun:test"
+import { afterEach, beforeEach, describe, expect, it, mock, setSystemTime } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -68,19 +68,71 @@ const mockPackCuratedHits = mock(async (input: Record<string, unknown>, budget: 
   items: [{ ref: "skills/review", tokens: 3, content: "mock concept" }],
 }))
 
+// The read tools and the write gate's identity search now invoke the public
+// `akm` CLI asynchronously (opencode-shared/akm-cli.ts runAkm -> execFile). This
+// fake CLI decodes the argv back into the input each backend stub expects, runs
+// the stub, and answers the way the real CLI does: JSON on stdout, or a non-zero
+// exit with the `{ok:false,error}` envelope on stderr.
+const execFileCalls: Array<{ args: string[]; env: Record<string, string | undefined> }> = []
+function decodeReadArgv(args: string[]): { verb: string; input: Record<string, unknown>; pack?: number; env?: string } {
+  const verb = args[0]
+  const flag = (name: string): string | undefined => {
+    const index = args.indexOf(name)
+    return index >= 0 ? args[index + 1] : undefined
+  }
+  const input: Record<string, unknown> = {}
+  if (verb === "show") {
+    input.ref = args[1]
+    const detail = flag("--detail")
+    if (detail) input.detail = detail
+    if (flag("--shape") === "summary") input.detail = "summary"
+    return { verb, input }
+  }
+  input.query = args[1]
+  if (flag("--type")) input.type = flag("--type")
+  if (flag("--limit")) input.limit = Number(flag("--limit"))
+  if (flag("--from")) input.source = flag("--from")
+  if (args.includes("--include-proposed")) input.includeProposed = true
+  return { verb, input, pack: flag("--pack") ? Number(flag("--pack")) : undefined }
+}
+const mockExecFile = mock((_command: string, args: string[], options: any, callback: (...cb: any[]) => void) => {
+  execFileCalls.push({ args, env: options?.env ?? {} })
+  const decoded = decodeReadArgv(args)
+  const run = async (): Promise<unknown> => {
+    if (decoded.verb === "search") {
+      const input = { ...decoded.input }
+      if (options?.env?.AKM_EVENT_SOURCE === "audit") (input as any).skipLogging = true
+      return mockAkmSearch(input)
+    }
+    if (decoded.verb === "show") return mockAkmShowUnified(decoded.input)
+    if (decoded.verb === "curate") {
+      const curated = await mockAkmCurate(decoded.input)
+      return decoded.pack !== undefined ? mockPackCuratedHits(curated as any, decoded.pack) : curated
+    }
+    throw new Error(`unexpected execFile verb ${decoded.verb}`)
+  }
+  run().then(
+    (value) => callback(null, JSON.stringify(value), ""),
+    (error) => callback(Object.assign(new Error("exit 1"), { code: 1 }), "", JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), code: "GENERAL" })),
+  )
+  return {} as any
+})
+
+// bun:test module mocks are process-global for a whole `bun test tests/` run, so
+// these stubs would also capture the child processes other test files start
+// (tests/opencode-v2-plugin.test.ts runs the real shared helpers against a fake
+// akm executable). They answer only while a test of THIS file is running.
+let v1TestActive = false
+const delegating = <T extends (...args: any[]) => any>(stub: T, real: (...args: any[]) => any) =>
+  ((...args: any[]) => (v1TestActive ? stub(...args) : real(...args))) as unknown as T
+
 mock.module("node:child_process", () => ({
   ...realChildProcess,
-  execFileSync: mockExecFileSync,
-  execSync: mockExecSync,
-  spawn: mockSpawn,
+  execFile: delegating(mockExecFile, realChildProcess.execFile),
+  execFileSync: delegating(mockExecFileSync, realChildProcess.execFileSync),
+  execSync: delegating(mockExecSync, realChildProcess.execSync),
+  spawn: delegating(mockSpawn, realChildProcess.spawn),
 }))
-mock.module("akm-cli/dist/commands/read/search.js", () => ({ akmSearch: mockAkmSearch }))
-mock.module("akm-cli/dist/commands/read/show.js", () => ({ akmShowUnified: mockAkmShowUnified }))
-mock.module("akm-cli/dist/commands/read/curate.js", () => ({
-  akmCurate: mockAkmCurate,
-  packCuratedHits: mockPackCuratedHits,
-}))
-
 const pluginModule = await import("../opencode/index.ts")
 const { AkmPlugin } = pluginModule
 
@@ -155,7 +207,12 @@ async function waitFor<T>(probe: () => T | undefined, timeoutMs = 5000): Promise
 }
 
 describe("akm-opencode plugin", () => {
+  afterEach(() => {
+    v1TestActive = false
+  })
+
   beforeEach(() => {
+    v1TestActive = true
     mockExecFileSync.mockClear()
     mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
       if (args?.[0] === "--version") return "akm 0.9.14\n"
@@ -164,6 +221,7 @@ describe("akm-opencode plugin", () => {
     })
     mockExecSync.mockClear()
     mockSpawn.mockClear()
+    execFileCalls.length = 0
     mockAkmSearch.mockClear()
     mockAkmShowUnified.mockClear()
     mockAkmCurate.mockClear()
@@ -396,7 +454,7 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("public tools", () => {
-    it("searches in process with current source fields", async () => {
+    it("searches through the public CLI with current source fields", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_search.execute({
         query: "review",
@@ -417,7 +475,7 @@ describe("akm-opencode plugin", () => {
       expect(JSON.parse(result).warnings).toContain("Do not treat proposed assets as curated until accepted.")
     })
 
-    it("shows a concept-ID reference in process", async () => {
+    it("shows a concept-ID reference through the public CLI", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const result = await hooks.tool!.akm_show.execute({
         ref: "knowledge/deploy#akm-fragment-3-1138d4941c9a",
@@ -464,7 +522,7 @@ describe("akm-opencode plugin", () => {
       }))
     })
 
-    it("curates in process without unsupported scope fields", async () => {
+    it("curates through the public CLI without unsupported scope fields", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_curate.execute({
         query: "deploy safely",
@@ -518,7 +576,7 @@ describe("akm-opencode plugin", () => {
       expect(mockPackCuratedHits).not.toHaveBeenCalled()
     })
 
-    it("degrades in-process failures into logged structured results", async () => {
+    it("degrades CLI failures into logged structured results", async () => {
       const client = createMockClient()
       mockAkmSearch.mockImplementationOnce(async () => {
         throw new Error("index unavailable")
@@ -528,7 +586,7 @@ describe("akm-opencode plugin", () => {
 
       expect(JSON.parse(result)).toEqual({ ok: false, error: "index unavailable" })
       expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
-        body: expect.objectContaining({ message: "AKM in-process call failed" }),
+        body: expect.objectContaining({ message: "AKM read call failed" }),
       }))
     })
 
@@ -2182,7 +2240,7 @@ describe("akm-opencode plugin", () => {
           run: async () => {
             mockAkmSearch.mockImplementation(() => new Promise(() => {}) as any)
             const hooks = await AkmPlugin(createPluginInput())
-            await readServiceYaml(hooks, "led-timeout", READ_SERVICE_YAML, 850)
+            await readServiceYaml(hooks, "led-timeout", READ_SERVICE_YAML, 2150)
             clearEventLog()
             await hooks["tool.execute.before"]!(beforeInput("led-timeout"), beforeOutput())
           },
