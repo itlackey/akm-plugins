@@ -65,7 +65,7 @@ jobs:
         shell: pwsh
         run: |
           $prefix = Join-Path $env:RUNNER_TEMP "akm-npm"
-          npm install akm-cli@0.9.28 --prefix $prefix --omit=optional --ignore-scripts --no-audit --no-fund
+          npm install akm-cli@0.9.29 --prefix $prefix --omit=optional --ignore-scripts --no-audit --no-fund
           "AKM_REAL_NPM_BIN=$(Join-Path $prefix 'node_modules/.bin')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Run hook tests

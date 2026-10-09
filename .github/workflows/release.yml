@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI compatibility floor these plugins target (e.g. 0.9.28). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp. A prerelease (e.g. 0.9.29-alpha.4, already on npm) makes this a `next` release, derived as <akm_version>.<UTC yyyymmddhhmm>."
+        description: "The exact akm CLI compatibility floor these plugins target (e.g. 0.9.29). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp. A prerelease (e.g. 0.9.30-alpha.4, already on npm) makes this a `next` release, derived as <akm_version>.<UTC yyyymmddhhmm>."
         required: true
         type: string
 
@@ -96,9 +96,9 @@ jobs:
       # a bump in akm's patch increases the numeric prefix. It also clears the
       # typo'd 202808* patches already published.
       #
-      # A prerelease akm_version (0.9.29-alpha.4) is a `next` release instead:
-      # <akm_version>.<yyyymmddhhmm> is 0.9.29-alpha.4.202610080512, a valid
-      # semver prerelease that sorts above 0.9.29-alpha.4 and below 0.9.29.
+      # A prerelease akm_version (0.9.30-alpha.4) is a `next` release instead:
+      # <akm_version>.<yyyymmddhhmm> is 0.9.30-alpha.4.202610080512, a valid
+      # semver prerelease that sorts above 0.9.30-alpha.4 and below 0.9.30.
       # It publishes under the npm `next` tag, and nothing is committed to main.
       - name: Derive release version
         id: derive
@@ -156,7 +156,7 @@ jobs:
           const parsedAkm = SEMVER.exec(akmVersion)
           if (!parsedAkm) {
             console.error(`akm_version "${akmVersion}" is not valid semver (MAJOR.MINOR.PATCH).`)
-            console.error('Supply the exact akm CLI version these plugins target, e.g. 0.9.28 -- the workflow appends the timestamp.')
+            console.error('Supply the exact akm CLI version these plugins target, e.g. 0.9.29 -- the workflow appends the timestamp.')
             process.exit(1)
           }
 
@@ -175,7 +175,7 @@ jobs:
           const floorVersion = `${floor[1]}.${floor[2]}.${floor[3]}`
           if (next) {
             // Claude's range check judges the release core, so an akm prerelease
-            // satisfies ^0.9.28 exactly when its core does.
+            // satisfies ^0.9.29 exactly when its core does.
             if (parsedAkm[1] !== floor[1] || parsedAkm[2] !== floor[2] || Number(parsedAkm[3]) < Number(floor[3])) {
               console.error(`akm_version "${akmVersion}" is outside AKM_VERSION_RANGE ${range}: its release core must be ${floor[1]}.${floor[2]}.${floor[3]} or later on the ${floor[1]}.${floor[2]} line.`)
               process.exit(1)
