@@ -1,0 +1,54 @@
+{
+  "name": "akm-opencode-v2",
+  "version": "0.9.30202610090106",
+  "type": "module",
+  "description": "OpenCode 2 plugin for AKM: the five AKM tools, automatic recall, and automatic session extraction. For OpenCode 1, use akm-opencode.",
+  "keywords": [
+    "opencode",
+    "opencode-2",
+    "opencode-plugin",
+    "akm",
+    "ai-agent",
+    "developer-tools",
+    "plugin"
+  ],
+  "homepage": "https://github.com/itlackey/akm-plugins#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/itlackey/akm-plugins.git",
+    "directory": "opencode-v2"
+  },
+  "bugs": {
+    "url": "https://github.com/itlackey/akm-plugins/issues"
+  },
+  "license": "MPL-2.0",
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun build ./index.ts --target=bun --outfile=dist/index.js --external @opencode/plugin --external @opencode/plugin/* --external effect --external effect/* --external akm-cli",
+    "prepack": "bun run build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "akm-cli": "0.9.30"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "2.0.26",
+    "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.0.26",
+    "@types/node": "^26.1.1",
+    "effect": "4.0.0-rc.112",
+    "typescript": "^5.8.3"
+  }
+}
