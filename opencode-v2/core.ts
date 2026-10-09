@@ -5,7 +5,7 @@
 //
 // Semantics, against OpenCode 2.0.26 (see README "Hook mapping"):
 //   - `session.prompt` hook   -> onPrompt(): decide whether the prompt warrants
-//     recall and run `akm curate` for it. The hook is awaited by the runtime
+//     recall and run the in-process `curate` (akm-cli/api) for it. The hook is awaited by the runtime
 //     before the model request is built, so we wait for curation for a bounded
 //     time (recallWaitMs); a slower curation keeps running and lands on the
 //     NEXT request instead of stalling this one.
@@ -15,6 +15,10 @@
 //     time), so it survives compaction.
 //   - event stream            -> onEvent(): session lifecycle; the extraction
 //     checkpoint and state cleanup.
+//   - `tool.execute.before`   -> onToolBefore(): the write gate.
+//   - `tool.execute.after`    -> onToolResult(): touched refs for auto-feedback.
+//   - `session.prompt` also feeds auto-feedback and learning proposals.
+//   - `shell.create.before`   -> shellEnv(): AKM_* variables for shells.
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractAkmRefsFromString } from "../claude/shared/ref-extraction"
