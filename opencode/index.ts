@@ -5,19 +5,6 @@ import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
-import { classifyFeedbackSignal, createExplicitCorrectionRegex, createRetrospectiveFeedbackRegex, createRetrospectiveNegativeRegex, shouldSubmitAutomaticFeedback } from "../claude/shared/feedback-signals"
-import { appendMemoryEvent, getEventLogPath, getHarnessStateDir, type AkmMemoryEvent } from "../claude/shared/memory-events"
-import {
-  appendCapturedLearningSignal,
-  captureLearningSignal,
-  createLearningProposalJob,
-  observeRecurringWorkflow,
-  recordLearningProposalStatus,
-  removeLearningProposalJob,
-  reserveLearningProposal,
-  type ProposalCandidate,
-} from "../claude/shared/learning-signals"
 import {
   type CliError,
   type ResolvedAkmCommand,
@@ -29,41 +16,44 @@ import {
 } from "../opencode-shared/akm-cli"
 import {
   AKM_CURATED_TAIL,
-  AKM_EXTRACT_OUTPUT_MAX_CHARS,
-  AKM_CURATE_MIN_SCORE,
   AKM_HINTS_PREFIX,
   applyContextBudget,
   autoMemoryEnabled,
-  buildCurateArgs,
+  buildCurateOptions,
   buildScopedArgs,
   createCuratedFileStore,
   extractMinIntervalMs,
   gatherCwdContext,
   formatWorkflowContext,
+  recallCurate,
   renderCuratedJsonResponse,
   spawnSessionExtract,
   summarizeActiveWorkflows,
   truncateLogText,
-  unrefChildStream,
 } from "../opencode-shared/recall"
+import { createBundleDirResolver } from "../opencode-shared/bundle"
+import { buildEventScope, opencodeEventLog, writeOpencodeEvent } from "../opencode-shared/events"
+import {
+  classifyToolFeedback,
+  createFeedbackTracker,
+  extractAkmRefsFromAllArgs,
+  extractToolRefs,
+  type NegativeFeedback,
+  parseToolOutput,
+  spawnPositiveFeedback,
+} from "../opencode-shared/feedback"
+import { createLearning, createPendingProposals } from "../opencode-shared/learning"
 import { ASSET_TYPES, TOOL_SPECS, type ToolSpec, buildFeedbackArgs, buildRememberArgs, withProposedWarnings } from "../opencode-shared/tools"
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractAkmRefsFromString, validateRefCandidates } from "../claude/shared/ref-extraction"
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
-const AKM_AUTO_FEEDBACK = (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
-const AKM_AUTO_LEARNING = (process.env.AKM_AUTO_LEARNING ?? "1") !== "0"
-const AKM_AUTO_SKILL_PROPOSALS = (process.env.AKM_AUTO_SKILL_PROPOSALS ?? "1") !== "0"
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
 const AKM_PENDING_PROPOSAL_TIMEOUT_MS = Math.max(500, (Number(process.env.AKM_PENDING_PROPOSAL_TIMEOUT ?? "2") || 2) * 1_000)
 const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const AKM_READ_TOOL_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_READ_TOOL_TIMEOUT ?? "60") || 60) * 1_000)
 const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
-const AKM_LEARNING_PROPOSAL_TIMEOUT_MS = Math.max(
-  1_000,
-  Number(process.env.AKM_LEARNING_PROPOSAL_TIMEOUT_MS ?? "600000") || 600_000,
-)
 // --- write gate (#99) -------------------------------------------------------
 // #94 and #95 both moved engagement by rewording the prompt, and both left the
 // one cell that matters untouched: editing a file whose format the model does
@@ -137,21 +127,15 @@ const WRITE_GATE_NEGATIVE_TTL_MS = 5 * 60 * 1000
 // non-oss non-gpt-4 models, so omitting it would make the gate dark for a
 // whole model family rather than merely inert.
 const WATCHED_WRITE_TOOLS = new Set(["edit", "write", "apply_patch"])
-// 13: "Memory leaks" — sessionBuffer previously grew without bound for the
+// 13: "Memory leaks" — the session buffer previously grew without bound for the
 // life of a session (a long-running session accumulates one entry per
-// observed tool ref / memory intent). Cap it drop-oldest, matching the
-// `.slice(-8)` cap style already used by retrospectiveState.recentRefs.
+// observed tool ref / memory intent). The tracker caps it drop-oldest.
 const AKM_SESSION_BUFFER_MAX_ENTRIES = Math.max(1, Number(process.env.AKM_SESSION_BUFFER_MAX_ENTRIES ?? "200") || 200)
 // Best-effort sweep age for orphaned curated tmp files (os.tmpdir()/akm-opencode/curated).
 // A session that ends without ever firing session.deleted (host crash, forced
 // kill) would otherwise leak its curated file on disk forever.
-const AKM_RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
-const AKM_RETROSPECTIVE_NEGATIVE_RE = createRetrospectiveNegativeRegex()
-const AKM_EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
 const PLUGIN_VERSION = readPackageVersion()
 const BUNDLED_AKM_API_VERSION = readBundledAkmVersion()
-const OPENCODE_EVENT_LOG = getEventLogPath("opencode")
-const OPENCODE_STATE_DIR = getHarnessStateDir("opencode")
 
 // Per-session state that drives the compound-engineering loop.
 // These maps are keyed by OpenCode sessionID.
@@ -161,16 +145,8 @@ const sessionWorkflow = new Map<string, string>()
 const sessionCuratedFile = new Map<string, string>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
-type SessionBufferEntry = {
-  timestamp: string
-  kind: "memory-intent" | "tool-ref" | "learning-signal"
-  toolName?: string
-  ref?: string
-  status?: "positive" | "negative" | "unknown"
-  note?: string
-  checkpointed?: boolean
-}
-const sessionBuffer = new Map<string, SessionBufferEntry[]>()
+// Refs touched and the negative-signal window, shared with the V2 plugin.
+const feedbackTracker = createFeedbackTracker({ maxBufferEntries: AKM_SESSION_BUFFER_MAX_ENTRIES })
 // Event-driven extraction (opencode): opencode has no true "session end" event
 // and `session.idle` fires after EVERY turn. To avoid flooding extract while a
 // session is actively worked, we min-interval-gate per session — at most one
@@ -180,9 +156,6 @@ const sessionBuffer = new Map<string, SessionBufferEntry[]>()
 // final delta after the last turn.
 const sessionLastExtractAt = new Map<string, number>()
 const AKM_EXTRACT_MIN_INTERVAL_MS = extractMinIntervalMs()
-const pendingProposalSummaryCache = new Map<string, { count: number; expiresAt: number; unsupported?: boolean }>()
-const retrospectiveState = new Map<string, { recentRefs: string[]; lastNegativeSignalAt?: number }>()
-let cachedAkmBundleDir: string | undefined
 // Passive ref observation (narrower than explicit show/search input, so
 // ordinary repository paths cannot become automatic feedback targets) lives in
 // claude/shared/ref-extraction.ts. This module deliberately keeps no local copy
@@ -190,7 +163,6 @@ let cachedAkmBundleDir: string | undefined
 // AKM 0.9 root list (it still matched `wikis/` and never matched `facts/`,
 // `instructions/`, or `sessions/`). extractAkmRefsFromString() is the shared
 // whitespace-token extractor and is the single source of truth here.
-const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until accepted."
 function readPackageVersion(): string {
   try {
     const raw = readFileSync(path.join(moduleDir, "package.json"), "utf8")
@@ -300,26 +272,7 @@ async function writePluginLog(client: LogCapableClient, level: LogLevel, message
   }
 }
 
-function buildEventScope(sessionID?: string, directory?: string, agent?: string) {
-  return {
-    user: process.env.AKM_USER_ID,
-    agent,
-    run: sessionID,
-    channel: process.env.AKM_CHANNEL,
-    project: directory,
-    repo: process.env.AKM_REPO,
-    branch: process.env.AKM_BRANCH,
-  }
-}
-
-function writeStructuredEvent(event: Omit<AkmMemoryEvent, "version" | "timestamp" | "harness">) {
-  return appendMemoryEvent(OPENCODE_EVENT_LOG, {
-    version: 1,
-    timestamp: nowIso(),
-    harness: "opencode",
-    ...event,
-  })
-}
+const writeStructuredEvent = writeOpencodeEvent
 
 const curatedFiles = createCuratedFileStore(path.join(os.tmpdir(), "akm-opencode", "curated"))
 const CURATED_DIR = curatedFiles.dir
@@ -339,10 +292,6 @@ async function logHookFailure(
   })
 }
 
-function nowIso(): string {
-  return new Date().toISOString()
-}
-
 // Opt-OUT (default enabled), matching the Claude hook's INDEX_ON_SESSION_END so
 // the same install ends a session with the same stash freshness on either
 // harness. It was opt-IN because the call site fired on
@@ -351,15 +300,6 @@ function nowIso(): string {
 // narrowed to session.deleted, so the default can match Claude's.
 function shouldIndexOnSessionEnd(): boolean {
   return (process.env.AKM_INDEX_ON_SESSION_END ?? "1") !== "0"
-}
-
-function addBufferEntry(sessionID: string | undefined, entry: Omit<SessionBufferEntry, "timestamp">) {
-  if (!sessionID) return
-  const buf = sessionBuffer.get(sessionID) ?? []
-  buf.push({ timestamp: nowIso(), ...entry })
-  // Drop-oldest cap (13: "Memory leaks" — sessionBuffer was uncapped).
-  if (buf.length > AKM_SESSION_BUFFER_MAX_ENTRIES) buf.splice(0, buf.length - AKM_SESSION_BUFFER_MAX_ENTRIES)
-  sessionBuffer.set(sessionID, buf)
 }
 
 function bumpCuratedVersion(sessionID: string) {
@@ -397,10 +337,9 @@ function clearSessionState(sessionID: string): void {
   sessionWorkflow.delete(sessionID)
   sessionCuratedVersion.delete(sessionID)
   sessionCuratedInjectedVersion.delete(sessionID)
-  sessionBuffer.delete(sessionID)
+  feedbackTracker.clear(sessionID)
   sessionLastExtractAt.delete(sessionID)
-  pendingProposalSummaryCache.delete(sessionID)
-  retrospectiveState.delete(sessionID)
+  pendingProposals.invalidate(sessionID)
   // #99 write gate: four more session-keyed maps, torn down here for the same
   // reason as the rest — a re-created session must not inherit a stale latch
   // (which would silently disable the gate) or a stale file identity, and must
@@ -425,14 +364,6 @@ function __curatedDirForTests(): string {
 // rejection or blocks the session.created path that triggers it.
 async function pruneStaleCuratedFiles(): Promise<void> {
   curatedFiles.pruneStale()
-}
-
-function parseMaybeJson(value: string): unknown {
-  try {
-    return JSON.parse(value)
-  } catch {
-    return undefined
-  }
 }
 
 // Synchronous CLI invocation used by the lifecycle hooks — the plugin host does
@@ -465,39 +396,39 @@ function runCurate(args: string[]): string | null {
   return body || null
 }
 
-async function runCurateLogged(
+// Automatic recall runs in-process through `akm-cli/api` (opencode-shared/recall.ts);
+// a failure, a timeout or an abort degrades to "no recall for this turn", logged.
+async function runRecall(
   client: LogCapableClient,
-  args: string[],
+  query: string,
   meta: CliLogMeta & { operation: string },
 ): Promise<string | null> {
-  return runCliSyncBestEffort(client, args, AKM_CURATE_TIMEOUT_MS, {
-    ...meta,
+  const outcome = await recallCurate(query, { cwd: meta.directory, timeoutMs: AKM_CURATE_TIMEOUT_MS })
+  if (outcome.ok) return outcome.text
+  await writePluginLog(client, "warn", "AKM recall failed", {
     subsystem: "curation",
+    operation: meta.operation,
+    toolName: meta.toolName,
+    sessionID: meta.sessionID,
+    directory: meta.directory,
+    error: outcome.error,
   })
+  return null
 }
 
-async function runCurateForPrompt(client: LogCapableClient, text: string, sessionID?: string): Promise<string | null> {
+async function runCurateForPrompt(client: LogCapableClient, text: string, sessionID: string | undefined, directory: string | undefined): Promise<string | null> {
   if (!text || text.length < AKM_CURATE_MIN_CHARS) return null
-  const raw = await runCurateLogged(client,
-    buildCurateArgs(text),
-    { toolName: "chat.message", sessionID, operation: "prompt-curate" },
-  )
-  return AKM_CURATE_MIN_SCORE > 0 ? renderCuratedJsonResponse(raw, text) : raw
+  return runRecall(client, text, { toolName: "chat.message", sessionID, directory, operation: "prompt-curate" })
 }
 
-async function runCurateForSession(client: LogCapableClient, sessionID: string, query?: string): Promise<string | null> {
+async function runCurateForSession(client: LogCapableClient, sessionID: string, directory: string | undefined, query?: string): Promise<string | null> {
   // `akm curate` requires a query and rejects the call without one, so an
   // empty context is nothing to curate — not a curate call with the query
   // left off. Building one anyway spent a subprocess per session start to
   // log a MISSING_REQUIRED_ARGUMENT warning.
   const trimmed = query?.trim()
   if (!trimmed) return null
-  const args = buildCurateArgs(trimmed)
-  const raw = await runCurateLogged(client,
-    args,
-    { toolName: "session.start", sessionID, operation: "session-curate" },
-  )
-  return AKM_CURATE_MIN_SCORE > 0 ? renderCuratedJsonResponse(raw, trimmed) : raw
+  return runRecall(client, trimmed, { toolName: "session.start", sessionID, directory, operation: "session-curate" })
 }
 
 async function runHintsForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
@@ -521,42 +452,17 @@ async function runWorkflowSummaryForSession(client: LogCapableClient, sessionID?
 }
 
 
-function formatPendingProposalContext(count: number): string {
-  const summaryLine = count === 1 ? "There is 1 pending AKM proposal." : `There are ${count} pending AKM proposals.`
-  return [
-    "# AKM pending proposals",
-    "",
-    summaryLine,
-    "Use the AKM CLI to review them; mutating proposal actions require explicit user approval.",
-    PROPOSED_QUALITY_WARNING,
-  ].join("\n")
-}
+const bundleDirResolver = createBundleDirResolver()
 
 async function getAkmBundleDir(client?: LogCapableClient): Promise<string | undefined> {
-  const override = process.env.AKM_BUNDLE_DIR?.trim()
-  if (override) return override
-  if (cachedAkmBundleDir !== undefined) return cachedAkmBundleDir || undefined
-  const raw = client
-    ? await runCliSyncBestEffort(client, ["info", "--format", "json", "-q"], AKM_CURATE_TIMEOUT_MS, {
-      toolName: "shell.env",
-      subsystem: "info",
-      operation: "get-bundle-dir",
-    })
-    : runCurate(["info", "--format", "json", "-q"])
-  if (!raw) {
-    cachedAkmBundleDir = ""
-    return undefined
-  }
-  const parsed = parseMaybeJson(raw)
-  if (parsed && typeof parsed === "object") {
-    const value = (parsed as Record<string, unknown>).bundleDir
-    if (typeof value === "string" && value.trim()) {
-      cachedAkmBundleDir = value.trim()
-      return cachedAkmBundleDir
-    }
-  }
-  cachedAkmBundleDir = ""
-  return undefined
+  return bundleDirResolver.get(async () =>
+    client
+      ? runCliSyncBestEffort(client, ["info", "--format", "json", "-q"], AKM_CURATE_TIMEOUT_MS, {
+        toolName: "shell.env",
+        subsystem: "info",
+        operation: "get-bundle-dir",
+      })
+      : runCurate(["info", "--format", "json", "-q"]))
 }
 
 // getAkmBundleDir() caches "" on failure and neither of its consumers checks,
@@ -655,60 +561,20 @@ async function runCliSyncBestEffort(
   return body || null
 }
 
-function noteRecentRefs(sessionID: string | undefined, refs: string[]) {
-  if (!sessionID || refs.length === 0) return
-  const state = retrospectiveState.get(sessionID) ?? { recentRefs: [] }
-  state.recentRefs = [...new Set([...state.recentRefs, ...refs])].slice(-8)
-  retrospectiveState.set(sessionID, state)
-}
+const pendingProposals = createPendingProposals({
+  list: async (args) => {
+    const command = resolveAkmCommand()
+    if (isCliError(command)) throw new Error(command.error)
+    return execResolvedAkm(command, args, { encoding: "utf8", timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS })
+  },
+  formatError: formatCliError,
+})
 
-async function getPendingProposalCount(client: LogCapableClient, sessionID?: string): Promise<{ count: number; unsupported?: boolean }> {
-  const cacheKey = sessionID ?? "global"
-  const cached = pendingProposalSummaryCache.get(cacheKey)
-  if (cached && cached.expiresAt > Date.now()) return cached
-
-  const command = resolveAkmCommand()
-  if (typeof command === "object" && "ok" in command) return { count: 0, unsupported: true }
-  try {
-    // AKM 0.9.14 canonical proposal-queue listing path: `akm proposal list`.
-    const stdout = execResolvedAkm(command, ["proposal", "list", "--status", "pending", "--format", "json"], {
-      encoding: "utf8",
-      timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS,
-    })
-    const parsed = safeJsonParse<{ proposals?: unknown[] }>(stdout)
-    const count = Array.isArray(parsed?.proposals) ? parsed.proposals.length : 0
-    const result = { count, expiresAt: Date.now() + 60_000 }
-    pendingProposalSummaryCache.set(cacheKey, result)
-    return result
-  } catch (error: unknown) {
-    const message = formatCliError(error)
-    const unsupported = /unknown|unsupported|not found|invalid/i.test(message)
-    const result = { count: 0, unsupported, expiresAt: Date.now() + 60_000 }
-    pendingProposalSummaryCache.set(cacheKey, result)
-    return result
-  }
-}
-
-async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: string | undefined, text: string) {
-  if (!sessionID) return
-  const state = retrospectiveState.get(sessionID)
-  const recentRefs = state?.recentRefs ?? []
-  if (recentRefs.length === 0) return
-
-  const explicitCorrection = AKM_EXPLICIT_CORRECTION_RE.test(text)
-  const negative = explicitCorrection || AKM_RETROSPECTIVE_NEGATIVE_RE.test(text)
-  if (!negative) return
-
-  if (!explicitCorrection) {
-    const now = Date.now()
-    if (!state?.lastNegativeSignalAt || now - state.lastNegativeSignalAt > 2 * 60 * 1000) {
-      retrospectiveState.set(sessionID, { recentRefs, lastNegativeSignalAt: now })
-      return
-    }
-  }
-
-  const targetRef = recentRefs[recentRefs.length - 1]
-  const raw = await runCli(client, ["feedback", targetRef, "--negative", "--reason", text.slice(0, 280)], {
+// An explicit correction (or a repeated negative signal) blames the last ref the
+// session touched. The decision is the shared tracker's; the call is ours so it
+// keeps this plugin's command logging and telemetry.
+async function recordNegativeFeedback(client: LogCapableClient, sessionID: string, negative: NegativeFeedback) {
+  const raw = await runCli(client, ["feedback", negative.ref, "--negative", "--reason", negative.reason], {
     toolName: "akm_feedback",
     sessionID,
   })
@@ -717,95 +583,32 @@ async function recordRetrospectiveFeedback(client: LogCapableClient, sessionID: 
     await emitWorkflowTelemetry(client, "info", "akm.feedback.recorded", {
       sessionID,
       toolName: "akm_feedback",
-      assetRef: targetRef,
+      assetRef: negative.ref,
       outcome: "success",
-      reason: explicitCorrection ? "explicit correction" : "negative retrospective signal",
+      reason: negative.explicit ? "explicit correction" : "negative retrospective signal",
     })
   }
-  retrospectiveState.set(sessionID, { recentRefs })
 }
 
 // Positive feedback only. A failed tool call is not feedback on the asset
-// (akm#999), and a correction goes through recordRetrospectiveFeedback().
-function queueFeedback(
-  client: LogCapableClient,
-  ref: string,
-  note: string,
-  meta: CliLogMeta,
-  dedupe?: Set<string>,
-): boolean {
-  if (dedupe?.has(ref)) return true
-  dedupe?.add(ref)
-
+// (akm#999), and a correction goes through recordNegativeFeedback().
+function queueFeedback(client: LogCapableClient, ref: string, note: string, meta: CliLogMeta): boolean {
   const command = resolveAkmCommand()
-  if (typeof command === "object" && "ok" in command) {
-    void writePluginLog(client, "warn", "AKM auto-feedback skipped", {
+  const fail = (error: string) => {
+    void writePluginLog(client, "warn", isCliError(command) ? "AKM auto-feedback skipped" : "AKM auto-feedback failed", {
       subsystem: "feedback",
       toolName: meta.toolName,
       sessionID: meta.sessionID,
       directory: meta.directory,
       ref,
-      error: command.error,
+      error,
     })
+  }
+  if (isCliError(command)) {
+    fail(command.error)
     return false
   }
-
-  try {
-    const child = spawn(
-      command.command,
-      [
-        ...command.argsPrefix,
-        "feedback",
-        ref,
-        "--positive",
-        "--reason",
-        note,
-        "--format",
-        "json",
-        "-q",
-      ],
-      {
-        detached: true,
-        stdio: "ignore",
-      },
-    )
-    child.on("exit", (code, signal) => {
-      if ((typeof code === "number" && code !== 0) || signal) {
-        void writePluginLog(client, "warn", "AKM auto-feedback failed", {
-          subsystem: "feedback",
-          toolName: meta.toolName,
-          sessionID: meta.sessionID,
-          directory: meta.directory,
-          ref,
-          error: signal
-            ? `akm feedback exited via signal ${signal}`
-            : `akm feedback exited with code ${code}`,
-        })
-      }
-    })
-    child.on("error", (error) => {
-      void writePluginLog(client, "warn", "AKM auto-feedback failed", {
-        subsystem: "feedback",
-        toolName: meta.toolName,
-        sessionID: meta.sessionID,
-        directory: meta.directory,
-        ref,
-        error: formatCliError(error),
-      })
-    })
-    child.unref()
-    return true
-  } catch (error: unknown) {
-    void writePluginLog(client, "warn", "AKM auto-feedback failed", {
-      subsystem: "feedback",
-      toolName: meta.toolName,
-      sessionID: meta.sessionID,
-      directory: meta.directory,
-      ref,
-      error: formatCliError(error),
-    })
-    return false
-  }
+  return spawnPositiveFeedback(command, ref, note, fail, formatCliError)
 }
 
 async function maybeIndexSessionMemory(
@@ -825,58 +628,6 @@ async function maybeIndexSessionMemory(
     ref,
     error: result.error,
   })
-}
-
-function extractToolRefs(
-  toolName: string,
-  args: Record<string, unknown>,
-  output: unknown,
-): string[] {
-  const refs = new Set<string>()
-  const addMatches = (value: unknown) => {
-    if (typeof value !== "string") return
-    for (const ref of extractAkmRefsFromString(value)) refs.add(ref)
-  }
-
-  for (const key of ["ref", "package_ref"]) {
-    addMatches((args as Record<string, unknown>)[key])
-  }
-
-  if (output && typeof output === "object") {
-    const o = output as Record<string, unknown>
-    addMatches(o.ref)
-    if (Array.isArray(o.hits)) {
-      for (const hit of o.hits) {
-        if (hit && typeof hit === "object") addMatches((hit as Record<string, unknown>).ref)
-      }
-    }
-    // akmCurate returns { query, summary, items } — not `hits` — so without this
-    // branch a curate call yields no refs at all and nothing downstream (the
-    // #99 already-shown credit, tool_observation, the feedback buffer) can see
-    // what the model was handed.
-    if (Array.isArray(o.items)) {
-      for (const item of o.items) {
-        if (item && typeof item === "object") addMatches((item as Record<string, unknown>).ref)
-      }
-    }
-    if (toolName === "akm_remember" && typeof o.ref === "string") addMatches(o.ref)
-  }
-
-  return [...refs]
-}
-
-function extractAkmRefsFromAllArgs(args: Record<string, unknown>): string[] {
-  if (!args || typeof args !== "object") return []
-  const refs = new Set<string>()
-  for (const value of Object.values(args)) {
-    if (typeof value === "string") {
-      for (const ref of extractAkmRefsFromString(value)) refs.add(ref)
-    } else if (typeof value === "object" && value !== null) {
-      const serialized = JSON.stringify(value)
-      for (const ref of extractAkmRefsFromString(serialized)) refs.add(ref)
-    }
-  }
-  return [...refs]
 }
 
 // --- write gate: state (#99) ------------------------------------------------
@@ -1593,7 +1344,7 @@ function emitWriteGate(
     subsystem: "write-gate",
     sessionID: input.sessionID,
     reason,
-    path: OPENCODE_EVENT_LOG,
+    path: opencodeEventLog(),
     error: written.error,
     consequence: "write_gate events are being dropped; an empty stage-1 histogram is indistinguishable from a gate that never fired",
   })
@@ -1916,244 +1667,6 @@ function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, direct
   }, formatCliError)
 }
 
-function learningProposalMinConfidence(): number {
-  const raw = Number(process.env.AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE ?? "0.75")
-  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.75
-}
-
-function parseLearningProposalEnvelope(raw: string): {
-  ok?: boolean
-  ref?: string
-  proposalId?: string
-  error?: string
-} {
-  const parsed = safeJsonParse<{
-    ok?: unknown
-    ref?: unknown
-    error?: unknown
-    proposal?: { id?: unknown; ref?: unknown }
-  }>(raw)
-  if (!parsed) return {}
-  return {
-    ...(typeof parsed.ok === "boolean" ? { ok: parsed.ok } : {}),
-    ...(typeof parsed.ref === "string"
-      ? { ref: parsed.ref }
-      : typeof parsed.proposal?.ref === "string"
-        ? { ref: parsed.proposal.ref }
-        : {}),
-    ...(typeof parsed.proposal?.id === "string" ? { proposalId: parsed.proposal.id } : {}),
-    ...(typeof parsed.error === "string" ? { error: parsed.error } : {}),
-  }
-}
-
-/** Fire-and-forget semantic authoring; AKM owns the proposal and its review. */
-function submitLearningProposal(
-  client: LogCapableClient,
-  candidate: ProposalCandidate,
-  directory: string | undefined,
-): void {
-  if (!AKM_AUTO_LEARNING || candidate.confidence < learningProposalMinConfidence()) return
-  const command = resolveAkmCommand()
-  if (typeof command === "object" && "ok" in command) {
-    void writePluginLog(client, "warn", "AKM learning proposal skipped", {
-      subsystem: "learning",
-      sessionID: candidate.sessionId,
-      directory,
-      kind: candidate.kind,
-      error: command.error,
-    })
-    return
-  }
-  const reservation = reserveLearningProposal(OPENCODE_STATE_DIR, candidate)
-  if (!reservation) return
-  let jobFile = ""
-  let taskFile = ""
-  let settled = false
-  const finish = (
-    status: "submitted" | "failed",
-    result: { ref?: string; proposalId?: string; error?: string },
-  ): void => {
-    if (settled) return
-    settled = true
-    recordLearningProposalStatus({
-      stateDir: OPENCODE_STATE_DIR,
-      candidate,
-      reservation,
-      status,
-      ...(result.ref ? { ref: result.ref } : {}),
-      ...(result.proposalId ? { proposalId: result.proposalId } : {}),
-      ...(result.error ? { error: result.error } : {}),
-    })
-    removeLearningProposalJob(jobFile, taskFile)
-    if (status === "submitted") pendingProposalSummaryCache.delete(candidate.sessionId ?? "global")
-    writeStructuredEvent({
-      event: "learning_proposal",
-      sessionId: candidate.sessionId,
-      project: candidate.project,
-      scope: buildEventScope(candidate.sessionId, directory),
-      input: {
-        kind: candidate.kind,
-        confidence: candidate.confidence,
-        proposalType: reservation.proposalType,
-        proposalName: reservation.proposalName,
-      },
-      refs: result.ref ? [result.ref] : undefined,
-      outcome: status === "submitted"
-        ? { status: "ok" }
-        : { status: "failed", error: result.error ?? "proposal submission failed" },
-    })
-    void writePluginLog(client, status === "submitted" ? "info" : "warn", `AKM learning proposal ${status}`, {
-      subsystem: "learning",
-      sessionID: candidate.sessionId,
-      directory,
-      kind: candidate.kind,
-      proposalType: reservation.proposalType,
-      proposalName: reservation.proposalName,
-      ref: result.ref,
-      proposalId: result.proposalId,
-      error: result.error,
-    })
-  }
-
-  try {
-    const created = createLearningProposalJob({
-      stateDir: OPENCODE_STATE_DIR,
-      command: command.command,
-      argsPrefix: command.argsPrefix,
-      candidate,
-      reservation,
-      logFile: path.join(OPENCODE_STATE_DIR, "learning-proposals.log"),
-      eventLog: OPENCODE_EVENT_LOG,
-    })
-    jobFile = created.jobFile
-    taskFile = created.job.taskFile
-    const child = spawn(
-      command.command,
-      [
-        ...command.argsPrefix,
-        "proposal",
-        "new",
-        reservation.proposalType,
-        reservation.proposalName,
-        "--file",
-        taskFile,
-        "--format",
-        "json",
-        "-q",
-        "--timeout-ms",
-        String(AKM_LEARNING_PROPOSAL_TIMEOUT_MS),
-      ],
-      {
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: AKM_LEARNING_PROPOSAL_TIMEOUT_MS,
-      },
-    )
-    let stdout = ""
-    let stderr = ""
-    for (const [stream, channel] of [[child.stdout, "stdout"], [child.stderr, "stderr"]] as const) {
-      if (!stream) continue
-      unrefChildStream(stream)
-      stream.setEncoding("utf8")
-      stream.on("data", (chunk: string) => {
-        if (channel === "stdout" && stdout.length < AKM_EXTRACT_OUTPUT_MAX_CHARS) stdout += chunk
-        if (channel === "stderr" && stderr.length < AKM_EXTRACT_OUTPUT_MAX_CHARS) stderr += chunk
-      })
-      stream.on("error", () => {})
-    }
-    child.on("close", (code, signal) => {
-      const stdoutBody = stdout.trim().slice(0, AKM_EXTRACT_OUTPUT_MAX_CHARS)
-      const stderrBody = stderr.trim().slice(0, AKM_EXTRACT_OUTPUT_MAX_CHARS)
-      const stdoutEnvelope = parseLearningProposalEnvelope(stdoutBody)
-      const envelope = stdoutEnvelope.ok === undefined && !stdoutEnvelope.error
-        ? parseLearningProposalEnvelope(stderrBody)
-        : stdoutEnvelope
-      const failed = envelope.ok !== true || (typeof code === "number" && code !== 0) || !!signal
-      if (failed) {
-        finish("failed", {
-          error: envelope.error
-            || stderrBody
-            || (signal ? `akm proposal new exited via signal ${signal}` : `akm proposal new exited with code ${code}`),
-        })
-      } else {
-        finish("submitted", envelope)
-      }
-    })
-    child.on("error", (error) => finish("failed", { error: formatCliError(error) }))
-    child.unref()
-  } catch (error: unknown) {
-    finish("failed", { error: formatCliError(error) })
-  }
-}
-
-function capturePromptLearning(
-  client: LogCapableClient,
-  text: string,
-  sessionID: string | undefined,
-  project: string,
-  directory: string | undefined,
-): void {
-  if (!AKM_AUTO_LEARNING) return
-  const signal = captureLearningSignal({
-    text,
-    harness: "opencode",
-    project,
-    ...(sessionID ? { sessionId: sessionID } : {}),
-  })
-  if (signal) {
-    try {
-      appendCapturedLearningSignal(OPENCODE_STATE_DIR, signal)
-      addBufferEntry(sessionID, {
-        kind: "learning-signal",
-        status: signal.sentiment === "positive" ? "positive" : "negative",
-        note: truncateLogText(signal.message, 500),
-      })
-      writeStructuredEvent({
-        event: "learning_signal",
-        sessionId: sessionID,
-        project,
-        scope: buildEventScope(sessionID, directory),
-        input: {
-          kind: signal.kind,
-          confidence: signal.confidence,
-          patterns: signal.patterns,
-          proposalType: signal.proposalType ?? null,
-          evidence: signal.message,
-        },
-        outcome: { status: signal.proposalType ? "ok" : "skipped" },
-      })
-    } catch (error: unknown) {
-      void writePluginLog(client, "warn", "AKM learning signal capture failed", {
-        subsystem: "learning",
-        sessionID,
-        directory,
-        error: formatCliError(error),
-      })
-    }
-    if (signal.proposalType) submitLearningProposal(client, signal, directory)
-  }
-
-  if (!AKM_AUTO_SKILL_PROPOSALS) return
-  try {
-    const workflow = observeRecurringWorkflow({
-      stateDir: OPENCODE_STATE_DIR,
-      text,
-      harness: "opencode",
-      project,
-      ...(sessionID ? { sessionId: sessionID } : {}),
-      ...(signal ? { signal } : {}),
-    })
-    if (workflow) submitLearningProposal(client, workflow, directory)
-  } catch (error: unknown) {
-    void writePluginLog(client, "warn", "AKM recurring-workflow capture failed", {
-      subsystem: "learning",
-      sessionID,
-      directory,
-      error: formatCliError(error),
-    })
-  }
-}
-
 function resolveAkmCommand(): ResolvedAkmCommand | CliError {
   return resolveSharedAkmCommand(import.meta.url, "akm-opencode")
 }
@@ -2196,7 +1709,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
     const refs = args[0] === "search" || args[0] === "curate"
       ? [...new Set([...(parsed?.hits?.flatMap((hit) => hit.ref ? [hit.ref] : []) ?? []), ...extractAkmRefsFromString(stdout)])]
       : extractAkmRefsFromString(stdout)
-    noteRecentRefs(meta.sessionID, refs)
+    feedbackTracker.noteRecentRefs(meta.sessionID, refs)
     if (meta.toolName === "akm_search") {
       await emitWorkflowTelemetry(client, "info", "akm.search.invoked", {
         sessionID: meta.sessionID,
@@ -2318,7 +1831,7 @@ async function runInProcess(
     }
     const output = result.output
     const refs = extractAkmRefsFromString(output)
-    noteRecentRefs(meta.sessionID, refs)
+    feedbackTracker.noteRecentRefs(meta.sessionID, refs)
     await writePluginLog(client, "info", "AKM read call completed", {
       subsystem: "akm",
       toolName: meta.toolName,
@@ -2445,14 +1958,6 @@ function extractText(parts: unknown): string {
   return segments.join("\n\n")
 }
 
-function parseToolOutput(raw: string): unknown {
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return undefined
-  }
-}
-
 function extractMemoryRefs(toolName: string, args: Record<string, unknown>, value: unknown): string[] {
   const refs = new Set<string>()
   const parsed = value && typeof value === "object" ? value as {
@@ -2484,29 +1989,6 @@ function extractMemoryRefs(toolName: string, args: Record<string, unknown>, valu
   return [...refs]
 }
 
-// Refs that must never receive automatic feedback, in bundle-qualified form
-// too (`local//lessons/foo`). Lessons take feedback through the proposal
-// queue; memories/env/secrets are not ranked assets at all. Same source as
-// NO_AUTO_FEEDBACK_REF_RE in claude/hooks/akm-hook.ts, which applies it to
-// both of its auto-feedback paths.
-const AKM_NO_AUTO_FEEDBACK_REF_RE = /^(?:.*\/\/)?(?:memories|env|secrets|lessons)\//
-
-// The outcome of an akm tool call: "positive" when it returned a result,
-// "negative" when it failed (a CLI error, `ok: false`, an `error` string). It
-// gates the write gate's already-shown credit and labels the observation
-// events; it is NOT feedback on the asset. A failed akm call says nothing about
-// the asset's content (akm#999), so nothing here reaches `akm feedback`.
-function classifyToolFeedback(value: unknown): "positive" | "negative" | undefined {
-  if (!value || typeof value !== "object") return undefined
-  if (isCliError(value)) return "negative"
-  if ("ok" in value && (value as { ok?: unknown }).ok === false) return "negative"
-  if ("error" in value && typeof (value as { error?: unknown }).error === "string") return "negative"
-  if ("ok" in value && (value as { ok?: unknown }).ok === true) return "positive"
-  if ("type" in value || "hits" in value || "items" in value) return "positive"
-  return undefined
-}
-
-
 // Turn a shared tool spec into this host's `tool.schema` argument map.
 function v1Args(spec: ToolSpec): Record<string, any> {
   const schema = tool.schema
@@ -2526,6 +2008,14 @@ function v1Args(spec: ToolSpec): Record<string, any> {
 
 const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
   const logClient = client as unknown as LogCapableClient
+  const learning = createLearning({
+    log: (level, message, extra) => void writePluginLog(logClient, level, message, extra),
+    writeEvent: writeStructuredEvent,
+    resolveCommand: resolveAkmCommand,
+    formatError: formatCliError,
+    addBufferEntry: feedbackTracker.addBufferEntry,
+    onSubmitted: (sessionID) => pendingProposals.invalidate(sessionID),
+  })
   return {
     // Events cover the lifecycle boundaries that Claude Code exposes as
     // SessionStart / Stop / PreCompact. We use them to warm the stash, capture
@@ -2551,7 +2041,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             warmIndexInBackground()
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
               const cwdContext = gatherCwdContext(directory)
-              const curated = await runCurateForSession(logClient, sid, cwdContext || undefined)
+              const curated = await runCurateForSession(logClient, sid, directory, cwdContext || undefined)
               if (curated) {
                 bumpCuratedVersion(sid)
                 sessionCurated.set(sid, curated)
@@ -2658,7 +2148,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const hints = sessionHints.get(sid)
         // 60s-cached, so reading it once per transform costs nothing; it was
         // previously awaited three times inside a single expression.
-        const proposalSummary = await getPendingProposalCount(logClient, sid)
+        const pendingBlock = await pendingProposals.contextBlock(sid)
         const blocks = [
           // Payload before framing. applyContextBudget() truncates the first
           // block that overflows and then stops, so whatever leads this array
@@ -2671,7 +2161,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           // The rules go in with or without `akm hints` output, which is empty on a fresh stash.
           hints ? `${AKM_HINTS_PREFIX}\n\n${hints}` : AKM_HINTS_PREFIX,
           sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
-          !proposalSummary.unsupported && proposalSummary.count > 0 ? formatPendingProposalContext(proposalSummary.count) : "",
+          pendingBlock,
         ]
         // ONE entry, not N (#96), and merged into the host's LAST existing
         // entry rather than pushed as a new one (#121). OpenCode maps each
@@ -2721,10 +2211,10 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           agent: input.agent,
           text: truncateLogText(text),
         })
-        capturePromptLearning(logClient, text, input.sessionID, directory || worktree, directory)
+        learning.capturePromptLearning(text, input.sessionID, directory || worktree, directory)
 
         if (AKM_AUTO_CURATE && input.sessionID) {
-          const decision = shouldRecall(text, { activeWorkflow: !!sessionWorkflow.get(input.sessionID), recentAssetFailure: retrospectiveState.get(input.sessionID)?.lastNegativeSignalAt != null })
+          const decision = shouldRecall(text, { activeWorkflow: !!sessionWorkflow.get(input.sessionID), recentAssetFailure: feedbackTracker.hasRecentNegativeSignal(input.sessionID) })
           if (decision.shouldRecall) {
             // Do NOT block the model on `akm curate` — previously this awaited
             // an 8s-timeout sync curate on every user message, adding up to 8s
@@ -2739,7 +2229,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             const previewText = text
             void (async () => {
               try {
-                const curated = await runCurateForPrompt(logClient, decision.query, sessionID)
+                const curated = await runCurateForPrompt(logClient, decision.query, sessionID, directorySnapshot)
                 // Shared 0.9 concept-ID extractor. The inline regex this
                 // replaced still matched the pre-0.9 `type:slug` ref form
                 // (`skill:code-review`, plus a `wiki:` type that no longer
@@ -2791,55 +2281,27 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // Track explicit memory intents so capture-memory has something durable
         // to flush when the session ends.
         if (/\b(remember|memory|memories)\b/i.test(text)) {
-          addBufferEntry(input.sessionID, {
+          feedbackTracker.addBufferEntry(input.sessionID, {
             kind: "memory-intent",
             note: truncateLogText(text, 500),
           })
         }
 
-        // Retrospective positive feedback: the loose "thanks|perfect|worked"
-        // matcher previously fired on `thanks, but it didn't work` because it
-        // only checked for a positive token without considering negation in
-        // the same message. Gate the path with the same negative/correction
-        // matchers used by `recordRetrospectiveFeedback` so a mixed-signal
-        // message is treated as ambiguous (skip rather than misattribute).
-        // Refs still flow through the shared confidence gate so Claude and
-        // OpenCode produce parallel auto-feedback verdicts for the same
-        // signal (README "Confidence-scored auto-feedback" parity claim).
-        if (
-          input.sessionID
-          && AKM_AUTO_FEEDBACK
-          && AKM_RETROSPECTIVE_FEEDBACK_RE.test(text)
-          && !AKM_RETROSPECTIVE_NEGATIVE_RE.test(text)
-          && !AKM_EXPLICIT_CORRECTION_RE.test(text)
-        ) {
-          const recentRefs = (sessionBuffer.get(input.sessionID) ?? [])
-            .filter((entry) => entry.kind === "tool-ref" && !!entry.ref)
-            .map((entry) => entry.ref!)
-            // Keep each ref's LAST occurrence, so `slice(-3)` really means "the
-            // three most recently touched distinct refs" — first-occurrence
-            // order drops a ref that was touched early and again just now.
-            .filter((ref, index, refs) => !AKM_NO_AUTO_FEEDBACK_REF_RE.test(ref) && refs.lastIndexOf(ref) === index)
-            .slice(-3)
-          const dedupe = new Set<string>()
-          for (const ref of recentRefs) {
-            const signal = classifyFeedbackSignal({
-              ref,
-              polarity: "positive",
-              harness: "opencode",
-              sessionId: input.sessionID,
-              retrospective: true,
-              note: "opencode retrospective: user confirmed it worked",
-            })
-            if (!shouldSubmitAutomaticFeedback(signal)) continue
-            queueFeedback(logClient, ref, signal.note, {
+        // Retrospective feedback (positive: the user confirmed it worked; negative:
+        // an explicit correction). What counts, and the mixed-signal rule that
+        // keeps `thanks, but it didn't work` from crediting anything, live in
+        // opencode-shared/feedback.ts, which the V2 plugin uses as well.
+        if (input.sessionID) {
+          const plan = feedbackTracker.planFeedback(input.sessionID, text)
+          for (const positive of plan.positive) {
+            queueFeedback(logClient, positive.ref, positive.note, {
               toolName: "chat.message",
               sessionID: input.sessionID,
               agent: input.agent,
-            }, dedupe)
+            })
           }
+          if (plan.negative) await recordNegativeFeedback(logClient, input.sessionID, plan.negative)
         }
-        await recordRetrospectiveFeedback(logClient, input.sessionID, text)
       } catch (error: unknown) {
         await writePluginLog(logClient, "error", "AKM chat.message hook failed", {
           subsystem: "hook",
@@ -2916,40 +2378,17 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const inputDirectory = (input as { directory?: unknown }).directory
         const directory = typeof inputDirectory === "string" ? inputDirectory : undefined
 
-        const allArgRefs = extractAkmRefsFromAllArgs(input.args as Record<string, unknown>)
-        const allOutputRefs = extractAkmRefsFromString(output.output)
-        const candidateRefs = [...new Set([...allArgRefs, ...allOutputRefs])]
-        const parsedForRefs = isAkmTool ? parseToolOutput(output.output) : null
-        const allRefs = isAkmTool && parsedForRefs
-          ? extractToolRefs(input.tool, input.args as Record<string, unknown>, parsedForRefs)
-          : validateRefCandidates(candidateRefs, [await getAkmBundleDir(logClient) ?? ""])
-        // The ref of a failed akm call is only the one the model asked for, an
-        // asset akm never returned, and the failure says nothing about its
-        // content (akm#999). Observed and logged, but never remembered as a ref
-        // the session used: the session buffer and the recent-ref list are what
-        // "thanks, that worked" credits and "that's wrong" blames.
-        const failedCall = classifyToolFeedback(parsedForRefs) === "negative"
-
-        if (allRefs.length > 0) {
-          writeStructuredEvent({
-            event: "tool_ref_observed",
-            sessionId: input.sessionID,
-            scope: buildEventScope(input.sessionID, directory, input.tool),
-            input: { tool: input.tool, callID: input.callID },
-            refs: allRefs,
-            outcome: { status: "ok" },
-          })
-          if (!failedCall) {
-            for (const ref of allRefs) {
-              addBufferEntry(input.sessionID, {
-                kind: "tool-ref",
-                toolName: input.tool,
-                ref,
-                status: "unknown",
-              })
-            }
-          }
-        }
+        const toolArgs = (input.args ?? {}) as Record<string, unknown>
+        const { refs: allRefs } = await feedbackTracker.observeToolRefs({
+          sessionID: input.sessionID,
+          tool: input.tool,
+          callID: input.callID,
+          args: toolArgs,
+          outputText: output.output,
+          getBundleDir: () => getAkmBundleDir(logClient),
+          directory,
+          writeEvent: writeStructuredEvent,
+        })
 
         // #99 write gate, read side. `read` is the tool that precedes every
         // trajectory in the failing cell: the model reads /app/service.yaml,
@@ -2997,7 +2436,15 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           })
         }
 
-        const toolRefs = extractToolRefs(input.tool, input.args as Record<string, unknown>, parsed)
+        const observed = feedbackTracker.observeAkmToolResult({
+          sessionID: input.sessionID,
+          tool: input.tool,
+          callID: input.callID,
+          args: toolArgs,
+          parsed,
+          directory,
+          writeEvent: writeStructuredEvent,
+        })
         // #99: a ref the model has already opened must never buy it a blocked
         // edit. Without this the compliant model gets re-blocked for doing
         // exactly what the gate asked.
@@ -3018,27 +2465,8 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // reads as "the model complied" (#99 review). classifyToolFeedback()
         // already types a failed akm call as negative; reuse it rather than
         // inventing a second notion of failure.
-        if ((input.tool === "akm_show" || input.tool === "akm_curate") && feedback !== "negative") {
-          noteShownRefs(input.sessionID, toolRefs)
-        }
-        if (!failedCall) noteRecentRefs(input.sessionID, toolRefs)
-        writeStructuredEvent({
-          event: "tool_observation",
-          sessionId: input.sessionID,
-          scope: buildEventScope(input.sessionID, directory, input.tool),
-          input: { tool: input.tool, callID: input.callID, args: input.args as Record<string, unknown>, output: parsed as Record<string, unknown> },
-          refs: toolRefs,
-          outcome: { status: feedback === "negative" ? "failed" : "ok" },
-        })
-        if (toolRefs.length > 0 && input.sessionID && !failedCall) {
-          for (const ref of toolRefs) {
-            addBufferEntry(input.sessionID, {
-              kind: "tool-ref",
-              toolName: input.tool,
-              ref,
-              status: feedback ?? "unknown",
-            })
-          }
+        if ((input.tool === "akm_show" || input.tool === "akm_curate") && !observed.failedCall) {
+          noteShownRefs(input.sessionID, observed.refs)
         }
 
         // No feedback is submitted from a tool outcome. A successful akm_show /
@@ -3212,7 +2640,7 @@ export const AkmPlugin = Object.assign(akmPlugin, {
   // file that re-imports here would leak into tests/opencode-plugin.test.ts.
   // tests/opencode-curate-floor.test.ts therefore drives these two seams from
   // a subprocess instead, which shares no module registry with anything.
-  __buildCurateArgsForTests: buildCurateArgs,
+  __buildCurateOptionsForTests: buildCurateOptions,
   __renderCuratedJsonResponseForTests: renderCuratedJsonResponse,
   __resetWriteGateForTests,
   __extractFormatIdentity: extractFormatIdentity,

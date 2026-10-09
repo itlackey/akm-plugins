@@ -18,6 +18,16 @@
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractAkmRefsFromString } from "../claude/shared/ref-extraction"
+import { createBundleDirResolver } from "../opencode-shared/bundle"
+import { type EventWriter, writeOpencodeEvent } from "../opencode-shared/events"
+import {
+  type NegativeFeedback,
+  createFeedbackTracker,
+  parseToolOutput,
+  spawnPositiveFeedback,
+  submitNegativeFeedback,
+} from "../opencode-shared/feedback"
+import { createLearning, createPendingProposals } from "../opencode-shared/learning"
 import {
   type CliError,
   type ResolvedAkmCommand,
@@ -30,17 +40,15 @@ import {
 } from "../opencode-shared/akm-cli"
 import {
   AKM_CURATED_TAIL,
-  AKM_CURATE_MIN_SCORE,
   AKM_HINTS_PREFIX,
   RECALLED_CONTENT_PROVENANCE,
   applyContextBudget,
   autoMemoryEnabled,
-  buildCurateArgs,
   buildScopedArgs,
   extractMinIntervalMs,
   formatWorkflowContext,
   gatherCwdContext,
-  renderCuratedJsonResponse,
+  recallCurate,
   spawnSessionExtract,
   summarizeActiveWorkflows,
   truncateLogText,
@@ -67,6 +75,12 @@ export type CoreOptions = {
   directory: string
   /** The entrypoint's `import.meta.url`, so `akm-cli` resolves from the plugin package. */
   moduleUrl: string
+  /** The project (worktree) root, exported to shell environments as AKM_PROJECT. Defaults to `directory`. */
+  projectDirectory?: string
+  /** The plugin's own version, exported to shell environments as AKM_PLUGIN_VERSION. */
+  pluginVersion?: string
+  /** Test seam: where structured memory events go. Defaults to the shared `opencode` ledger. */
+  writeEvent?: EventWriter
   /** How long a prompt hook may wait for curation before the request proceeds without it. */
   recallWaitMs?: number
   /** Test seam: replaces command resolution. */
@@ -99,6 +113,8 @@ const AUTO_CURATE = () => (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
 const CURATE_MIN_CHARS = () => Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
 const CURATE_TIMEOUT_MS = () => Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
 const READ_TOOL_TIMEOUT_MS = () => Math.max(1_000, (Number(process.env.AKM_READ_TOOL_TIMEOUT ?? "60") || 60) * 1_000)
+const PENDING_PROPOSAL_TIMEOUT_MS = () => Math.max(500, (Number(process.env.AKM_PENDING_PROPOSAL_TIMEOUT ?? "2") || 2) * 1_000)
+const SESSION_BUFFER_MAX_ENTRIES = () => Math.max(1, Number(process.env.AKM_SESSION_BUFFER_MAX_ENTRIES ?? "200") || 200)
 const NEED_MORE_CONTEXT_HINT =
   "Need more AKM context? Use `akm_search` or `akm_curate` before writing or editing a file whose exact syntax you are not certain of."
 
@@ -119,6 +135,9 @@ export function createCore(options: CoreOptions) {
   const resolveCommand = options.resolveCommand ?? (() => resolveAkmCommand(options.moduleUrl, PACKAGE_NAME))
   const extractSession = options.extract ?? spawnSessionExtract
   let disposed = false
+  const writeEvent = options.writeEvent ?? writeOpencodeEvent
+  const tracker = createFeedbackTracker({ maxBufferEntries: SESSION_BUFFER_MAX_ENTRIES() })
+  const bundleDir = createBundleDirResolver()
 
   // Logging is a boundary: redact, then hand to the sink, and never let a sink
   // failure escape into a hook.
@@ -129,6 +148,26 @@ export function createCore(options: CoreOptions) {
       // A broken logger must not break the host.
     }
   }
+
+  const formatError = (error: unknown) => formatCliError(error, PACKAGE_NAME)
+  const pendingProposals = createPendingProposals({
+    list: async (args) => {
+      const command = resolveCommand()
+      if (isCliError(command)) throw new Error(command.error)
+      const result = await runAkm(command, args, { timeoutMs: PENDING_PROPOSAL_TIMEOUT_MS(), cwd: options.directory, packageName: PACKAGE_NAME })
+      if (!result.ok) throw new Error(result.error)
+      return result.stdout
+    },
+    formatError,
+  })
+  const learning = createLearning({
+    log,
+    writeEvent,
+    resolveCommand,
+    formatError,
+    addBufferEntry: tracker.addBufferEntry,
+    onSubmitted: (sessionID) => pendingProposals.invalidate(sessionID),
+  })
 
   function state(sessionID: string): SessionState {
     let existing = sessions.get(sessionID)
@@ -141,6 +180,8 @@ export function createCore(options: CoreOptions) {
 
   function dropSession(sessionID: string): void {
     const existing = sessions.get(sessionID)
+    tracker.clear(sessionID)
+    pendingProposals.invalidate(sessionID)
     if (!existing) return
     for (const controller of existing.controllers) controller.abort()
     existing.controllers.clear()
@@ -149,7 +190,7 @@ export function createCore(options: CoreOptions) {
 
   /** One akm call that never throws: stdout text, or null (and a logged warning). */
   async function runBestEffort(
-    sessionID: string,
+    sessionID: string | undefined,
     args: string[],
     meta: { operation: string },
   ): Promise<string | null> {
@@ -159,7 +200,7 @@ export function createCore(options: CoreOptions) {
       return null
     }
     const controller = new AbortController()
-    const owner = sessions.get(sessionID)
+    const owner = sessionID ? sessions.get(sessionID) : undefined
     owner?.controllers.add(controller)
     try {
       const result = await runAkm(command, args, {
@@ -180,21 +221,91 @@ export function createCore(options: CoreOptions) {
     }
   }
 
+  /** One in-process recall (`akm-cli/api`) that never throws: the curated text, or null (and a logged warning). */
   async function curate(sessionID: string, query: string, operation: string): Promise<string | null> {
-    const raw = await runBestEffort(sessionID, buildCurateArgs(query), { operation })
-    return AKM_CURATE_MIN_SCORE > 0 ? renderCuratedJsonResponse(raw, query) : raw
+    const controller = new AbortController()
+    const owner = sessions.get(sessionID)
+    owner?.controllers.add(controller)
+    try {
+      const outcome = await recallCurate(query, { cwd: options.directory, timeoutMs: CURATE_TIMEOUT_MS(), signal: controller.signal })
+      if (outcome.ok) return outcome.text
+      if (!outcome.aborted) log("warn", "AKM recall failed", { operation, sessionID, subsystem: "curation", error: outcome.error })
+      return null
+    } finally {
+      owner?.controllers.delete(controller)
+    }
   }
 
   // --- hooks ------------------------------------------------------------------
 
+  /**
+   * What the user's message means for the learning loop, independent of recall:
+   * a correction/preference/workflow becomes a proposal in akm's review queue (never
+   * an automatic memory write), and a "that worked" / "that's wrong" credits or
+   * blames the refs this session touched. Starts work and returns; never throws.
+   */
+  function observeUserMessage(sessionID: string, text: string): void {
+    try {
+      learning.capturePromptLearning(text, sessionID, options.directory, options.directory)
+    } catch (error: unknown) {
+      log("warn", "AKM learning capture failed", { subsystem: "learning", sessionID, error: formatError(error) })
+    }
+    try {
+      const plan = tracker.planFeedback(sessionID, text)
+      for (const positive of plan.positive) startPositiveFeedback(sessionID, positive.ref, positive.note)
+      if (plan.negative) void submitNegative(sessionID, plan.negative)
+    } catch (error: unknown) {
+      log("warn", "AKM auto-feedback failed", { subsystem: "feedback", sessionID, error: formatError(error) })
+    }
+  }
+
+  function startPositiveFeedback(sessionID: string, ref: string, note: string): void {
+    const command = resolveCommand()
+    if (isCliError(command)) {
+      log("warn", "AKM auto-feedback skipped", { subsystem: "feedback", toolName: "session.prompt", sessionID, ref, error: command.error })
+      return
+    }
+    spawnPositiveFeedback(
+      command,
+      ref,
+      note,
+      (error) => log("warn", "AKM auto-feedback failed", { subsystem: "feedback", toolName: "session.prompt", sessionID, ref, error }),
+      formatError,
+    )
+  }
+
+  async function submitNegative(sessionID: string, negative: NegativeFeedback): Promise<void> {
+    try {
+      const command = resolveCommand()
+      if (isCliError(command)) {
+        log("warn", "AKM auto-feedback skipped", { subsystem: "feedback", toolName: "session.prompt", sessionID, ref: negative.ref, error: command.error })
+        return
+      }
+      const result = await submitNegativeFeedback(command, negative, { timeoutMs: READ_TOOL_TIMEOUT_MS(), cwd: options.directory, packageName: PACKAGE_NAME })
+      log(result.ok ? "info" : "warn", result.ok ? "AKM auto-feedback recorded" : "AKM auto-feedback failed", {
+        subsystem: "feedback",
+        sessionID,
+        ref: negative.ref,
+        reason: negative.explicit ? "explicit correction" : "negative retrospective signal",
+        ...(result.error ? { error: result.error } : {}),
+      })
+    } catch (error: unknown) {
+      log("warn", "AKM auto-feedback failed", { subsystem: "feedback", sessionID, ref: negative.ref, error: formatError(error) })
+    }
+  }
+
   /** `session.prompt` hook body. Never throws. */
   async function onPrompt(sessionID: string, promptText: string): Promise<void> {
     try {
-      if (disposed || !AUTO_CURATE()) return
+      if (disposed) return
       const text = promptText.trim()
       if (!text) return
+      // Read before the feedback plan updates the window, as the V1 hook does.
+      const recentAssetFailure = tracker.hasRecentNegativeSignal(sessionID)
+      observeUserMessage(sessionID, text)
+      if (!AUTO_CURATE()) return
       const st = state(sessionID)
-      const decision = shouldRecall(text, { activeWorkflow: !!st.workflow, recentAssetFailure: false })
+      const decision = shouldRecall(text, { activeWorkflow: !!st.workflow, recentAssetFailure })
       if (!decision.shouldRecall) {
         if (!(st.curated ?? "").includes(NEED_MORE_CONTEXT_HINT)) {
           st.curated = st.curated ? `${st.curated}\n\n${NEED_MORE_CONTEXT_HINT}` : NEED_MORE_CONTEXT_HINT
@@ -236,7 +347,7 @@ export function createCore(options: CoreOptions) {
   }
 
   /** `session.context` hook body: the text to add to the request's system context, or "". Never throws. */
-  function contextText(sessionID: string): string {
+  async function contextText(sessionID: string): Promise<string> {
     try {
       if (disposed) return ""
       const st = sessions.get(sessionID)
@@ -244,6 +355,8 @@ export function createCore(options: CoreOptions) {
         st?.curated ? `${RECALLED_CONTENT_PROVENANCE}${st.curated}${AKM_CURATED_TAIL}` : "",
         st?.hints ? `${AKM_HINTS_PREFIX}\n\n${st.hints}` : AKM_HINTS_PREFIX,
         st?.workflow ? formatWorkflowContext(st.workflow) : "",
+        // The pending-proposal nag: only when something awaits review (cached for a minute).
+        await pendingProposals.contextBlock(sessionID),
       ]
       return applyContextBudget(blocks).join("\n\n")
     } catch (error: unknown) {
@@ -295,6 +408,62 @@ export function createCore(options: CoreOptions) {
       },
       (error) => formatCliError(error, PACKAGE_NAME),
     )
+  }
+
+  /** `akm info`'s bundle directory (or AKM_BUNDLE_DIR), cached; undefined when akm cannot say. */
+  function getBundleDir(): Promise<string | undefined> {
+    return bundleDir.get(() => runBestEffort(undefined, ["info", "--format", "json", "-q"], { operation: "get-bundle-dir" }))
+  }
+
+  /**
+   * `tool.execute.after` body, for EVERY tool: note the akm refs it touched (the
+   * refs "thanks, that worked" later credits) and record what the plugin's own
+   * tools returned. A tool outcome is never feedback by itself. Never throws.
+   */
+  async function onToolResult(call: {
+    tool: string
+    sessionID: string
+    callID: string
+    args: unknown
+    status: string
+    /** The tool's text output, or the error message when it failed. */
+    text: string
+  }): Promise<void> {
+    try {
+      if (disposed) return
+      const args = call.args && typeof call.args === "object" ? (call.args as Record<string, unknown>) : {}
+      const common = { sessionID: call.sessionID, tool: call.tool, callID: call.callID, args, directory: options.directory, writeEvent }
+      const { refs } = await tracker.observeToolRefs({ ...common, outputText: call.text, getBundleDir })
+      if (!call.tool.startsWith("akm_")) return
+      log(call.status === "error" ? "warn" : "debug", "AKM tool result observed", {
+        toolName: call.tool,
+        sessionID: call.sessionID,
+        callID: call.callID,
+        status: call.status,
+        refs,
+      })
+      const parsed = parseToolOutput(call.text)
+      if (parsed && typeof parsed === "object") tracker.observeAkmToolResult({ ...common, parsed })
+    } catch (error: unknown) {
+      log("error", "AKM tool.execute.after hook failed", { hook: "tool.execute.after", toolName: call.tool, sessionID: call.sessionID, error: formatError(error) })
+    }
+  }
+
+  /**
+   * `shell.create.before` body: tell every shell the agent starts which project
+   * and plugin it is running under, and where the bundle is, so `akm` run from
+   * the shell resolves the same bundle. Mutates `env` in place. Never throws.
+   */
+  async function shellEnv(env: Record<string, string | undefined>): Promise<void> {
+    try {
+      if (disposed) return
+      env.AKM_PROJECT = options.projectDirectory ?? options.directory
+      if (options.pluginVersion) env.AKM_PLUGIN_VERSION = options.pluginVersion
+      const dir = await getBundleDir()
+      if (dir) env.AKM_BUNDLE_DIR = dir
+    } catch (error: unknown) {
+      log("error", "AKM shell.create.before hook failed", { hook: "shell.create.before", error: formatError(error) })
+    }
   }
 
   /** Native event stream handler. Never throws. */
@@ -395,6 +564,8 @@ export function createCore(options: CoreOptions) {
     tools,
     onPrompt,
     contextText,
+    onToolResult,
+    shellEnv,
     onEvent,
     dispose,
     log,

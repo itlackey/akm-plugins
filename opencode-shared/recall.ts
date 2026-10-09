@@ -8,6 +8,7 @@ import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
+import { type CurateOptions, loadCurate } from "./akm-api"
 import type { ResolvedAkmCommand } from "./akm-cli"
 
 export const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
@@ -99,18 +100,71 @@ export function buildScopedArgs(context: Record<string, unknown> | undefined): s
 }
 
 
-// #110 — mirrors claude/hooks/akm-hook.ts's buildCurateArgs(): appends
-// `--type` when AKM_CURATE_TYPE is set, and requests `--format json` instead
-// of the long-standing `--format text` only when the AKM_CURATE_MIN_SCORE
-// floor is enabled, since per-item `score`/`type` are only needed then. With
-// the floor disabled this is the exact argv these two call sites have always
-// sent, so that (default, tested) path is unchanged.
-export function buildCurateArgs(query: string): string[] {
-  const args = ["--shape", "agent", "-q", "curate", query]
-  args.push("--limit", String(AKM_CURATE_LIMIT))
-  if (AKM_CURATE_TYPE) args.push("--type", AKM_CURATE_TYPE)
-  args.push("--format", AKM_CURATE_MIN_SCORE > 0 ? "json" : "text")
-  return args
+// #110 — mirrors claude/hooks/akm-hook.ts's buildCurateArgs(): passes `type`
+// when AKM_CURATE_TYPE is set, and asks for `json` instead of the long-standing
+// `text` only when the AKM_CURATE_MIN_SCORE floor is enabled, since per-item
+// `score`/`type` are only needed then. With the floor disabled this is the
+// request recall has always made, so that (default, tested) path is unchanged.
+export function buildCurateOptions(cwd?: string): CurateOptions {
+  return {
+    limit: AKM_CURATE_LIMIT,
+    ...(AKM_CURATE_TYPE ? { type: AKM_CURATE_TYPE } : {}),
+    format: AKM_CURATE_MIN_SCORE > 0 ? "json" : "text",
+    ...(cwd ? { cwd } : {}),
+  }
+}
+
+export type RecallOutcome =
+  | { ok: true; text: string | null }
+  | { ok: false; error: string; aborted: boolean }
+
+/**
+ * Automatic recall: one in-process `curate` through `akm-cli/api`, rendered the
+ * way the CLI path always was (`json` through the relevance floor when
+ * AKM_CURATE_MIN_SCORE is set, otherwise the printed text).
+ *
+ * The call cannot be killed, so a timeout or an abort stops WAITING for it: the
+ * returned outcome says so, and whatever the call later produces (or throws) is
+ * dropped. Never throws; the caller logs `ok:false` and carries on without recall.
+ */
+export async function recallCurate(
+  query: string,
+  options: { cwd?: string; timeoutMs: number; signal?: AbortSignal },
+): Promise<RecallOutcome> {
+  const { signal } = options
+  if (signal?.aborted) return { ok: false, error: "recall was aborted", aborted: true }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  const stopped = new Promise<RecallOutcome>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ ok: false, error: `akm curate timed out after ${options.timeoutMs}ms`, aborted: false }),
+      options.timeoutMs,
+    )
+    ;(timer as { unref?: () => void }).unref?.()
+    onAbort = () => resolve({ ok: false, error: "recall was aborted", aborted: true })
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+  const call = loadCurate().then((curate) => curate(query, buildCurateOptions(options.cwd)))
+  const finished = call.then(
+    (raw): RecallOutcome => {
+      const body = String(raw ?? "").trim()
+      const text = body ? (AKM_CURATE_MIN_SCORE > 0 ? renderCuratedJsonResponse(body, query) : body) : null
+      return { ok: true, text }
+    },
+    (error: unknown): RecallOutcome => ({ ok: false, error: apiErrorMessage(error), aborted: false }),
+  )
+  try {
+    return await Promise.race([finished, stopped])
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (onAbort) signal?.removeEventListener("abort", onAbort)
+  }
+}
+
+function apiErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === "string" && code ? `${message} (${code})` : message
 }
 
 // #110 — mirrors claude/hooks/akm-hook.ts's renderCuratedJson(): decode a

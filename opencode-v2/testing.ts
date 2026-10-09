@@ -16,6 +16,7 @@ export type HostFake = {
   /** Hooks registered through `session.hook`, by name. */
   sessionHooks: Map<string, Callback>
   toolHooks: Map<string, Callback>
+  shellHooks: Map<string, Callback>
   logs: LoggedLine[]
   /** Push a native event onto the stream the plugin subscribed to. */
   emit(event: unknown): Promise<void>
@@ -27,6 +28,8 @@ export type HostFake = {
   /** Run the `context` hook against a request whose system parts are `system`; returns the parts afterwards. */
   runContext(sessionID: string, system: Array<{ type: "text"; text: string }>): Promise<Array<{ type: "text"; text: string }>>
   runToolHook(name: string, input: unknown): Promise<void>
+  /** Run `shell.create.before` against `env`, as the host does when it creates a shell; returns the env afterwards. */
+  runShellCreate(env?: Record<string, string | undefined>): Promise<Record<string, string | undefined>>
   callTool(name: string, input: unknown, sessionID?: string): Promise<{ content: string; metadata?: Record<string, unknown> }>
 }
 
@@ -34,6 +37,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
   const tools = new Map<string, any>()
   const sessionHooks = new Map<string, Callback>()
   const toolHooks = new Map<string, Callback>()
+  const shellHooks = new Map<string, Callback>()
   const logs: LoggedLine[] = []
   const events = await Effect.runPromise(Queue.unbounded<unknown>())
   let markSubscribed!: () => void
@@ -43,7 +47,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
 
   const registration = { dispose: Effect.void }
   const ctx: any = {
-    location: { directory },
+    location: { directory, project: { directory } },
     tool: {
       transform: (callback: (editor: unknown) => void) =>
         Effect.sync(() => {
@@ -59,6 +63,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
         }),
       hook: (name: string, callback: Callback) => Effect.sync(() => (toolHooks.set(name, callback), registration)),
     },
+    shell: { hook: (name: string, callback: Callback) => Effect.sync(() => (shellHooks.set(name, callback), registration)) },
     session: { hook: (name: string, callback: Callback) => Effect.sync(() => (sessionHooks.set(name, callback), registration)) },
     event: {
       subscribe: () => {
@@ -87,6 +92,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
     tools,
     sessionHooks,
     toolHooks,
+    shellHooks,
     logs,
     subscribed,
     emit: (event) => run(Queue.offer(events, event)).then(() => undefined),
@@ -98,6 +104,11 @@ export async function startPlugin(directory: string): Promise<HostFake> {
       return input.system
     },
     runToolHook: (name, input) => run(toolHooks.get(name)!(input)),
+    runShellCreate: async (env = { PATH: "/usr/bin" }) => {
+      const input = { command: "echo", cwd: directory, timeout: 0, shell: "sh", env }
+      await run(shellHooks.get("create.before")!(input))
+      return input.env
+    },
     callTool: (name, input, sessionID = "ses_test") =>
       run(tools.get(name).execute(input, { sessionID })) as Promise<{ content: string; metadata?: Record<string, unknown> }>,
   }

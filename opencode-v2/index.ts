@@ -10,6 +10,7 @@
 // here writes to the console, stdout or stderr.
 import { Plugin } from "@opencode/plugin/effect"
 import { Effect, Stream } from "effect"
+import { readPluginVersion } from "../opencode-shared/bundle"
 import { type LogLevel, PLUGIN_ID, createCore } from "./core"
 
 type EffectContext = Parameters<Parameters<typeof Plugin.define>[0]["effect"]>[0]
@@ -19,6 +20,14 @@ const LEVELS: Record<LogLevel, "Debug" | "Info" | "Warn" | "Error"> = {
   info: "Info",
   warn: "Warn",
   error: "Error",
+}
+
+/** The text of a completed tool result: `content` is a string or a list of parts, `output` is structured. */
+function resultText(result: { content?: string | ReadonlyArray<{ type: string; text?: string }>; output?: unknown } | undefined): string {
+  const content = result?.content
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) return content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n")
+  return typeof result?.output === "string" ? result.output : ""
 }
 
 const plugin = Plugin.define({
@@ -32,6 +41,8 @@ const plugin = Plugin.define({
 
       const core = createCore({
         directory: ctx.location.directory,
+        projectDirectory: ctx.location.project?.directory,
+        pluginVersion: readPluginVersion(import.meta.url, PLUGIN_ID),
         moduleUrl: import.meta.url,
         log: (level, message, extra) => {
           void runPromise(
@@ -74,8 +85,8 @@ const plugin = Plugin.define({
 
       // Automatic recall, step 2: inject the recalled block into this request's system context.
       yield* ctx.session.hook("context", (input) =>
-        Effect.sync(() => {
-          const text = core.contextText(String(input.sessionID))
+        Effect.promise(async () => {
+          const text = await core.contextText(String(input.sessionID))
           if (!text) return
           const last = input.system.length - 1
           // Merge into the last existing part rather than adding a new one, as the V1
@@ -86,18 +97,24 @@ const plugin = Plugin.define({
         }),
       )
 
-      // Tool post-processing: record the outcome of the plugin's own tools.
+      // Tool post-processing, for every tool: note the akm refs it touched (what a later
+      // "thanks, that worked" credits) and record the plugin's own tools' results.
       yield* ctx.tool.hook("execute.after", (input) =>
-        Effect.sync(() => {
-          if (!input.tool.startsWith("akm_")) return
-          core.log(input.status === "error" ? "warn" : "debug", "AKM tool result observed", {
-            toolName: input.tool,
+        Effect.promise(() =>
+          core.onToolResult({
+            tool: input.tool,
             sessionID: String(input.sessionID),
             callID: String(input.id),
+            args: input.input,
             status: input.status,
-          })
-        }),
+            text: input.status === "error" ? String(input.error?.message ?? "") : resultText(input.result),
+          }),
+        ),
       )
+
+      // Shell environment: the V2 analogue of V1's `shell.env`. `env` is the full environment
+      // the host is about to spawn the shell with, mutated in place.
+      yield* ctx.shell.hook("create.before", (input) => Effect.promise(() => core.shellEnv(input.env)))
 
       // Session lifecycle: one native event subscription, closed with the plugin scope.
       const directory = ctx.location.directory
