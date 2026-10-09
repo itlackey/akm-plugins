@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
 import { type CurateFn, setCurateForTests } from "../opencode-shared/akm-api"
+import { resetWriteGateForTests } from "../opencode-shared/write-gate"
 import { startPlugin, type HostFake } from "../opencode-v2/testing"
 
 // Drives the real `akm-opencode-v2` entrypoint (`Plugin.define`, effect API of
@@ -19,6 +20,7 @@ writeFileSync(path.join(project, "package.json"), JSON.stringify({ name: "fixtur
 
 const assets = [
   { ref: "skills/nginx-proxy", type: "skill", name: "nginx-proxy", description: "Configure an nginx reverse proxy for deployment", keywords: ["nginx", "reverse", "proxy", "deployment", "config"] },
+  { ref: "knowledge/inkwell", type: "knowledge", name: "inkwell", description: "The inkwell service manifest format", keywords: ["inkwell"] },
   { ref: "knowledge/deploy-notes", type: "knowledge", name: "deploy-notes", description: "Deployment notes", keywords: ["deployment", "notes"] },
 ]
 
@@ -57,6 +59,8 @@ beforeEach(() => {
   })
   for (const key of ENV_KEYS) saved[key] = process.env[key]
   process.env.XDG_STATE_HOME = path.join(root, `state-${++counter}`)
+  delete process.env.AKM_WRITE_GATE
+  resetWriteGateForTests()
   fake = freshFakeAkm()
   process.env.AKM_OPENCODE_CLI = fake.akmPath
   process.env.AKM_EXTRACT_MIN_INTERVAL_MS = "600000"
@@ -462,6 +466,13 @@ describe("akm-opencode-v2 plugin", () => {
       expect(proposalCalls()).toHaveLength(1)
     })
 
+    it("reads the prompt `opencode run` hands over as a JSON string literal", async () => {
+      host = await startPlugin(project)
+      await host.runPrompt("ses_q", JSON.stringify("Remember that the nightly build uploads artifacts to the staging bucket"))
+      await settle(600)
+      expect(proposalCalls()).toHaveLength(1)
+    })
+
     it("does not propose from an ordinary task prompt", async () => {
       host = await startPlugin(project)
       await host.runPrompt("ses_l", PROMPT)
@@ -517,6 +528,142 @@ describe("akm-opencode-v2 plugin", () => {
       const env = await host.runShellCreate()
       expect(env.AKM_PROJECT).toBe(project)
       expect(env.AKM_BUNDLE_DIR).toBeUndefined()
+    })
+  })
+
+  describe("write gate", () => {
+    let g = ""
+    const manifest = path.join(project, "service.yaml")
+    const readManifest = (sessionID: string) =>
+      host!.runToolHook("execute.after", {
+        tool: "read",
+        sessionID,
+        id: "read_1",
+        input: { path: "service.yaml" },
+        status: "completed",
+        result: {
+          output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" },
+          content: [{ type: "text", text: "Read file service.yaml, lines 1-2\n1: apiVersion: inkwell/v2\n2: kind: Service" }],
+        },
+      })
+    const edit = (sessionID: string, input: Record<string, unknown> = { path: "service.yaml", oldString: "kind: Service", newString: "kind: Svc" }, tool = "edit") =>
+      host!.runToolHook("execute.before", { tool, sessionID, id: `call_${Math.random()}`, input })
+    const ledger = () => {
+      try {
+        return readFileSync(path.join(process.env.XDG_STATE_HOME!, "akm-opencode", "events.jsonl"), "utf8")
+          .trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.event === "write_gate")
+      } catch {
+        return []
+      }
+    }
+    const reasons = () => ledger().map((event) => event.input.reason)
+
+    beforeEach(() => {
+      g = `ses_g${++counter}`
+      writeFileSync(manifest, "apiVersion: inkwell/v2\nkind: Service\n")
+    })
+
+    function enforce() {
+      process.env.AKM_WRITE_GATE = "enforce"
+      resetWriteGateForTests()
+    }
+
+    it("blocks the first edit to a file whose declared format the bundle documents, once", async () => {
+      enforce()
+      host = await startPlugin(project)
+      await readManifest(g)
+      await settle(1200) // the identity search runs in the background after the read
+      await expect(edit(g)).rejects.toThrow(/declares `inkwell\/v2`|declares `inkwell`/)
+      await expect(edit(g)).resolves.toBeUndefined() // repeating it proceeds
+      expect(reasons()).toEqual(["fired", "latched"])
+      expect(ledger()[0].refs).toEqual(["knowledge/inkwell"])
+      expect(ledger()[0].outcome.status).toBe("ok")
+    })
+
+    it("fails with the gate message as the tool error, tagged the way the host reads", async () => {
+      enforce()
+      host = await startPlugin(project)
+      await readManifest(g)
+      await settle(1200)
+      const error = await edit(g).then(() => undefined, (e: unknown) => e as { _tag?: string; message: string })
+      expect(error?._tag).toBe("Tool.Error")
+      expect(error?.message).toContain('Call akm_show with ref "knowledge/inkwell"')
+      expect(error?.message).toContain("The inkwell service manifest format")
+    })
+
+    it("only records what it would have blocked in the default observe mode", async () => {
+      host = await startPlugin(project)
+      await readManifest(g)
+      await settle(1200)
+      await expect(edit(g)).resolves.toBeUndefined()
+      expect(reasons()).toEqual(["observe"])
+    })
+
+    it("does not block a model that already opened the asset, or that creates the file", async () => {
+      enforce()
+      host = await startPlugin(project)
+      await readManifest("ses_shown")
+      await settle(1200)
+      await host.runToolHook("execute.after", { tool: "akm_show", sessionID: "ses_shown", id: "s1", input: { ref: "knowledge/inkwell" }, status: "completed", result: { content: JSON.stringify({ type: "knowledge", ref: "knowledge/inkwell", content: "format" }) } })
+      await expect(edit("ses_shown")).resolves.toBeUndefined()
+
+      await readManifest("ses_create")
+      await expect(edit("ses_create", { path: "service.yaml", oldString: "", newString: "x" })).resolves.toBeUndefined()
+      await expect(edit("ses_create")).resolves.toBeUndefined() // the session created this path: create work, not an edit
+      await expect(edit("ses_unread", { path: "other.yaml", oldString: "a", newString: "b" })).resolves.toBeUndefined()
+      expect(reasons()).toEqual(["already-shown", "create-not-edit", "session-created", "file-not-read"])
+    })
+
+    it("is blind to a patch envelope, says so once, and types every skip", async () => {
+      enforce()
+      host = await startPlugin(project)
+      await edit("ses_p", { patchText: "*** Begin Patch\n*** End Patch" }, "patch")
+      await edit("ses_p", { patchText: "*** Begin Patch\n*** End Patch" }, "patch")
+      await edit("ses_p", { notAPath: 1 }, "write")
+      expect(reasons()).toEqual(["apply-patch-unsupported", "apply-patch-unsupported", "no-file-path"])
+      expect(host.logs.filter((line) => line.message === "AKM write gate inert for patch")).toHaveLength(1)
+    })
+
+    it("ignores tools it does not watch, honours AKM_WRITE_GATE=off, and refuses a misspelled mode loudly", async () => {
+      enforce()
+      host = await startPlugin(project)
+      await host.runToolHook("execute.before", { tool: "shell", sessionID: "s", id: "c", input: { command: "ls" } })
+      expect(ledger()).toHaveLength(0)
+
+      process.env.AKM_WRITE_GATE = "off"
+      resetWriteGateForTests()
+      await edit("ses_off")
+      expect(reasons()).toEqual(["disabled"])
+
+      process.env.AKM_WRITE_GATE = "enfroce"
+      resetWriteGateForTests()
+      await readManifest("ses_bad")
+      await settle(300)
+      await expect(edit("ses_bad")).resolves.toBeUndefined()
+      expect(reasons().at(-1)).toBe("invalid-mode")
+      expect(host.logs.some((line) => line.level === "Error" && line.message.includes("unrecognized AKM_WRITE_GATE"))).toBe(true)
+    })
+
+    it("fails open and logs when akm cannot answer the identity search", async () => {
+      enforce()
+      process.env.AKM_OPENCODE_CLI = path.join(root, "does-not-exist")
+      host = await startPlugin(project)
+      await readManifest(g)
+      await settle(500)
+      await expect(edit(g)).resolves.toBeUndefined()
+      expect(reasons()).toEqual(["search-error"])
+      expect(host.logs.some((line) => line.message === "AKM write gate resolution failed")).toBe(true)
+    })
+
+    it("forgets a session's files when it is deleted", async () => {
+      enforce()
+      host = await startPlugin(project)
+      await host.subscribed
+      await readManifest("ses_d")
+      await host.emit({ type: "session.deleted", data: { sessionID: "ses_d" }, location: { directory: project } })
+      await settle(200)
+      await edit("ses_d")
+      expect(reasons().at(-1)).toBe("file-not-read")
     })
   })
 })

@@ -859,6 +859,21 @@ describe("akm-opencode plugin", () => {
       expect(injected).not.toMatch(/incomplete|unhelpful/)
     })
 
+    it("degrades to no recall and logs it when the in-process curate fails", async () => {
+      setCurateForTests(async () => {
+        throw Object.assign(new Error("No default bundle configured"), { code: "NO_BUNDLE" })
+      })
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput(client))
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "recall-fail-1" } } } as any)
+      const output: { system: string[] } = { system: [] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID: "recall-fail-1" } as any, output as any)
+      expect(output.system.join("\n")).not.toContain("AKM bundle curation written to")
+      expect(client.app.log).toHaveBeenCalledWith(expect.objectContaining({
+        body: expect.objectContaining({ level: "warn", message: "AKM recall failed", extra: expect.objectContaining({ error: expect.stringContaining("NO_BUNDLE") }) }),
+      }))
+    })
+
     it("does not run curate at all when the directory yields no context", async () => {
       // `akm curate` requires a query and rejects the call without one, so an
       // empty context is nothing to curate. The plugin used to build the call

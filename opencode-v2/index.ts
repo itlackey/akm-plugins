@@ -9,6 +9,7 @@
 // captured from the plugin's own fiber context, i.e. the host's logger. Nothing
 // here writes to the console, stdout or stderr.
 import { Plugin } from "@opencode/plugin/effect"
+import type { Tool } from "@opencode/schema/tool"
 import { Effect, Stream } from "effect"
 import { readPluginVersion } from "../opencode-shared/bundle"
 import { type LogLevel, PLUGIN_ID, createCore } from "./core"
@@ -28,6 +29,12 @@ function resultText(result: { content?: string | ReadonlyArray<{ type: string; t
   if (typeof content === "string") return content
   if (Array.isArray(content)) return content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n")
   return typeof result?.output === "string" ? result.output : ""
+}
+
+/** A completed `read`'s file text: the structured `output.content` of a file result, not the framed rendering. */
+function readFileText(result: { output?: unknown } | undefined): string | undefined {
+  const output = result?.output as { type?: unknown; content?: unknown } | undefined
+  return output?.type === "file" && typeof output.content === "string" ? output.content : undefined
 }
 
 const plugin = Plugin.define({
@@ -97,6 +104,21 @@ const plugin = Plugin.define({
         }),
       )
 
+      // The write gate: fail an edit/write with the gate's message. The host reads a pre-tool
+      // failure's `message` when it is a Tool.Error (verified against the 2.0.26 binary: a
+      // `_tag: "Tool.Error"` error reaches the model as the tool's error result; an untagged one
+      // is treated as a declined call). `schema/tool` is not importable from a plugin, so the
+      // error is built here with the tag the host matches on.
+      yield* ctx.tool.hook("execute.before", (input) =>
+        Effect.promise(() =>
+          core.onToolBefore({ tool: input.tool, sessionID: String(input.sessionID), callID: String(input.id), input: input.input }),
+        ).pipe(
+          Effect.flatMap((message) =>
+            message === undefined ? Effect.void : Effect.fail(Object.assign(new Error(message), { _tag: "Tool.Error" }) as unknown as Tool.Error),
+          ),
+        ),
+      )
+
       // Tool post-processing, for every tool: note the akm refs it touched (what a later
       // "thanks, that worked" credits) and record the plugin's own tools' results.
       yield* ctx.tool.hook("execute.after", (input) =>
@@ -108,6 +130,7 @@ const plugin = Plugin.define({
             args: input.input,
             status: input.status,
             text: input.status === "error" ? String(input.error?.message ?? "") : resultText(input.result),
+            readContent: input.status === "completed" ? readFileText(input.result) : undefined,
           }),
         ),
       )

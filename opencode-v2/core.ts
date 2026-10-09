@@ -27,6 +27,16 @@ import {
   spawnPositiveFeedback,
   submitNegativeFeedback,
 } from "../opencode-shared/feedback"
+import {
+  type GateHost,
+  type GateSearchResponse,
+  clearGateSession,
+  formatGateMessage,
+  gateDecision,
+  noteShownRefs,
+  observeFileIdentity,
+  warnIfWriteGateInert,
+} from "../opencode-shared/write-gate"
 import { createLearning, createPendingProposals } from "../opencode-shared/learning"
 import {
   type CliError,
@@ -52,6 +62,7 @@ import {
   spawnSessionExtract,
   summarizeActiveWorkflows,
   truncateLogText,
+  unwrapJsonStringPrompt,
 } from "../opencode-shared/recall"
 import {
   TOOL_SPECS,
@@ -115,6 +126,11 @@ const CURATE_TIMEOUT_MS = () => Math.max(1_000, (Number(process.env.AKM_CURATE_T
 const READ_TOOL_TIMEOUT_MS = () => Math.max(1_000, (Number(process.env.AKM_READ_TOOL_TIMEOUT ?? "60") || 60) * 1_000)
 const PENDING_PROPOSAL_TIMEOUT_MS = () => Math.max(500, (Number(process.env.AKM_PENDING_PROPOSAL_TIMEOUT ?? "2") || 2) * 1_000)
 const SESSION_BUFFER_MAX_ENTRIES = () => Math.max(1, Number(process.env.AKM_SESSION_BUFFER_MAX_ENTRIES ?? "200") || 200)
+// The write gate watches the OpenCode 2 write-path tools: `edit` {path, oldString, newString},
+// `write` {path, content}, and `patch` {patchText} on gpt-* models, where it replaces both
+// (the gate cannot resolve a file from a patch envelope and records that, as V1 does).
+const WATCHED_WRITE_TOOLS = new Set(["edit", "write", "patch"])
+const WRITE_GATE_SEARCH_TIMEOUT_MS = 8_000
 const NEED_MORE_CONTEXT_HINT =
   "Need more AKM context? Use `akm_search` or `akm_curate` before writing or editing a file whose exact syntax you are not certain of."
 
@@ -160,6 +176,25 @@ export function createCore(options: CoreOptions) {
     },
     formatError,
   })
+  const gateHost: GateHost = {
+    log,
+    writeEvent,
+    formatError,
+    pathKey: "path",
+    patchTool: "patch",
+    search: async (token) => {
+      const command = resolveCommand()
+      if (isCliError(command)) throw new Error(command.error)
+      // The PLUGIN's search, not the model's: a non-user event source keeps it out of akm's demand signals.
+      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--shape", "agent", "--format", "json"], {
+        timeoutMs: WRITE_GATE_SEARCH_TIMEOUT_MS,
+        env: { AKM_EVENT_SOURCE: "audit" },
+        packageName: PACKAGE_NAME,
+      })
+      if (!result.ok) throw new Error(result.error)
+      return parseToolOutput(result.stdout) as GateSearchResponse | undefined
+    },
+  }
   const learning = createLearning({
     log,
     writeEvent,
@@ -180,6 +215,7 @@ export function createCore(options: CoreOptions) {
 
   function dropSession(sessionID: string): void {
     const existing = sessions.get(sessionID)
+    clearGateSession(sessionID)
     tracker.clear(sessionID)
     pendingProposals.invalidate(sessionID)
     if (!existing) return
@@ -298,7 +334,7 @@ export function createCore(options: CoreOptions) {
   async function onPrompt(sessionID: string, promptText: string): Promise<void> {
     try {
       if (disposed) return
-      const text = promptText.trim()
+      const text = unwrapJsonStringPrompt(promptText)
       if (!text) return
       // Read before the feedback plan updates the window, as the V1 hook does.
       const recentAssetFailure = tracker.hasRecentNegativeSignal(sessionID)
@@ -410,6 +446,28 @@ export function createCore(options: CoreOptions) {
     )
   }
 
+  /**
+   * `tool.execute.before` body: the format-declaration write gate. Returns the message the
+   * host should fail the tool call with, or undefined to let it proceed (the shipped default
+   * mode, `observe`, only records what it would have blocked). A plugin-internal fault never
+   * blocks the user's write. Never throws.
+   */
+  async function onToolBefore(call: { tool: string; sessionID: string; callID: string; input: unknown }): Promise<string | undefined> {
+    try {
+      if (disposed || !WATCHED_WRITE_TOOLS.has(call.tool)) return undefined
+      const args = call.input && typeof call.input === "object" ? call.input : {}
+      const decision = await gateDecision(
+        gateHost,
+        { tool: call.tool, sessionID: call.sessionID, callID: call.callID, directory: options.directory } as { tool: string; sessionID: string; callID: string },
+        { args },
+      )
+      return decision ? formatGateMessage(decision.filePath, decision.token, decision.ref, decision.description) : undefined
+    } catch (error: unknown) {
+      log("error", "AKM tool.execute.before hook failed", { hook: "tool.execute.before", toolName: call.tool, sessionID: call.sessionID, error: formatError(error) })
+      return undefined
+    }
+  }
+
   /** `akm info`'s bundle directory (or AKM_BUNDLE_DIR), cached; undefined when akm cannot say. */
   function getBundleDir(): Promise<string | undefined> {
     return bundleDir.get(() => runBestEffort(undefined, ["info", "--format", "json", "-q"], { operation: "get-bundle-dir" }))
@@ -428,12 +486,18 @@ export function createCore(options: CoreOptions) {
     status: string
     /** The tool's text output, or the error message when it failed. */
     text: string
+    /** For `read`: the file's own text (not the numbered, framed rendering the model sees), when the host gave it. */
+    readContent?: string
   }): Promise<void> {
     try {
       if (disposed) return
       const args = call.args && typeof call.args === "object" ? (call.args as Record<string, unknown>) : {}
       const common = { sessionID: call.sessionID, tool: call.tool, callID: call.callID, args, directory: options.directory, writeEvent }
       const { refs } = await tracker.observeToolRefs({ ...common, outputText: call.text, getBundleDir })
+      // Write gate, read side: what the file declares about its own format.
+      if (call.tool === "read" && call.status !== "error") {
+        observeFileIdentity(gateHost, call.sessionID, options.directory, args.path, call.readContent, call.readContent !== undefined)
+      }
       if (!call.tool.startsWith("akm_")) return
       log(call.status === "error" ? "warn" : "debug", "AKM tool result observed", {
         toolName: call.tool,
@@ -443,7 +507,11 @@ export function createCore(options: CoreOptions) {
         refs,
       })
       const parsed = parseToolOutput(call.text)
-      if (parsed && typeof parsed === "object") tracker.observeAkmToolResult({ ...common, parsed })
+      if (parsed && typeof parsed === "object") {
+        const observed = tracker.observeAkmToolResult({ ...common, parsed })
+        // A ref the model has already opened must never buy it a blocked edit.
+        if ((call.tool === "akm_show" || call.tool === "akm_curate") && !observed.failedCall) noteShownRefs(call.sessionID, observed.refs)
+      }
     } catch (error: unknown) {
       log("error", "AKM tool.execute.after hook failed", { hook: "tool.execute.after", toolName: call.tool, sessionID: call.sessionID, error: formatError(error) })
     }
@@ -482,6 +550,8 @@ export function createCore(options: CoreOptions) {
           maybeExtract(sessionID)
           break
         case "session.deleted":
+          // The gate is the one feature whose total failure looks exactly like normal operation.
+          warnIfWriteGateInert(gateHost)
           dropSession(sessionID)
           break
         default:
@@ -564,6 +634,7 @@ export function createCore(options: CoreOptions) {
     tools,
     onPrompt,
     contextText,
+    onToolBefore,
     onToolResult,
     shellEnv,
     onEvent,

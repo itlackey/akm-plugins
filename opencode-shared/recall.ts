@@ -423,3 +423,23 @@ export function summarizeActiveWorkflows(raw: string): string | null {
 export function formatWorkflowContext(summary: string): string {
   return `# AKM active workflows\n${summary}`
 }
+
+/**
+ * The text a user typed, trimmed. `opencode run "one argument"` persists that
+ * argument as a JSON string literal (including its surrounding quotes) and hands
+ * the same text to the prompt hook, so start-anchored learning signals such as
+ * `Always ...` would otherwise see `"Always ..."` and be missed in the real CLI.
+ * Unwraps exactly one JSON-string layer; never parses objects or arrays from user input.
+ */
+export function unwrapJsonStringPrompt(value: string): string {
+  const raw = value.trim()
+  if (raw.startsWith('"') && raw.endsWith('"')) {
+    try {
+      const decoded = JSON.parse(raw)
+      if (typeof decoded === "string") return decoded.trim()
+    } catch {
+      // A literal unmatched/escaped quote is ordinary user text.
+    }
+  }
+  return raw
+}
