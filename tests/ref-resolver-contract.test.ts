@@ -110,11 +110,10 @@ describe("AKM 0.9 ref-resolver contract", () => {
     ).toEqual(["knowledge/release-notes.md", "scripts/deploy.sh", "secrets/api-token", "skills/rollout"])
   })
 
-  test("resolves a task, a YAML workflow and an env file by the ID akm gives them", () => {
-    // Checked against akm-cli 0.9.20: a task is tasks/<id>.yml and its ID drops
-    // the extension; a workflow is <id>.md or <id>.yml, and the .md spelling is
-    // tolerated but the .yml one is not (`show` answers it, `feedback` refuses
-    // it); an env is <name>.env, and `.env` and `default.env` are the default of
+  test("resolves a task, a workflow and an env file by the ID akm gives them", () => {
+    // Checked against akm-cli 0.10.26101001-alpha: a task is tasks/<id>.yml and its ID drops
+    // the extension; a workflow is <id>.md only (the GitHub-shaped .yml workflow
+    // was removed in 0.10, so a stray workflows/x.yml names nothing); an env is <name>.env, and `.env` and `default.env` are the default of
     // their directory, env/default or env/<dir>/default. `.yaml` is no task.
     // fake-akm-contract.test.ts runs the same refs through the real binary.
     const bundle = makeBundle()
@@ -156,7 +155,6 @@ describe("AKM 0.9 ref-resolver contract", () => {
       "tasks/nightly",
       "workflows/release",
       "workflows/release.md",
-      "workflows/ship",
     ])
   })
 

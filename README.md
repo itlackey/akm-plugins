@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.9.30`. The OpenCode, Claude, and Codex integrations expose exactly five public AKM surfaces:
+Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.10.26101001-alpha` (akm 0.10 or newer; the plugins pass `--detail agent`, which akm 0.9 rejects). The OpenCode, Claude, and Codex integrations expose exactly five public AKM surfaces:
 
 | | OpenCode | Claude Code | Codex |
 | --- | --- | --- | --- |
@@ -78,9 +78,9 @@ Codex does not run plugin hooks until you review and trust them: open `/hooks` i
 
 ## Updating
 
-From akm 0.9.30, run `akm upgrade`. After it updates the CLI, it updates the akm plugin of each harness it finds: Claude Code and Codex when the `akm-plugins` marketplace is configured and the plugin is installed, and OpenCode when `akm-opencode` is cached (deferred while OpenCode is running). It only updates; it never installs a plugin, and `akm upgrade --check` reports what is pending without changing anything. With the OpenCode plugin present it also moves the CLI only to the `akm-cli` version `akm-opencode@latest` pins. In a headless container, run `akm upgrade -q` from the entrypoint; Codex hooks still need their one-time trust entries baked into `~/.codex/config.toml` (see the `akm upgrade` entry in the akm CLI reference).
+From akm 0.10, run `akm upgrade`. After it updates the CLI, it updates the akm plugin of each harness it finds: Claude Code and Codex when the `akm-plugins` marketplace is configured and the plugin is installed, and OpenCode when `akm-opencode` is cached (deferred while OpenCode is running). It only updates; it never installs a plugin, and `akm upgrade --check` reports what is pending without changing anything. With the OpenCode plugin present it also moves the CLI only to the `akm-cli` version `akm-opencode@latest` pins. In a headless container, run `akm upgrade -q` from the entrypoint; Codex hooks still need their one-time trust entries baked into `~/.codex/config.toml` (see the `akm upgrade` entry in the akm CLI reference).
 
-To update by hand, or with an akm older than 0.9.30:
+To update by hand, or with an akm older than 0.10:
 
 - **Claude Code** does not auto-update third-party marketplaces by default. Turn it on in `/plugin` → Marketplaces → `akm-plugins` → Enable auto-update, or add `"autoUpdate": true` beside `source` in the `akm-plugins` entry of `extraKnownMarketplaces` in `settings.json`. The Claude desktop app starts Claude Code with `DISABLE_AUTOUPDATER=1`, which also switches plugin updates off, so desktop users also need `"env": { "FORCE_AUTOUPDATE_PLUGINS": "1" }` in `settings.json`. To update by hand: `claude plugin marketplace update akm-plugins`, then `claude plugin update akm@akm-plugins`.
 - **Codex** updates the plugin by itself every time it starts; `codex plugin marketplace upgrade akm-plugins` does it on demand. A release that changes a hook's command shows that hook as modified in `/hooks`, and it does not run until you trust it again.
@@ -104,8 +104,8 @@ OpenCode guard reads the manifest of the dependency it actually imported;
 requesting a newer API against an older exact-pinned dependency returns a
 structured error instead of silently returning exact content.
 
-Release-order gate: publish `akm-cli@0.9.30` first, then update OpenCode's exact
-dependency and lockfile and Claude's compatibility floor to 0.9.30, run the
+Release-order gate: publish the `akm-cli` build first, then update OpenCode's exact
+dependency and lockfile and Claude's compatibility floor to it (today the alpha `0.10.26101001-alpha`; the final 0.10 build before the plugins release), run the
 real-package contract suite, and only then publish the plugins. Do not fabricate
 the unpublished registry lock entry on this branch.
 
@@ -113,7 +113,7 @@ the unpublished registry lock entry on this branch.
 
 The plugins keep **MAJOR.MINOR in sync with the AKM CLI line they target, and let PATCH diverge** inside that minor. While AKM is on `0.9.x`, the plugins release `0.9.0`, `0.9.1`, `0.9.2`, … independently of AKM's own patch number. From AKM 0.10 the patch is a daily build number (see below).
 
-The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.9.30` means `>=0.9.30 <0.10.0`. OpenCode exact-pins that floor (`akm-cli@0.9.30`) because it imports AKM's in-process `dist/` modules; allowing an untested patch to resolve at user install time would make one plugin release execute different private APIs on different machines.
+The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.10.26101001` means `>=0.10.26101001 <0.11.0` (today `^0.10.26101001-alpha`, the alpha the plugins are tested against, until the final 0.10 build ships). OpenCode exact-pins that floor (`akm-cli@0.10.26101001-alpha`) because it imports AKM's in-process `dist/` modules; allowing an untested patch to resolve at user install time would make one plugin release execute different private APIs on different machines.
 
 Patch divergence is deliberate: a plugin-only fix has to be shippable without waiting for an AKM release, which is impossible if the patch component is spent mirroring AKM's.
 

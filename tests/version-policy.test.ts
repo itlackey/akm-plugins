@@ -2,7 +2,7 @@
 // line they target, and let PATCH diverge freely inside that minor.
 //
 // The sync point is AKM_VERSION_RANGE in claude/shared/akm-version.ts. On a 0.x
-// version a caret range is exactly a minor line (`^0.9.30` == `>=0.9.30 <0.10.0`),
+// version a caret range is exactly a minor line (`^0.10.26101001` == `>=0.10.26101001 <0.11.0`),
 // so "plugins are 0.9.x while akm is 0.9.x" is already what that constant says.
 // This file makes the invariant enforced rather than conventional: five version
 // fields, Claude's install ref, and OpenCode's exact package/lockfile pins all
@@ -24,7 +24,7 @@ const REPO_ROOT = path.join(import.meta.dir, "..")
 const readText = (relative: string): string => readFileSync(path.join(REPO_ROOT, relative), "utf8")
 const readJson = (relative: string): Record<string, any> => JSON.parse(readText(relative))
 
-/** `0.9.30` -> `0.9`. Returns null for anything that is not plain semver. */
+/** `0.10.26101001` -> `0.10`. Returns null for anything that is not plain semver. */
 function minorLine(version: string): string | null {
   const parsed = valid(version)
   if (!parsed) return null
@@ -32,7 +32,7 @@ function minorLine(version: string): string | null {
   return `${major}.${minor}`
 }
 
-/** `^0.9.30` -> `0.9.30`. The range floor is the minimum compatible CLI version. */
+/** `^0.10.26101001-alpha` -> `0.10.26101001-alpha`. The range floor is the minimum compatible CLI version. */
 function rangeFloor(range: string): string {
   return range.trim().replace(/^[\^~>=v\s]+/, "")
 }
@@ -48,10 +48,10 @@ const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
 
 describe("version policy", () => {
   test("the akm range is a caret range, so a minor line is what it pins", () => {
-    // The whole policy rests on `^0.9.30` meaning ">=0.9.30 <0.10.0". If the range
+    // The whole policy rests on `^0.10.26101001` meaning ">=0.10.26101001 <0.11.0". If the range
     // is ever widened into an OR-list or a bare pin, "MAJOR.MINOR in sync" stops
     // having a single answer and every assertion below becomes a guess.
-    expect(AKM_VERSION_RANGE).toMatch(/^\^\d+\.\d+\.\d+$/)
+    expect(AKM_VERSION_RANGE).toMatch(/^\^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
     expect(valid(rangeFloor(AKM_VERSION_RANGE))).not.toBeNull()
   })
 
@@ -99,23 +99,27 @@ describe("version policy", () => {
     // future change tightening patch back into lockstep fails here and has to
     // argue with the comment at the top of this file instead of sliding in.
     const floorPatch = rangeFloor(AKM_VERSION_RANGE)
-    for (const candidate of ["0.9.0", "0.9.1", "0.9.30"]) {
+    for (const candidate of ["0.10.0", "0.10.26101001", "0.10.26101001-alpha"]) {
       expect(minorLine(candidate)).toBe(minorLine(floorPatch))
     }
-    expect(minorLine("0.10.0")).not.toBe(minorLine(floorPatch))
+    expect(minorLine("0.9.30")).not.toBe(minorLine(floorPatch))
+    expect(minorLine("0.11.0")).not.toBe(minorLine(floorPatch))
   })
 
   test("the range ceiling is real, and a prerelease is judged by its release core", () => {
     // claude/shared/akm-version.ts drops a prerelease tag before matching, so a
     // newer 0.9.x build is never refused for being a prerelease — 0.9.17-alpha.3
     // against ^0.9.16 used to disable akm for whole sessions. The ceiling is
-    // this file's policy: 0.10.0-beta.1 is the next minor line, on 0.x the next
-    // plugin line, so it is refused exactly like 0.10.0 until a 0.10.x plugin
-    // ships with a new floor. 0.9.17-alpha.3 is now below the floor, so the same
-    // shape is asserted one patch above it.
-    expect(satisfiesAkmVersionRange("0.9.31-alpha.3")).toBe(true)
-    expect(satisfiesAkmVersionRange("0.10.0")).toBe(false)
-    expect(satisfiesAkmVersionRange("0.10.0-beta.1")).toBe(false)
+    // this file's policy: 0.11.0-beta.1 is the next minor line, on 0.x the next
+    // plugin line, so it is refused exactly like 0.11.0 until a 0.11.x plugin
+    // ships with a new floor. The 0.10 patch is an 8-digit daily build, so the
+    // floor is compared as a number, not as text.
+    expect(satisfiesAkmVersionRange("0.10.26101002-alpha")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.10.26101001")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.10.26100901")).toBe(false)
+    expect(satisfiesAkmVersionRange("0.9.31-alpha.3")).toBe(false)
+    expect(satisfiesAkmVersionRange("0.11.0")).toBe(false)
+    expect(satisfiesAkmVersionRange("0.11.0-beta.1")).toBe(false)
   })
 
   test("the release workflow derives the version instead of accepting a typed one", () => {
@@ -150,8 +154,7 @@ describe("version policy", () => {
     const derive = (akm: string, stamp: string): string => deriveRelease(akm, at(stamp), () => []).version
     const patchOf = (version: string): number => Number(valid(version)!.split(".")[2])
 
-    const floorLine = minorLine(rangeFloor(AKM_VERSION_RANGE))
-    expect(minorLine(derive("0.9.1", "202608242012"))).toBe(floorLine)
+    expect(minorLine(derive("0.10.26101001", "202610100000"))).toBe(minorLine(rangeFloor(AKM_VERSION_RANGE)))
 
     // The two typo'd releases already on npm must be cleared by the scheme.
     const published = patchOf("0.9.202808220049")
@@ -177,7 +180,8 @@ describe("version policy", () => {
     const next = derive("0.9.31-alpha.4", "202610080512")
     expect(next).toBe("0.9.31-alpha.4.202610080512")
     expect(valid(next)).toBe(next)
-    expect(satisfiesAkmVersionRange(next)).toBe(true)
+    // The 0.10 scheme (no timestamp suffix) is the one the range accepts.
+    expect(satisfiesAkmVersionRange(deriveRelease("0.10.26101001-alpha", new Date(Date.UTC(2026, 9, 10)), () => []).version)).toBe(true)
 
     // Below the stable it precedes, above the akm prerelease it targets, and
     // above the previous next (including the stale 0.8.0-rc.8 on npm today).
