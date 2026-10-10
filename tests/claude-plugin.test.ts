@@ -1445,10 +1445,9 @@ exit 0
     expect(curatedContent).toContain("# curated") // the actual recalled content is still present
     const invocations = readFileSync(invokeLog, "utf8")
     expect(invocations).toContain("curate")
-    expect(invocations).toContain("--shape agent")
+    expect(invocations).toContain("--detail agent")
     expect(invocations).toContain("--format text")
     expect(invocations).not.toContain("--for-agent")
-    expect(invocations).not.toContain("--detail agent")
     expect(invocations).not.toContain("--run sess-start-1")
   })
 

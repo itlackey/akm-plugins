@@ -575,7 +575,7 @@ async function runCurateLogged(
 // the floor disabled this is the exact argv these two call sites have always
 // sent, so that (default, tested) path is unchanged.
 function buildCurateArgs(query: string): string[] {
-  const args = ["--shape", "agent", "-q", "curate", query]
+  const args = ["--detail", "agent", "-q", "curate", query]
   args.push("--limit", String(AKM_CURATE_LIMIT))
   if (AKM_CURATE_TYPE) args.push("--type", AKM_CURATE_TYPE)
   args.push("--format", AKM_CURATE_MIN_SCORE > 0 ? "json" : "text")

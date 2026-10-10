@@ -140,7 +140,7 @@ describe("fake-akm envelope contract", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
-      const args = ["--format", "json", "--shape", "agent", "-q", "search", "contract-no-match", "--from", "local"]
+      const args = ["--format", "json", "--detail", "agent", "-q", "search", "contract-no-match", "--from", "local"]
       const realEnvelope = runReal(real, args) as Record<string, unknown>
       const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
@@ -156,7 +156,7 @@ describe("fake-akm envelope contract", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
-      const args = ["--format", "json", "--shape", "agent", "-q", "curate", "contract-no-match", "--from", "local", "--limit", "5"]
+      const args = ["--format", "json", "--detail", "agent", "-q", "curate", "contract-no-match", "--from", "local", "--limit", "5"]
       const realEnvelope = runReal(real, args) as Record<string, unknown>
       const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))

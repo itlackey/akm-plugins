@@ -7,7 +7,7 @@
  * always used) never prints a per-item relevance score — `formatCuratePlain`
  * on the CLI side has no `score` line — so the hooks had no way to tell "five
  * weak hits" from "five strong hits" and always emitted whatever the CLI
- * returned. `--shape agent` DOES carry `score` (and `type`) on each item in
+ * returned. `--detail agent` DOES carry `score` (and `type`) on each item in
  * `--format json`, so the fix lives here: switch to JSON, decide, and render
  * just enough text to stay useful — NOT a full port of the CLI's own
  * formatter (next-steps footer, warnings block, etc. — the hooks already
