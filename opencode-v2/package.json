@@ -1,6 +1,6 @@
 {
   "name": "akm-opencode-v2",
-  "version": "0.10.26101001-alpha",
+  "version": "0.10.26101002-alpha",
   "type": "module",
   "description": "OpenCode 2 plugin for AKM: the five AKM tools, automatic recall, and automatic session extraction. For OpenCode 1, use akm-opencode.",
   "keywords": [
