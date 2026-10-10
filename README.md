@@ -111,7 +111,7 @@ the unpublished registry lock entry on this branch.
 
 ## Versioning
 
-The plugins keep **MAJOR.MINOR in sync with the AKM CLI line they target, and let PATCH diverge** inside that minor. While AKM is on `0.9.x`, the plugins release `0.9.0`, `0.9.1`, `0.9.2`, … independently of AKM's own patch number.
+The plugins keep **MAJOR.MINOR in sync with the AKM CLI line they target, and let PATCH diverge** inside that minor. While AKM is on `0.9.x`, the plugins release `0.9.0`, `0.9.1`, `0.9.2`, … independently of AKM's own patch number. From AKM 0.10 the patch is a daily build number (see below).
 
 The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.9.30` means `>=0.9.30 <0.10.0`. OpenCode exact-pins that floor (`akm-cli@0.9.30`) because it imports AKM's in-process `dist/` modules; allowing an untested patch to resolve at user install time would make one plugin release execute different private APIs on different machines.
 
@@ -121,9 +121,20 @@ Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A
 
 **Prerelease channel (`next`).** When the AKM CLI publishes a prerelease to its npm `next` dist-tag (say `0.9.31-alpha.4`), the release workflow can be run with that as `akm_version`. A prerelease `akm_version` makes it a `next` release: the plugin version is `<akm_version>.<UTC yyyymmddhhmm>` (`0.9.31-alpha.4.202610080512`, which sorts above `0.9.31-alpha.4` and below `0.9.31`), `akm-opencode` is published with `--tag next`, and the GitHub release is marked a prerelease. The `akm-cli@<akm_version>` it names must already be on npm. The OpenCode build exact-pins that prerelease and regenerates `opencode/bun.lock` against it, but only in the commit the `v<version>` tag points at: nothing is committed to `main`, and the stable floor (`AKM_VERSION_RANGE`, the pin on `main`) does not move. Claude's range check reads the release core, so an akm prerelease already satisfies `^0.9.30`. To follow the channel in OpenCode, set `"plugin": ["akm-opencode@next"]` in `opencode.json`; `akm-opencode@latest` stays on the stable line.
 
+**Daily builds (AKM 0.10 onward).** AKM 0.10 versions its releases as `0.10.YYMMDDNN` (UTC year, month, day and the build of that day, two digits each, `NN` 01 to 99), with `-alpha`, `-beta` or `-rc` for a prerelease and no `.N` ([akm#1089](https://github.com/itlackey/akm/issues/1089)). The plugins use the same scheme with their own counter. Run the release workflow with the AKM version they target as `akm_version`, and the plugin version is `0.10.<UTC YYMMDD><NN>[-stage]`: `NN` is one above the highest `akm-opencode` build already on npm for that UTC day, and the stage is copied from `akm_version`.
+
+| `akm_version` | at (UTC) | `akm-opencode` published | plugin version | npm tag |
+| --- | --- | --- | --- | --- |
+| `0.10.26101001` | 2026-10-10 | none that day | `0.10.26101001` | `latest` |
+| `0.10.26101001` | 2026-10-10 | one build that day | `0.10.26101002` | `latest` |
+| `0.10.26101002-rc` | 2026-10-11 | none that day | `0.10.26101101-rc` | `next` |
+
+A stage makes it a `next` release exactly as the 0.9 prerelease channel does (the `akm-cli@<akm_version>` it names must already be on npm and OpenCode's build exact-pins it), and `0.10.26101101-rc` sorts below the stable build of the same day. The exact `akm-cli` pin in `opencode/package.json` and the `AKM_VERSION_RANGE` floor work as before: move both to the stable daily build (`^0.10.26101001`, `0.10.26101001`) before releasing against it. The 0.9 scheme could not continue: `<akm_version><yyyymmddhhmm>` would be `0.10.26101001202610101200`, a 20-digit patch above `Number.MAX_SAFE_INTEGER`, which node-semver and npm reject. A malformed `akm_version` (not two digits each, not a calendar date, `NN` outside 01 to 99, a stage other than those three) fails before anything is tagged. AKM 0.9 releases keep the old scheme above, so the 0.9 plugins can still be released.
+
 Both rules are enforced, not conventional:
 
 - [`tests/version-policy.test.ts`](./tests/version-policy.test.ts) pins all five version fields to each other and to the `AKM_VERSION_RANGE` minor line, keeps Claude's install ref equal to that range, and requires OpenCode's dependency and lockfile to equal the range floor exactly.
+- [`scripts/release-version.ts`](./scripts/release-version.ts) derives the plugin version from `akm_version` and the UTC clock (both schemes), tested in [`tests/release-version.test.ts`](./tests/release-version.test.ts).
 - `.github/workflows/release.yml` validates the requested version *before* it stamps manifests, commits, and pushes a tag — npm would otherwise be the first thing to reject a bad version, long after the tag exists.
 
 ## Links

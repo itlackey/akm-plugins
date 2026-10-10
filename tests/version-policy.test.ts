@@ -18,6 +18,7 @@ import path from "node:path"
 
 import { AKM_VERSION_RANGE, satisfiesAkmVersionRange } from "../claude/shared/akm-version"
 import { valid } from "../claude/shared/vendor-semver"
+import { deriveRelease } from "../scripts/release-version"
 
 const REPO_ROOT = path.join(import.meta.dir, "..")
 const readText = (relative: string): string => readFileSync(path.join(REPO_ROOT, relative), "utf8")
@@ -118,8 +119,9 @@ describe("version policy", () => {
   })
 
   test("the release workflow derives the version instead of accepting a typed one", () => {
-    // The release version is <akm_version><UTC yyyymmddhhmm>, e.g. akm 0.9.1
-    // released at 2026-08-24 20:12 UTC -> 0.9.1202608242012.
+    // The release version is derived from the akm version and the UTC clock by scripts/release-version.ts (see
+    // tests/release-version.test.ts for the schemes). On the akm 0.9 line that is <akm_version><UTC yyyymmddhhmm>, e.g.
+    // akm 0.9.1 released at 2026-08-24 20:12 UTC -> 0.9.1202608242012; from akm 0.10 it is 0.10.YYMMDDNN.
     //
     // This is enforced rather than conventional because the hand-typed scheme
     // it replaced shipped two releases with a typo'd YEAR -- 0.9.202808211043
@@ -127,15 +129,14 @@ describe("version policy", () => {
     // numerically, so the NEXT correctly-dated hand-typed release would have
     // sorted BELOW them: the publish succeeds, `latest` stays on the older
     // build, and every consumer silently keeps installing it. Deriving the
-    // timestamp in CI removes the typo, and the monotonicity check catches any
+    // date in CI removes the typo, and the monotonicity check catches any
     // other way of sorting backwards.
     const workflow = readText(".github/workflows/release.yml")
 
-    // The operator supplies the akm line, never the timestamp.
+    // The operator supplies the akm version, never the date.
     expect(workflow).toContain("akm_version:")
     expect(workflow).not.toContain("inputs.version")
-    expect(workflow).toContain("date -u +%Y%m%d%H%M")
-    expect(workflow).toContain('VERSION="${AKM_VERSION}${TIMESTAMP}"')
+    expect(workflow).toContain('bun scripts/release-version.ts derive >> "$GITHUB_OUTPUT"')
 
     // ...and a publish that would leave `latest` pointing backwards is refused.
     expect(workflow).toContain("does NOT sort above the published ${channel}")
@@ -144,7 +145,9 @@ describe("version policy", () => {
   test("the derived version shape stays on the akm minor line and sorts forward", () => {
     // Pure arithmetic on the scheme, so a future change to the shape has to
     // face these cases rather than discovering them on npm.
-    const derive = (akm: string, stamp: string): string => `${akm}${stamp}`
+    const at = (stamp: string): Date =>
+      new Date(Date.UTC(+stamp.slice(0, 4), +stamp.slice(4, 6) - 1, +stamp.slice(6, 8), +stamp.slice(8, 10), +stamp.slice(10, 12)))
+    const derive = (akm: string, stamp: string): string => deriveRelease(akm, at(stamp), () => []).version
     const patchOf = (version: string): number => Number(valid(version)!.split(".")[2])
 
     const floorLine = minorLine(rangeFloor(AKM_VERSION_RANGE))
@@ -166,7 +169,9 @@ describe("version policy", () => {
     // <akm_version>.<UTC yyyymmddhhmm> so the whole string stays a valid semver
     // prerelease. Gluing the stamp on without the dot would read as part of the
     // last identifier (alpha.4202610080512) and sort by its text, not its time.
-    const derive = (akm: string, stamp: string): string => (akm.includes("-") ? `${akm}.${stamp}` : `${akm}${stamp}`)
+    const at = (stamp: string): Date =>
+      new Date(Date.UTC(+stamp.slice(0, 4), +stamp.slice(4, 6) - 1, +stamp.slice(6, 8), +stamp.slice(8, 10), +stamp.slice(10, 12)))
+    const derive = (akm: string, stamp: string): string => deriveRelease(akm, at(stamp), () => []).version
     const order = (a: string, b: string): number => Bun.semver.order(a, b)
 
     const next = derive("0.9.31-alpha.4", "202610080512")
@@ -187,8 +192,7 @@ describe("version policy", () => {
   test("the release workflow publishes a prerelease akm_version as a next release without touching main", () => {
     const workflow = readText(".github/workflows/release.yml")
 
-    // Derivation and validation; the monotonicity guard runs against the `next` tag.
-    expect(workflow).toContain('VERSION="${AKM_VERSION}.${TIMESTAMP}"')
+    // Validation; the monotonicity guard runs against the `next` tag.
     expect(workflow).toContain("`dist-tags.${channel}`")
     expect(workflow).toContain("is outside AKM_VERSION_RANGE")
     expect(workflow).toContain("is not on npm. Publish that akm prerelease first")
