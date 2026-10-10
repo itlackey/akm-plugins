@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.9.30`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
+Claude Code plugin for [AKM](https://github.com/itlackey/akm) `^0.10.26101002-alpha`. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
 The AKM skill also supports delegating work to an AKM agent through Claude's
 existing Bash tool. It invokes `akm agent` directly; it does not use MCP,
@@ -21,7 +21,7 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.9.30` (judged on `major.minor.patch`, so a prerelease of a newer 0.9.x build such as `0.9.31-alpha.3` passes); the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically. Claude Code must be 2.1.139 or newer, the first release that can start a hook without a shell (see [Windows](#windows) for why that matters). On Windows, neither Git for Windows nor WSL is needed.
+The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and satisfy `^0.10.26101002-alpha` (akm 0.10 or newer: the plugins pass `--detail agent`, which akm 0.9 rejects; judged on `major.minor.patch`, so a prerelease of a newer 0.10 build such as `0.10.26101101-rc` passes); the session-start hook reports a degraded status when either dependency is unavailable and does not install software automatically. Claude Code must be 2.1.139 or newer, the first release that can start a hook without a shell (see [Windows](#windows) for why that matters). On Windows, neither Git for Windows nor WSL is needed.
 
 ## Slash Commands
 
@@ -79,7 +79,7 @@ codex plugin marketplace add itlackey/akm-plugins
 codex plugin add akm@akm-plugins
 ```
 
-Bun 1.0 or newer and AKM satisfying `^0.9.30` must be on `PATH`, as [above](#installation); nothing installs them for you. Codex skips plugin hooks until you review and trust them: run `/hooks` in the Codex CLI and trust the two AKM hooks. Codex asks again when a plugin update changes a hook.
+Bun 1.0 or newer and AKM satisfying `^0.10.26101002-alpha` must be on `PATH`, as [above](#installation); nothing installs them for you. Codex skips plugin hooks until you review and trust them: run `/hooks` in the Codex CLI and trust the two AKM hooks. Codex asks again when a plugin update changes a hook.
 
 Codex gets:
 
@@ -140,7 +140,7 @@ What differs from macOS and Linux:
 
 `.github/workflows/tests.yml` runs a `windows` job on `windows-latest` for every pull request and every push to `main`. It runs:
 
-- the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`, and once against the `akm-cli@0.9.30` npm itself installs;
+- the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`, and once against the `akm-cli@0.10.26101002-alpha` npm itself installs;
 - the real Claude Code (2.1.286) and the real Codex (0.160.0), installed from npm and started with no credential. `claude -p` registers the manifest's 23 handlers and runs SessionStart, UserPromptSubmit and SessionEnd through exec form before it stops at "Not logged in". `codex exec` runs the two hooks, with the plugin installed from the checkout and trusted the way `/hooks` does, before its model provider, a dead local port, refuses the request.
 
 Tests that write their fake akm as a POSIX `sh` script, assert POSIX mode bits or run `akm-hook.sh` are skipped there by name (`[skipped on Windows: ...]`): `tests/host-runtime.ts` explains why, and `tests/hook-commands.test.ts` and `tests/codex-plugin.test.ts` run the same hook modes against the Windows-capable fake.
@@ -176,7 +176,7 @@ The most useful settings are also exposed in Claude Code's `/plugin` configurati
 | --- | --- | --- |
 | `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. Set this. When it is unset the hooks discover the bundle by spawning `akm info`, which adds a subprocess to every file-tool hook that sees a concept-like token; setting it removes that spawn entirely. The session-start hook tells you to set it when no bundle is configured. |
 | `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to a locally built AKM CLI entry point. |
-| `AKM_PACKAGE_REF` | `akm-cli@^0.9.30` | Package specification shown when AKM is unavailable. It is never installed automatically. |
+| `AKM_PACKAGE_REF` | `akm-cli@^0.10.26101002-alpha` | Package specification shown when AKM is unavailable. It is never installed automatically. |
 | `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` (`~/.local/state/akm-claude`; under Codex, its plugin data directory) | Local plugin state directory. The home directory is `os.homedir()`, so on Windows it is `%USERPROFILE%\.local\state\akm-claude`. |
 | `AKM_PLUGIN_HARNESS` | `claude-code` | Host the hook labels its records with. The Codex manifest sets it to `codex` on macOS and Linux (on Windows it passes `--harness=codex` instead); leave it alone otherwise. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working. |

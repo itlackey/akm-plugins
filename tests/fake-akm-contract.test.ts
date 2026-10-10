@@ -140,7 +140,7 @@ describe("fake-akm envelope contract", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
-      const args = ["--format", "json", "--shape", "agent", "-q", "search", "contract-no-match", "--from", "local"]
+      const args = ["--format", "json", "--detail", "agent", "-q", "search", "contract-no-match", "--from", "local"]
       const realEnvelope = runReal(real, args) as Record<string, unknown>
       const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
@@ -156,7 +156,7 @@ describe("fake-akm envelope contract", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
-      const args = ["--format", "json", "--shape", "agent", "-q", "curate", "contract-no-match", "--from", "local", "--limit", "5"]
+      const args = ["--format", "json", "--detail", "agent", "-q", "curate", "contract-no-match", "--from", "local", "--limit", "5"]
       const realEnvelope = runReal(real, args) as Record<string, unknown>
       const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
@@ -241,7 +241,7 @@ describe("fake-akm envelope contract", () => {
   // of truth is akm, so it is pinned here type by type against the real binary:
   // `show` and `feedback` accept the canonical ref of every asset type, both
   // refuse the spellings that merely name a file, and the validator says the same
-  // about every one of them (checked against 0.9.20).
+  // about every one of them (checked against 0.10.26101002-alpha).
   // It probes 38 refs: 9.7 s on GitHub's Linux runner, so a run 2.8x slower would reach 27 s of the 30 s default; it gets 60 s.
   test.skipIf(!akmAvailable)("show and feedback accept the canonical ref of every asset type, and the validator agrees", async () => {
     const real = makeRealEnv()
@@ -315,10 +315,9 @@ describe("fake-akm envelope contract", () => {
         "tasks/nightly",
         "workflows/release",
         "workflows/release.md",
-        "workflows/ship",
       ]
       // Each of these names a file akm has, and akm refuses it: `show` fails, or
-      // answers without a ref, or `feedback` fails (workflows/ship.yml). Files at
+      // answers without a ref, or `feedback` fails. A .yml workflow is not indexed at all since 0.10. Files at
       // the bundle root are not indexed, and an ID may not repeat its type.
       const refused = [
         "env/.env",
@@ -340,6 +339,7 @@ describe("fake-akm envelope contract", () => {
         "tasks/legacy",
         "tasks/legacy.yaml",
         "tasks/nightly.yml",
+        "workflows/ship",
         "workflows/ship.yml",
       ]
 

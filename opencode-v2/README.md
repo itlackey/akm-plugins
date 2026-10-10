@@ -1,6 +1,6 @@
 # akm-opencode-v2
 
-OpenCode **2.x** plugin for [AKM](https://github.com/itlackey/akm) `0.9.30`. It registers the five public AKM tools, brings relevant AKM context into the model request automatically, records feedback and learning proposals from what you tell the model, and hands finished turns to AKM's session extraction.
+OpenCode **2.x** plugin for [AKM](https://github.com/itlackey/akm) `0.10.26101002-alpha`. It registers the five public AKM tools, brings relevant AKM context into the model request automatically, records feedback and learning proposals from what you tell the model, and hands finished turns to AKM's session extraction.
 
 Using OpenCode 1.x? Install [`akm-opencode`](../opencode/README.md) instead. Install only the plugin that matches your OpenCode major: each is built against its host's plugin API and neither works in the other.
 
@@ -8,7 +8,7 @@ Using OpenCode 1.x? Install [`akm-opencode`](../opencode/README.md) instead. Ins
 | --- | --- | --- |
 | OpenCode | 1.x (tested 1.18.34) | 2.x (built and loaded against 2.0.26) |
 | Plugin API | `@opencode-ai/plugin` 1.x | `@opencode/plugin` 2.0.26 (Effect entrypoint) |
-| `akm-cli` | `0.9.30`, exact | `0.9.30`, exact |
+| `akm-cli` | `0.10.26101002-alpha`, exact | `0.10.26101002-alpha`, exact |
 | Config key | `"plugin": ["akm-opencode"]` | `"plugins": ["akm-opencode-v2"]` |
 
 This package depends on neither `opencode-ai` nor `@opencode/cli`. Installing it never installs or replaces your `opencode` binary.
@@ -23,7 +23,7 @@ Add the plugin to your OpenCode 2 configuration (the `plugins` array in `opencod
 }
 ```
 
-`akm-cli@0.9.30` is installed with the plugin and is the `akm` it runs (set `AKM_OPENCODE_CLI` to an absolute path to use another executable). `@opencode/plugin` and `effect` are peer dependencies: OpenCode supplies its own copies at load time, so they are external to the published bundle.
+`akm-cli@0.10.26101002-alpha` is installed with the plugin and is the `akm` it runs (set `AKM_OPENCODE_CLI` to an absolute path to use another executable). `@opencode/plugin` and `effect` are peer dependencies: OpenCode supplies its own copies at load time, so they are external to the published bundle.
 
 ## Tools
 

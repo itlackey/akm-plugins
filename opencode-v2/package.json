@@ -1,6 +1,6 @@
 {
   "name": "akm-opencode-v2",
-  "version": "0.9.30202610090106",
+  "version": "0.10.26101001-alpha",
   "type": "module",
   "description": "OpenCode 2 plugin for AKM: the five AKM tools, automatic recall, and automatic session extraction. For OpenCode 1, use akm-opencode.",
   "keywords": [
@@ -39,7 +39,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "akm-cli": "0.9.30"
+    "akm-cli": "0.10.26101002-alpha"
   },
   "peerDependencies": {
     "@opencode/plugin": "2.0.26",

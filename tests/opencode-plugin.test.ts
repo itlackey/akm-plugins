@@ -85,7 +85,6 @@ function decodeReadArgv(args: string[]): { verb: string; input: Record<string, u
     input.ref = args[1]
     const detail = flag("--detail")
     if (detail) input.detail = detail
-    if (flag("--shape") === "summary") input.detail = "summary"
     return { verb, input }
   }
   input.query = args[1]

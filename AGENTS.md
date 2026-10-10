@@ -38,7 +38,7 @@ Fall back to `akm search` only for known-ref lookups:
 ```sh
 akm search "<known name>"              # Only when akm show returned "not found" and you need the exact ref
 akm search "<query>" --type script     # Filter by type (agent, command, env, fact, instruction, knowledge, lesson, memory, script, secret, session, skill, task, workflow)
-akm search "<query>" --from <source>   # Filter by source: local (default), registry, or all ("--source" was renamed to "--from" in 0.9)
+akm search "<query>" --from <source>   # Filter by source: local (default), registry, or all
 akm search "<query>" --from <name>     # scope to a single configured source name (e.g., --from akm-stash)
 akm search "<query>" --include-proposed  # Merge proposed-quality drafts into hits (default search hides them)
 ```
@@ -81,8 +81,8 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 
 **Proposal queue, improve, and task verbs:**
 - `akm proposal list` / `akm proposal show <id>` / `akm proposal diff <id>` / `akm proposal accept <id>` / `akm proposal reject <id> --reason "..."` — operate the durable proposal queue. `akm proposal diff` accepts UUID, UUID prefix, or asset ref positionally. Always confirm with the user before `accept`/`reject`.
-- `akm proposal drain --policy <personal-stash|conservative|manual|path> [--dry-run] [--promote] [--yes] [--max-accepts N] [--max-diff-lines N] [--older-than D] [--judgment] [--strategy <name>]` — **mutating.** Bulk-triage the standing pending backlog by a deterministic policy (promotes/rejects and commits to git; no batch revert). Always `--dry-run` first; only `--promote --yes` after explicit user approval. This and the automatic `processes.triage` improve pre-pass supersede the old manual proposal-queue management agent session.
-- `akm improve [ref|type] [--task "..."] [--strategy <name>]` — generate improvement proposals via the configured agent CLI. Improve strategies (`improve.strategies.<name>`) add a `processes.triage` pre-pass (`{ enabled, applyMode: queue|promote, policy, maxAcceptsPerRun, maxDiffLines, rejectEmpty, judgment }`) and end-of-run git `sync` (`{ enabled, push, message }` with `{timestamp}{date}{time}{scope}{refs}{accepted}` tokens; override via `--sync/--no-sync`, `--push/--no-push`).
+- `akm proposal drain [--dry-run] [--promote] [--yes] [--max-accepts N] [--older-than D] [--judgment] [--strategy <name>]` — **mutating.** Bulk-triage the standing pending backlog (accepts what a quality judge passed, rejects empty diffs, and commits to git; no batch revert). Always `--dry-run` first; only `--promote --yes` after explicit user approval. This and the automatic `processes.triage` improve pre-pass supersede the old manual proposal-queue management agent session.
+- `akm improve [ref|type] [--task "..."] [--strategy <name>]` — generate improvement proposals via the configured agent CLI. Improve strategies (`improve.strategies.<name>`) add a `processes.triage` pre-pass (`{ enabled, applyMode: queue|promote, maxAcceptsPerRun, judgment }`) and end-of-run git `sync` (`{ enabled, push, message }` with `{timestamp}{date}{time}{scope}{refs}{accepted}` tokens; override via `--sync/--no-sync`, `--push/--no-push`).
 - `akm proposal new <type> <name> (--task "..." | --file <path>)` — ask the configured agent CLI to author a brand-new asset and queue it as a proposal.
 - `akm proposal extract --type <claude|opencode> --session-id <id>` — mine durable insights out of a native session file and queue them as proposals. Requires a configured LLM engine; without one it exits 78 (`LLM_NOT_CONFIGURED`).
 - `akm task add|run|explain|history|sync|doctor` — manage scheduled task assets through the OS scheduler.

@@ -5,7 +5,7 @@
 //
 // Contract of `akm-cli/api`'s `curate` (shared with the akm side):
 //   - resolves to exactly the stdout text
-//     `akm --shape agent -q curate <query> [--limit N] [--type T] --format <format>`
+//     `akm --detail agent -q curate <query> [--limit N] [--type T] --format <format>`
 //     prints, computed in-process (no child process);
 //   - rejects with an Error whose message is the CLI's error text and whose `code`
 //     property is the CLI's error code when the CLI would have failed;

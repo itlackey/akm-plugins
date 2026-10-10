@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode **1.x** plugin for [AKM](https://github.com/itlackey/akm) `0.9.30`. It exposes exactly five public tools and uses lifecycle hooks to bring relevant AKM context into a session. Every AKM call goes through the public `akm` CLI (`--format json`); the plugin imports nothing from `akm-cli` internals. The `akm-cli` dependency is exact-pinned to the tested release, the same pin as `akm-opencode-v2`.
+OpenCode **1.x** plugin for [AKM](https://github.com/itlackey/akm) `0.10.26101002-alpha`. It exposes exactly five public tools and uses lifecycle hooks to bring relevant AKM context into a session. Every AKM call goes through the public `akm` CLI (`--format json`); the plugin imports nothing from `akm-cli` internals. The `akm-cli` dependency is exact-pinned to the tested release, the same pin as `akm-opencode-v2`.
 
 Using OpenCode 2.x? Install [`akm-opencode-v2`](../opencode-v2/README.md) instead. This package's name, entrypoint and single `AkmPlugin` export are unchanged, and `latest` stays on the OpenCode 1 plugin. Tested against OpenCode 1.18.34.
 
@@ -24,7 +24,7 @@ Add the plugin to `opencode.json`:
 | `akm_feedback` | Record positive or negative feedback for a concept. |
 | `akm_remember` | Save durable knowledge as a searchable memory. |
 
-All five tools run the bundled `akm` CLI as a subprocess (`akm search|show|curate ... --format json`, `akm feedback`, `akm remember`), through the helper shared with `akm-opencode-v2` ([`opencode-shared/akm-cli.ts`](../opencode-shared/akm-cli.ts)). Each call therefore pays the CLI's process start-up, about 0.4-0.5 s on akm-cli 0.9.30; the in-process library calls this replaced took 2-30 ms warm. Failures return structured results and are logged through OpenCode app logging.
+All five tools run the bundled `akm` CLI as a subprocess (`akm search|show|curate ... --format json`, `akm feedback`, `akm remember`), through the helper shared with `akm-opencode-v2` ([`opencode-shared/akm-cli.ts`](../opencode-shared/akm-cli.ts)). Each call therefore pays the CLI's process start-up, about 0.4-0.5 s on akm-cli 0.9.30 (not re-measured on 0.10); the in-process library calls this replaced took 2-30 ms warm. Failures return structured results and are logged through OpenCode app logging.
 
 Use the `ref` returned by search or curate directly with show or feedback. When `akm_curate.pack` is set, the response already includes packed local content, so a separate show call is only needed for omitted or registry-only hits. Concept IDs look like `skills/code-review`, `memories/release-retro`, or `team-playbook//knowledge/deploy#Rollback`.
 

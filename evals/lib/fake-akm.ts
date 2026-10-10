@@ -305,13 +305,13 @@ try {
 } catch {}
 
 // Strip global flags so we can find the verb. Mirrors the akm CLI surface
-// the hooks invoke: \`akm [--format X] [--shape S] [-q] [--detail Y] <verb> [args...]\`.
-// \`--shape\` is a v0.8.0 global flag (human|agent|summary); omitting it here made
-// the shim mis-detect the verb as "--shape" and emit nothing, collapsing curation.
+// the hooks invoke: \`akm [--format X] [-q] [--detail Y] <verb> [args...]\`, where \`--detail\` takes
+// brief|normal|full|agent. Omitting a value flag here made the shim mis-detect the
+// verb as the flag's value and emit nothing, collapsing curation.
 const args = []
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i]
-  if (a === "--format" || a === "--detail" || a === "--shape") {
+  if (a === "--format" || a === "--detail") {
     i++
     continue
   }
@@ -472,7 +472,7 @@ if (verb === "info") {
     JSON.stringify({
       ok: true,
       schemaVersion: 1,
-      version: "0.9.30",
+      version: "0.10.26101002",
       bundleDir,
       cacheDir: xdgDir("AKM_CACHE_DIR", "XDG_CACHE_HOME", ".cache"),
       configDir: xdgDir("AKM_CONFIG_DIR", "XDG_CONFIG_HOME", ".config"),
@@ -729,7 +729,7 @@ if (verb === "--version" || verb === "-V") {
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers
   // always receive the semver that governs the compatibility gate.
-  writeFileSync(1, "fake-akm 0.9.30\\n")
+  writeFileSync(1, "fake-akm 0.10.26101002\\n")
   process.exit(0)
 }
 

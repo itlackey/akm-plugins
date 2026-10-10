@@ -1012,7 +1012,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
       if (isCliError(command)) throw new Error(command.error)
       // This search is the PLUGIN's, not the model's: attribute it to a non-user event
       // source so akm's utility scores and feedback ranking do not count it as demand.
-      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--shape", "agent", "--format", "json"], {
+      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--detail", "agent", "--format", "json"], {
         timeoutMs: 8_000,
         env: { AKM_EVENT_SOURCE: "audit" },
         packageName: "akm-opencode",
@@ -1348,7 +1348,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     //   - `read` returns `<path>…</path>\n<type>file</type>\n<content>\n` with
     //     every line prefixed `N: `.
     //   - The CLI's default `search` shape drops `description` and `tags`;
-    //     `--detail full` and `--shape agent` keep them, so the gate uses the latter.
+    //     `--detail full` and `--detail agent` keep them, so the gate uses the latter.
     //
     // The throw sits OUTSIDE the try/catch on purpose. Every other hook body in
     // this file wraps itself in `try { … } catch { logHookFailure }` by

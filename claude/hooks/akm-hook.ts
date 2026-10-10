@@ -43,7 +43,7 @@ const HARNESS_ARG = process.argv.find((arg) => arg.startsWith("--harness="))?.sl
 // AKM_REQUIRED_RANGE is the single shared version contract imported from
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
 // is a separate concern: the single package range passed to Bun/npm.
-const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.9.30"
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.10.26101002-alpha"
 // Claude Code unless a host says otherwise. The Codex manifest's hook commands
 // (.codex-plugin/plugin.json) run this same hook as Codex: on POSIX with
 // AKM_PLUGIN_HARNESS=codex and AKM_PLUGIN_STATE_DIR set in front of the command,
@@ -1425,7 +1425,7 @@ const NO_AUTO_FEEDBACK_REF_RE = /^(?:.*\/\/)?(?:memories|env|secrets|lessons)\//
 const AKM_READ_ONLY_VERBS = new Set(["show", "search", "curate"])
 // Global flags that take a separate value, so `akm --format json -q show <ref>`
 // resolves to `show` rather than to `json`.
-const AKM_VALUE_FLAGS = new Set(["--format", "--shape", "--limit"])
+const AKM_VALUE_FLAGS = new Set(["--format", "--detail", "--limit"])
 
 // Only the FIRST akm invocation in the command text is inspected, so a
 // compound `akm show workflows/x && akm workflow run workflows/x` resolves to
@@ -1632,7 +1632,7 @@ function captureRetrospectiveFeedback(text: string, sid: string) {
 // argv curatePrompt() has always sent, so that (default, tested) path is
 // unchanged.
 function buildCurateArgs(query: string, limit: number): string[] {
-  const args = ["curate", query, "--limit", String(limit), "--shape", "agent", "-q"]
+  const args = ["curate", query, "--limit", String(limit), "--detail", "agent", "-q"]
   if (CURATE_TYPE) args.push("--type", CURATE_TYPE)
   args.push("--format", CURATE_MIN_SCORE > 0 ? "json" : "text")
   return args

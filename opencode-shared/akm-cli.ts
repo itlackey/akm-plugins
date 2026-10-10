@@ -140,7 +140,7 @@ export type ReadOperation = "search" | "show" | "curate"
  * Every verb is asked for `--format json`. `search` asks for `--detail full`
  * so a hit carries `description`/`tags` exactly as the in-process library
  * return did; `show` maps its `detail` (brief|normal|full, or `summary`, which
- * the CLI spells `--shape summary`).
+ * akm 0.10 folds into `--detail brief`).
  */
 export function buildReadArgs(operation: ReadOperation, input: Record<string, unknown>): string[] {
   const str = (key: string): string | undefined => {
@@ -169,7 +169,7 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (ref.startsWith("-")) throw new Error("ref must not start with '-'")
     args.push("show", ref)
     const detail = str("detail")
-    if (detail === "summary") args.push("--shape", "summary")
+    if (detail === "summary") args.push("--detail", "brief")
     else if (detail) args.push("--detail", detail)
   } else {
     const query = str("query")

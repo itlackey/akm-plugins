@@ -190,7 +190,7 @@ export function createCore(options: CoreOptions) {
       const command = resolveCommand()
       if (isCliError(command)) throw new Error(command.error)
       // The PLUGIN's search, not the model's: a non-user event source keeps it out of akm's demand signals.
-      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--shape", "agent", "--format", "json"], {
+      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--detail", "agent", "--format", "json"], {
         timeoutMs: WRITE_GATE_SEARCH_TIMEOUT_MS,
         env: { AKM_EVENT_SOURCE: "audit" },
         packageName: PACKAGE_NAME,

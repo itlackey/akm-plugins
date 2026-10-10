@@ -11,9 +11,9 @@ describe("opencode-shared read argv", () => {
     expect(buildReadArgs("search", {})).toEqual(["search", "", "--detail", "full", "--format", "json"])
   })
 
-  it("show puts the ref first and maps summary to --shape", () => {
+  it("show puts the ref first and maps summary to --detail brief", () => {
     expect(buildReadArgs("show", { ref: "knowledge/deploy#rollback", detail: "full" })).toEqual(["show", "knowledge/deploy#rollback", "--detail", "full", "--format", "json"])
-    expect(buildReadArgs("show", { ref: "skills/a", detail: "summary" })).toEqual(["show", "skills/a", "--shape", "summary", "--format", "json"])
+    expect(buildReadArgs("show", { ref: "skills/a", detail: "summary" })).toEqual(["show", "skills/a", "--detail", "brief", "--format", "json"])
     expect(() => buildReadArgs("show", { ref: "--format" })).toThrow("must not start with '-'")
     expect(() => buildReadArgs("show", {})).toThrow("ref is required")
   })

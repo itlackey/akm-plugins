@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI compatibility floor these plugins target (e.g. 0.9.30). The release version is derived as <akm_version><UTC yyyymmddhhmm> — you never type the timestamp. A prerelease (e.g. 0.9.31-alpha.4, already on npm) makes this a `next` release, derived as <akm_version>.<UTC yyyymmddhhmm>."
+        description: "The exact akm CLI compatibility floor these plugins target. For akm 0.10+ (e.g. 0.10.26101001) the plugins release as 0.10.<UTC YYMMDD><NN>, NN being the next free build of the day; a stage (e.g. 0.10.26101001-alpha, already on npm) makes it a `next` release with the same stage. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
         required: true
         type: string
 
@@ -90,42 +90,36 @@ jobs:
       # Derive the release version, then fail before anything is written.
       #
       # The operator supplies only the akm CLI version these plugins target;
-      # the workflow appends a UTC timestamp. That is deliberate: the two
-      # releases before this change were typed by hand as 0.9.202808211043 and
-      # 0.9.202808220049, and BOTH carry a typo'd year (2028, not 2026). npm
-      # compares PATCH numerically, so a later, correctly-dated hand-typed
-      # release would have sorted BELOW them and silently never become
-      # `latest`. Removing the human from the timestamp removes that whole
-      # failure class.
+      # scripts/release-version.ts (tested in tests/release-version.test.ts)
+      # derives the rest from the UTC clock. That is deliberate: the two
+      # releases before the derived scheme were typed by hand as
+      # 0.9.202808211043 and 0.9.202808220049, and BOTH carry a typo'd year
+      # (2028, not 2026). npm compares PATCH numerically, so a later,
+      # correctly-dated hand-typed release would have sorted BELOW them and
+      # silently never become `latest`. Removing the human from the date
+      # removes that whole failure class.
       #
-      # Shape: <akm_version><yyyymmddhhmm>, e.g. akm 0.9.1 at 2026-08-24 20:12
-      # UTC -> 0.9.1202608242012, i.e. PATCH = 1202608242012. Monotonic in the
-      # two ways that matter: within one akm patch the timestamp increases, and
-      # a bump in akm's patch increases the numeric prefix. It also clears the
-      # typo'd 202808* patches already published.
+      # akm 0.10 and later (akm#1089): akm versions are daily builds,
+      # 0.10.YYMMDDNN with -alpha/-beta/-rc for a prerelease. The plugins use
+      # the same shape with their own counter: 0.10.<UTC YYMMDD><NN>[-stage],
+      # NN one above the highest akm-opencode build already on npm that day,
+      # the stage copied from akm_version. A stage is a `next` release.
       #
-      # A prerelease akm_version (0.9.31-alpha.4) is a `next` release instead:
-      # <akm_version>.<yyyymmddhhmm> is 0.9.31-alpha.4.202610080512, a valid
-      # semver prerelease that sorts above 0.9.31-alpha.4 and below 0.9.31.
-      # It publishes under the npm `next` tag, and nothing is committed to main.
+      # akm 0.9 (the old scheme, still releasable): <akm_version><yyyymmddhhmm>,
+      # e.g. akm 0.9.1 at 2026-08-24 20:12 UTC -> 0.9.1202608242012. A
+      # prerelease akm_version (0.9.31-alpha.4) is a `next` release instead:
+      # <akm_version>.<yyyymmddhhmm>, 0.9.31-alpha.4.202610080512, a valid
+      # semver prerelease. That scheme stops at 0.10: 26101001 followed by 12
+      # digits is 20 digits, above Number.MAX_SAFE_INTEGER, which node-semver
+      # rejects.
+      #
+      # A `next` release publishes under the npm `next` tag, and nothing is
+      # committed to main.
       - name: Derive release version
         id: derive
         env:
           AKM_VERSION: ${{ inputs.akm_version }}
-        run: |
-          AKM_VERSION="$(echo "$AKM_VERSION" | tr -d '[:space:]')"
-          TIMESTAMP="$(date -u +%Y%m%d%H%M)"
-          if [[ "$AKM_VERSION" == *-* ]]; then
-            NEXT=true
-            VERSION="${AKM_VERSION}.${TIMESTAMP}"
-          else
-            NEXT=false
-            VERSION="${AKM_VERSION}${TIMESTAMP}"
-          fi
-          echo "akm_version=$AKM_VERSION" >> "$GITHUB_OUTPUT"
-          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Targeting akm $AKM_VERSION; releasing plugins as $VERSION"
+        run: bun scripts/release-version.ts derive >> "$GITHUB_OUTPUT"
 
       # Four rules, all checked before the tag exists (npm would otherwise be
       # the first thing to reject a bad version, by which point the tag is
