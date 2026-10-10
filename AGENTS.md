@@ -1,7 +1,16 @@
+## Plugin Layout
+
+- `opencode/` is `akm-opencode`, the OpenCode **1.x** plugin (`@opencode-ai/plugin` 1.x); its name, entrypoint and single `AkmPlugin` export are a published contract.
+- `opencode-v2/` is `akm-opencode-v2`, the OpenCode **2.x** plugin (`@opencode/plugin` 2.0.26, Effect entrypoint, `Plugin.define` with a stable id). `core.ts` is host-agnostic; `index.ts` is native wiring only; `testing.ts` is the test harness and is not published.
+- `opencode-shared/` holds the version-neutral logic both entrypoints use: `akm-cli.ts` (the one place `akm` is resolved and invoked, and `search|show|curate` argv/result handling), `akm-api.ts` (the one in-process entry, `akm-cli/api`'s `curate`, used only by automatic recall), `recall.ts` (recall policy, context budget, curated-file store, session extraction), `tools.ts` (the five tool specs and write-verb argv), `feedback.ts` (auto-feedback policy and per-session ref tracking), `learning.ts` (learning proposals and the pending-proposal nag), `write-gate.ts` (the format-declaration write gate), `events.ts` / `bundle.ts` (the memory-event ledger, bundle dir and plugin version). Add shared behavior there, not by copying between entrypoints.
+- Plugins call the public `akm` CLI, except automatic recall, which calls `curate` from the supported `akm-cli/api` entry point in-process through `opencode-shared/akm-api.ts` (tests substitute it with `setCurateForTests`; it is imported lazily and external to the bundles, and a missing entry point degrades recall to "off, logged"). Never import `akm-cli/dist/...` or any other `akm-cli` internals, and never depend on `opencode-ai` or `@opencode/cli`. Both OpenCode packages pin the same `akm-cli` version exactly; `tests/version-policy.test.ts` enforces it.
+- Mocking `node:child_process` in a test file is process-global for the whole `bun test tests/` run. `tests/opencode-plugin.test.ts` delegates to the real functions outside its own tests so the V2 tests, which spawn a fake `akm`, keep working; keep that property in any new mock.
+
 ## Logging Standard
 
 - Plugin runtime code in this repo must never write directly to `console.*`, `process.stdout`, or `process.stderr`.
-- OpenCode runtime paths must log through `client.app.log` and degrade unexpected failures into structured results where possible.
+- OpenCode 1 runtime paths (`opencode/`, `akm-opencode`) must log through `client.app.log` and degrade unexpected failures into structured results where possible.
+- OpenCode 2 runtime paths (`opencode-v2/`, `akm-opencode-v2`) must log through Effect's logger from the plugin's own fiber context (`Effect.logWithLevel`, as `opencode-v2/index.ts` does), because the V2 plugin API has no `client.app.log`. Code in `opencode-shared/` takes a log sink or returns failures as values; it never logs on its own.
 - Claude runtime paths must use plugin-local logging/state and fail closed without printing raw diagnostics.
 - Add basic error trapping around hooks, tool handlers, SDK calls, and subprocess boundaries so errors are logged instead of escaping silently.
 - Exception: dedicated CLI entrypoints and fake CLI shims in eval tooling may write to stdout/stderr only when stream output is the behavior being emulated or tested.
@@ -64,7 +73,7 @@ assets over writing new code.
 These requirements apply to all code in this repo, especially plugin runtime code.
 
 - Never write directly to `console.*`, `process.stdout`, or `process.stderr` from plugin runtime code.
-- For OpenCode plugin runtime code, route diagnostics through OpenCode app logging (`client.app.log`) and degrade failures into structured results whenever possible.
+- For OpenCode plugin runtime code, route diagnostics through the host's logging channel (`client.app.log` for OpenCode 1, the Effect logger for OpenCode 2) and degrade failures into structured results whenever possible.
 - For Claude plugin runtime code, use the plugin's local state/logging mechanism and fail closed without printing raw diagnostics to the console.
 - Add basic error trapping around lifecycle hooks, tool handlers, SDK calls, subprocess wrappers, and other integration boundaries so unexpected failures are logged and do not escape silently.
 - Tests should assert logged failures and structured error results instead of normalizing direct console output from plugin paths.

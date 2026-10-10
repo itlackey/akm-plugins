@@ -33,18 +33,18 @@ const CURATE_JSON = JSON.stringify({
   ],
 })
 
-type Probe = { args: string[]; rendered: string | null }
+type Probe = { options: { limit?: number; type?: string; format?: string; cwd?: string }; rendered: string | null }
 
 /**
  * Import the plugin under `env` in a subprocess and exercise both seams.
- * Returns the built curate argv and the rendered curated block (or null).
+ * Returns the in-process curate options and the rendered curated block (or null).
  */
 function probe(env: Record<string, string>): Probe {
   const script = `
     const { AkmPlugin } = await import(${JSON.stringify(path.join(repoRoot, "opencode/index.ts"))})
-    const args = AkmPlugin.__buildCurateArgsForTests("some prompt text")
+    const options = AkmPlugin.__buildCurateOptionsForTests()
     const rendered = AkmPlugin.__renderCuratedJsonResponseForTests(${JSON.stringify(CURATE_JSON)}, "some prompt text")
-    process.stdout.write(JSON.stringify({ args, rendered }))
+    process.stdout.write(JSON.stringify({ options, rendered }))
   `
   const result = Bun.spawnSync(["bun", "-e", script], {
     cwd: repoRoot,
@@ -60,26 +60,26 @@ function probe(env: Record<string, string>): Probe {
 }
 
 describe("#110 opencode curate floor and type filter", () => {
-  test("default (unset) sends the long-standing text argv and does not filter", () => {
-    const { args } = probe({ AKM_CURATE_MIN_SCORE: "", AKM_CURATE_TYPE: "" })
+  test("default (unset) asks for the long-standing text format and does not filter", () => {
+    const { options } = probe({ AKM_CURATE_MIN_SCORE: "", AKM_CURATE_TYPE: "" })
 
-    // The pre-#110 argv, unchanged: no --type, and text rather than json.
-    expect(args).toContain("--format")
-    expect(args[args.indexOf("--format") + 1]).toBe("text")
-    expect(args).not.toContain("--type")
+    // The pre-#110 request, unchanged: no type, and text rather than json.
+    expect(options.format).toBe("text")
+    expect(options).not.toHaveProperty("type")
+    expect(options).not.toHaveProperty("cwd")
+    expect(options.limit).toBe(5)
   })
 
   test("a floor switches the request to json, because scores are only needed then", () => {
-    const { args } = probe({ AKM_CURATE_MIN_SCORE: "5" })
+    const { options } = probe({ AKM_CURATE_MIN_SCORE: "5" })
 
-    expect(args[args.indexOf("--format") + 1]).toBe("json")
+    expect(options.format).toBe("json")
   })
 
-  test("AKM_CURATE_TYPE is passed through to akm as --type", () => {
-    const { args } = probe({ AKM_CURATE_TYPE: "lesson" })
+  test("AKM_CURATE_TYPE is passed through to akm as the curate type", () => {
+    const { options } = probe({ AKM_CURATE_TYPE: "lesson" })
 
-    expect(args).toContain("--type")
-    expect(args[args.indexOf("--type") + 1]).toBe("lesson")
+    expect(options.type).toBe("lesson")
   })
 
   test("the floor drops items scoring below it", () => {

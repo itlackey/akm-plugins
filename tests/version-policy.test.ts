@@ -4,7 +4,7 @@
 // The sync point is AKM_VERSION_RANGE in claude/shared/akm-version.ts. On a 0.x
 // version a caret range is exactly a minor line (`^0.10.26101001` == `>=0.10.26101001 <0.11.0`),
 // so "plugins are 0.9.x while akm is 0.9.x" is already what that constant says.
-// This file makes the invariant enforced rather than conventional: five version
+// This file makes the invariant enforced rather than conventional: six version
 // fields, Claude's install ref, and OpenCode's exact package/lockfile pins all
 // restate the same fact by hand, and nothing previously stopped them drifting.
 //
@@ -40,6 +40,7 @@ function rangeFloor(range: string): string {
 // Every manifest the release workflow stamps with the single version string.
 const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
   { file: "opencode/package.json", read: () => readJson("opencode/package.json").version },
+  { file: "opencode-v2/package.json", read: () => readJson("opencode-v2/package.json").version },
   { file: "claude/package.json", read: () => readJson("claude/package.json").version },
   { file: "claude/.claude-plugin/plugin.json", read: () => readJson("claude/.claude-plugin/plugin.json").version },
   { file: "claude/.codex-plugin/plugin.json", read: () => readJson("claude/.codex-plugin/plugin.json").version },
@@ -67,8 +68,8 @@ describe("version policy", () => {
     }
   })
 
-  test("all five manifests carry the identical version", () => {
-    // release.yml writes one string into all five; they can only diverge
+  test("all six manifests carry the identical version", () => {
+    // release.yml writes one string into all six; they can only diverge
     // through a hand edit, which is exactly when nobody is checking.
     const seen = VERSION_FIELDS.map(({ file, read }) => `${file} -> ${read()}`)
     const versions = new Set(VERSION_FIELDS.map(({ read }) => read()))
@@ -215,7 +216,7 @@ describe("version policy", () => {
     expect(workflow).toContain("--prerelease")
   })
 
-  test("Claude follows the range and OpenCode exact-pins its floor", () => {
+  test("Claude follows the range and both OpenCode packages exact-pin its floor", () => {
     // The Claude hook has no package manager behind it (git marketplace, no
     // npm deps), so its ref is what a user is told to install. OpenCode imports
     // private dist modules in process, so both its manifest and lockfile must
@@ -229,9 +230,35 @@ describe("version policy", () => {
     const bundledDep = readJson("opencode/package.json").dependencies["akm-cli"]
     expect(`opencode/package.json akm-cli: ${bundledDep}`).toBe(`opencode/package.json akm-cli: ${floor}`)
 
-    const lockfile = readText("opencode/bun.lock")
-    expect(lockfile).toContain(`"akm-cli": "${floor}"`)
-    expect(lockfile).toContain(`"akm-cli": ["akm-cli@${floor}",`)
+    // The same pin in both OpenCode packages: they share one set of AKM databases,
+    // so they must never run different CLIs.
+    for (const dir of ["opencode", "opencode-v2"]) {
+      expect(`${dir}/package.json akm-cli: ${readJson(`${dir}/package.json`).dependencies["akm-cli"]}`).toBe(`${dir}/package.json akm-cli: ${floor}`)
+      const lock = readText(`${dir}/bun.lock`)
+      expect(lock).toContain(`"akm-cli": "${floor}"`)
+      expect(lock).toContain(`"akm-cli": ["akm-cli@${floor}",`)
+    }
+  })
+
+  test("neither OpenCode package depends on an OpenCode CLI or deep-imports akm-cli", () => {
+    // Installing a plugin must never install or replace the user's opencode binary,
+    // and the plugins use only the public akm CLI.
+    for (const dir of ["opencode", "opencode-v2"]) {
+      const manifest = readJson(`${dir}/package.json`)
+      const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.peerDependencies, ...manifest.optionalDependencies })
+      expect(`${dir}: ${declared.filter((name) => name === "opencode-ai" || name === "@opencode/cli")}`).toBe(`${dir}: `)
+    }
+    for (const file of ["opencode/index.ts", "opencode-v2/index.ts", "opencode-v2/core.ts", "opencode-shared/akm-cli.ts", "opencode-shared/recall.ts", "opencode-shared/tools.ts"]) {
+      expect(`${file} imports akm-cli internals: ${/from\s+["']akm-cli\/dist/.test(readText(file))}`).toBe(`${file} imports akm-cli internals: false`)
+    }
+  })
+
+  test("the V2 package pins the plugin API it was built against", () => {
+    const manifest = readJson("opencode-v2/package.json")
+    expect(manifest.name).toBe("akm-opencode-v2")
+    expect(manifest.peerDependencies["@opencode/plugin"]).toBe("2.0.26")
+    expect(manifest.devDependencies["@opencode/plugin"]).toBe("2.0.26")
+    expect(readJson("opencode/package.json").name).toBe("akm-opencode")
   })
 
   test("the release workflow refuses version-contract drift before tagging", () => {
