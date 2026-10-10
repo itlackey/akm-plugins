@@ -241,7 +241,7 @@ describe("fake-akm envelope contract", () => {
   // of truth is akm, so it is pinned here type by type against the real binary:
   // `show` and `feedback` accept the canonical ref of every asset type, both
   // refuse the spellings that merely name a file, and the validator says the same
-  // about every one of them (checked against 0.10.26101001-alpha).
+  // about every one of them (checked against 0.10.26101002-alpha).
   // It probes 38 refs: 9.7 s on GitHub's Linux runner, so a run 2.8x slower would reach 27 s of the 30 s default; it gets 60 s.
   test.skipIf(!akmAvailable)("show and feedback accept the canonical ref of every asset type, and the validator agrees", async () => {
     const real = makeRealEnv()

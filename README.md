@@ -1,6 +1,6 @@
 # AKM Plugins
 
-Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.10.26101001-alpha` (akm 0.10 or newer; the plugins pass `--detail agent`, which akm 0.9 rejects). The OpenCode, Claude, and Codex integrations expose exactly five public AKM surfaces:
+Platform plugins for [AKM](https://github.com/itlackey/akm) `^0.10.26101002-alpha` (akm 0.10 or newer; the plugins pass `--detail agent`, which akm 0.9 rejects). The OpenCode, Claude, and Codex integrations expose exactly five public AKM surfaces:
 
 | | OpenCode | Claude Code | Codex |
 | --- | --- | --- | --- |
@@ -117,7 +117,7 @@ Before a core candidate is published, validate against a package tarball built f
 a temporary core checkout whose manifest carries the candidate version.
 
 Release-order gate: publish the `akm-cli` build first, then update both OpenCode
-packages' exact dependency and lockfiles and Claude's compatibility floor to it (today the alpha `0.10.26101001-alpha`; the final 0.10 build before the plugins release), run the
+packages' exact dependency and lockfiles and Claude's compatibility floor to it (today the alpha `0.10.26101002-alpha`; the final 0.10 build before the plugins release), run the
 real-package contract suite, and only then publish the plugins. Do not fabricate
 the unpublished registry lock entry on this branch.
 
@@ -125,7 +125,7 @@ the unpublished registry lock entry on this branch.
 
 The plugins keep **MAJOR.MINOR in sync with the AKM CLI line they target, and let PATCH diverge** inside that minor. While AKM is on `0.9.x`, the plugins release `0.9.0`, `0.9.1`, `0.9.2`, … independently of AKM's own patch number. From AKM 0.10 the patch is a daily build number (see below).
 
-The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.10.26101001` means `>=0.10.26101001 <0.11.0` (today `^0.10.26101001-alpha`, the alpha the plugins are tested against, until the final 0.10 build ships). Both OpenCode plugins exact-pin that floor (`akm-cli@0.10.26101001-alpha`) so a plugin release always executes the CLI it was tested with, and the two never disagree about which `akm` owns the shared databases; Claude only shells out through public CLI verbs and keeps the caret range.
+The Claude compatibility floor is `AKM_VERSION_RANGE` in [`claude/shared/akm-version.ts`](./claude/shared/akm-version.ts). On a `0.x` version a caret range remains inside a minor line — `^0.10.26101001` means `>=0.10.26101001 <0.11.0` (today `^0.10.26101002-alpha`, the alpha the plugins are tested against, until the final 0.10 build ships). Both OpenCode plugins exact-pin that floor (`akm-cli@0.10.26101002-alpha`) so a plugin release always executes the CLI it was tested with, and the two never disagree about which `akm` owns the shared databases; Claude only shells out through public CLI verbs and keeps the caret range.
 
 Patch divergence is deliberate: a plugin-only fix has to be shippable without waiting for an AKM release, which is impossible if the patch component is spent mirroring AKM's.
 

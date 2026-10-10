@@ -125,20 +125,20 @@ exit 0
 }
 
 describe("AKM_VERSION_RANGE contract", () => {
-  it("is a single caret clause anchored at the 0.10.26101001 alpha build", () => {
-    expect(AKM_VERSION_RANGE).toBe("^0.10.26101001-alpha")
+  it("is a single caret clause anchored at the 0.10.26101002 alpha build", () => {
+    expect(AKM_VERSION_RANGE).toBe("^0.10.26101002-alpha")
   })
 
   it("accepts every build whose release core is in the 0.10 line at or above the floor, prerelease or not", () => {
     // 0.10 patches are 8-digit daily builds (YYMMDDNN), not small counters.
-    for (const version of ["0.10.26101001", "0.10.26101001-alpha", "0.10.26101001-rc", "0.10.26101002", "0.10.26101101-beta", "0.10.99123199", "0.10.26101001+build.5"]) {
+    for (const version of ["0.10.26101002", "0.10.26101002-alpha", "0.10.26101002-rc", "0.10.26101003", "0.10.26101101-beta", "0.10.99123199", "0.10.26101002+build.5"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(true)
     }
   })
 
   it("rejects releases below the floor or outside the 0.10 line, prerelease or not", () => {
     // The plugins pass --detail agent, which akm 0.9 rejects, so every 0.9 release is refused.
-    for (const version of ["0.8.9", "0.9.0", "0.9.30", "0.9.31", "0.9.31-alpha.3", "0.10.0", "0.10.0-beta.1", "0.10.26100901", "0.10.26100999-rc", "0.11.26101001", "1.0.0", "1.0.0-rc.1"]) {
+    for (const version of ["0.8.9", "0.9.0", "0.9.30", "0.9.31", "0.9.31-alpha.3", "0.10.0", "0.10.0-beta.1", "0.10.26100901", "0.10.26100999-rc", "0.10.26101001", "0.10.26101001-alpha", "0.11.26101002", "1.0.0", "1.0.0-rc.1"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(false)
     }
   })
@@ -169,7 +169,7 @@ describe("AKM_VERSION_RANGE contract", () => {
 // `check-akm` entry points existed only for these tests.
 describe("checkAkmVersion", () => {
   itPosix("returns ok, logs readiness, and stays silent on stderr for a compatible CLI", () => {
-    const result = runHookSandboxed(["session-start"], { akmVersion: "0.10.26101001" })
+    const result = runHookSandboxed(["session-start"], { akmVersion: "0.10.26101002" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
@@ -178,7 +178,7 @@ describe("checkAkmVersion", () => {
   })
 
   itPosix("accepts 0.10 daily builds at or above the floor, prerelease included", () => {
-    for (const version of ["0.10.26101001", "0.10.26101001-alpha", "0.10.26101101"]) {
+    for (const version of ["0.10.26101002", "0.10.26101002-alpha", "0.10.26101101"]) {
       const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
@@ -206,7 +206,7 @@ describe("checkAkmVersion", () => {
     const tempDir = makeTempDir()
     const localCli = path.join(tempDir, "dist", "cli.js")
     mkdirSync(path.dirname(localCli), { recursive: true })
-    writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.10.26101001')\n")
+    writeFileSync(localCli, "#!/usr/bin/env bun\nif (process.argv.includes('--version')) console.log('akm 0.10.26101002')\n")
 
     const result = runHookSandboxed(["session-start"], {
       akmVersion: null,
@@ -250,15 +250,15 @@ describe("checkAkmVersion", () => {
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("AKM is NOT available")
-    expect(result.stdout).toContain("^0.10.26101001-alpha")
-    expect(result.stdout).toContain("akm-cli@^0.10.26101001-alpha")
+    expect(result.stdout).toContain("^0.10.26101002-alpha")
+    expect(result.stdout).toContain("akm-cli@^0.10.26101002-alpha")
     expect(result.installLog).toBe("")
     // additionalContext reaches the model, which cannot install anything.
     // systemMessage is the channel to the person who can, so it has to carry
     // the concrete command rather than a pointer to the model's context.
     const payload = JSON.parse(result.stdout.trim())
     expect(payload.systemMessage).toContain("AKM is unavailable this session")
-    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.10.26101001-alpha")
+    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.10.26101002-alpha")
   })
 
   itPosix("session-start ships the header and footer on a healthy CLI with a completely quiet stash", () => {
@@ -271,7 +271,7 @@ describe("checkAkmVersion", () => {
     // unreachable on a fresh install. Assert the header actually ships.
     const bundleDir = makeTempDir()
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.10.26101001",
+      akmVersion: "0.10.26101002",
       env: { AKM_BUNDLE_DIR: bundleDir },
     })
     expect(result.exitCode).toBe(0)
@@ -298,7 +298,7 @@ describe("checkAkmVersion", () => {
   itPosix("session-start reports a missing bundle through context and the state log, not stderr", () => {
     const missingBundleDir = path.join(makeTempDir(), "definitely-not-here")
     const result = runHookSandboxed(["session-start"], {
-      akmVersion: "0.10.26101001",
+      akmVersion: "0.10.26101002",
       env: { AKM_BUNDLE_DIR: missingBundleDir },
     })
     expect(result.exitCode).toBe(0)

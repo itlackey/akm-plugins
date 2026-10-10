@@ -566,7 +566,7 @@ describe("Codex hook runtime", () => {
     const payload = expectCodexOutput(runCodexHook("SessionStart", sandbox), "SessionStart")
 
     expect(payload.hookSpecificOutput.additionalContext).toContain("# AKM is NOT available in this session")
-    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.10.26101001-alpha")
+    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.10.26101002-alpha")
     expect(readLines(path.join(sandbox.dataDir, "session.log"))[0]).toContain("akm_missing")
     expectNoClaudeState(sandbox)
   })
@@ -579,7 +579,7 @@ describe("Codex hook runtime", () => {
       `import { appendFileSync } from "node:fs"
 appendFileSync(${JSON.stringify(sandbox.callLog)}, args.join(" ") + "\\n")
 if (args[0] === "--version") {
-  console.log("akm 0.10.26101001")
+  console.log("akm 0.10.26101002")
   process.exit(0)
 }
 console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: { id: "proposal-1", ref: "instructions/use-pnpm" } }))

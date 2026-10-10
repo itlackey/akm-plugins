@@ -32,7 +32,7 @@ function minorLine(version: string): string | null {
   return `${major}.${minor}`
 }
 
-/** `^0.10.26101001-alpha` -> `0.10.26101001-alpha`. The range floor is the minimum compatible CLI version. */
+/** `^0.10.26101002-alpha` -> `0.10.26101002-alpha`. The range floor is the minimum compatible CLI version. */
 function rangeFloor(range: string): string {
   return range.trim().replace(/^[\^~>=v\s]+/, "")
 }
@@ -100,7 +100,7 @@ describe("version policy", () => {
     // future change tightening patch back into lockstep fails here and has to
     // argue with the comment at the top of this file instead of sliding in.
     const floorPatch = rangeFloor(AKM_VERSION_RANGE)
-    for (const candidate of ["0.10.0", "0.10.26101001", "0.10.26101001-alpha"]) {
+    for (const candidate of ["0.10.0", "0.10.26101001", "0.10.26101002-alpha"]) {
       expect(minorLine(candidate)).toBe(minorLine(floorPatch))
     }
     expect(minorLine("0.9.30")).not.toBe(minorLine(floorPatch))
@@ -116,7 +116,8 @@ describe("version policy", () => {
     // ships with a new floor. The 0.10 patch is an 8-digit daily build, so the
     // floor is compared as a number, not as text.
     expect(satisfiesAkmVersionRange("0.10.26101002-alpha")).toBe(true)
-    expect(satisfiesAkmVersionRange("0.10.26101001")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.10.26101002")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.10.26101001")).toBe(false)
     expect(satisfiesAkmVersionRange("0.10.26100901")).toBe(false)
     expect(satisfiesAkmVersionRange("0.9.31-alpha.3")).toBe(false)
     expect(satisfiesAkmVersionRange("0.11.0")).toBe(false)
@@ -182,7 +183,7 @@ describe("version policy", () => {
     expect(next).toBe("0.9.31-alpha.4.202610080512")
     expect(valid(next)).toBe(next)
     // The 0.10 scheme (no timestamp suffix) is the one the range accepts.
-    expect(satisfiesAkmVersionRange(deriveRelease("0.10.26101001-alpha", new Date(Date.UTC(2026, 9, 10)), () => []).version)).toBe(true)
+    expect(satisfiesAkmVersionRange(deriveRelease("0.10.26101002-alpha", new Date(Date.UTC(2026, 9, 11)), () => []).version)).toBe(true)
 
     // Below the stable it precedes, above the akm prerelease it targets, and
     // above the previous next (including the stale 0.8.0-rc.8 on npm today).

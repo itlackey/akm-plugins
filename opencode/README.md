@@ -1,6 +1,6 @@
 # akm-opencode
 
-OpenCode **1.x** plugin for [AKM](https://github.com/itlackey/akm) `0.10.26101001-alpha`. It exposes exactly five public tools and uses lifecycle hooks to bring relevant AKM context into a session. Every AKM call goes through the public `akm` CLI (`--format json`); the plugin imports nothing from `akm-cli` internals. The `akm-cli` dependency is exact-pinned to the tested release, the same pin as `akm-opencode-v2`.
+OpenCode **1.x** plugin for [AKM](https://github.com/itlackey/akm) `0.10.26101002-alpha`. It exposes exactly five public tools and uses lifecycle hooks to bring relevant AKM context into a session. Every AKM call goes through the public `akm` CLI (`--format json`); the plugin imports nothing from `akm-cli` internals. The `akm-cli` dependency is exact-pinned to the tested release, the same pin as `akm-opencode-v2`.
 
 Using OpenCode 2.x? Install [`akm-opencode-v2`](../opencode-v2/README.md) instead. This package's name, entrypoint and single `AkmPlugin` export are unchanged, and `latest` stays on the OpenCode 1 plugin. Tested against OpenCode 1.18.34.
 

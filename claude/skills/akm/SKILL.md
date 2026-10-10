@@ -5,7 +5,7 @@ description: Search, show, and curate AKM concepts, record feedback, and remembe
 
 # AKM
 
-AKM `^0.10.26101001-alpha` exposes exactly five public plugin surfaces. The `/akm-*` slash
+AKM `^0.10.26101002-alpha` exposes exactly five public plugin surfaces. The `/akm-*` slash
 commands exist only in Claude Code; in any other host, such as Codex, run the
 `akm` CLI forms:
 

@@ -111,7 +111,7 @@ describe("AKM 0.9 ref-resolver contract", () => {
   })
 
   test("resolves a task, a workflow and an env file by the ID akm gives them", () => {
-    // Checked against akm-cli 0.10.26101001-alpha: a task is tasks/<id>.yml and its ID drops
+    // Checked against akm-cli 0.10.26101002-alpha: a task is tasks/<id>.yml and its ID drops
     // the extension; a workflow is <id>.md only (the GitHub-shaped .yml workflow
     // was removed in 0.10, so a stray workflows/x.yml names nothing); an env is <name>.env, and `.env` and `default.env` are the default of
     // their directory, env/default or env/<dir>/default. `.yaml` is no task.

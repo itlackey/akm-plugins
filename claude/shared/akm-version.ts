@@ -89,7 +89,7 @@ import { satisfies, valid } from "./vendor-semver"
 // the alpha build the plugins are tested against until the final 0.10 build
 // ships; the floor, OpenCode's exact pin and the Windows CI install then move
 // to that build together. The patch is an 8-digit number, compared numerically.
-export const AKM_VERSION_RANGE = "^0.10.26101001-alpha"
+export const AKM_VERSION_RANGE = "^0.10.26101002-alpha"
 
 /**
  * True when `version` is a valid semver string whose release core
