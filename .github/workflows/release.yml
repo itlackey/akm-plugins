@@ -294,7 +294,8 @@ jobs:
           if [ "${{ steps.derive.outputs.next }}" = "true" ]; then
             # Committed locally and reachable only from the tag; main is not pushed.
             git add opencode/bun.lock
-            git commit -m "chore: next build ${{ steps.derive.outputs.version }}"
+            # Nothing to commit when the branch already carries this version: tag HEAD as it is.
+            git diff --cached --quiet || git commit -m "chore: next build ${{ steps.derive.outputs.version }}"
           elif ! git diff --cached --quiet; then
             git commit -m "chore: bump version to ${{ steps.derive.outputs.version }}"
             git push
