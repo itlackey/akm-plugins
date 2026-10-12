@@ -5,7 +5,7 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { AKM_VERSION_RANGE as AKM_REQUIRED_RANGE, satisfiesAkmVersionRange } from "../shared/akm-version"
+import { AKM_MIN_VERSION, meetsAkmMinVersion } from "../shared/akm-version"
 import { valid } from "../shared/vendor-semver"
 import {
   classifyFeedbackSignal,
@@ -40,10 +40,14 @@ const COMMAND = POSITIONAL[0] ?? ""
 const MODE = POSITIONAL[1] ?? ""
 const HARNESS_ARG = process.argv.find((arg) => arg.startsWith("--harness="))?.slice("--harness=".length)
 
-// AKM_REQUIRED_RANGE is the single shared version contract imported from
+// AKM_MIN_VERSION is the single shared version floor imported from
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
-// is a separate concern: the single package range passed to Bun/npm.
-const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? "akm-cli@^0.10.261001-beta"
+// is a separate concern: the package range passed to Bun/npm. `-0` is the lowest
+// prerelease of the floor, so the range admits the floor's own prereleases
+// (0.10.261001-beta) and every later release; npm `latest` may still be older.
+const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@>=${AKM_MIN_VERSION}-0`
+// The ref contains `>`, so it is double-quoted (works in sh, cmd and PowerShell) wherever it is shown as a command.
+const AKM_INSTALL_COMMAND = (manager: "bun" | "npm") => `${manager} install -g "${AKM_PACKAGE_REF}"`
 // Claude Code unless a host says otherwise. The Codex manifest's hook commands
 // (.codex-plugin/plugin.json) run this same hook as Codex: on POSIX with
 // AKM_PLUGIN_HARNESS=codex and AKM_PLUGIN_STATE_DIR set in front of the command,
@@ -596,7 +600,7 @@ function akmVersionSatisfies(commandSpec: AkmCommandSpec): { ok: boolean; versio
   const version = readAkmVersion(commandSpec)
   if (!version) return { ok: false, version: "unknown", error: "unable to parse akm version" }
   if (!valid(version)) return { ok: false, version, error: "akm version is not valid semver" }
-  if (!satisfiesAkmVersionRange(version)) return { ok: false, version, error: `akm version does not satisfy ${AKM_REQUIRED_RANGE}` }
+  if (!meetsAkmMinVersion(version)) return { ok: false, version, error: `akm version is below ${AKM_MIN_VERSION}` }
   return { ok: true, version }
 }
 
@@ -1085,10 +1089,10 @@ function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; pa
       appendLog(SESSION_LOG, "akm_ready", "path", existing.displayPath, current.version)
       return { ok: true, version: current.version, path: existing.displayPath }
     }
-    appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing.displayPath, current.version, AKM_REQUIRED_RANGE, current.error ?? "out_of_range")
+    appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing.displayPath, current.version, AKM_MIN_VERSION, current.error ?? "below_floor")
     return { ok: false, reason: "version-mismatch", version: current.version, path: existing.displayPath }
   }
-  appendLog(SESSION_LOG, "akm_missing", "path", AKM_PACKAGE_REF, AKM_REQUIRED_RANGE)
+  appendLog(SESSION_LOG, "akm_missing", "path", AKM_PACKAGE_REF, AKM_MIN_VERSION)
   return { ok: false, reason: "not-installed" }
 }
 
@@ -1363,10 +1367,6 @@ function gatherSessionStartWarnings(bundleRoots: readonly string[]): string[] {
     )
     appendLog(SESSION_LOG, "bundle_missing", bundleDir ?? "(unconfigured)")
   }
-
-  // No prerelease warning here: since the range uses a stable-only caret
-  // floor, no prerelease build can pass the version gate, so a passing
-  // versionCheck is always a stable release.
 
   return warnings
 }
@@ -1752,20 +1752,40 @@ async function sessionStart(): Promise<string> {
     // won't keep trying to call it) and can relay the install hint to the
     // user. We intentionally do NOT crash the hook — the rest of Claude Code
     // stays fully functional.
+    const install = [`  ${AKM_INSTALL_COMMAND("bun")}`, `  ${AKM_INSTALL_COMMAND("npm")}`]
+    const reason = versionCheck.reason ?? "unknown"
+    if (reason === "version-mismatch") {
+      // Installed but below the floor (or its version could not be read). The
+      // hook's own calls would fail against an older akm (`curate --detail agent`
+      // is rejected before 0.10), so the hook-driven features stay off for the
+      // session. The agent is NOT told to avoid akm entirely: a plain
+      // `akm curate/show` still works on an older CLI, and a blanket ban
+      // silently disabled akm for every agent when the installed version moved.
+      return emitHookContext(
+        "SessionStart",
+        [
+          "# AKM plugin features are off in this session: akm is too old",
+          "",
+          `Installed akm: ${versionCheck.version ?? "unknown"} (${versionCheck.path ?? "akm"}). The plugin needs ${AKM_MIN_VERSION} or newer, so automatic recall and session hooks are disabled.`,
+          "You may still run `akm` commands yourself, but flags and output the plugin documents may not work on this version. Ask the user to upgrade akm-cli:",
+          ...install,
+        ].join("\n"),
+        `AKM ${versionCheck.version ?? "unknown"} is older than the required ${AKM_MIN_VERSION}, so the AKM plugin is off this session. Upgrade with: ${AKM_INSTALL_COMMAND("bun")}`,
+      )
+    }
     return emitHookContext(
       "SessionStart",
       [
         "# AKM is NOT available in this session",
         "",
-        `The akm CLI is missing or does not satisfy \`${AKM_REQUIRED_RANGE}\` (reason: ${versionCheck.reason ?? "unknown"}).`,
-        "Do not call any `akm` Bash command. Ask the user to install or upgrade akm-cli manually:",
-        `  bun install -g ${AKM_PACKAGE_REF}`,
-        `  npm install -g ${AKM_PACKAGE_REF}`,
+        `The akm CLI is not installed (reason: ${reason}). The plugin needs ${AKM_MIN_VERSION} or newer.`,
+        "Do not call any `akm` Bash command. Ask the user to install akm-cli manually:",
+        ...install,
       ].join("\n"),
       // The model cannot install anything; the user can. Give the human the
       // one command they need instead of leaving the whole failure inside the
       // model's context window.
-      `AKM is unavailable this session (${versionCheck.reason ?? "unknown"}). Install it with: bun install -g ${AKM_PACKAGE_REF}`,
+      `AKM is unavailable this session (${reason}). Install it with: ${AKM_INSTALL_COMMAND("bun")}`,
     )
   }
   if (!akmAvailable()) return ""
@@ -1950,13 +1970,12 @@ function extractSession(): string {
   //
   // The version floor in checkAkmVersion() does NOT protect this literal, and
   // the reporting machine is the proof: plugin 0.9.1 declared
-  // AKM_VERSION_RANGE "^0.9.0", akm-cli was 0.9.10, and `^0.9.0` accepts
+  // AKM_VERSION_RANGE "^0.9.0", akm-cli was 0.9.10, and `^0.9.0` accepted
   // 0.9.10 — so the check ran, passed, and reported a healthy pairing while
   // 0.9.2's claude-code -> claude rename had already broken every extraction.
   // Raising the floor in a NEW release cannot help, because an already-
-  // installed plugin carries its OWN old range; a caret range inside 0.9.x has
-  // no ceiling below 0.10.0, so any behavioural change in a 0.9.x patch passes
-  // it. What actually surfaces a rename is the ok:false block this spawn
+  // installed plugin carries its OWN old floor; a version gate cannot see a
+  // behavioural change in a newer akm. What actually surfaces a rename is the ok:false block this spawn
   // writes to EXTRACT_LOG, reported at the next SessionStart by
   // lastExtractFailureWarning() — which is why that message must name the real
   // warning (#107) rather than guess a cause.
