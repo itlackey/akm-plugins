@@ -566,7 +566,7 @@ describe("Codex hook runtime", () => {
     const payload = expectCodexOutput(runCodexHook("SessionStart", sandbox), "SessionStart")
 
     expect(payload.hookSpecificOutput.additionalContext).toContain("# AKM is NOT available in this session")
-    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.10.261001-beta")
+    expect(payload.systemMessage).toContain("bun install -g \"akm-cli@>=0.10.261001-0\"")
     expect(readLines(path.join(sandbox.dataDir, "session.log"))[0]).toContain("akm_missing")
     expectNoClaudeState(sandbox)
   })

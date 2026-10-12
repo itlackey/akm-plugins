@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI compatibility floor these plugins target. For akm 0.10+ (e.g. 0.10.261001-beta, already on npm) the plugins release as 0.10.<UTC YYMM><NN>[-stage], NN being the next free release number of the current UTC month among the published 6-digit akm-opencode versions, and the stage (alpha, beta or rc) copied from akm_version; a stage makes it a `next` release. A retired 8-digit daily akm version (0.10.YYMMDDNN) is rejected. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
+        description: "The exact akm CLI version these plugins target (at or above the Claude minimum, AKM_MIN_VERSION). For akm 0.10+ (e.g. 0.10.261001-beta, already on npm) the plugins release as 0.10.<UTC YYMM><NN>[-stage], NN being the next free release number of the current UTC month among the published 6-digit akm-opencode versions, and the stage (alpha, beta or rc) copied from akm_version; a stage makes it a `next` release. A retired 8-digit daily akm version (0.10.YYMMDDNN) is rejected. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
         required: true
         type: string
 
@@ -125,16 +125,14 @@ jobs:
 
       # Four rules, all checked before the tag exists (npm would otherwise be
       # the first thing to reject a bad version, by which point the tag is
-      # already pushed): the supplied akm version must be plain semver and
-      # exactly match the Claude compatibility floor, both OpenCode packages must
-      # exact-pin that same version, and the derived version must sort ABOVE whatever npm
-      # currently calls `latest`.
+      # already pushed): the supplied akm version must be plain semver and at or
+      # above the Claude minimum (AKM_MIN_VERSION; a later minor is fine), both
+      # OpenCode packages must exact-pin that same version, and the derived version
+      # must sort ABOVE whatever npm currently calls `latest`.
       #
-      # A `next` release changes three of them: the akm prerelease must only
-      # share the floor's minor line and not fall below its patch (the floor
-      # stays at the stable line), the pin is set in the build and not read
-      # from main, so instead akm-cli@<akm_version> must already be on npm, and
-      # the version must sort above whatever npm calls `next`.
+      # A `next` release changes two of them: the pin is set in the build and not
+      # read from main, so instead akm-cli@<akm_version> must already be on npm,
+      # and the version must sort above whatever npm calls `next`.
       - name: Validate release version
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
@@ -151,9 +149,9 @@ jobs:
           const source = fs.readFileSync('claude/shared/akm-version.ts', 'utf8')
           const opencodePackage = JSON.parse(fs.readFileSync('opencode/package.json', 'utf8'))
           const opencodeV2Package = JSON.parse(fs.readFileSync('opencode-v2/package.json', 'utf8'))
-          const range = /AKM_VERSION_RANGE\s*=\s*"([^"]+)"/.exec(source)?.[1]
-          if (!range) {
-            console.error('Could not read AKM_VERSION_RANGE from claude/shared/akm-version.ts')
+          const minVersion = /AKM_MIN_VERSION\s*=\s*"([^"]+)"/.exec(source)?.[1]
+          if (!minVersion) {
+            console.error('Could not read AKM_MIN_VERSION from claude/shared/akm-version.ts')
             process.exit(1)
           }
 
@@ -171,32 +169,27 @@ jobs:
             process.exit(1)
           }
 
-          const floor = SEMVER.exec(range.replace(/^[\^~>=v\s]+/, ''))
+          const floor = SEMVER.exec(minVersion)
           if (!floor) {
-            console.error(`AKM_VERSION_RANGE "${range}" has no parseable floor; expected a caret range like ^0.9.0.`)
+            console.error(`AKM_MIN_VERSION "${minVersion}" is not valid semver.`)
             process.exit(1)
           }
 
-          const floorVersion = `${floor[1]}.${floor[2]}.${floor[3]}`
-          if (next) {
-            // Claude's range check judges the release core, so an akm prerelease
-            // satisfies ^0.9.30 exactly when its core does.
-            if (parsedAkm[1] !== floor[1] || parsedAkm[2] !== floor[2] || Number(parsedAkm[3]) < Number(floor[3])) {
-              console.error(`akm_version "${akmVersion}" is outside AKM_VERSION_RANGE ${range}: its release core must be ${floor[1]}.${floor[2]}.${floor[3]} or later on the ${floor[1]}.${floor[2]} line.`)
-              process.exit(1)
-            }
-          } else if (akmVersion !== floorVersion) {
-            console.error(`akm_version "${akmVersion}" does not equal AKM_VERSION_RANGE floor "${floorVersion}" (${range}).`)
-            console.error('Move AKM_VERSION_RANGE first and validate that exact CLI version before publishing.')
+          // Claude's check is a floor on the release core (prerelease ignored), so
+          // an akm_version passes exactly when its core is at or above the floor.
+          // A later minor is fine; only a build below the floor is refused. The
+          // OpenCode pin below is exact, so it moves with akm_version, not the floor.
+          const belowFloor = [1, 2, 3].map((i) => Number(parsedAkm[i]) - Number(floor[i])).find((diff) => diff !== 0) < 0
+          if (belowFloor) {
+            console.error(`akm_version "${akmVersion}" is below AKM_MIN_VERSION ${minVersion}: its release core must be ${floor[1]}.${floor[2]}.${floor[3]} or later.`)
             process.exit(1)
           }
 
           // Both OpenCode plugins run the akm-cli they declare, against the user's
-          // shared AKM databases. A caret range would let one plugin release run
-          // an untested CLI on some machines, and let the two plugins disagree
-          // about which CLI owns those databases, so both exact-pin the tested
-          // floor. Claude resolves its CLI through public verbs and deliberately
-          // retains the stable caret range.
+          // shared AKM databases. A range would let one plugin release run an
+          // untested CLI on some machines, and let the two plugins disagree about
+          // which CLI owns those databases, so both exact-pin the tested akm_version.
+          // Claude resolves its CLI through public verbs and only enforces the floor.
           const opencodeAkm = opencodePackage.dependencies?.['akm-cli']
           const opencodeV2Akm = opencodeV2Package.dependencies?.['akm-cli']
           if (next) {
@@ -273,7 +266,7 @@ jobs:
             console.log(`${version} sorts above the published ${channel} ${published}.`)
           }
 
-          console.log(`Version ${version} is valid semver; Claude targets ${range} and both OpenCode packages exact-pin akm-cli ${next ? akmVersion : opencodeAkm}.`)
+          console.log(`Version ${version} is valid semver; Claude requires akm >= ${minVersion} and both OpenCode packages exact-pin akm-cli ${next ? akmVersion : opencodeAkm}.`)
           EOF
 
       - name: Bump versions
@@ -302,7 +295,7 @@ jobs:
 
       # `next` only: both OpenCode builds pin the exact akm prerelease. The pins
       # and the regenerated lockfiles live in the tagged commit alone, never on
-      # main, where the pins stay at the floor.
+      # main, where the pins stay on the last stable build.
       - name: Pin akm-cli to the akm prerelease
         if: ${{ steps.derive.outputs.next == 'true' }}
         env:
