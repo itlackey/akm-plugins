@@ -15,8 +15,8 @@
 | `ref-extraction.test.ts` | `extractAkmRefs()` pattern matching: all ref shapes, edge cases |
 | `ref-resolver-contract.test.ts` | Ref resolver contract: resolve + feedback integration |
 | `opencode-eval-harness.test.ts` | Eval harness fixtures and score thresholds |
-| `release-version.test.ts` | `scripts/release-version.ts`: the plugin release version derived from the akm version (0.10 daily builds `0.10.YYMMDDNN[-stage]` with their own counter; the 0.9 `<akm_version><yyyymmddhhmm>` scheme), validation, and that no derived version is a 20-digit patch |
-| `akm-version-check.test.ts` | `satisfiesAkmVersionRange()` against the `^0.10.26101002-alpha` contract: judges the release core, so it accepts 0.10 daily builds (8-digit patch) at or above the floor (prereleases included) and rejects releases below the floor or outside the line. |
+| `release-version.test.ts` | `scripts/release-version.ts`: the plugin release version derived from the akm version (0.10 monthly release numbers `0.10.YYMMNN[-stage]` with their own counter, retired 8-digit daily builds ignored and rejected, and the pinned ordering below them; the 0.9 `<akm_version><yyyymmddhhmm>` scheme), validation, and that no derived version is an 18-digit patch |
+| `akm-version-check.test.ts` | `satisfiesAkmVersionRange()` against the `^0.10.261001-beta` contract: judges the release core, so it accepts 0.10 monthly builds (6-digit patch) at or above the floor (prereleases included, and the retired 8-digit daily alphas) and rejects releases below the floor or outside the line. |
 
 ## AKM CLI resolution (audit #19)
 
