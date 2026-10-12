@@ -44,7 +44,6 @@ const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
   { file: "claude/package.json", read: () => readJson("claude/package.json").version },
   { file: "claude/.claude-plugin/plugin.json", read: () => readJson("claude/.claude-plugin/plugin.json").version },
   { file: "claude/.codex-plugin/plugin.json", read: () => readJson("claude/.codex-plugin/plugin.json").version },
-  { file: ".claude-plugin/marketplace.json", read: () => readJson(".claude-plugin/marketplace.json").plugins[0].version },
 ]
 
 describe("version policy", () => {

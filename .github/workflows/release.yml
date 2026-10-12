@@ -294,10 +294,6 @@ jobs:
           updateJsonFile('claude/package.json', (pkg) => ({ ...pkg, version }))
           updateJsonFile('claude/.claude-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
           updateJsonFile('claude/.codex-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
-          updateJsonFile('.claude-plugin/marketplace.json', (marketplace) => ({
-            ...marketplace,
-            plugins: marketplace.plugins.map((plugin, index) => index === 0 ? { ...plugin, version } : plugin),
-          }))
           EOF
 
       # `next` only: both OpenCode builds pin the exact akm prerelease. The pins
@@ -317,10 +313,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add claude/package.json opencode/package.json opencode-v2/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json .claude-plugin/marketplace.json
+          git add claude/package.json opencode/package.json opencode-v2/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json
 
           if [ "${{ steps.derive.outputs.next }}" = "true" ]; then
-            # Committed locally and reachable only from the tag; main is not pushed.
+            # Committed locally and reachable only from the tag and the `next` branch; main is not pushed.
             git add opencode/bun.lock opencode-v2/bun.lock
             # Nothing to commit when the branch already carries this version: tag HEAD as it is.
             git diff --cached --quiet || git commit -m "chore: next build ${{ steps.derive.outputs.version }}"
@@ -335,6 +331,19 @@ jobs:
             git tag "v${{ steps.derive.outputs.version }}"
             git push origin "v${{ steps.derive.outputs.version }}"
             echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # `next` only: move the `next` branch to the tagged commit. A marketplace pinned to a
+          # tag never changes, so `claude plugin update` and `codex plugin marketplace upgrade`
+          # find nothing; one that follows a branch sees each new commit. Users on the prerelease
+          # channel follow `next` (Claude `#next`, Codex `--ref next`) and stable users the default
+          # branch. Force, because every `next` build commit hangs off the release branch and the
+          # previous one is not its ancestor. The tag's own commit, so a re-run of an existing tag
+          # puts `next` on that tag and not on a fresh rebuild.
+          if [ "${{ steps.derive.outputs.next }}" = "true" ]; then
+            git fetch --quiet --depth=1 origin "refs/tags/v${{ steps.derive.outputs.version }}"
+            SHA="$(git rev-parse FETCH_HEAD)"
+            git push --force origin "$SHA:refs/heads/next"
           fi
 
           echo "tag=v${{ steps.derive.outputs.version }}" >> "$GITHUB_OUTPUT"
