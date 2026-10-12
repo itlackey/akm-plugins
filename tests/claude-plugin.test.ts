@@ -186,7 +186,8 @@ describe("Claude plugin metadata", () => {
     expect(plugin.hooks.SessionEnd).toBeDefined()
     expect(plugin.userConfig.auto_learning.default).toBe(true)
     expect(plugin.version).toBe(pkg.version)
-    expect(marketplace.plugins[0].version).toBe(plugin.version)
+    // plugin.json's version wins; a copy in the marketplace entry would only drift.
+    expect(marketplace.plugins[0].version).toBeUndefined()
 
     // Every handler is exec form (`bun` + args, no shell: see hook-commands.test.ts), so what a handler runs is its
     // command and arguments taken together.

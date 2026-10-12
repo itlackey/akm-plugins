@@ -9,19 +9,21 @@ Using OpenCode 1.x? Install [`akm-opencode`](../opencode/README.md) instead. Ins
 | OpenCode | 1.x (tested 1.18.34) | 2.x (built and loaded against 2.0.26) |
 | Plugin API | `@opencode-ai/plugin` 1.x | `@opencode/plugin` 2.0.26 (Effect entrypoint) |
 | `akm-cli` | `0.10.26101002-alpha`, exact | `0.10.26101002-alpha`, exact |
-| Config key | `"plugin": ["akm-opencode"]` | `"plugins": ["akm-opencode-v2"]` |
+| Config key | `"plugin": ["akm-opencode"]` | `"plugins": ["akm-opencode-v2@next"]` |
 
 This package depends on neither `opencode-ai` nor `@opencode/cli`. Installing it never installs or replaces your `opencode` binary.
 
 ## Installation
 
-Add the plugin to your OpenCode 2 configuration (the `plugins` array in `opencode.json`, or run `opencode plugin add akm-opencode-v2`):
+Add the plugin to your OpenCode 2 configuration (the `plugins` array in `opencode.json`, or run `opencode plugin add akm-opencode-v2@next`):
 
 ```json
 {
-  "plugins": ["akm-opencode-v2"]
+  "plugins": ["akm-opencode-v2@next"]
 }
 ```
+
+Use `@next` (the prerelease channel) or an exact version such as `akm-opencode-v2@0.10.261002-beta`, not the bare name. OpenCode 2 resolves a bare name to `*`, which excludes prereleases, and every published `akm-opencode-v2` version is a prerelease, so `akm-opencode-v2` alone fails with `No matching version found for akm-opencode-v2@*`.
 
 `akm-cli@0.10.26101002-alpha` is installed with the plugin and is the `akm` it runs (set `AKM_OPENCODE_CLI` to an absolute path to use another executable). `@opencode/plugin` and `effect` are peer dependencies: OpenCode supplies its own copies at load time, so they are external to the published bundle.
 
@@ -87,7 +89,7 @@ Differences from V1 in general: V1 awaits some hooks synchronously; V2's helpers
 
 ## Compatibility and updating
 
-Both plugins pin the same `akm-cli` and use only its public CLI, against the same AKM databases. Update order: install or upgrade `akm-cli` first (or let the plugin's dependency do it), then the plugin matching your OpenCode major. A new `akm-opencode-v2` release never changes `akm-opencode`'s default export or `latest` tag, and vice versa. Moving from OpenCode 1 to 2 means replacing `akm-opencode` with `akm-opencode-v2` in the new host's configuration; AKM data is untouched.
+Both plugins pin the same `akm-cli` and use only its public CLI, against the same AKM databases. Update order: install or upgrade `akm-cli` first (or let the plugin's dependency do it), then the plugin matching your OpenCode major. To update `akm-opencode-v2`, run `opencode plugin check`, then `opencode plugin update`, then restart OpenCode. A tag spec such as `@next` is never re-resolved on restart, so a restart alone does not update it; `plugin update` installs the new build into a new cache folder and leaves the old folders behind; and `plugin list` / `plugin check` print "No plugins found" until the service has loaded its plugins after a restart. A new `akm-opencode-v2` release never changes `akm-opencode`'s default export or `latest` tag, and vice versa. Moving from OpenCode 1 to 2 means replacing `akm-opencode` with `akm-opencode-v2` in the new host's configuration; AKM data is untouched.
 
 ### Verification receipt
 

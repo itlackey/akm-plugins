@@ -21,6 +21,8 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
+For the prerelease channel add the marketplace from the `next` branch instead: `claude plugin marketplace add itlackey/akm-plugins@next` (or `"ref": "next"` and `"autoUpdate": true` in the `akm-plugins` entry of `extraKnownMarketplaces`; see the [repo README](../README.md#updating)). The default branch is stable. Run `/reload-plugins` in a running session after an update.
+
 The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and be `0.10.261001` or newer (the plugins pass `--detail agent`, which akm 0.9 rejects). Only an akm below that minimum is refused; any later release, including a later minor such as 0.11, passes, and the check compares `major.minor.patch` only, so `0.10.261001-beta` and `0.10.261102-rc` pass. The session-start hook reports a degraded status when either dependency is unavailable (for a too-old akm it names the installed version, the minimum and the upgrade command, turns the hook-driven features off, and does not forbid running `akm` yourself) and does not install software automatically. Claude Code must be 2.1.139 or newer, the first release that can start a hook without a shell (see [Windows](#windows) for why that matters). On Windows, neither Git for Windows nor WSL is needed.
 
 ## Slash Commands
@@ -78,6 +80,8 @@ The same directory is also a Codex plugin: `.codex-plugin/plugin.json` is its Co
 codex plugin marketplace add itlackey/akm-plugins
 codex plugin add akm@akm-plugins
 ```
+
+For the prerelease channel, add the marketplace with `--ref next`: `codex plugin marketplace add itlackey/akm-plugins --ref next`.
 
 Bun 1.0 or newer and AKM 0.10.261001 or newer must be on `PATH`, as [above](#installation); nothing installs them for you. Codex skips plugin hooks until you review and trust them: run `/hooks` in the Codex CLI and trust the two AKM hooks. Codex asks again when a plugin update changes a hook.
 

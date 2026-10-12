@@ -45,15 +45,19 @@ There is one plugin per OpenCode major. Install only the one that matches your O
 }
 ```
 
+The bare name resolves to the `latest` tag, which is still a stable 0.9 build. For the AKM 0.10 plugin use `"akm-opencode@next"` (the prerelease channel) or an exact version such as `"akm-opencode@0.10.261002-beta"`.
+
 It also uses OpenCode lifecycle hooks to inject curated context, preserve it through compaction, record usage feedback, and capture useful session memories. See [opencode/README.md](./opencode/README.md) for details.
 
-**OpenCode 2.x** (built against `@opencode/plugin` 2.0.26): add `akm-opencode-v2`:
+**OpenCode 2.x** (built against `@opencode/plugin` 2.0.26): add `akm-opencode-v2@next`:
 
 ```json
 {
-  "plugins": ["akm-opencode-v2"]
+  "plugins": ["akm-opencode-v2@next"]
 }
 ```
+
+Do not use the bare name `akm-opencode-v2`: OpenCode 2 resolves it to `*`, which excludes prereleases, and every published `akm-opencode-v2` version is a prerelease, so the install fails with `No matching version found for akm-opencode-v2@*`. Use `@next` (the prerelease channel) or an exact version such as `akm-opencode-v2@0.10.261002-beta`; `opencode plugin add akm-opencode-v2@next` does the same from the command line.
 
 It registers the same five tools, injects recall into the model request, and extracts finished sessions through `akm proposal extract`. See [opencode-v2/README.md](./opencode-v2/README.md) for the hook mapping and what is not ported from V1.
 
@@ -75,7 +79,26 @@ claude plugin marketplace add itlackey/akm-plugins
 claude plugin install akm@akm-plugins
 ```
 
-Claude receives the five slash commands, an AKM skill, and lifecycle hooks for scoped curation, feedback, and memory capture. See [claude/README.md](./claude/README.md) for details. The hooks need Claude Code 2.1.139 or newer and Bun on `PATH`; on Windows that means `bun.exe`, and neither Git for Windows nor WSL ([details](./claude/README.md#windows)).
+To follow the prerelease channel instead, add the marketplace from the `next` branch, which each prerelease moves to its tagged commit:
+
+```sh
+claude plugin marketplace add itlackey/akm-plugins@next
+```
+
+Or set it in `settings.json` so it updates by itself:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "akm-plugins": {
+      "source": { "source": "github", "repo": "itlackey/akm-plugins", "ref": "next" },
+      "autoUpdate": true
+    }
+  }
+}
+```
+
+The default branch is the stable channel. Claude receives the five slash commands, an AKM skill, and lifecycle hooks for scoped curation, feedback, and memory capture. See [claude/README.md](./claude/README.md) for details. The hooks need Claude Code 2.1.139 or newer and Bun on `PATH`; on Windows that means `bun.exe`, and neither Git for Windows nor WSL ([details](./claude/README.md#windows)).
 
 ## Codex
 
@@ -86,6 +109,8 @@ codex plugin marketplace add itlackey/akm-plugins
 codex plugin add akm@akm-plugins
 ```
 
+For the prerelease channel, add the marketplace from the `next` branch (`codex plugin marketplace add itlackey/akm-plugins --ref next`); the default branch is stable.
+
 The Codex plugin is the same [`claude/`](./claude) directory with a second manifest, `.codex-plugin/plugin.json`, listed in [`.agents/plugins/marketplace.json`](./.agents/plugins/marketplace.json). Codex receives the AKM skill, which drives the `akm` CLI directly; the five commands, which Codex converts into skills when it installs the plugin; and two hooks: `SessionStart` injects the AKM primer and checks the CLI version, and `UserPromptSubmit` curates context for each prompt. The Claude plugin's other hooks (session extraction, tool and subagent observations) are not part of it, and neither is tool feedback: Codex's `PostToolUse` reports a Bash command's output but no exit status, so a failed `akm` command could not be told from a successful one, and the plugin submits no feedback under Codex.
 
 Codex does not run plugin hooks until you review and trust them: open `/hooks` in the Codex CLI and trust the two AKM hooks. See [claude/README.md](./claude/README.md#codex) for details. On Windows the hooks run through PowerShell with Bun on `PATH` (the manifest's `commandWindows`); [claude/README.md](./claude/README.md#windows) says what that needs and what is tested.
@@ -94,12 +119,14 @@ Codex does not run plugin hooks until you review and trust them: open `/hooks` i
 
 From akm 0.10, run `akm upgrade`. After it updates the CLI, it updates the akm plugin of each harness it finds: Claude Code and Codex when the `akm-plugins` marketplace is configured and the plugin is installed, and OpenCode when `akm-opencode` is cached (deferred while OpenCode is running). It only updates; it never installs a plugin, and `akm upgrade --check` reports what is pending without changing anything. With the OpenCode plugin present it also moves the CLI only to the `akm-cli` version `akm-opencode@latest` pins. In a headless container, run `akm upgrade -q` from the entrypoint; Codex hooks still need their one-time trust entries baked into `~/.codex/config.toml` (see the `akm upgrade` entry in the akm CLI reference).
 
+Each prerelease (`next`) moves the repo's `next` branch to its tagged commit, so a marketplace that follows `next` sees every prerelease and one that follows the default branch sees stable releases only. The marketplaces do not pin a tag: a tag never moves, so there would be nothing for an update to find. Updates are therefore `akm upgrade`, Claude Code's auto-update, or the commands below.
+
 To update by hand, or with an akm older than 0.10:
 
-- **Claude Code** does not auto-update third-party marketplaces by default. Turn it on in `/plugin` → Marketplaces → `akm-plugins` → Enable auto-update, or add `"autoUpdate": true` beside `source` in the `akm-plugins` entry of `extraKnownMarketplaces` in `settings.json`. The Claude desktop app starts Claude Code with `DISABLE_AUTOUPDATER=1`, which also switches plugin updates off, so desktop users also need `"env": { "FORCE_AUTOUPDATE_PLUGINS": "1" }` in `settings.json`. To update by hand: `claude plugin marketplace update akm-plugins`, then `claude plugin update akm@akm-plugins`.
+- **Claude Code** does not auto-update third-party marketplaces by default. Turn it on in `/plugin` → Marketplaces → `akm-plugins` → Enable auto-update, or add `"autoUpdate": true` beside `source` in the `akm-plugins` entry of `extraKnownMarketplaces` in `settings.json` (with `"ref": "next"` in `source` for the prerelease channel, see [above](#claude-code)). The Claude desktop app starts Claude Code with `DISABLE_AUTOUPDATER=1`, which also switches plugin updates off, so desktop users also need `"env": { "FORCE_AUTOUPDATE_PLUGINS": "1" }` in `settings.json`. To update by hand: `claude plugin marketplace update akm-plugins`, then `claude plugin update akm@akm-plugins`. A session that is already running needs `/reload-plugins` to pick the update up.
 - **Codex** updates the plugin by itself every time it starts; `codex plugin marketplace upgrade akm-plugins` does it on demand. A release that changes a hook's command shows that hook as modified in `/hooks`, and it does not run until you trust it again.
-- **OpenCode 1** installs `akm-opencode` the first time and never checks for a newer version. To update, close OpenCode, delete `~/.cache/opencode/packages/akm-opencode@latest`, and start OpenCode again.
-- **OpenCode 2** manages its plugins with `opencode plugin check` and `opencode plugin update`. Update `akm-opencode-v2` the same way you would any package plugin; the update order for either major is `akm-cli` first, then the plugin.
+- **OpenCode 1** installs `akm-opencode` the first time and never checks for a newer version. To update, run `akm upgrade --next`, or close OpenCode and install the exact version you want: `opencode plugin akm-opencode@<version> -g -f`, with `<version>` from `npm view akm-opencode dist-tags.latest` (or `dist-tags.next`). It replaces the plugin entry in the global `opencode.json` and installs the version into its own cache directory (`~/.cache/opencode/packages/akm-opencode@<version>`), so nothing has to be deleted by hand; the old version's directory is left behind. Use an exact version: `akm-opencode@latest` or `akm-opencode@next` reuses its cache directory and does not refresh it.
+- **OpenCode 2** manages its plugins with `opencode plugin check` (lists plugins with a newer version) and `opencode plugin update`; then restart OpenCode. A tag spec such as `akm-opencode-v2@next` is never re-resolved on restart, so a restart alone does not update it. `plugin update` installs the new build into a new cache folder and leaves the old folders behind. `plugin list` and `plugin check` print "No plugins found" until the service has loaded its plugins after a restart, so restart OpenCode first if you see that. The update order for either major is `akm-cli` first, then the plugin.
 
 ## Development
 
@@ -131,7 +158,7 @@ Patch divergence is deliberate: a plugin-only fix has to be shippable without wa
 
 Versions must be plain semver (`MAJOR.MINOR.PATCH`, optionally `-prerelease`). A four-component string such as `0.9.30.20260929.1` is not semver and npm rejects it on publish. For dated snapshot builds use a prerelease of the *next* patch — `0.9.31-20260929.1`, which sorts above `0.9.30` and below `0.9.31` — rather than a prerelease of the current one, which would sort *below* the version already published. Snapshots reach users only through an explicit npm dist-tag.
 
-**Prerelease channel (`next`).** When the AKM CLI publishes a prerelease to its npm `next` dist-tag (say `0.9.31-alpha.4`), the release workflow can be run with that as `akm_version`. A prerelease `akm_version` makes it a `next` release: the plugin version is `<akm_version>.<UTC yyyymmddhhmm>` (`0.9.31-alpha.4.202610080512`, which sorts above `0.9.31-alpha.4` and below `0.9.31`), `akm-opencode` and `akm-opencode-v2` are published with `--tag next`, and the GitHub release is marked a prerelease. The `akm-cli@<akm_version>` it names must already be on npm. The OpenCode builds exact-pin that prerelease and regenerate `opencode/bun.lock` and `opencode-v2/bun.lock` against it, but only in the commit the `v<version>` tag points at: nothing is committed to `main`, and the floor (`AKM_MIN_VERSION`, the pin on `main`) does not move. Claude's floor check reads the release core, so an akm prerelease at or above the floor already passes. To follow the channel in OpenCode 1, set `"plugin": ["akm-opencode@next"]` in `opencode.json` (`"plugins": ["akm-opencode-v2@next"]` for OpenCode 2); the `latest` tags stay on the stable line.
+**Prerelease channel (`next`).** When the AKM CLI publishes a prerelease to its npm `next` dist-tag (say `0.9.31-alpha.4`), the release workflow can be run with that as `akm_version`. A prerelease `akm_version` makes it a `next` release: the plugin version is `<akm_version>.<UTC yyyymmddhhmm>` (`0.9.31-alpha.4.202610080512`, which sorts above `0.9.31-alpha.4` and below `0.9.31`), `akm-opencode` and `akm-opencode-v2` are published with `--tag next`, and the GitHub release is marked a prerelease. The `akm-cli@<akm_version>` it names must already be on npm. The OpenCode builds exact-pin that prerelease and regenerate `opencode/bun.lock` and `opencode-v2/bun.lock` against it, but only in the commit the `v<version>` tag points at: nothing is committed to `main`, and the floor (`AKM_MIN_VERSION`, the pin on `main`) does not move. Claude's floor check reads the release core, so an akm prerelease at or above the floor already passes. To follow the channel in OpenCode 1, set `"plugin": ["akm-opencode@next"]` in `opencode.json` (`"plugins": ["akm-opencode-v2@next"]` for OpenCode 2, where the bare name cannot install because every version is a prerelease); the `latest` tags stay on the stable line.
 
 **Monthly release numbers (AKM 0.10 onward).** AKM 0.10 versions its releases as `0.10.YYMMNN` (UTC year, month and the release number within that month, two digits each, `NN` 01 to 99), with `-alpha`, `-beta` or `-rc` for a prerelease and no `.N` ([akm#1089](https://github.com/itlackey/akm/issues/1089)). Every release consumes a new `NN` whatever its stage: `0.10.261001-alpha`, `0.10.261002-beta`, `0.10.261003`. The plugins use the same scheme with their own counter. Run the release workflow with the AKM version they target as `akm_version`, and the plugin version is `0.10.<UTC YYMM><NN>[-stage]`: `NN` is one above the highest 6-digit `akm-opencode` version already on npm for the current UTC month (stage ignored), and the stage is copied from `akm_version`.
 
