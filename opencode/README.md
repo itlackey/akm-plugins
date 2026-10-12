@@ -14,6 +14,8 @@ Add the plugin to `opencode.json`:
 }
 ```
 
+The bare name resolves to the `latest` tag, which is still a stable 0.9 build. For the AKM 0.10 plugin use `"akm-opencode@next"` (the prerelease channel) or an exact version such as `"akm-opencode@0.10.261002-beta"`. To update, run `akm upgrade --next`, or close OpenCode and run `opencode plugin akm-opencode@<version> -g -f` with an exact version (a tag spec like `@next` reuses its cache directory and is not refreshed).
+
 ## Tools
 
 | Tool | Description |
