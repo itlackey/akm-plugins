@@ -1390,7 +1390,7 @@ exit 0
     const quotedLog = shellQuote(invokeLog)
 
     // Fake akm: version/install, index no-op, hints + curated output.
-    // The version MUST satisfy the plugin's required range (^0.10.26101002-alpha)
+    // The version MUST satisfy the plugin's required range (^0.10.261001-beta)
     // so the new SessionStart consent gate treats akm as healthy and proceeds
     // with the normal injected-context flow.
     writeFileSync(

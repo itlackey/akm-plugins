@@ -84,12 +84,21 @@
 
 import { satisfies, valid } from "./vendor-semver"
 
-// The floor is akm 0.10 (daily builds, 0.10.YYMMDDNN[-stage]): the plugins pass
-// `--detail agent`, which akm 0.9 rejects ("Invalid value for --detail"). It is
-// the alpha build the plugins are tested against until the final 0.10 build
-// ships; the floor, OpenCode's exact pin and the Windows CI install then move
-// to that build together. The patch is an 8-digit number, compared numerically.
-export const AKM_VERSION_RANGE = "^0.10.26101002-alpha"
+// The floor is akm 0.10 (monthly release numbers, 0.10.YYMMNN[-stage]): the plugins pass `--detail agent`, which akm 0.9
+// rejects ("Invalid value for --detail"). It is the first release of the new scheme, 0.10.261001-beta (akm#1089).
+//
+// The floor is written with that prerelease tag so it names a version that exists and is the strict-semver floor for
+// every matcher (npm resolves the install ref below from it, which `^0.10.261001` would not while 0.10.261001 itself is
+// unpublished). The gate here drops the tag from the installed version and compares the release core against the floor,
+// and a stable core sorts above its own prerelease, so 0.10.261001-beta, 0.10.261001 and every later 0.10.YYMMNN[-stage]
+// pass; the release workflow's range check reads the floor's core the same way.
+//
+// The retired daily alphas (0.10.YYMMDDNN-alpha, an 8-digit patch) also satisfy this caret range: semver compares the
+// patch numerically, so they sort higher than every 6-digit build. That is accepted, not a bug to fix here; it is pinned
+// in tests/release-version.test.ts and tests/akm-version-check.test.ts.
+//
+// The floor, OpenCode's exact pins and the Windows CI install move to a new build together when the plugins need one.
+export const AKM_VERSION_RANGE = "^0.10.261001-beta"
 
 /**
  * True when `version` is a valid semver string whose release core

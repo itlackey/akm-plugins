@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI compatibility floor these plugins target. For akm 0.10+ (e.g. 0.10.26101001) the plugins release as 0.10.<UTC YYMMDD><NN>, NN being the next free build of the day; a stage (e.g. 0.10.26101001-alpha, already on npm) makes it a `next` release with the same stage. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
+        description: "The exact akm CLI compatibility floor these plugins target. For akm 0.10+ (e.g. 0.10.261001-beta, already on npm) the plugins release as 0.10.<UTC YYMM><NN>[-stage], NN being the next free release number of the current UTC month among the published 6-digit akm-opencode versions, and the stage (alpha, beta or rc) copied from akm_version; a stage makes it a `next` release. A retired 8-digit daily akm version (0.10.YYMMDDNN) is rejected. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
         required: true
         type: string
 
@@ -99,18 +99,20 @@ jobs:
       # silently never become `latest`. Removing the human from the date
       # removes that whole failure class.
       #
-      # akm 0.10 and later (akm#1089): akm versions are daily builds,
-      # 0.10.YYMMDDNN with -alpha/-beta/-rc for a prerelease. The plugins use
-      # the same shape with their own counter: 0.10.<UTC YYMMDD><NN>[-stage],
-      # NN one above the highest akm-opencode build already on npm that day,
-      # the stage copied from akm_version. A stage is a `next` release.
+      # akm 0.10 and later (akm#1089): akm versions are monthly release
+      # numbers, 0.10.YYMMNN with -alpha/-beta/-rc for a prerelease. The
+      # plugins use the same shape with their own counter: 0.10.<UTC YYMM><NN>
+      # [-stage], NN one above the highest 6-digit akm-opencode version already
+      # on npm for the current UTC month (stage ignored, retired 8-digit daily
+      # builds ignored), the stage copied from akm_version. A stage is a `next`
+      # release. A retired 8-digit daily akm_version is rejected.
       #
       # akm 0.9 (the old scheme, still releasable): <akm_version><yyyymmddhhmm>,
       # e.g. akm 0.9.1 at 2026-08-24 20:12 UTC -> 0.9.1202608242012. A
       # prerelease akm_version (0.9.31-alpha.4) is a `next` release instead:
       # <akm_version>.<yyyymmddhhmm>, 0.9.31-alpha.4.202610080512, a valid
-      # semver prerelease. That scheme stops at 0.10: 26101001 followed by 12
-      # digits is 20 digits, above Number.MAX_SAFE_INTEGER, which node-semver
+      # semver prerelease. That scheme stops at 0.10: 261001 followed by 12
+      # digits is 18 digits, above Number.MAX_SAFE_INTEGER, which node-semver
       # rejects.
       #
       # A `next` release publishes under the npm `next` tag, and nothing is
@@ -237,6 +239,15 @@ jobs:
               console.error(`Published version "${published}" is not plain semver; cannot compare. Investigate before releasing.`)
               process.exit(1)
             }
+            // Known, accepted break (akm#1089): the retired daily builds have an 8-digit patch, so every
+            // 6-digit 0.10.YYMMNN version sorts below them. Moving the tag off one of them is the intent.
+            if (prev[1] === parsed[1] && prev[2] === parsed[2] && prev[3].length === 8 && parsed[3].length === 6) {
+              console.log(`Published ${channel} "${published}" is a retired daily build; "${version}" sorts below it by design. Skipping the monotonicity check.`)
+              published = ''
+            }
+          }
+          if (published) {
+            const prev = SEMVER.exec(published)
             const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
             const compare = (a, b) => {
               for (const i of [1, 2, 3]) {

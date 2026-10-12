@@ -125,20 +125,27 @@ exit 0
 }
 
 describe("AKM_VERSION_RANGE contract", () => {
-  it("is a single caret clause anchored at the 0.10.26101002 alpha build", () => {
-    expect(AKM_VERSION_RANGE).toBe("^0.10.26101002-alpha")
+  it("is a single caret clause anchored at the first monthly build, 0.10.261001-beta", () => {
+    expect(AKM_VERSION_RANGE).toBe("^0.10.261001-beta")
   })
 
   it("accepts every build whose release core is in the 0.10 line at or above the floor, prerelease or not", () => {
-    // 0.10 patches are 8-digit daily builds (YYMMDDNN), not small counters.
-    for (const version of ["0.10.26101002", "0.10.26101002-alpha", "0.10.26101002-rc", "0.10.26101003", "0.10.26101101-beta", "0.10.99123199", "0.10.26101002+build.5"]) {
+    // 0.10 patches are 6-digit monthly release numbers (YYMMNN), compared as numbers.
+    for (const version of ["0.10.261001-beta", "0.10.261001", "0.10.261002-rc", "0.10.261003", "0.10.261144", "0.10.261201-alpha", "0.10.270101", "0.10.991299", "0.10.261001+build.5"]) {
+      expect(satisfiesAkmVersionRange(version)).toBe(true)
+    }
+  })
+
+  it("also accepts the retired daily alphas, which sort higher than every monthly build (accepted)", () => {
+    // 0.10.YYMMDDNN has an 8-digit patch, so semver sorts it above any caret floor in the 6-digit scheme (akm#1089).
+    for (const version of ["0.10.26101001-alpha", "0.10.26101002-alpha", "0.10.26101201-alpha"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(true)
     }
   })
 
   it("rejects releases below the floor or outside the 0.10 line, prerelease or not", () => {
     // The plugins pass --detail agent, which akm 0.9 rejects, so every 0.9 release is refused.
-    for (const version of ["0.8.9", "0.9.0", "0.9.30", "0.9.31", "0.9.31-alpha.3", "0.10.0", "0.10.0-beta.1", "0.10.26100901", "0.10.26100999-rc", "0.10.26101001", "0.10.26101001-alpha", "0.11.26101002", "1.0.0", "1.0.0-rc.1"]) {
+    for (const version of ["0.8.9", "0.9.0", "0.9.30", "0.9.31", "0.9.31-alpha.3", "0.10.0", "0.10.0-beta.1", "0.10.260901", "0.10.260999-rc", "0.10.261000", "0.11.261001", "0.11.26101002", "1.0.0", "1.0.0-rc.1"]) {
       expect(satisfiesAkmVersionRange(version)).toBe(false)
     }
   })
@@ -149,8 +156,9 @@ describe("AKM_VERSION_RANGE contract", () => {
     // against ^0.9.16 and disabled akm for the whole session ("version-
     // mismatch") although it is newer than the floor. The gate therefore
     // judges the release core only; floor and ceiling still apply to it.
-    expect(satisfiesAkmVersionRange("0.10.26101002-alpha")).toBe(true)
-    expect(satisfiesAkmVersionRange("0.10.26100901-rc")).toBe(false)
+    expect(satisfiesAkmVersionRange("0.10.261001-beta")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.10.261002-rc")).toBe(true)
+    expect(satisfiesAkmVersionRange("0.10.260901-rc")).toBe(false)
     // The ceiling is the versioning policy (plugin MAJOR.MINOR tracks akm's):
     // a prerelease of the next minor line is that line, refused like 0.11.0
     // itself until a 0.11.x plugin ships with a new floor.
@@ -169,7 +177,7 @@ describe("AKM_VERSION_RANGE contract", () => {
 // `check-akm` entry points existed only for these tests.
 describe("checkAkmVersion", () => {
   itPosix("returns ok, logs readiness, and stays silent on stderr for a compatible CLI", () => {
-    const result = runHookSandboxed(["session-start"], { akmVersion: "0.10.26101002" })
+    const result = runHookSandboxed(["session-start"], { akmVersion: "0.10.261001-beta" })
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     const sessionLog = readLogLines(path.join(result.stateDir, "akm-claude/session.log"))
@@ -177,8 +185,8 @@ describe("checkAkmVersion", () => {
     expect(result.installLog).toBe("")
   })
 
-  itPosix("accepts 0.10 daily builds at or above the floor, prerelease included", () => {
-    for (const version of ["0.10.26101002", "0.10.26101002-alpha", "0.10.26101101"]) {
+  itPosix("accepts 0.10 monthly builds at or above the floor, prerelease included", () => {
+    for (const version of ["0.10.261001-beta", "0.10.261001", "0.10.261002-rc", "0.10.261101"]) {
       const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
@@ -192,7 +200,7 @@ describe("checkAkmVersion", () => {
   })
 
   itPosix("rejects every tested build outside the range", () => {
-    for (const version of ["0.8.3", "0.9.0", "0.9.30", "0.9.31-alpha.3", "0.10.0-beta.1", "0.10.26100901"]) {
+    for (const version of ["0.8.3", "0.9.0", "0.9.30", "0.9.31-alpha.3", "0.10.0-beta.1", "0.10.260901"]) {
       const result = runHookSandboxed(["session-start"], { akmVersion: version })
       expect(result.exitCode).toBe(0)
       expect(result.stderr).toBe("")
@@ -250,15 +258,15 @@ describe("checkAkmVersion", () => {
     expect(result.exitCode).toBe(0)
     expect(result.stderr).toBe("")
     expect(result.stdout).toContain("AKM is NOT available")
-    expect(result.stdout).toContain("^0.10.26101002-alpha")
-    expect(result.stdout).toContain("akm-cli@^0.10.26101002-alpha")
+    expect(result.stdout).toContain("^0.10.261001-beta")
+    expect(result.stdout).toContain("akm-cli@^0.10.261001-beta")
     expect(result.installLog).toBe("")
     // additionalContext reaches the model, which cannot install anything.
     // systemMessage is the channel to the person who can, so it has to carry
     // the concrete command rather than a pointer to the model's context.
     const payload = JSON.parse(result.stdout.trim())
     expect(payload.systemMessage).toContain("AKM is unavailable this session")
-    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.10.26101002-alpha")
+    expect(payload.systemMessage).toContain("bun install -g akm-cli@^0.10.261001-beta")
   })
 
   itPosix("session-start ships the header and footer on a healthy CLI with a completely quiet stash", () => {
