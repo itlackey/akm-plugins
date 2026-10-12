@@ -6,7 +6,8 @@
 
 import { describe, expect, test } from "bun:test"
 
-import { satisfies, valid } from "../claude/shared/vendor-semver"
+import { meetsAkmMinVersion } from "../claude/shared/akm-version"
+import { valid } from "../claude/shared/vendor-semver"
 import { deriveRelease } from "../scripts/release-version"
 
 const at = (iso: string): Date => new Date(iso)
@@ -77,13 +78,13 @@ describe("akm 0.10: monthly release numbers", () => {
     }
   })
 
-  test("a plugin build sorts above every 0.9 plugin build and satisfies a caret floor on its own line", () => {
+  test("a plugin build sorts above every 0.9 plugin build and meets the akm floor", () => {
     const version = derive("0.10.261001", "2026-10-12T04:00:00Z").version
     expect(order(version, "0.9.30202610090106")).toBe(1)
-    expect(satisfies("0.10.261002", "^0.10.261001")).toBe(true)
-    expect(satisfies("0.10.261001", "^0.10.261001")).toBe(true)
-    expect(satisfies("0.10.260901", "^0.10.261001")).toBe(false)
-    expect(satisfies("0.11.270101", "^0.10.261001")).toBe(false)
+    expect(meetsAkmMinVersion("0.10.261002")).toBe(true)
+    expect(meetsAkmMinVersion("0.10.261001")).toBe(true)
+    expect(meetsAkmMinVersion("0.10.260901")).toBe(false)
+    expect(meetsAkmMinVersion("0.11.270101")).toBe(true)
   })
 
   test("KNOWN, ACCEPTED: every monthly build sorts below the retired 8-digit daily alphas (akm#1089)", () => {

@@ -1,9 +1,10 @@
 // Versioning policy: the plugins keep MAJOR.MINOR in sync with the akm CLI
 // line they target, and let PATCH diverge freely inside that minor.
 //
-// The sync point is AKM_VERSION_RANGE in claude/shared/akm-version.ts. On a 0.x
-// version a caret range is exactly a minor line (`^0.10.261001-beta` == `>=0.10.261001-beta <0.11.0`),
-// so "plugins are 0.9.x while akm is 0.9.x" is already what that constant says.
+// The sync point is AKM_MIN_VERSION in claude/shared/akm-version.ts, a minimum
+// akm version. Its MAJOR.MINOR is the akm line the plugins target, so "plugins
+// are 0.10.x while akm is 0.10.x" is what that constant says; the hook itself
+// only refuses an akm BELOW the floor.
 // This file makes the invariant enforced rather than conventional: six version
 // fields, Claude's install ref, and OpenCode's exact package/lockfile pins all
 // restate the same fact by hand, and nothing previously stopped them drifting.
@@ -16,7 +17,7 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 
-import { AKM_VERSION_RANGE, satisfiesAkmVersionRange } from "../claude/shared/akm-version"
+import { AKM_MIN_VERSION, meetsAkmMinVersion } from "../claude/shared/akm-version"
 import { valid } from "../claude/shared/vendor-semver"
 import { deriveRelease } from "../scripts/release-version"
 
@@ -32,11 +33,6 @@ function minorLine(version: string): string | null {
   return `${major}.${minor}`
 }
 
-/** `^0.10.261001-beta` -> `0.10.261001-beta`. The range floor is the minimum compatible CLI version. */
-function rangeFloor(range: string): string {
-  return range.trim().replace(/^[\^~>=v\s]+/, "")
-}
-
 // Every manifest the release workflow stamps with the single version string.
 const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
   { file: "opencode/package.json", read: () => readJson("opencode/package.json").version },
@@ -48,12 +44,11 @@ const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
 ]
 
 describe("version policy", () => {
-  test("the akm range is a caret range, so a minor line is what it pins", () => {
-    // The whole policy rests on `^0.10.261001-beta` meaning ">=0.10.261001-beta <0.11.0". If the range
-    // is ever widened into an OR-list or a bare pin, "MAJOR.MINOR in sync" stops
-    // having a single answer and every assertion below becomes a guess.
-    expect(AKM_VERSION_RANGE).toMatch(/^\^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
-    expect(valid(rangeFloor(AKM_VERSION_RANGE))).not.toBeNull()
+  test("the akm floor is one plain release version", () => {
+    // "MAJOR.MINOR in sync" needs a single answer: a stable x.y.z, no range operators and no prerelease tag
+    // (the check compares the release core, so a tag on the floor would be meaningless).
+    expect(AKM_MIN_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(valid(AKM_MIN_VERSION)).toBe(AKM_MIN_VERSION)
   })
 
   test("every stamped version is plain semver", () => {
@@ -88,7 +83,7 @@ describe("version policy", () => {
   })
 
   test("the plugin minor line matches the akm line the plugins target", () => {
-    const expected = minorLine(rangeFloor(AKM_VERSION_RANGE))
+    const expected = minorLine(AKM_MIN_VERSION)
     expect(expected).not.toBeNull()
     for (const { file, read } of VERSION_FIELDS) {
       expect(`${file}: ${minorLine(read())}`).toBe(`${file}: ${expected}`)
@@ -99,7 +94,7 @@ describe("version policy", () => {
     // Not a drift check — an executable statement of the policy, so that a
     // future change tightening patch back into lockstep fails here and has to
     // argue with the comment at the top of this file instead of sliding in.
-    const floorPatch = rangeFloor(AKM_VERSION_RANGE)
+    const floorPatch = AKM_MIN_VERSION
     for (const candidate of ["0.10.0", "0.10.261001", "0.10.261002-rc"]) {
       expect(minorLine(candidate)).toBe(minorLine(floorPatch))
     }
@@ -107,26 +102,20 @@ describe("version policy", () => {
     expect(minorLine("0.11.0")).not.toBe(minorLine(floorPatch))
   })
 
-  test("the range ceiling is real, and a prerelease is judged by its release core", () => {
-    // claude/shared/akm-version.ts drops a prerelease tag before matching, so a
-    // newer 0.9.x build is never refused for being a prerelease — 0.9.17-alpha.3
-    // against ^0.9.16 used to disable akm for whole sessions. The ceiling is
-    // this file's policy: 0.11.0-beta.1 is the next minor line, on 0.x the next
-    // plugin line, so it is refused exactly like 0.11.0 until a 0.11.x plugin
-    // ships with a new floor. The 0.10 patch is a 6-digit monthly release number
-    // (YYMMNN), so the floor is compared as a number, not as text. The floor's own
-    // prerelease tag does not exclude 0.10.261001-beta or its stable core. The
-    // retired 8-digit daily alphas compare numerically higher and so also pass;
-    // that is accepted (akm#1089, tests/release-version.test.ts).
-    expect(satisfiesAkmVersionRange("0.10.261001-beta")).toBe(true)
-    expect(satisfiesAkmVersionRange("0.10.261001")).toBe(true)
-    expect(satisfiesAkmVersionRange("0.10.261144")).toBe(true)
-    expect(satisfiesAkmVersionRange("0.10.26101002-alpha")).toBe(true)
-    expect(satisfiesAkmVersionRange("0.10.261000")).toBe(false)
-    expect(satisfiesAkmVersionRange("0.10.260901")).toBe(false)
-    expect(satisfiesAkmVersionRange("0.9.31-alpha.3")).toBe(false)
-    expect(satisfiesAkmVersionRange("0.11.0")).toBe(false)
-    expect(satisfiesAkmVersionRange("0.11.0-beta.1")).toBe(false)
+  test("the floor is a minimum: only a build below it is refused, and a prerelease is judged by its release core", () => {
+    // claude/shared/akm-version.ts drops a prerelease tag before comparing, so a
+    // newer build is never refused for being a prerelease, and there is no ceiling:
+    // the next minor line (0.11) and later majors pass until the floor is raised.
+    // The 0.10 patch is a 6-digit monthly release number (YYMMNN), so the floor is
+    // compared as a number, not as text. The retired 8-digit daily alphas compare
+    // numerically higher and so also pass; that is accepted (akm#1089,
+    // tests/release-version.test.ts).
+    for (const version of ["0.10.261001-beta", "0.10.261001", "0.10.261144", "0.10.26101002-alpha", "0.11.0", "0.11.0-beta.1", "1.0.0"]) {
+      expect(`${version}: ${meetsAkmMinVersion(version)}`).toBe(`${version}: true`)
+    }
+    for (const version of ["0.10.261000", "0.10.260901", "0.9.31-alpha.3", "0.9.99"]) {
+      expect(`${version}: ${meetsAkmMinVersion(version)}`).toBe(`${version}: false`)
+    }
   })
 
   test("the release workflow derives the version instead of accepting a typed one", () => {
@@ -164,7 +153,7 @@ describe("version policy", () => {
     const derive = (akm: string, stamp: string): string => deriveRelease(akm, at(stamp), () => []).version
     const patchOf = (version: string): number => Number(valid(version)!.split(".")[2])
 
-    expect(minorLine(derive("0.10.261001-beta", "202610100000"))).toBe(minorLine(rangeFloor(AKM_VERSION_RANGE)))
+    expect(minorLine(derive("0.10.261001-beta", "202610100000"))).toBe(minorLine(AKM_MIN_VERSION))
 
     // The two typo'd releases already on npm must be cleared by the scheme.
     const published = patchOf("0.9.202808220049")
@@ -190,8 +179,8 @@ describe("version policy", () => {
     const next = derive("0.9.31-alpha.4", "202610080512")
     expect(next).toBe("0.9.31-alpha.4.202610080512")
     expect(valid(next)).toBe(next)
-    // The 0.10 scheme (no timestamp suffix) is the one the range accepts.
-    expect(satisfiesAkmVersionRange(deriveRelease("0.10.261002-alpha", new Date(Date.UTC(2026, 9, 11)), () => []).version)).toBe(true)
+    // The 0.10 scheme (no timestamp suffix) is the one the floor accepts.
+    expect(meetsAkmMinVersion(deriveRelease("0.10.261002-alpha", new Date(Date.UTC(2026, 9, 11)), () => []).version)).toBe(true)
 
     // Below the stable it precedes, above the akm prerelease it targets, and
     // above the previous next (including the stale 0.8.0-rc.8 on npm today).
@@ -208,7 +197,7 @@ describe("version policy", () => {
 
     // Validation; the monotonicity guard runs against the `next` tag.
     expect(workflow).toContain("`dist-tags.${channel}`")
-    expect(workflow).toContain("is outside AKM_VERSION_RANGE")
+    expect(workflow).toContain("is below AKM_MIN_VERSION")
     expect(workflow).toContain("is not on npm. Publish that akm prerelease first")
 
     // The pin and lockfile are build-only: staged and committed in the next
@@ -225,29 +214,30 @@ describe("version policy", () => {
     expect(workflow).toContain("--prerelease")
   })
 
-  test("Claude follows the range and both OpenCode packages exact-pin one akm-cli the range admits", () => {
+  test("Claude's install ref is derived from the floor and both OpenCode packages exact-pin one akm-cli at or above it", () => {
     // The Claude hook has no package manager behind it (git marketplace, no
     // npm deps), so its ref is what a user is told to install. OpenCode imports
     // private dist modules in process, so both its manifest and lockfile must
     // resolve exactly one CLI version we tested rather than a future patch.
     //
-    // The pin is the floor only when a stable plugin release is cut: the release
-    // workflow then requires akm_version == the floor's core == the pin, so the
-    // floor and the pins move together first. A `next` release (a prerelease akm_version) sets the
-    // pins in its tagged commit alone. The floor is the first monthly build,
-    // 0.10.261001-beta, which was not on npm when this was written, and a lockfile
-    // entry for an unpublished version cannot be generated, so the pins on this
-    // branch stay on the last published build (the daily alpha), which the caret
-    // range admits because the 8-digit patch compares higher (akm#1089). Do not
+    // The pin only has to be at or above the floor. A stable plugin release
+    // requires the pin to equal akm_version (itself at or above the floor); a `next` release
+    // (a prerelease akm_version) sets the pins in its tagged commit alone. The pins
+    // on this branch stay on the last published build (the daily alpha), which
+    // meets the floor because the 8-digit patch compares higher (akm#1089). Do not
     // hand-edit the pins to a version that does not exist yet.
-    const expectedRef = `akm-cli@${AKM_VERSION_RANGE}`
+    //
+    // The ref is a range, not a pin: npm's `latest` for akm-cli can sit below the
+    // floor (0.9.x), so a bare `akm-cli` would install an akm the hook refuses.
+    // `-0` is the lowest prerelease, so it admits the floor's own 0.10.261001-beta.
+    const expectedRef = "akm-cli@>=${AKM_MIN_VERSION}-0"
 
-    const packageRef = /AKM_PACKAGE_REF\s*\?\?\s*"([^"]+)"/.exec(readText("claude/hooks/akm-hook.ts"))?.[1]
+    const packageRef = /AKM_PACKAGE_REF\s*\?\?\s*`([^`]+)`/.exec(readText("claude/hooks/akm-hook.ts"))?.[1]
     expect(`claude/hooks/akm-hook.ts: ${packageRef}`).toBe(`claude/hooks/akm-hook.ts: ${expectedRef}`)
 
     const pin = readJson("opencode/package.json").dependencies["akm-cli"]
-    expect(`opencode/package.json akm-cli ${pin} in ${AKM_VERSION_RANGE}: ${satisfiesAkmVersionRange(pin)}`).toBe(
-      `opencode/package.json akm-cli ${pin} in ${AKM_VERSION_RANGE}: true`,
+    expect(`opencode/package.json akm-cli ${pin} >= ${AKM_MIN_VERSION}: ${meetsAkmMinVersion(pin)}`).toBe(
+      `opencode/package.json akm-cli ${pin} >= ${AKM_MIN_VERSION}: true`,
     )
     expect(valid(pin)).toBe(pin)
 
@@ -284,7 +274,7 @@ describe("version policy", () => {
 
   test("the release workflow refuses version-contract drift before tagging", () => {
     const workflow = readText(".github/workflows/release.yml")
-    expect(workflow).toContain("does not equal AKM_VERSION_RANGE floor")
+    expect(workflow).toContain("is below AKM_MIN_VERSION")
     expect(workflow).toContain("must exact-pin akm-cli")
   })
 

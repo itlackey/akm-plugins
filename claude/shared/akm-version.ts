@@ -1,112 +1,46 @@
-// Single source of truth for the akm-cli version contract.
+// Single source of truth for the akm-cli version contract: a minimum version.
 //
-// The Claude hook validates the user's installed akm-cli against this exact
-// range. OpenCode executes its declared akm-cli dependency in process and
-// therefore pins the range floor exactly in opencode/package.json; the version
+// The Claude/Codex hook refuses an installed akm-cli only when it is BELOW this
+// floor. Anything at or above it passes, including a later minor or major line
+// (0.11, 1.0): a newer akm is never a reason to disable the plugin. OpenCode
+// executes its declared akm-cli dependency in process and therefore pins one
+// exact version at or above the floor in opencode/package.json; the version
 // policy tests and release workflow keep those two contracts synchronized.
 //
-// The matcher is the vendored `satisfies()` rather than the npm `semver`
-// package because the Claude hook runs as a bare Bun script with no
-// node_modules at hook-execution time.
+// The floor is akm 0.10.261001, the first monthly release (0.10.YYMMNN[-stage],
+// akm#1089): the plugins pass `--detail agent`, which akm 0.9 rejects ("Invalid
+// value for --detail"), and an older CLI also lacks the `--replace/--with/
+// --source` feedback flags and the index/state migrations the plugins rely on.
 //
-// A single caret clause anchored at the stable release covers the supported
-// public CLI line: `^0.9.30` admits stable 0.9.30 and later 0.9.x releases.
-// 0.9.30 is a required compatibility floor, not a marketing version. The
-// OpenCode plugin runs akm-cli in-process against the same `index.db` and
-// `state.db` as the installed CLI, so that copy must be the floor or newer.
-// 0.9.30 is the floor because it is the stable release the plugins are
-// released against: OpenCode exact-pins akm-cli, and `akm upgrade` holds the
-// CLI to that pin, so the pin must move for users to reach 0.9.30, whose
-// `akm upgrade` acts only on the `akm-opencode` spec OpenCode's config names
-// (akm#1117; 0.9.29 did so for `@next` only, akm#1115). Its release notes
-// list no change to a command or flag the plugins pass, and OpenCode imports
-// only akm's curate, search and show modules; its exact pin follows the floor
-// because the release workflow requires the two to match. 0.9.28 made
-// `akm upgrade` update each installed harness's akm plugin, which the README's
-// Updating section tells users to run.
-// 0.9.27 rebuilt the FTS table when rows had left it and recreated an index
-// that 0.9.1 wrote (akm#1055, akm#1057), which the OpenCode plugin's in-process
-// search runs over.
-// Earlier floors still hold: 0.9.26 added the exact-fix flags `--replace`,
-// `--with` and `--source` to `akm feedback --negative`, which the plugins'
-// guidance tells agents to attach to correct a verified fact in an asset's
-// text (claude/skills/akm/SKILL.md, claude/commands/akm-feedback.md,
-// OpenCode's akm_feedback tool); an older CLI rejects them as unknown flags,
-// so the feedback call fails outright. 0.9.25 limited reflect to an asset's
-// frontmatter, retuned its quality judge for that and read Codex sessions, so
-// the plugins tell agents that negative feedback flags an asset and lowers its
-// ranking, not that improve rewrites its text (the same guidance), 0.9.21 made
-// `akm improve` reflect on an asset only from negative feedback (akm#1010),
-// 0.9.20 stopped a dispatching command killed by SIGTERM or SIGINT from
-// leaving the `opencode serve` it started running (akm#1005; `akm agent
-// --prompt` reproduced it, and Claude's skill dispatches agents by running
-// `akm agent` through Bash), 0.9.19 made improve plan only the bundle it writes
-// to and changed proposal reads and judging (akm#997-#1000), 0.9.18 fixed a
-// SQLite lock loss (copying a live database file in-process dropped its POSIX
-// locks, so an older read-write SQLite peer could delete the WAL; akm#995),
-// 0.9.17 migrated both databases forward (index layout 26, the improve-ledger
-// state migrations), and before 0.9.16 bundle activation and executable
-// authority were not yet host-owned, so an older binary would restore a
-// different trust model.
+// The comparison is numeric on major.minor.patch and ignores any prerelease or
+// build tag on the installed version, so 0.10.261001-beta meets the floor. That
+// also means a prerelease OF the floor (0.10.261001-alpha) meets it: the gate
+// judges the release core, so a newer build is never refused for being a
+// prerelease. The retired daily alphas (0.10.YYMMDDNN-alpha, an 8-digit patch)
+// compare numerically above the floor and pass; that is accepted
+// (tests/release-version.test.ts, tests/akm-version-check.test.ts).
 //
-// The gate reads the RELEASE CORE (major.minor.patch) and ignores a prerelease
-// tag. node-semver's default rule, which the vendored matcher reproduces, is
-// that no prerelease satisfies a stable range — so an installed 0.9.17-alpha.3
-// was refused against ^0.9.16 and akm was disabled for the whole session
-// ("version-mismatch") although it is a NEWER build than the floor. A newer
-// akm must never be refused here. Floor and ceiling still apply to the core:
-// 0.9.15-rc.1 is below the floor, and 0.10.0-beta.1 is the next minor line —
-// on 0.x the next plugin line (see tests/version-policy.test.ts).
+// The matcher is vendored (./vendor-semver) because the Claude hook runs as a
+// bare Bun script with no node_modules at hook-execution time.
 //
-// Earlier 0.9 releases are deliberately excluded as well: accepting them
-// would silently pass the version gate onto a CLI with retired ref and
-// workflow contracts, or one that cannot open a migrated state.db.
-//
-// #106 asked, as a maintainer decision, whether a caret range is the right
-// matcher at all given akm's own STABILITY.md: "0.9.x patch releases may
-// also contain breaking changes" while the 0.9.x line pays off technical
-// debt pre-1.0. Verified against that document and against the akm 0.9.12
-// branch (itlackey/akm, release/0.9.12) while checking this plugin for
-// compatibility: every akm surface these plugins call is tier Stable
-// (search, curate, show, info, feedback, workflow list) EXCEPT `akm proposal
-// extract`, which is tier Evolving — "payload shapes may shift" — and is
-// exactly the surface `extractSession()`/`lastExtractFailureWarning()` parse
-// most deeply. 0.9.12 did change that envelope again (added `engine`,
-// `engineKind`, `skipReasons`, and an aggregate `warnings[]` line for an
-// all-skip run — see akm#912/#913) — the Evolving tag is not decorative.
-// The 0.9.30 compatibility review keeps the split explicit: keep the caret
-// range for Claude's stable CLI calls, but exact-pin OpenCode's package because
-// it imports private in-process modules and shares AKM's databases. The
-// #107/#108/#109 envelope hardening remains necessary on both surfaces: every
-// read of the Evolving extract envelope goes through safeJsonParse with every
-// field optional-chained, so an additive shape change degrades to "say less"
-// rather than a crash or fabricated warning.
+// Moving the floor moves OpenCode's exact pins and the Windows CI install with
+// it; the release workflow requires the stable pin and floor to match.
 
-import { satisfies, valid } from "./vendor-semver"
+import { releaseCore, valid } from "./vendor-semver"
 
-// The floor is akm 0.10 (monthly release numbers, 0.10.YYMMNN[-stage]): the plugins pass `--detail agent`, which akm 0.9
-// rejects ("Invalid value for --detail"). It is the first release of the new scheme, 0.10.261001-beta (akm#1089).
-//
-// The floor is written with that prerelease tag so it names a version that exists and is the strict-semver floor for
-// every matcher (npm resolves the install ref below from it, which `^0.10.261001` would not while 0.10.261001 itself is
-// unpublished). The gate here drops the tag from the installed version and compares the release core against the floor,
-// and a stable core sorts above its own prerelease, so 0.10.261001-beta, 0.10.261001 and every later 0.10.YYMMNN[-stage]
-// pass; the release workflow's range check reads the floor's core the same way.
-//
-// The retired daily alphas (0.10.YYMMDDNN-alpha, an 8-digit patch) also satisfy this caret range: semver compares the
-// patch numerically, so they sort higher than every 6-digit build. That is accepted, not a bug to fix here; it is pinned
-// in tests/release-version.test.ts and tests/akm-version-check.test.ts.
-//
-// The floor, OpenCode's exact pins and the Windows CI install move to a new build together when the plugins need one.
-export const AKM_VERSION_RANGE = "^0.10.261001-beta"
+export const AKM_MIN_VERSION = "0.10.261001"
 
 /**
- * True when `version` is a valid semver string whose release core
- * (major.minor.patch, prerelease and build tags dropped) satisfies
- * {@link AKM_VERSION_RANGE}. Non-strings (e.g. a failed probe) return false.
+ * True when `version` is valid semver whose release core (major.minor.patch,
+ * prerelease and build tags dropped) is at or above {@link AKM_MIN_VERSION}.
+ * Non-strings (e.g. a failed probe) and invalid versions return false.
  */
-export function satisfiesAkmVersionRange(version: string | null | undefined): boolean {
-  const normalized = typeof version === "string" ? valid(version) : null
-  if (!normalized) return false
-  return satisfies(normalized.replace(/[-+].*$/, ""), AKM_VERSION_RANGE)
+export function meetsAkmMinVersion(version: string | null | undefined): boolean {
+  const core = typeof version === "string" && valid(version) ? releaseCore(version) : null
+  const floor = releaseCore(AKM_MIN_VERSION)
+  if (!core || !floor) return false
+  for (let i = 0; i < 3; i++) {
+    if (core[i] !== floor[i]) return core[i] > floor[i]
+  }
+  return true
 }
