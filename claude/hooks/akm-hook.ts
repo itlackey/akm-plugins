@@ -44,7 +44,7 @@ const HARNESS_ARG = process.argv.find((arg) => arg.startsWith("--harness="))?.sl
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
 // is a separate concern: the package range passed to Bun/npm. `-0` is the lowest
 // prerelease of the floor, so the range admits the floor's own prereleases
-// (0.10.261001-beta) and every later release; npm `latest` may still be older.
+// (0.10.261004-beta) and every later release; npm `latest` may still be older.
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@>=${AKM_MIN_VERSION}-0`
 // The ref contains `>`, so it is double-quoted (works in sh, cmd and PowerShell) wherever it is shown as a command.
 const AKM_INSTALL_COMMAND = (manager: "bun" | "npm") => `${manager} install -g "${AKM_PACKAGE_REF}"`

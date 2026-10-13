@@ -109,7 +109,7 @@ describe("version policy", () => {
     // compared as a number, not as text. The retired 8-digit daily alphas compare
     // numerically higher and so also pass; that is accepted (akm#1089,
     // tests/release-version.test.ts).
-    for (const version of ["0.10.261001-beta", "0.10.261001", "0.10.261144", "0.10.26101002-alpha", "0.11.0", "0.11.0-beta.1", "1.0.0"]) {
+    for (const version of ["0.10.261004-beta", "0.10.261004", "0.10.261144", "0.10.26101002-alpha", "0.11.0", "0.11.0-beta.1", "1.0.0"]) {
       expect(`${version}: ${meetsAkmMinVersion(version)}`).toBe(`${version}: true`)
     }
     for (const version of ["0.10.261000", "0.10.260901", "0.9.31-alpha.3", "0.9.99"]) {
@@ -179,7 +179,7 @@ describe("version policy", () => {
     expect(next).toBe("0.9.31-alpha.4.202610080512")
     expect(valid(next)).toBe(next)
     // The 0.10 scheme (no timestamp suffix) is the one the floor accepts.
-    expect(meetsAkmMinVersion(deriveRelease("0.10.261002-alpha", new Date(Date.UTC(2026, 9, 11)), () => []).version)).toBe(true)
+    expect(meetsAkmMinVersion(deriveRelease("0.10.261004-beta", new Date(Date.UTC(2026, 9, 13)), () => ["0.10.261001-beta", "0.10.261002-beta", "0.10.261003-beta"]).version)).toBe(true)
 
     // Below the stable it precedes, above the akm prerelease it targets, and
     // above the previous next (including the stale 0.8.0-rc.8 on npm today).
@@ -228,7 +228,7 @@ describe("version policy", () => {
     //
     // The ref is a range, not a pin: npm's `latest` for akm-cli can sit below the
     // floor (0.9.x), so a bare `akm-cli` would install an akm the hook refuses.
-    // `-0` is the lowest prerelease, so it admits the floor's own 0.10.261001-beta.
+    // `-0` is the lowest prerelease, so it admits the floor's own 0.10.261004-beta.
     const expectedRef = "akm-cli@>=${AKM_MIN_VERSION}-0"
 
     const packageRef = /AKM_PACKAGE_REF\s*\?\?\s*`([^`]+)`/.exec(readText("claude/hooks/akm-hook.ts"))?.[1]

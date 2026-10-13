@@ -81,8 +81,9 @@ describe("akm 0.10: monthly release numbers", () => {
   test("a plugin build sorts above every 0.9 plugin build and meets the akm floor", () => {
     const version = derive("0.10.261001", "2026-10-12T04:00:00Z").version
     expect(order(version, "0.9.30202610090106")).toBe(1)
-    expect(meetsAkmMinVersion("0.10.261002")).toBe(true)
-    expect(meetsAkmMinVersion("0.10.261001")).toBe(true)
+    expect(meetsAkmMinVersion("0.10.261005")).toBe(true)
+    expect(meetsAkmMinVersion("0.10.261004")).toBe(true)
+    expect(meetsAkmMinVersion("0.10.261003")).toBe(false)
     expect(meetsAkmMinVersion("0.10.260901")).toBe(false)
     expect(meetsAkmMinVersion("0.11.270101")).toBe(true)
   })
