@@ -57,7 +57,7 @@ It also uses OpenCode lifecycle hooks to inject curated context, preserve it thr
 }
 ```
 
-Do not use the bare name `akm-opencode-v2`: OpenCode 2 resolves it to `*`, which excludes prereleases, and every published `akm-opencode-v2` version is a prerelease, so the install fails with `No matching version found for akm-opencode-v2@*`. Use `@next` (the prerelease channel) or an exact version such as `akm-opencode-v2@0.10.261002-beta`; `opencode plugin add akm-opencode-v2@next` does the same from the command line.
+The bare name `akm-opencode-v2` installs whatever npm's `latest` tag points at. Until the first stable 0.10 release, the release workflow also moves `latest` to each new prerelease, so the bare name gets the newest beta too. `@next` (the prerelease channel) or an exact version such as `akm-opencode-v2@0.10.261002-beta` is still the explicit choice; `opencode plugin add akm-opencode-v2@next` does the same from the command line.
 
 It registers the same five tools, injects recall into the model request, and extracts finished sessions through `akm proposal extract`. See [opencode-v2/README.md](./opencode-v2/README.md) for the hook mapping and what is not ported from V1.
 

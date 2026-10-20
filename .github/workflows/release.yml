@@ -453,6 +453,22 @@ jobs:
         working-directory: opencode-v2
         run: npm publish ${{ steps.publish_args.outputs.publish_args }}
 
+      # TEMPORARY, until the first stable 0.10 plugin release: also point npm `latest` at this prerelease, so a bare
+      # `opencode plugin add akm-opencode-v2` installs a 0.10 build. Turn it off by setting the repository variable
+      # OPENCODE_V2_PRERELEASE_LATEST=false; delete this step once a stable release owns `latest`.
+      # Needs "Allow npm dist-tag" enabled on akm-opencode-v2's trusted publisher (npmjs.com -> package settings).
+      # It never fails the release: if npm refuses, it leaves a warning and `latest` where it was.
+      - name: Point latest at this prerelease (temporary)
+        if: ${{ needs.version.outputs.next == 'true' && vars.OPENCODE_V2_PRERELEASE_LATEST != 'false' }}
+        working-directory: opencode-v2
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm dist-tag add "akm-opencode-v2@$VERSION" latest; then
+            echo "akm-opencode-v2 latest -> $VERSION"
+          else
+            echo "::warning::Could not point akm-opencode-v2 latest at $VERSION. Enable 'Allow npm dist-tag' on the package's trusted publisher, or run: npm dist-tag add akm-opencode-v2@$VERSION latest"
+          fi
+
   github-release:
     needs: [version, publish-opencode, publish-opencode-v2]
     runs-on: ubuntu-latest
