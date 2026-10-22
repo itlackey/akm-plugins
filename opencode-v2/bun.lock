@@ -5,7 +5,7 @@
     "": {
       "name": "akm-opencode-v2",
       "dependencies": {
-        "akm-cli": "0.10.26101002-alpha",
+        "akm-cli": "0.10.261012-beta",
       },
       "devDependencies": {
         "@opencode/plugin": "2.0.26",
@@ -312,7 +312,7 @@
 
     "agent-base": ["agent-base@7.1.4", "", {}, "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ=="],
 
-    "akm-cli": ["akm-cli@0.10.26101002-alpha", "", { "dependencies": { "@clack/prompts": "^1.3.0", "@huggingface/transformers": "4.2.0", "@opencode-ai/sdk": "1.2.20", "@opencode/client": "2.0.26", "citty": "^0.2.2", "dotenv": "^17.4.2", "fast-xml-parser": "^5.10.1", "node-html-parser": "^9.0.1", "semver": "^7.6.0", "turndown": "^7.2.4", "yaml": "^2.8.4", "zod": "^3.23.0" }, "optionalDependencies": { "better-sqlite3": "12.11.1", "sqlite-vec": "^0.1.9" }, "bin": { "akm": "dist/akm", "akm-migrate": "dist/akm-migrate" } }, "sha512-PBHVkGUYqUjfRykDUmmzX4I3O8ptUe8CtAMz4X6NgUy8AmABGeYzOLkimbGzvafdSgf80ltCNOhUWJw4CyKjEg=="],
+    "akm-cli": ["akm-cli@0.10.261012-beta", "", { "dependencies": { "@clack/prompts": "^1.3.0", "@huggingface/transformers": "4.2.0", "@opencode-ai/sdk": "1.2.20", "@opencode/client": "2.0.26", "citty": "^0.2.2", "dotenv": "^17.4.2", "fast-xml-parser": "^5.10.1", "marked": "^18.1.1", "node-html-parser": "^9.0.1", "semver": "^7.6.0", "turndown": "^7.2.4", "yaml": "^2.8.4", "zod": "^3.23.0" }, "optionalDependencies": { "better-sqlite3": "12.11.1", "sqlite-vec": "^0.1.9" }, "hasInstallScript": true, "bin": { "akm": "dist/akm", "akm-migrate": "dist/akm-migrate" } }, "sha512-pWZ62Ez0COtYvtEkk/atPl2/LJszFTTfOI9rAc63xbvVX7h/Xn/lK9Nj/c7MCYeMnsGbvorVmnie1LMNbj/SaQ=="],
 
     "ansi-regex": ["ansi-regex@6.4.0", "", {}, "sha512-KzTVk2tCWAHtYrvvvaP8bJKJq2pVinhLcGEQdtLIYPbmNGNyYe8QwNaTUYQp2J7/vIsUKt5QCqAfUkYyG9DkOw=="],
 
@@ -551,6 +551,8 @@
     "lru-cache": ["lru-cache@11.5.3", "", {}, "sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg=="],
 
     "make-fetch-happen": ["make-fetch-happen@15.0.6", "", { "dependencies": { "@gar/promise-retry": "^1.0.0", "@npmcli/agent": "^4.0.0", "@npmcli/redact": "^4.0.0", "cacache": "^20.0.1", "http-cache-semantics": "^4.1.1", "minipass": "^7.0.2", "minipass-fetch": "^5.0.0", "minipass-flush": "^1.0.5", "minipass-pipeline": "^1.2.4", "negotiator": "^1.0.0", "proc-log": "^6.0.0", "ssri": "^13.0.0" } }, "sha512-Je0fLJ0F5atA7F+eIlLzk+Wkcl57JDf4kf+EW8xiP5E31xOQxkIxTbgf1Oi1Lw9tRI9UEMRdI5Vz2xTzoNU1Jw=="],
+
+    "marked": ["marked@18.1.1", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg=="],
 
     "matcher": ["matcher@3.0.0", "", { "dependencies": { "escape-string-regexp": "^4.0.0" } }, "sha512-OkeDaAZ/bQCxeFAozM55PKcKU0yJMPGifLwV4Qgjitu+5MoAfSQN4lsLJeXZ1b8w0x+/Emda6MZgXS1jvsapng=="],
 
