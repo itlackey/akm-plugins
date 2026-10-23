@@ -271,6 +271,14 @@ describe("version policy", () => {
     expect(readJson("opencode/package.json").name).toBe("akm-opencode")
   })
 
+  test("the V2 package's effect peer is the one its @opencode/plugin depends on", () => {
+    const manifest = readJson("opencode-v2/package.json")
+    const plugin = readJson("opencode-v2/node_modules/@opencode/plugin/package.json")
+    expect(plugin.version).toBe(manifest.devDependencies["@opencode/plugin"])
+    expect(manifest.peerDependencies.effect).toBe(plugin.dependencies.effect)
+    expect(manifest.devDependencies.effect).toBe(plugin.dependencies.effect)
+  })
+
   test("the release workflow refuses version-contract drift before tagging", () => {
     const workflow = readText(".github/workflows/release.yml")
     expect(workflow).toContain("is below AKM_MIN_VERSION")
