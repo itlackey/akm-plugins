@@ -66,6 +66,7 @@ jobs:
     outputs:
       version: ${{ steps.derive.outputs.version }}
       next: ${{ steps.derive.outputs.next }}
+      akm_version: ${{ steps.derive.outputs.akm_version }}
       tag: ${{ steps.tag.outputs.tag }}
       tag_exists: ${{ steps.tag.outputs.tag_exists }}
     steps:
@@ -391,6 +392,8 @@ jobs:
           gh release create "${{ needs.version.outputs.tag }}" \
             --repo "${{ github.repository }}" \
             --title "${{ needs.version.outputs.tag }}" \
+            --notes "Requires akm-cli $AKM_VERSION." \
             --generate-notes $PRERELEASE
         env:
           GH_TOKEN: ${{ github.token }}
+          AKM_VERSION: ${{ needs.version.outputs.akm_version }}
