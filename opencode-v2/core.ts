@@ -3,7 +3,7 @@
 // registry, session hooks, event stream, logging) onto the functions here, and
 // tests drive them directly with a fake `akm`.
 //
-// Semantics, against OpenCode 2.0.26 (see README "Hook mapping"):
+// Semantics, against OpenCode 2 (built against 2.1.4; see README "Hook mapping"):
 //   - `session.prompt` hook   -> onPrompt(): decide whether the prompt warrants
 //     recall and run the in-process `curate` (akm-cli/api) for it. The hook is awaited by the runtime
 //     before the model request is built, so we wait for curation for a bounded
@@ -152,6 +152,9 @@ export function createCore(options: CoreOptions) {
   const now = options.now ?? Date.now
   const recallWaitMs = options.recallWaitMs ?? Math.max(0, Number(process.env.AKM_RECALL_WAIT_MS ?? "3000") || 0)
   const sessions = new Map<string, SessionState>()
+  // A subagent's child session: its prompt is model-written and its work is part of the parent session,
+  // so it gets no recall, no learning signals and no extraction of its own.
+  const childSessions = new Set<string>()
   const resolveCommand = options.resolveCommand ?? (() => resolveAkmCommand(options.moduleUrl, PACKAGE_NAME))
   const extractSession = options.extract ?? spawnSessionExtract
   let disposed = false
@@ -218,6 +221,7 @@ export function createCore(options: CoreOptions) {
   }
 
   function dropSession(sessionID: string): void {
+    childSessions.delete(sessionID)
     const existing = sessions.get(sessionID)
     clearGateSession(sessionID)
     tracker.clear(sessionID)
@@ -337,7 +341,7 @@ export function createCore(options: CoreOptions) {
   /** `session.prompt` hook body. Never throws. */
   async function onPrompt(sessionID: string, promptText: string): Promise<void> {
     try {
-      if (disposed) return
+      if (disposed || childSessions.has(sessionID)) return
       const text = unwrapJsonStringPrompt(promptText)
       if (!text) return
       // Read before the feedback plan updates the window, as the V1 hook does.
@@ -421,7 +425,7 @@ export function createCore(options: CoreOptions) {
 
   /** Min-interval-gated, fire-and-forget extraction of a native session into the proposal queue. */
   function maybeExtract(sessionID: string): void {
-    if (disposed || !autoMemoryEnabled()) return
+    if (disposed || !autoMemoryEnabled() || childSessions.has(sessionID)) return
     const st = state(sessionID)
     const at = now()
     if (at - st.lastExtractAt < extractMinIntervalMs()) return
@@ -542,12 +546,13 @@ export function createCore(options: CoreOptions) {
   async function onEvent(event: { type?: string; data?: unknown }): Promise<void> {
     try {
       if (disposed || !event?.type) return
-      const data = (event.data ?? {}) as { sessionID?: unknown }
+      const data = (event.data ?? {}) as { sessionID?: unknown; parentID?: unknown }
       const sessionID = typeof data.sessionID === "string" ? data.sessionID : undefined
       if (!sessionID) return
       switch (event.type) {
         case "session.created":
-          await onSessionCreated(sessionID)
+          if (typeof data.parentID === "string") childSessions.add(sessionID)
+          else await onSessionCreated(sessionID)
           break
         case "session.execution.succeeded":
           // A turn finished: the V2 analogue of V1's per-turn `session.idle`.
