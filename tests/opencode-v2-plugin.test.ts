@@ -206,6 +206,25 @@ describe("akm-opencode-v2 plugin", () => {
     expect(extract()).toHaveLength(1)
   })
 
+  it("gives a subagent's child session no session-start work, recall or extraction of its own", async () => {
+    host = await startPlugin(project)
+    await host.subscribed
+    const at = { location: { directory: project } }
+    await host.emit({ type: "session.created", data: { sessionID: "ses_child", parentID: "ses_parent" }, ...at })
+    await settle(300)
+    await host.runPrompt("ses_child", PROMPT)
+    await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_child" }, ...at })
+    await settle(400)
+    expect(fake.calls().some((a) => a.includes("hints"))).toBe(false)
+    expect(curateCalls).toHaveLength(0)
+    expect(fake.calls().some((a) => a[1] === "extract")).toBe(false)
+
+    // The parent still gets all of it.
+    await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_parent" }, ...at })
+    await settle(400)
+    expect(fake.calls().filter((a) => a[1] === "extract")).toHaveLength(1)
+  })
+
   it("honours AKM_AUTO_MEMORY=0 and ignores events from other projects", async () => {
     process.env.AKM_AUTO_MEMORY = "0"
     host = await startPlugin(project)
