@@ -8,7 +8,7 @@ import { resetWriteGateForTests } from "../opencode-shared/write-gate"
 import { startPlugin, type HostFake } from "../opencode-v2/testing"
 
 // Drives the real `akm-opencode-v2` entrypoint (`Plugin.define`, effect API of
-// @opencode/plugin 2.0.26) against a fake OpenCode context and the repo's fake
+// @opencode/plugin 2.1.4) against a fake OpenCode context and the repo's fake
 // `akm` executable (evals/lib/fake-akm.ts). The shared helpers spawn real child
 // processes: tests/opencode-plugin.test.ts mocks node:child_process for the whole
 // run but delegates to the real functions outside its own tests.

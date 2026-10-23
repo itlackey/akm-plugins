@@ -1,4 +1,4 @@
-// akm-opencode-v2: the AKM plugin for OpenCode 2.x (@opencode/plugin 2.0.26).
+// akm-opencode-v2: the AKM plugin for OpenCode 2.x (@opencode/plugin 2.1.4).
 //
 // This file is native wiring only. The recall policy, tool schemas, redaction,
 // ref extraction, `akm` invocation and extraction flow live in
