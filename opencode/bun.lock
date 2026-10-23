@@ -6,7 +6,7 @@
       "name": "akm-opencode",
       "dependencies": {
         "@opencode-ai/plugin": "^1.18.14",
-        "akm-cli": "0.10.26101002-alpha",
+        "akm-cli": "0.10.261013-beta",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -129,7 +129,7 @@
 
     "adm-zip": ["adm-zip@0.5.18", "", {}, "sha512-ufJnssQGbxzLNS1Ho9bCtX4rQKCCvoVuDLHoJyc3F9dOGDB4BkWs2Ci0kv53lqocAEQ/Cbi+I2XCsNYGqVYqng=="],
 
-    "akm-cli": ["akm-cli@0.10.26101002-alpha", "", { "dependencies": { "@clack/prompts": "^1.3.0", "@huggingface/transformers": "4.2.0", "@opencode-ai/sdk": "1.2.20", "@opencode/client": "2.0.26", "citty": "^0.2.2", "dotenv": "^17.4.2", "fast-xml-parser": "^5.10.1", "node-html-parser": "^9.0.1", "semver": "^7.6.0", "turndown": "^7.2.4", "yaml": "^2.8.4", "zod": "^3.23.0" }, "optionalDependencies": { "better-sqlite3": "12.11.1", "sqlite-vec": "^0.1.9" }, "bin": { "akm": "dist/akm", "akm-migrate": "dist/akm-migrate" } }, "sha512-PBHVkGUYqUjfRykDUmmzX4I3O8ptUe8CtAMz4X6NgUy8AmABGeYzOLkimbGzvafdSgf80ltCNOhUWJw4CyKjEg=="],
+    "akm-cli": ["akm-cli@0.10.261013-beta", "", { "dependencies": { "@clack/prompts": "^1.3.0", "@huggingface/transformers": "4.2.0", "@opencode-ai/sdk": "1.2.20", "@opencode/client": "2.0.26", "citty": "^0.2.2", "dotenv": "^17.4.2", "fast-xml-parser": "^5.10.1", "marked": "^18.1.1", "node-html-parser": "^9.0.1", "semver": "^7.6.0", "turndown": "^7.2.4", "yaml": "^2.8.4", "zod": "^3.23.0" }, "optionalDependencies": { "better-sqlite3": "12.11.1", "sqlite-vec": "^0.1.9" }, "hasInstallScript": true, "bin": { "akm": "dist/akm", "akm-migrate": "dist/akm-migrate" } }, "sha512-xuG8H6usntX7he1kxd7kl/6uBp6sIyVNGLPFT7Fe0mxIHfLrm1BBAfiWT5x40vIt3mIJNmDi51nGL+PFR6LJgw=="],
 
     "anynum": ["anynum@1.0.1", "", {}, "sha512-N6//FLET/tXYNM/F6ABca1oH6fWB+KlTt909Le28WMDBk8oaT4vY17DCrwg2MvmuqUKt3Ni4N5dGJ/EoBgcO6A=="],
 
@@ -244,6 +244,8 @@
     "kubernetes-types": ["kubernetes-types@1.30.0", "", {}, "sha512-Dew1okvhM/SQcIa2rcgujNndZwU8VnSapDgdxlYoB84ZlpAD43U6KLAFqYo17ykSFGHNPrg0qry0bP+GJd9v7Q=="],
 
     "long": ["long@5.3.2", "", {}, "sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA=="],
+
+    "marked": ["marked@18.1.1", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg=="],
 
     "matcher": ["matcher@3.0.0", "", { "dependencies": { "escape-string-regexp": "^4.0.0" } }, "sha512-OkeDaAZ/bQCxeFAozM55PKcKU0yJMPGifLwV4Qgjitu+5MoAfSQN4lsLJeXZ1b8w0x+/Emda6MZgXS1jvsapng=="],
 
