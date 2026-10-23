@@ -33,7 +33,7 @@ The same five tools, with the same descriptions and argument schemas, as the V1 
 
 ## Hook mapping
 
-How each V1 responsibility maps onto the OpenCode 2.0.26 plugin API, as implemented:
+How each V1 responsibility maps onto the OpenCode 2 plugin API (built against 2.1.4), as implemented:
 
 | V1 responsibility | V2 native mechanism | Behavior |
 | --- | --- | --- |
