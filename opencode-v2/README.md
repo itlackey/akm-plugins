@@ -6,8 +6,8 @@ Using OpenCode 1.x? Install [`akm-opencode`](../opencode/README.md) instead. Ins
 
 | | `akm-opencode` | `akm-opencode-v2` |
 | --- | --- | --- |
-| OpenCode | 1.x (tested 1.18.34) | 2.x (built and loaded against 2.0.26) |
-| Plugin API | `@opencode-ai/plugin` 1.x | `@opencode/plugin` 2.0.26 (Effect entrypoint) |
+| OpenCode | 1.x (tested 1.18.34) | 2.x (built against 2.1.4; loaded against 2.0.26 and 2.1.4) |
+| Plugin API | `@opencode-ai/plugin` 1.x | `@opencode/plugin` 2.1.4 (Effect entrypoint) |
 | `akm-cli` | `0.10.26101002-alpha`, exact | `0.10.26101002-alpha`, exact |
 | Config key | `"plugin": ["akm-opencode"]` | `"plugins": ["akm-opencode-v2@next"]` |
 

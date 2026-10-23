@@ -49,7 +49,7 @@ The bare name resolves to the `latest` tag, which is still a stable 0.9 build. F
 
 It also uses OpenCode lifecycle hooks to inject curated context, preserve it through compaction, record usage feedback, and capture useful session memories. See [opencode/README.md](./opencode/README.md) for details.
 
-**OpenCode 2.x** (built against `@opencode/plugin` 2.0.26): add `akm-opencode-v2@next`:
+**OpenCode 2.x** (built against `@opencode/plugin` 2.1.4): add `akm-opencode-v2@next`:
 
 ```json
 {

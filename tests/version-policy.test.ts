@@ -266,8 +266,8 @@ describe("version policy", () => {
   test("the V2 package pins the plugin API it was built against", () => {
     const manifest = readJson("opencode-v2/package.json")
     expect(manifest.name).toBe("akm-opencode-v2")
-    expect(manifest.peerDependencies["@opencode/plugin"]).toBe("2.0.26")
-    expect(manifest.devDependencies["@opencode/plugin"]).toBe("2.0.26")
+    expect(manifest.peerDependencies["@opencode/plugin"]).toBe("2.1.4")
+    expect(manifest.devDependencies["@opencode/plugin"]).toBe("2.1.4")
     expect(readJson("opencode/package.json").name).toBe("akm-opencode")
   })
 
