@@ -144,7 +144,9 @@ jobs:
           if (next) {
             // The build pins this exact prerelease, so it has to be installable. npm can take a few minutes to serve a
             // version akm's own release has just published, so wait for it (up to 10 minutes) and fail only when it
-            // does not appear in that time or npm serves a different version.
+            // does not appear in that time or npm serves a different version. A mistyped akm_version gets the same
+            // 404 ("No match found for version") as a version npm has not caught up with yet, so a 404 waits too;
+            // npm's answer is printed on the first miss so a typo is visible at once and the run can be cancelled.
             const deadline = Date.now() + 10 * 60 * 1000
             let served = ''
             let detail = ''
@@ -153,7 +155,9 @@ jobs:
                 served = execFileSync('npm', ['view', `akm-cli@${akmVersion}`, 'version'], { encoding: 'utf8', stdio: 'pipe' }).trim()
               } catch (error) {
                 served = ''
+                const first = !detail
                 detail = String(error.stderr || error.message).trim()
+                if (first) console.log(`npm view akm-cli@${akmVersion}:\n${detail}`)
               }
               if (served || Date.now() >= deadline) break
               console.log(`akm-cli@${akmVersion} is not served by npm yet; checking again in 15 seconds.`)
@@ -161,7 +165,9 @@ jobs:
             }
             if (served !== akmVersion) {
               console.error(`akm-cli@${akmVersion} is not on npm. Publish that akm prerelease first; the OpenCode build exact-pins it.`)
-              console.error(served ? `npm served "${served}" for it.` : `npm still did not serve it after 10 minutes: ${detail}`)
+              console.error(served
+                ? `npm served "${served}" for akm-cli@${akmVersion}.`
+                : `npm still did not serve akm-cli@${akmVersion} after 10 minutes; check akm_version for a typo. npm's last error:\n${detail}`)
               process.exit(1)
             }
           } else {
