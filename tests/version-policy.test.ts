@@ -213,6 +213,29 @@ describe("version policy", () => {
     expect(workflow).toContain("--prerelease")
   })
 
+  test("the release workflow tests the pin it publishes: pin, install, typecheck and test come before the commit and tag", () => {
+    // The publish jobs check out the tag, so the tree that is tested has to be the one that is tagged. A test job ahead
+    // of the version job (or a pin written after the tests) tests a different akm-cli than the one published.
+    const workflow = readText(".github/workflows/release.yml")
+    expect(workflow).not.toContain("needs: test")
+
+    const steps = [
+      "- name: Pin akm-cli to the akm prerelease",
+      "- name: Install opencode deps",
+      "- name: Install opencode-v2 deps",
+      "- name: Typecheck opencode plugin",
+      "- name: Typecheck opencode-v2 plugin",
+      "- name: Run integration tests",
+      "- name: Run the real Codex",
+      "- name: Run tier-2 evals against checked-in baseline",
+      "- name: Commit and tag",
+    ]
+    const positions = steps.map((step) => `${step}: ${workflow.indexOf(step) >= 0}`)
+    expect(positions).toEqual(steps.map((step) => `${step}: true`))
+    const order = steps.map((step) => workflow.indexOf(step))
+    expect(order.join(" < ")).toBe([...order].sort((a, b) => a - b).join(" < "))
+  })
+
   test("Claude's install ref is derived from the floor and both OpenCode packages exact-pin one akm-cli at or above it", () => {
     // The Claude hook has no package manager behind it (git marketplace, no
     // npm deps), so its ref is what a user is told to install. OpenCode imports

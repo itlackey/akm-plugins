@@ -9,65 +9,11 @@ on:
         type: string
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install claude deps
-        working-directory: claude
-        run: bun install --frozen-lockfile
-
-      - name: Install opencode deps
-        working-directory: opencode
-        run: bun install --frozen-lockfile
-
-      - name: Install opencode-v2 deps
-        working-directory: opencode-v2
-        run: bun install --frozen-lockfile
-
-      - name: Install evals deps
-        working-directory: evals
-        run: bun install --frozen-lockfile
-
-      - name: Typecheck claude plugin
-        working-directory: claude
-        run: bun run typecheck
-
-      - name: Typecheck opencode plugin
-        working-directory: opencode
-        run: bun run typecheck
-
-      - name: Typecheck opencode-v2 plugin
-        working-directory: opencode-v2
-        run: bun run typecheck
-
-      - name: Run integration tests
-        run: bun test tests/
-
-      # The real Codex, offline, against this checkout's plugin (tests/real-hosts.test.ts): no login and no model call.
-      # The version tests.yml pins (tests/version-policy.test.ts keeps them together).
-      - name: Install Codex with npm
-        run: |
-          prefix="$RUNNER_TEMP/hosts-npm"
-          npm install @openai/codex@0.160.0 --prefix "$prefix" --no-audit --no-fund
-          codex="$(find "$prefix/node_modules" -type f -name codex -path '*/vendor/*' | head -n 1)"
-          "$codex" --version
-          echo "AKM_REAL_CODEX_BIN=$codex" >> "$GITHUB_ENV"
-
-      - name: Run the real Codex
-        run: bun test --timeout 300000 tests/real-hosts.test.ts
-
-      - name: Run tier-2 evals against checked-in baseline
-        working-directory: evals
-        run: bun tier2/runner.ts --baseline tier2/baseline/tier2.json --out ../eval-results/release
-
+  # One job decides what is published, in this order: derive and validate the version, stamp the manifests, pin
+  # akm-cli (a `next` release), install, typecheck and test that tree, and only then commit and tag it. The publish jobs
+  # check out the tag, so they publish the tree that was tested. A test job ahead of this one would run before the pin
+  # exists and so test a different akm-cli than the one published.
   version:
-    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -81,6 +27,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -292,19 +239,72 @@ jobs:
 
       # `next` only: both OpenCode builds pin the exact akm prerelease. The pins
       # and the regenerated lockfiles live in the tagged commit alone, never on
-      # main, where the pins stay on the last stable build.
+      # main, where the pins stay on the last stable build. This runs before the
+      # installs, typechecks and tests below, which therefore run against the pin.
       - name: Pin akm-cli to the akm prerelease
         if: ${{ steps.derive.outputs.next == 'true' }}
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
         run: |
           for dir in opencode opencode-v2; do
-            (cd "$dir" && npm pkg set "dependencies.akm-cli=$AKM_VERSION" && bun install && bun run typecheck)
+            (cd "$dir" && npm pkg set "dependencies.akm-cli=$AKM_VERSION" && bun install)
           done
+
+      - name: Install claude deps
+        working-directory: claude
+        run: bun install --frozen-lockfile
+
+      - name: Install opencode deps
+        working-directory: opencode
+        run: bun install --frozen-lockfile
+
+      - name: Install opencode-v2 deps
+        working-directory: opencode-v2
+        run: bun install --frozen-lockfile
+
+      - name: Install evals deps
+        working-directory: evals
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck claude plugin
+        working-directory: claude
+        run: bun run typecheck
+
+      - name: Typecheck opencode plugin
+        working-directory: opencode
+        run: bun run typecheck
+
+      - name: Typecheck opencode-v2 plugin
+        working-directory: opencode-v2
+        run: bun run typecheck
+
+      - name: Run integration tests
+        run: bun test tests/
+
+      # The real Codex, offline, against this checkout's plugin (tests/real-hosts.test.ts): no login and no model call.
+      # The version tests.yml pins (tests/version-policy.test.ts keeps them together).
+      - name: Install Codex with npm
+        run: |
+          prefix="$RUNNER_TEMP/hosts-npm"
+          npm install @openai/codex@0.160.0 --prefix "$prefix" --no-audit --no-fund
+          codex="$(find "$prefix/node_modules" -type f -name codex -path '*/vendor/*' | head -n 1)"
+          "$codex" --version
+          echo "AKM_REAL_CODEX_BIN=$codex" >> "$GITHUB_ENV"
+
+      - name: Run the real Codex
+        run: bun test --timeout 300000 tests/real-hosts.test.ts
+
+      - name: Run tier-2 evals against checked-in baseline
+        working-directory: evals
+        run: bun tier2/runner.ts --baseline tier2/baseline/tier2.json --out ../eval-results/release
 
       - name: Commit and tag
         id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # The checkout kept no write credential while the tests ran; push with the job's token from here on.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add claude/package.json opencode/package.json opencode-v2/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json
