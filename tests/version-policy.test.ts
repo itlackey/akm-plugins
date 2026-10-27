@@ -245,9 +245,10 @@ describe("version policy", () => {
     // The pin only has to be at or above the floor. A stable plugin release
     // requires the pin to equal akm_version (itself at or above the floor); a `next` release
     // (a prerelease akm_version) sets the pins in its tagged commit too. The pins
-    // on this branch are the build the plugins were last tested with, 0.10.261015-beta,
-    // which meets the floor. Do not hand-edit the pins to a version that is not on
-    // npm yet.
+    // on this branch are the build the plugins were last tested with, which meets the
+    // floor. Do not hand-edit the pins to a version that is not on npm yet.
+    // The two manifests and their lockfiles are the only place the version is written:
+    // tests.yml reads it from opencode/package.json (the next test).
     //
     // The ref is a range, not a pin: npm's `latest` for akm-cli can sit below the
     // floor (0.9.x), so a bare `akm-cli` would install an akm the hook refuses.
@@ -270,6 +271,16 @@ describe("version policy", () => {
       const lock = readText(`${dir}/bun.lock`)
       expect(lock).toContain(`"akm-cli": "${pin}"`)
       expect(lock).toContain(`"akm-cli": ["akm-cli@${pin}",`)
+    }
+  })
+
+  test("the akm-cli pin is written in the two OpenCode manifests and their lockfiles only: the workflows read it", () => {
+    // One home for the pin, so moving it is a two-file edit plus the lockfiles. tests.yml's Windows job installs the
+    // akm-cli the packages pin, read from opencode/package.json (the test above makes the two manifests equal), and
+    // release.yml sets the pin from akm_version for a `next` release, so neither workflow names a version.
+    expect(readText(".github/workflows/tests.yml")).toContain(`node -p "require('./opencode/package.json').dependencies['akm-cli']"`)
+    for (const file of [".github/workflows/tests.yml", ".github/workflows/release.yml"]) {
+      expect(`${file} names an akm-cli version: ${/akm-cli@\d/.test(readText(file))}`).toBe(`${file} names an akm-cli version: false`)
     }
   })
 
