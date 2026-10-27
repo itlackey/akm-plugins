@@ -79,8 +79,9 @@ jobs:
       # must sort ABOVE whatever npm currently calls `latest`.
       #
       # A `next` release changes two of them: the pin is set in the build and not
-      # read from main, so instead akm-cli@<akm_version> must already be on npm,
-      # and the version must sort above whatever npm calls `next`.
+      # read from main, so instead akm-cli@<akm_version> must already be on npm
+      # (the step waits up to 10 minutes for npm to serve it), and the version
+      # must sort above whatever npm calls `next`.
       - name: Validate release version
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
@@ -141,11 +142,26 @@ jobs:
           const opencodeAkm = opencodePackage.dependencies?.['akm-cli']
           const opencodeV2Akm = opencodeV2Package.dependencies?.['akm-cli']
           if (next) {
-            // The build pins this exact prerelease, so it has to be installable.
-            try {
-              execFileSync('npm', ['view', `akm-cli@${akmVersion}`, 'version'], { encoding: 'utf8', stdio: 'pipe' })
-            } catch {
+            // The build pins this exact prerelease, so it has to be installable. npm can take a few minutes to serve a
+            // version akm's own release has just published, so wait for it (up to 10 minutes) and fail only when it
+            // does not appear in that time or npm serves a different version.
+            const deadline = Date.now() + 10 * 60 * 1000
+            let served = ''
+            let detail = ''
+            for (;;) {
+              try {
+                served = execFileSync('npm', ['view', `akm-cli@${akmVersion}`, 'version'], { encoding: 'utf8', stdio: 'pipe' }).trim()
+              } catch (error) {
+                served = ''
+                detail = String(error.stderr || error.message).trim()
+              }
+              if (served || Date.now() >= deadline) break
+              console.log(`akm-cli@${akmVersion} is not served by npm yet; checking again in 15 seconds.`)
+              execFileSync('sleep', ['15'])
+            }
+            if (served !== akmVersion) {
               console.error(`akm-cli@${akmVersion} is not on npm. Publish that akm prerelease first; the OpenCode build exact-pins it.`)
+              console.error(served ? `npm served "${served}" for it.` : `npm still did not serve it after 10 minutes: ${detail}`)
               process.exit(1)
             }
           } else {
