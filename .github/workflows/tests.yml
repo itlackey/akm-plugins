@@ -79,11 +79,13 @@ jobs:
 
       # npm's own shims for akm (akm.cmd beside an extensionless sh script), so the
       # hook is also run against the real thing rather than only against the fake.
+      # The version is the one the OpenCode packages pin (opencode/package.json), read here, not repeated.
       - name: Install akm-cli with npm
         shell: pwsh
         run: |
           $prefix = Join-Path $env:RUNNER_TEMP "akm-npm"
-          npm install akm-cli@0.10.261015-beta --prefix $prefix --omit=optional --ignore-scripts --no-audit --no-fund
+          $akm = node -p "require('./opencode/package.json').dependencies['akm-cli']"
+          npm install "akm-cli@$akm" --prefix $prefix --omit=optional --ignore-scripts --no-audit --no-fund
           "AKM_REAL_NPM_BIN=$(Join-Path $prefix 'node_modules/.bin')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Run hook tests

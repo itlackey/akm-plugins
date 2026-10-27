@@ -543,7 +543,7 @@ describe.skipIf(!IS_WINDOWS || !process.env.AKM_REAL_NPM_BIN)("Claude hooks agai
 
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toContain("# AKM is available in this session")
-    // The version the workflow installed (tests.yml pins it), read from npm's own copy rather than repeated here.
+    // The version the workflow installed (tests.yml reads it from opencode/package.json), read from npm's own copy rather than repeated here.
     const installed = JSON.parse(readFileSync(path.join(realBin, "..", "akm-cli", "package.json"), "utf8")).version as string
     expect(readLines(path.join(sandbox.stateDir, "session.log"))[0].toLowerCase()).toContain(`akm_ready\tpath\t${path.join(realBin, "akm.cmd")}\t${installed}`.toLowerCase())
   })
