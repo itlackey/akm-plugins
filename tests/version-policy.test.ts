@@ -14,7 +14,7 @@
 // impossible if the patch component is spent mirroring akm's.
 
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 
 import { AKM_MIN_VERSION, meetsAkmMinVersion } from "../claude/shared/akm-version"
@@ -271,7 +271,10 @@ describe("version policy", () => {
     expect(readJson("opencode/package.json").name).toBe("akm-opencode")
   })
 
-  test("the V2 package's effect peer is the one its @opencode/plugin depends on", () => {
+  // Reads the installed @opencode/plugin, so it runs where opencode-v2's dependencies are installed (the Linux
+  // test job); the Windows job installs only the pinned akm and runs this file without them.
+  const v2PluginInstalled = existsSync(path.join(REPO_ROOT, "opencode-v2/node_modules/@opencode/plugin/package.json"))
+  test.skipIf(!v2PluginInstalled)("the V2 package's effect peer is the one its @opencode/plugin depends on", () => {
     const manifest = readJson("opencode-v2/package.json")
     const plugin = readJson("opencode-v2/node_modules/@opencode/plugin/package.json")
     expect(plugin.version).toBe(manifest.devDependencies["@opencode/plugin"])
