@@ -39,16 +39,16 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "akm-cli": "0.10.26101002-alpha"
+    "akm-cli": "0.10.261015-beta"
   },
   "peerDependencies": {
-    "@opencode/plugin": "2.0.26",
-    "effect": "4.0.0-rc.112"
+    "@opencode/plugin": "2.1.4",
+    "effect": "4.0.1"
   },
   "devDependencies": {
-    "@opencode/plugin": "2.0.26",
+    "@opencode/plugin": "2.1.4",
     "@types/node": "^26.1.1",
-    "effect": "4.0.0-rc.112",
+    "effect": "4.0.1",
     "typescript": "^5.8.3"
   }
 }

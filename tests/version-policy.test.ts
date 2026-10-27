@@ -14,7 +14,7 @@
 // impossible if the patch component is spent mirroring akm's.
 
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 
 import { AKM_MIN_VERSION, meetsAkmMinVersion } from "../claude/shared/akm-version"
@@ -221,10 +221,10 @@ describe("version policy", () => {
     //
     // The pin only has to be at or above the floor. A stable plugin release
     // requires the pin to equal akm_version (itself at or above the floor); a `next` release
-    // (a prerelease akm_version) sets the pins in its tagged commit alone. The pins
-    // on this branch stay on the last published build (the daily alpha), which
-    // meets the floor because the 8-digit patch compares higher (akm#1089). Do not
-    // hand-edit the pins to a version that does not exist yet.
+    // (a prerelease akm_version) sets the pins in its tagged commit too. The pins
+    // on this branch are the build the plugins were last tested with, 0.10.261015-beta,
+    // which meets the floor. Do not hand-edit the pins to a version that is not on
+    // npm yet.
     //
     // The ref is a range, not a pin: npm's `latest` for akm-cli can sit below the
     // floor (0.9.x), so a bare `akm-cli` would install an akm the hook refuses.
@@ -266,9 +266,20 @@ describe("version policy", () => {
   test("the V2 package pins the plugin API it was built against", () => {
     const manifest = readJson("opencode-v2/package.json")
     expect(manifest.name).toBe("akm-opencode-v2")
-    expect(manifest.peerDependencies["@opencode/plugin"]).toBe("2.0.26")
-    expect(manifest.devDependencies["@opencode/plugin"]).toBe("2.0.26")
+    expect(manifest.peerDependencies["@opencode/plugin"]).toBe("2.1.4")
+    expect(manifest.devDependencies["@opencode/plugin"]).toBe("2.1.4")
     expect(readJson("opencode/package.json").name).toBe("akm-opencode")
+  })
+
+  // Reads the installed @opencode/plugin, so it runs where opencode-v2's dependencies are installed (the Linux
+  // test job); the Windows job installs only the pinned akm and runs this file without them.
+  const v2PluginInstalled = existsSync(path.join(REPO_ROOT, "opencode-v2/node_modules/@opencode/plugin/package.json"))
+  test.skipIf(!v2PluginInstalled)("the V2 package's effect peer is the one its @opencode/plugin depends on", () => {
+    const manifest = readJson("opencode-v2/package.json")
+    const plugin = readJson("opencode-v2/node_modules/@opencode/plugin/package.json")
+    expect(plugin.version).toBe(manifest.devDependencies["@opencode/plugin"])
+    expect(manifest.peerDependencies.effect).toBe(plugin.dependencies.effect)
+    expect(manifest.devDependencies.effect).toBe(plugin.dependencies.effect)
   })
 
   test("the release workflow refuses version-contract drift before tagging", () => {

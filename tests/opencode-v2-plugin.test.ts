@@ -8,7 +8,7 @@ import { resetWriteGateForTests } from "../opencode-shared/write-gate"
 import { startPlugin, type HostFake } from "../opencode-v2/testing"
 
 // Drives the real `akm-opencode-v2` entrypoint (`Plugin.define`, effect API of
-// @opencode/plugin 2.0.26) against a fake OpenCode context and the repo's fake
+// @opencode/plugin 2.1.4) against a fake OpenCode context and the repo's fake
 // `akm` executable (evals/lib/fake-akm.ts). The shared helpers spawn real child
 // processes: tests/opencode-plugin.test.ts mocks node:child_process for the whole
 // run but delegates to the real functions outside its own tests.
@@ -204,6 +204,25 @@ describe("akm-opencode-v2 plugin", () => {
     await host.emit(event) // every turn fires this event; the interval gate collapses them
     await settle(300)
     expect(extract()).toHaveLength(1)
+  })
+
+  it("gives a subagent's child session no session-start work, recall or extraction of its own", async () => {
+    host = await startPlugin(project)
+    await host.subscribed
+    const at = { location: { directory: project } }
+    await host.emit({ type: "session.created", data: { sessionID: "ses_child", parentID: "ses_parent" }, ...at })
+    await settle(300)
+    await host.runPrompt("ses_child", PROMPT)
+    await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_child" }, ...at })
+    await settle(400)
+    expect(fake.calls().some((a) => a.includes("hints"))).toBe(false)
+    expect(curateCalls).toHaveLength(0)
+    expect(fake.calls().some((a) => a[1] === "extract")).toBe(false)
+
+    // The parent still gets all of it.
+    await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_parent" }, ...at })
+    await settle(400)
+    expect(fake.calls().filter((a) => a[1] === "extract")).toHaveLength(1)
   })
 
   it("honours AKM_AUTO_MEMORY=0 and ignores events from other projects", async () => {

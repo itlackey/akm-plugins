@@ -1,14 +1,14 @@
 # akm-opencode-v2
 
-OpenCode **2.x** plugin for [AKM](https://github.com/itlackey/akm) `0.10.26101002-alpha`. It registers the five public AKM tools, brings relevant AKM context into the model request automatically, records feedback and learning proposals from what you tell the model, and hands finished turns to AKM's session extraction.
+OpenCode **2.x** plugin for [AKM](https://github.com/itlackey/akm) `0.10.261015-beta`. It registers the five public AKM tools, brings relevant AKM context into the model request automatically, records feedback and learning proposals from what you tell the model, and hands finished turns to AKM's session extraction.
 
 Using OpenCode 1.x? Install [`akm-opencode`](../opencode/README.md) instead. Install only the plugin that matches your OpenCode major: each is built against its host's plugin API and neither works in the other.
 
 | | `akm-opencode` | `akm-opencode-v2` |
 | --- | --- | --- |
-| OpenCode | 1.x (tested 1.18.34) | 2.x (built and loaded against 2.0.26) |
-| Plugin API | `@opencode-ai/plugin` 1.x | `@opencode/plugin` 2.0.26 (Effect entrypoint) |
-| `akm-cli` | `0.10.26101002-alpha`, exact | `0.10.26101002-alpha`, exact |
+| OpenCode | 1.x (tested 1.18.34) | 2.x (built against 2.1.4; loaded against 2.0.26 and 2.1.4) |
+| Plugin API | `@opencode-ai/plugin` 1.x | `@opencode/plugin` 2.1.4 (Effect entrypoint) |
+| `akm-cli` | `0.10.261015-beta`, exact | `0.10.261015-beta`, exact |
 | Config key | `"plugin": ["akm-opencode"]` | `"plugins": ["akm-opencode-v2@next"]` |
 
 This package depends on neither `opencode-ai` nor `@opencode/cli`. Installing it never installs or replaces your `opencode` binary.
@@ -25,7 +25,7 @@ Add the plugin to your OpenCode 2 configuration (the `plugins` array in `opencod
 
 Use `@next` (the prerelease channel) or an exact version such as `akm-opencode-v2@0.10.261002-beta`, not the bare name. OpenCode 2 resolves a bare name to `*`, which excludes prereleases, and every published `akm-opencode-v2` version is a prerelease, so `akm-opencode-v2` alone fails with `No matching version found for akm-opencode-v2@*`.
 
-`akm-cli@0.10.26101002-alpha` is installed with the plugin and is the `akm` it runs (set `AKM_OPENCODE_CLI` to an absolute path to use another executable). `@opencode/plugin` and `effect` are peer dependencies: OpenCode supplies its own copies at load time, so they are external to the published bundle.
+`akm-cli@0.10.261015-beta` is installed with the plugin and is the `akm` it runs (set `AKM_OPENCODE_CLI` to an absolute path to use another executable). `@opencode/plugin` and `effect` are peer dependencies: OpenCode supplies its own copies at load time, so they are external to the published bundle.
 
 ## Tools
 
@@ -33,7 +33,7 @@ The same five tools, with the same descriptions and argument schemas, as the V1 
 
 ## Hook mapping
 
-How each V1 responsibility maps onto the OpenCode 2.0.26 plugin API, as implemented:
+How each V1 responsibility maps onto the OpenCode 2 plugin API (built against 2.1.4), as implemented:
 
 | V1 responsibility | V2 native mechanism | Behavior |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ Automatic recall (the `prompt` hook and the session-start curation) calls `curat
 
 ### Write gate
 
-OpenCode 2.0.26 **does** have a native pre-tool hook that can block: `tool.hook("execute.before")` runs before every tool, may mutate `input`, and a failure with a `Tool.Error` becomes the tool's error result, which the model reads. (Verified against the 2.0.26 binary: an error tagged `_tag: "Tool.Error"` reaches the model with its message intact; an untagged error is reported as a declined call, so the plugin builds the tagged error itself because `@opencode/schema` cannot be imported from a plugin.) The gate is therefore ported with the V1 policy ([`opencode-shared/write-gate.ts`](../opencode-shared/write-gate.ts)): when a file the session **read** declares a format (`apiVersion`, `$schema`, a yaml-language-server pragma, an XML default namespace) that the bundle documents, and the session has not opened that asset, the first `edit`/`write` to the file is blocked once with a message naming the asset; repeating it proceeds. Same as V1, the default mode is `observe` (ledger only, nothing blocked); `AKM_WRITE_GATE=enforce` blocks and `off` disables it, and every watched call writes exactly one `write_gate` event with a named reason.
+OpenCode 2 **does** have a native pre-tool hook that can block: `tool.hook("execute.before")` runs before every tool, may mutate `input`, and a failure with a `Tool.Error` becomes the tool's error result, which the model reads. (Verified against the 2.0.26 binary: an error tagged `_tag: "Tool.Error"` reaches the model with its message intact; an untagged error is reported as a declined call, so the plugin builds the tagged error itself because `@opencode/schema` cannot be imported from a plugin.) The gate is therefore ported with the V1 policy ([`opencode-shared/write-gate.ts`](../opencode-shared/write-gate.ts)): when a file the session **read** declares a format (`apiVersion`, `$schema`, a yaml-language-server pragma, an XML default namespace) that the bundle documents, and the session has not opened that asset, the first `edit`/`write` to the file is blocked once with a message naming the asset; repeating it proceeds. Same as V1, the default mode is `observe` (ledger only, nothing blocked); `AKM_WRITE_GATE=enforce` blocks and `off` disables it, and every watched call writes exactly one `write_gate` event with a named reason.
 
 Differences from V1: the tools are `edit {path, oldString, newString}`, `write {path, content}` and, on `gpt-*` models, `patch {patchText}` (V1: `filePath` and `apply_patch`). As in V1 the gate cannot resolve a file from a patch envelope, so `patch` is a typed skip with one warning. A `read` result carries the file's raw text as structured `output.content`, which the gate scans directly instead of V1's numbered `<content>` rendering.
 
@@ -104,7 +104,9 @@ Round 1, with recall still going through the CLI: verified against the real bina
 
 Round 2 (same binary, built `dist/` loaded through a re-exporting plugin directory, mock model, stub `akm`): the shell hook exports `AKM_PROJECT`, `AKM_BUNDLE_DIR` and `AKM_PLUGIN_VERSION` to a model-issued `shell` call; `edit` before an opened asset is blocked in `enforce` and the model receives the gate message; a prompt of "Remember that ..." runs `akm proposal new` and logs `AKM learning proposal submitted`; `akm_show` followed by "thanks, that worked" runs `akm feedback knowledge/inkwell --positive`; the pending count is requested. **In-process recall cannot be exercised for real yet** because no published `akm-cli` provides `akm-cli/api`: against the real binary the plugin logged `AKM recall failed` and carried on, and recall through the API is covered by tests against a fake that follows the contract.
 
-Not verified against the real binary: a real model's use of the tools, compaction and retry behaviour, subagent sessions, `session.deleted` cleanup, and installing the package from the npm registry (it is not published; the plugin was loaded from a directory that re-exports the installed `dist/`). `tests/opencode-v2-plugin.test.ts` covers these paths with a fake host context and a fake `akm`.
+A subagent's child session (`session.created` with a `parentID`) is part of its parent's work and its prompt is model-written, so the plugin runs no session-start curation, recall, learning signals or extraction for it; the parent's extraction covers it.
+
+Not verified against the real binary: a real model's use of the tools, compaction and retry behaviour, `session.deleted` cleanup, and installing the package from the npm registry (it is not published; the plugin was loaded from a directory that re-exports the installed `dist/`). `tests/opencode-v2-plugin.test.ts` covers these paths with a fake host context and a fake `akm`.
 
 ## Locking down destructive commands
 
