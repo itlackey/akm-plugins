@@ -221,10 +221,10 @@ describe("version policy", () => {
     //
     // The pin only has to be at or above the floor. A stable plugin release
     // requires the pin to equal akm_version (itself at or above the floor); a `next` release
-    // (a prerelease akm_version) sets the pins in its tagged commit alone. The pins
-    // on this branch stay on the last published build (the daily alpha), which
-    // meets the floor because the 8-digit patch compares higher (akm#1089). Do not
-    // hand-edit the pins to a version that does not exist yet.
+    // (a prerelease akm_version) sets the pins in its tagged commit too. The pins
+    // on this branch are the build the plugins were last tested with, 0.10.261015-beta,
+    // which meets the floor. Do not hand-edit the pins to a version that is not on
+    // npm yet.
     //
     // The ref is a range, not a pin: npm's `latest` for akm-cli can sit below the
     // floor (0.9.x), so a bare `akm-cli` would install an akm the hook refuses.

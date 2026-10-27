@@ -458,12 +458,6 @@ function xdgDir(akmVar, xdgVar, fallback) {
   return require("node:path").join(root, "akm")
 }
 
-// 0.9.15 workflow list envelopes carry a scope key derived from the cwd.
-function fakeScopeKey() {
-  const hash = require("node:crypto").createHash("sha256").update(process.cwd()).digest("hex")
-  return "dir:v1:" + hash
-}
-
 if (verb === "info") {
   const bundleDir = (process.env.AKM_BUNDLE_DIR || idx.bundleDir || "").trim()
   const byType = {}
@@ -498,6 +492,7 @@ if (verb === "info") {
       searchModes: ["fts"],
       semanticSearch: { mode: "off", status: "disabled" },
       registries: [],
+      connectionsAndHarnesses: [],
       sourceProviders: bundleDir ? [{ type: "filesystem", name: "bundle", path: bundleDir }] : [],
       indexStats: {
         entryCount: idx.assets.length,
@@ -605,7 +600,7 @@ if (verb === "config") {
 // envelope exercises the parse path without inventing fixture state.
 if (verb === "workflow" && tail[0] === "list") {
   const runs = []
-  process.stdout.write(JSON.stringify({ ok: true, runs, scopeKey: fakeScopeKey(), shape: "workflow-list", schemaVersion: 1, results: runs }))
+  process.stdout.write(JSON.stringify({ ok: true, runs, shape: "workflow-list", schemaVersion: 1, results: runs }))
   process.exit(0)
 }
 
