@@ -144,7 +144,7 @@ What differs from macOS and Linux:
 
 `.github/workflows/tests.yml` runs a `windows` job on `windows-latest` for every pull request and every push to `main`. It runs:
 
-- the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`, and once against the `akm-cli@0.10.261015-beta` npm itself installs;
+- the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`, and once against the `akm-cli` the OpenCode packages pin, as npm itself installs it;
 - the real Claude Code (2.1.286) and the real Codex (0.160.0), installed from npm and started with no credential. `claude -p` registers the manifest's 23 handlers and runs SessionStart, UserPromptSubmit and SessionEnd through exec form before it stops at "Not logged in". `codex exec` runs the two hooks, with the plugin installed from the checkout and trusted the way `/hooks` does, before its model provider, a dead local port, refuses the request.
 
 Tests that write their fake akm as a POSIX `sh` script, assert POSIX mode bits or run `akm-hook.sh` are skipped there by name (`[skipped on Windows: ...]`): `tests/host-runtime.ts` explains why, and `tests/hook-commands.test.ts` and `tests/codex-plugin.test.ts` run the same hook modes against the Windows-capable fake.
