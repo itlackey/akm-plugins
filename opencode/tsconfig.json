@@ -12,5 +12,5 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["index.ts", "../claude/shared/**/*.ts"]
+  "include": ["index.ts", "../claude/shared/**/*.ts", "../opencode-shared/**/*.ts"]
 }

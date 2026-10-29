@@ -4,62 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI compatibility floor these plugins target. For akm 0.10+ (e.g. 0.10.26101001) the plugins release as 0.10.<UTC YYMMDD><NN>, NN being the next free build of the day; a stage (e.g. 0.10.26101001-alpha, already on npm) makes it a `next` release with the same stage. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
+        description: "The exact akm CLI version these plugins target (at or above the Claude minimum, AKM_MIN_VERSION). For akm 0.10+ (e.g. 0.10.261001-beta, already on npm) the plugins release as 0.10.<UTC YYMM><NN>[-stage], NN being the next free release number of the current UTC month among the published 6-digit akm-opencode versions, and the stage (alpha, beta or rc) copied from akm_version; a stage makes it a `next` release. A retired 8-digit daily akm version (0.10.YYMMDDNN) is rejected. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
         required: true
         type: string
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install claude deps
-        working-directory: claude
-        run: bun install --frozen-lockfile
-
-      - name: Install opencode deps
-        working-directory: opencode
-        run: bun install --frozen-lockfile
-
-      - name: Install evals deps
-        working-directory: evals
-        run: bun install --frozen-lockfile
-
-      - name: Typecheck claude plugin
-        working-directory: claude
-        run: bun run typecheck
-
-      - name: Typecheck opencode plugin
-        working-directory: opencode
-        run: bun run typecheck
-
-      - name: Run integration tests
-        run: bun test tests/
-
-      # The real Codex, offline, against this checkout's plugin (tests/real-hosts.test.ts): no login and no model call.
-      # The version tests.yml pins (tests/version-policy.test.ts keeps them together).
-      - name: Install Codex with npm
-        run: |
-          prefix="$RUNNER_TEMP/hosts-npm"
-          npm install @openai/codex@0.160.0 --prefix "$prefix" --no-audit --no-fund
-          codex="$(find "$prefix/node_modules" -type f -name codex -path '*/vendor/*' | head -n 1)"
-          "$codex" --version
-          echo "AKM_REAL_CODEX_BIN=$codex" >> "$GITHUB_ENV"
-
-      - name: Run the real Codex
-        run: bun test --timeout 300000 tests/real-hosts.test.ts
-
-      - name: Run tier-2 evals against checked-in baseline
-        working-directory: evals
-        run: bun tier2/runner.ts --baseline tier2/baseline/tier2.json --out ../eval-results/release
-
+  # One job decides what is published, in this order: derive and validate the version, stamp the manifests, pin
+  # akm-cli (a `next` release), install, typecheck and test that tree, and only then commit and tag it. The publish jobs
+  # check out the tag, so they publish the tree that was tested. A test job ahead of this one would run before the pin
+  # exists and so test a different akm-cli than the one published.
   version:
-    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -73,6 +27,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
@@ -92,18 +47,20 @@ jobs:
       # silently never become `latest`. Removing the human from the date
       # removes that whole failure class.
       #
-      # akm 0.10 and later (akm#1089): akm versions are daily builds,
-      # 0.10.YYMMDDNN with -alpha/-beta/-rc for a prerelease. The plugins use
-      # the same shape with their own counter: 0.10.<UTC YYMMDD><NN>[-stage],
-      # NN one above the highest akm-opencode build already on npm that day,
-      # the stage copied from akm_version. A stage is a `next` release.
+      # akm 0.10 and later (akm#1089): akm versions are monthly release
+      # numbers, 0.10.YYMMNN with -alpha/-beta/-rc for a prerelease. The
+      # plugins use the same shape with their own counter: 0.10.<UTC YYMM><NN>
+      # [-stage], NN one above the highest 6-digit akm-opencode version already
+      # on npm for the current UTC month (stage ignored, retired 8-digit daily
+      # builds ignored), the stage copied from akm_version. A stage is a `next`
+      # release. A retired 8-digit daily akm_version is rejected.
       #
       # akm 0.9 (the old scheme, still releasable): <akm_version><yyyymmddhhmm>,
       # e.g. akm 0.9.1 at 2026-08-24 20:12 UTC -> 0.9.1202608242012. A
       # prerelease akm_version (0.9.31-alpha.4) is a `next` release instead:
       # <akm_version>.<yyyymmddhhmm>, 0.9.31-alpha.4.202610080512, a valid
-      # semver prerelease. That scheme stops at 0.10: 26101001 followed by 12
-      # digits is 20 digits, above Number.MAX_SAFE_INTEGER, which node-semver
+      # semver prerelease. That scheme stops at 0.10: 261001 followed by 12
+      # digits is 18 digits, above Number.MAX_SAFE_INTEGER, which node-semver
       # rejects.
       #
       # A `next` release publishes under the npm `next` tag, and nothing is
@@ -116,16 +73,15 @@ jobs:
 
       # Four rules, all checked before the tag exists (npm would otherwise be
       # the first thing to reject a bad version, by which point the tag is
-      # already pushed): the supplied akm version must be plain semver and
-      # exactly match the Claude compatibility floor, OpenCode must exact-pin
-      # that same version, and the derived version must sort ABOVE whatever npm
-      # currently calls `latest`.
+      # already pushed): the supplied akm version must be plain semver and at or
+      # above the Claude minimum (AKM_MIN_VERSION; a later minor is fine), both
+      # OpenCode packages must exact-pin that same version, and the derived version
+      # must sort ABOVE whatever npm currently calls `latest`.
       #
-      # A `next` release changes three of them: the akm prerelease must only
-      # share the floor's minor line and not fall below its patch (the floor
-      # stays at the stable line), the pin is set in the build and not read
-      # from main, so instead akm-cli@<akm_version> must already be on npm, and
-      # the version must sort above whatever npm calls `next`.
+      # A `next` release changes two of them: the pin is set in the build and not
+      # read from main, so instead akm-cli@<akm_version> must already be on npm
+      # (the step waits up to 10 minutes for npm to serve it), and the version
+      # must sort above whatever npm calls `next`.
       - name: Validate release version
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
@@ -141,9 +97,10 @@ jobs:
           const next = process.env.NEXT === 'true'
           const source = fs.readFileSync('claude/shared/akm-version.ts', 'utf8')
           const opencodePackage = JSON.parse(fs.readFileSync('opencode/package.json', 'utf8'))
-          const range = /AKM_VERSION_RANGE\s*=\s*"([^"]+)"/.exec(source)?.[1]
-          if (!range) {
-            console.error('Could not read AKM_VERSION_RANGE from claude/shared/akm-version.ts')
+          const opencodeV2Package = JSON.parse(fs.readFileSync('opencode-v2/package.json', 'utf8'))
+          const minVersion = /AKM_MIN_VERSION\s*=\s*"([^"]+)"/.exec(source)?.[1]
+          if (!minVersion) {
+            console.error('Could not read AKM_MIN_VERSION from claude/shared/akm-version.ts')
             process.exit(1)
           }
 
@@ -161,43 +118,67 @@ jobs:
             process.exit(1)
           }
 
-          const floor = SEMVER.exec(range.replace(/^[\^~>=v\s]+/, ''))
+          const floor = SEMVER.exec(minVersion)
           if (!floor) {
-            console.error(`AKM_VERSION_RANGE "${range}" has no parseable floor; expected a caret range like ^0.9.0.`)
+            console.error(`AKM_MIN_VERSION "${minVersion}" is not valid semver.`)
             process.exit(1)
           }
 
-          const floorVersion = `${floor[1]}.${floor[2]}.${floor[3]}`
-          if (next) {
-            // Claude's range check judges the release core, so an akm prerelease
-            // satisfies ^0.9.30 exactly when its core does.
-            if (parsedAkm[1] !== floor[1] || parsedAkm[2] !== floor[2] || Number(parsedAkm[3]) < Number(floor[3])) {
-              console.error(`akm_version "${akmVersion}" is outside AKM_VERSION_RANGE ${range}: its release core must be ${floor[1]}.${floor[2]}.${floor[3]} or later on the ${floor[1]}.${floor[2]} line.`)
-              process.exit(1)
-            }
-          } else if (akmVersion !== floorVersion) {
-            console.error(`akm_version "${akmVersion}" does not equal AKM_VERSION_RANGE floor "${floorVersion}" (${range}).`)
-            console.error('Move AKM_VERSION_RANGE first and validate that exact CLI version before publishing.')
+          // Claude's check is a floor on the release core (prerelease ignored), so
+          // an akm_version passes exactly when its core is at or above the floor.
+          // A later minor is fine; only a build below the floor is refused. The
+          // OpenCode pin below is exact, so it moves with akm_version, not the floor.
+          const belowFloor = [1, 2, 3].map((i) => Number(parsedAkm[i]) - Number(floor[i])).find((diff) => diff !== 0) < 0
+          if (belowFloor) {
+            console.error(`akm_version "${akmVersion}" is below AKM_MIN_VERSION ${minVersion}: its release core must be ${floor[1]}.${floor[2]}.${floor[3]} or later.`)
             process.exit(1)
           }
 
-          // OpenCode imports akm-cli's private dist modules in process. A
-          // caret range would let the same plugin release execute different,
-          // untested private APIs on different machines, so it must exact-pin
-          // the tested floor. Claude only shells out through public CLI verbs
-          // and deliberately retains the stable caret range.
+          // Both OpenCode plugins run the akm-cli they declare, against the user's
+          // shared AKM databases. A range would let one plugin release run an
+          // untested CLI on some machines, and let the two plugins disagree about
+          // which CLI owns those databases, so both exact-pin the tested akm_version.
+          // Claude resolves its CLI through public verbs and only enforces the floor.
           const opencodeAkm = opencodePackage.dependencies?.['akm-cli']
+          const opencodeV2Akm = opencodeV2Package.dependencies?.['akm-cli']
           if (next) {
-            // The build pins this exact prerelease, so it has to be installable.
-            try {
-              execFileSync('npm', ['view', `akm-cli@${akmVersion}`, 'version'], { encoding: 'utf8', stdio: 'pipe' })
-            } catch {
+            // The build pins this exact prerelease, so it has to be installable. npm can take a few minutes to serve a
+            // version akm's own release has just published, so wait for it (up to 10 minutes) and fail only when it
+            // does not appear in that time or npm serves a different version. A mistyped akm_version gets the same
+            // 404 ("No match found for version") as a version npm has not caught up with yet, so a 404 waits too;
+            // npm's answer is printed on the first miss so a typo is visible at once and the run can be cancelled.
+            const deadline = Date.now() + 10 * 60 * 1000
+            let served = ''
+            let detail = ''
+            for (;;) {
+              try {
+                served = execFileSync('npm', ['view', `akm-cli@${akmVersion}`, 'version'], { encoding: 'utf8', stdio: 'pipe' }).trim()
+              } catch (error) {
+                served = ''
+                const first = !detail
+                detail = String(error.stderr || error.message).trim()
+                if (first) console.log(`npm view akm-cli@${akmVersion}:\n${detail}`)
+              }
+              if (served || Date.now() >= deadline) break
+              console.log(`akm-cli@${akmVersion} is not served by npm yet; checking again in 15 seconds.`)
+              execFileSync('sleep', ['15'])
+            }
+            if (served !== akmVersion) {
               console.error(`akm-cli@${akmVersion} is not on npm. Publish that akm prerelease first; the OpenCode build exact-pins it.`)
+              console.error(served
+                ? `npm served "${served}" for akm-cli@${akmVersion}.`
+                : `npm still did not serve akm-cli@${akmVersion} after 10 minutes; check akm_version for a typo. npm's last error:\n${detail}`)
               process.exit(1)
             }
-          } else if (opencodeAkm !== akmVersion) {
-            console.error(`opencode/package.json must exact-pin akm-cli to "${akmVersion}"; found "${opencodeAkm ?? '<missing>'}".`)
-            process.exit(1)
+          } else {
+            if (opencodeAkm !== akmVersion) {
+              console.error(`opencode/package.json must exact-pin akm-cli to "${akmVersion}"; found "${opencodeAkm ?? '<missing>'}".`)
+              process.exit(1)
+            }
+            if (opencodeV2Akm !== akmVersion) {
+              console.error(`opencode-v2/package.json must exact-pin akm-cli to "${akmVersion}"; found "${opencodeV2Akm ?? '<missing>'}".`)
+              process.exit(1)
+            }
           }
 
           // Monotonicity guard. This is the check the hand-typed scheme never
@@ -221,6 +202,15 @@ jobs:
               console.error(`Published version "${published}" is not plain semver; cannot compare. Investigate before releasing.`)
               process.exit(1)
             }
+            // Known, accepted break (akm#1089): the retired daily builds have an 8-digit patch, so every
+            // 6-digit 0.10.YYMMNN version sorts below them. Moving the tag off one of them is the intent.
+            if (prev[1] === parsed[1] && prev[2] === parsed[2] && prev[3].length === 8 && parsed[3].length === 6) {
+              console.log(`Published ${channel} "${published}" is a retired daily build; "${version}" sorts below it by design. Skipping the monotonicity check.`)
+              published = ''
+            }
+          }
+          if (published) {
+            const prev = SEMVER.exec(published)
             const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
             const compare = (a, b) => {
               for (const i of [1, 2, 3]) {
@@ -246,7 +236,7 @@ jobs:
             console.log(`${version} sorts above the published ${channel} ${published}.`)
           }
 
-          console.log(`Version ${version} is valid semver; Claude targets ${range} and OpenCode exact-pins akm-cli ${next ? akmVersion : opencodeAkm}.`)
+          console.log(`Version ${version} is valid semver; Claude requires akm >= ${minVersion} and both OpenCode packages exact-pin akm-cli ${next ? akmVersion : opencodeAkm}.`)
           EOF
 
       - name: Bump versions
@@ -263,38 +253,87 @@ jobs:
           }
 
           updateJsonFile('opencode/package.json', (pkg) => ({ ...pkg, version }))
+          updateJsonFile('opencode-v2/package.json', (pkg) => ({ ...pkg, version }))
           updateJsonFile('claude/package.json', (pkg) => ({ ...pkg, version }))
           updateJsonFile('claude/.claude-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
           updateJsonFile('claude/.codex-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
-          updateJsonFile('.claude-plugin/marketplace.json', (marketplace) => ({
-            ...marketplace,
-            plugins: marketplace.plugins.map((plugin, index) => index === 0 ? { ...plugin, version } : plugin),
-          }))
           EOF
 
-      # `next` only: OpenCode imports akm's dist in process, so its build pins
-      # the exact akm prerelease. The pin and the regenerated lockfile live in
-      # the tagged commit alone, never on main, where the pin stays at the floor.
+      # `next` only: both OpenCode builds pin the exact akm prerelease. The pins
+      # and the regenerated lockfiles live in the tagged commit alone, never on
+      # main, where the pins stay on the last stable build. This runs before the
+      # installs, typechecks and tests below, which therefore run against the pin.
       - name: Pin akm-cli to the akm prerelease
         if: ${{ steps.derive.outputs.next == 'true' }}
-        working-directory: opencode
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
         run: |
-          npm pkg set "dependencies.akm-cli=$AKM_VERSION"
-          bun install
-          bun run typecheck
+          for dir in opencode opencode-v2; do
+            (cd "$dir" && npm pkg set "dependencies.akm-cli=$AKM_VERSION" && bun install)
+          done
+
+      - name: Install claude deps
+        working-directory: claude
+        run: bun install --frozen-lockfile
+
+      - name: Install opencode deps
+        working-directory: opencode
+        run: bun install --frozen-lockfile
+
+      - name: Install opencode-v2 deps
+        working-directory: opencode-v2
+        run: bun install --frozen-lockfile
+
+      - name: Install evals deps
+        working-directory: evals
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck claude plugin
+        working-directory: claude
+        run: bun run typecheck
+
+      - name: Typecheck opencode plugin
+        working-directory: opencode
+        run: bun run typecheck
+
+      - name: Typecheck opencode-v2 plugin
+        working-directory: opencode-v2
+        run: bun run typecheck
+
+      - name: Run integration tests
+        run: bun test tests/
+
+      # The real Codex, offline, against this checkout's plugin (tests/real-hosts.test.ts): no login and no model call.
+      # The version tests.yml pins (tests/version-policy.test.ts keeps them together).
+      - name: Install Codex with npm
+        run: |
+          prefix="$RUNNER_TEMP/hosts-npm"
+          npm install @openai/codex@0.160.0 --prefix "$prefix" --no-audit --no-fund
+          codex="$(find "$prefix/node_modules" -type f -name codex -path '*/vendor/*' | head -n 1)"
+          "$codex" --version
+          echo "AKM_REAL_CODEX_BIN=$codex" >> "$GITHUB_ENV"
+
+      - name: Run the real Codex
+        run: bun test --timeout 300000 tests/real-hosts.test.ts
+
+      - name: Run tier-2 evals against checked-in baseline
+        working-directory: evals
+        run: bun tier2/runner.ts --baseline tier2/baseline/tier2.json --out ../eval-results/release
 
       - name: Commit and tag
         id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # The checkout kept no write credential while the tests ran; push with the job's token from here on.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add claude/package.json opencode/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json .claude-plugin/marketplace.json
+          git add claude/package.json opencode/package.json opencode-v2/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json
 
           if [ "${{ steps.derive.outputs.next }}" = "true" ]; then
-            # Committed locally and reachable only from the tag; main is not pushed.
-            git add opencode/bun.lock
+            # Committed locally and reachable only from the tag and the `next` branch; main is not pushed.
+            git add opencode/bun.lock opencode-v2/bun.lock
             # Nothing to commit when the branch already carries this version: tag HEAD as it is.
             git diff --cached --quiet || git commit -m "chore: next build ${{ steps.derive.outputs.version }}"
           elif ! git diff --cached --quiet; then
@@ -308,6 +347,19 @@ jobs:
             git tag "v${{ steps.derive.outputs.version }}"
             git push origin "v${{ steps.derive.outputs.version }}"
             echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # `next` only: move the `next` branch to the tagged commit. A marketplace pinned to a
+          # tag never changes, so `claude plugin update` and `codex plugin marketplace upgrade`
+          # find nothing; one that follows a branch sees each new commit. Users on the prerelease
+          # channel follow `next` (Claude `#next`, Codex `--ref next`) and stable users the default
+          # branch. Force, because every `next` build commit hangs off the release branch and the
+          # previous one is not its ancestor. The tag's own commit, so a re-run of an existing tag
+          # puts `next` on that tag and not on a fresh rebuild.
+          if [ "${{ steps.derive.outputs.next }}" = "true" ]; then
+            git fetch --quiet --depth=1 origin "refs/tags/v${{ steps.derive.outputs.version }}"
+            SHA="$(git rev-parse FETCH_HEAD)"
+            git push --force origin "$SHA:refs/heads/next"
           fi
 
           echo "tag=v${{ steps.derive.outputs.version }}" >> "$GITHUB_OUTPUT"
@@ -368,8 +420,80 @@ jobs:
         working-directory: opencode
         run: npm publish ${{ steps.publish_args.outputs.publish_args }}
 
+  publish-opencode-v2:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # `npm publish` fires opencode-v2's prepack, which runs `bun run build` to
+      # bundle the plugin and its shared modules into dist/.
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install opencode-v2 deps
+        working-directory: opencode-v2
+        run: bun install --frozen-lockfile
+
+      - run: npm install -g npm@latest
+
+      - name: Check if akm-opencode-v2 version already exists
+        id: npm_version
+        working-directory: opencode-v2
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+
+          if npm view "akm-opencode-v2@$VERSION" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Derive npm publish args
+        id: publish_args
+        env:
+          NEXT: ${{ needs.version.outputs.next }}
+        run: |
+          PUBLISH_ARGS="--provenance --access public"
+
+          if [ "$NEXT" = "true" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --tag next"
+          fi
+
+          echo "publish_args=$PUBLISH_ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Publish akm-opencode-v2
+        if: ${{ steps.npm_version.outputs.exists != 'true' }}
+        working-directory: opencode-v2
+        run: npm publish ${{ steps.publish_args.outputs.publish_args }}
+
+      # TEMPORARY, until the first stable 0.10 plugin release: also point npm `latest` at this prerelease, so a bare
+      # `opencode plugin add akm-opencode-v2` installs a 0.10 build. Turn it off by setting the repository variable
+      # OPENCODE_V2_PRERELEASE_LATEST=false; delete this step once a stable release owns `latest`.
+      # Needs "Allow npm dist-tag" enabled on akm-opencode-v2's trusted publisher (npmjs.com -> package settings).
+      # It never fails the release: if npm refuses, it leaves a warning and `latest` where it was.
+      - name: Point latest at this prerelease (temporary)
+        if: ${{ needs.version.outputs.next == 'true' && vars.OPENCODE_V2_PRERELEASE_LATEST != 'false' }}
+        working-directory: opencode-v2
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm dist-tag add "akm-opencode-v2@$VERSION" latest; then
+            echo "akm-opencode-v2 latest -> $VERSION"
+          else
+            echo "::warning::Could not point akm-opencode-v2 latest at $VERSION. Enable 'Allow npm dist-tag' on the package's trusted publisher, or run: npm dist-tag add akm-opencode-v2@$VERSION latest"
+          fi
+
   github-release:
-    needs: [version, publish-opencode]
+    needs: [version, publish-opencode, publish-opencode-v2]
     runs-on: ubuntu-latest
     permissions:
       contents: write

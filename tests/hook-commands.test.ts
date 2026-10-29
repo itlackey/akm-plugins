@@ -382,7 +382,7 @@ setTimeout(() => process.exit(0), 90_000)
 import { spawn } from "node:child_process"
 appendFileSync(${JSON.stringify(sandbox.callLog)}, [new Date().toISOString(), process.pid, ...args].join("\\t") + "\\n")
 if (args[0] === "--version") {
-  console.log("akm 0.9.30")
+  console.log("akm 0.10.26101001")
   process.exit(0)
 }
 if (${hangsWhen}) {
@@ -543,6 +543,8 @@ describe.skipIf(!IS_WINDOWS || !process.env.AKM_REAL_NPM_BIN)("Claude hooks agai
 
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toContain("# AKM is available in this session")
-    expect(readLines(path.join(sandbox.stateDir, "session.log"))[0].toLowerCase()).toContain(`akm_ready\tpath\t${path.join(realBin, "akm.cmd")}\t0.9.30`.toLowerCase())
+    // The version the workflow installed (tests.yml reads it from opencode/package.json), read from npm's own copy rather than repeated here.
+    const installed = JSON.parse(readFileSync(path.join(realBin, "..", "akm-cli", "package.json"), "utf8")).version as string
+    expect(readLines(path.join(sandbox.stateDir, "session.log"))[0].toLowerCase()).toContain(`akm_ready\tpath\t${path.join(realBin, "akm.cmd")}\t${installed}`.toLowerCase())
   })
 })

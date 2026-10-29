@@ -103,7 +103,7 @@ function isAsset(type: string, directPath: string): boolean {
   if (type === "env") {
     return isFile(`${directPath}.env`) || (path.basename(directPath) === "default" && isFile(path.join(path.dirname(directPath), ".env")));
   }
-  return markdownFile(directPath) || (type === "workflows" && isFile(`${directPath}.yml`));
+  return markdownFile(directPath);
 }
 
 // The types akm also resolves for a file kept outside the type's directory, by
@@ -116,15 +116,14 @@ const OUTSIDE_THEIR_DIRECTORY = new Set(["scripts", "agents", "commands", "facts
  * Resolve a concept ID under any local bundle root without invoking AKM.
  *
  * A concept ID is the asset's path with the extension its type owns dropped:
- * `.md` for most types (tolerated in the ID too), `.yml` for a task, `.md` or
- * `.yml` for a workflow, `.env` for an env (the default env of a directory is
+ * `.md` for most types (tolerated in the ID too), `.yml` for a task, `.env` for an env (the default env of a directory is
  * its `.env` file, ID env/default or env/<dir>/default). A skill is its
  * directory. Only scripts/ and secrets/ IDs keep the file's name, a script
  * needs one of akm's script extensions, and a secret is no `.lock` or
  * `.sensitive` marker. This is akm's placement rule (asset-placement.js, 0.9.20),
  * checked type by type against the real binary in fake-akm-contract.test.ts. A
  * file that merely exists is therefore not a ref: `akm show` and `akm feedback`
- * refuse tasks/x.yml, env/x.env, skills/x/SKILL.md, skills/x/scripts/run.py and
+ * refuse workflows/x.yml (a workflow is `.md` only since akm 0.10), tasks/x.yml, env/x.env, skills/x/SKILL.md, skills/x/scripts/run.py and
  * scripts/x.html.
  *
  * A script or markdown file kept outside its type's directory is named by its

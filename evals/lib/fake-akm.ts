@@ -305,13 +305,13 @@ try {
 } catch {}
 
 // Strip global flags so we can find the verb. Mirrors the akm CLI surface
-// the hooks invoke: \`akm [--format X] [--shape S] [-q] [--detail Y] <verb> [args...]\`.
-// \`--shape\` is a v0.8.0 global flag (human|agent|summary); omitting it here made
-// the shim mis-detect the verb as "--shape" and emit nothing, collapsing curation.
+// the hooks invoke: \`akm [--format X] [-q] [--detail Y] <verb> [args...]\`, where \`--detail\` takes
+// brief|normal|full|agent. Omitting a value flag here made the shim mis-detect the
+// verb as the flag's value and emit nothing, collapsing curation.
 const args = []
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i]
-  if (a === "--format" || a === "--detail" || a === "--shape") {
+  if (a === "--format" || a === "--detail") {
     i++
     continue
   }
@@ -458,12 +458,6 @@ function xdgDir(akmVar, xdgVar, fallback) {
   return require("node:path").join(root, "akm")
 }
 
-// 0.9.15 workflow list envelopes carry a scope key derived from the cwd.
-function fakeScopeKey() {
-  const hash = require("node:crypto").createHash("sha256").update(process.cwd()).digest("hex")
-  return "dir:v1:" + hash
-}
-
 if (verb === "info") {
   const bundleDir = (process.env.AKM_BUNDLE_DIR || idx.bundleDir || "").trim()
   const byType = {}
@@ -472,7 +466,7 @@ if (verb === "info") {
     JSON.stringify({
       ok: true,
       schemaVersion: 1,
-      version: "0.9.30",
+      version: "0.10.26101002",
       bundleDir,
       cacheDir: xdgDir("AKM_CACHE_DIR", "XDG_CACHE_HOME", ".cache"),
       configDir: xdgDir("AKM_CONFIG_DIR", "XDG_CONFIG_HOME", ".config"),
@@ -498,6 +492,7 @@ if (verb === "info") {
       searchModes: ["fts"],
       semanticSearch: { mode: "off", status: "disabled" },
       registries: [],
+      connectionsAndHarnesses: [],
       sourceProviders: bundleDir ? [{ type: "filesystem", name: "bundle", path: bundleDir }] : [],
       indexStats: {
         entryCount: idx.assets.length,
@@ -605,7 +600,7 @@ if (verb === "config") {
 // envelope exercises the parse path without inventing fixture state.
 if (verb === "workflow" && tail[0] === "list") {
   const runs = []
-  process.stdout.write(JSON.stringify({ ok: true, runs, scopeKey: fakeScopeKey(), shape: "workflow-list", schemaVersion: 1, results: runs }))
+  process.stdout.write(JSON.stringify({ ok: true, runs, shape: "workflow-list", schemaVersion: 1, results: runs }))
   process.exit(0)
 }
 
@@ -720,16 +715,16 @@ if (verb === "feedback" || verb === "index") {
 }
 
 if (verb === "--version" || verb === "-V") {
-  // Plugin gates feature paths on satisfiesAkmVersionRange() which only
-  // accepts current 0.9 builds. Reporting an older fake version made the OpenCode plugin
+  // Plugin gates feature paths on meetsAkmMinVersion(), which refuses a build
+  // below AKM_MIN_VERSION. Reporting an older fake version made the OpenCode plugin
   // treat the shim as an incompatible CLI and silently short-circuit
-  // auto-feedback (queueFeedback bails before spawning). Keep this in lockstep
-  // with the plugin's required range so eval harnesses exercise the real path.
+  // auto-feedback (queueFeedback bails before spawning). Keep this at or above
+  // the plugin's minimum so eval harnesses exercise the real path.
   // Node 24 can drop an async stdout write when this short-lived fake calls
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers
   // always receive the semver that governs the compatibility gate.
-  writeFileSync(1, "fake-akm 0.9.30\\n")
+  writeFileSync(1, "fake-akm 0.10.26101002\\n")
   process.exit(0)
 }
 
