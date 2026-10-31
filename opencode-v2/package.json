@@ -39,7 +39,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "akm-cli": "0.10.261021"
+    "akm-cli": "0.10.261022"
   },
   "peerDependencies": {
     "@opencode/plugin": "2.1.4",
