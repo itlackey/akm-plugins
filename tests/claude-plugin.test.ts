@@ -668,6 +668,24 @@ exit 0
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemories/release-retro\takm show memories/release-retro --format json")
   })
 
+  it("records a ref outside the type folders from the JSON output of an akm Bash call", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    const bundleDir = makeBundle(tempDir, ["WORK/plan"])
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["post-tool", "success"], {
+      input: JSON.stringify({
+        tool: "Bash",
+        input: { command: "akm show WORK/plan --format json" },
+        output: "{\"type\":\"knowledge\",\"ref\":\"WORK/plan\",\"content\":\"Step one.\"}",
+      }),
+      env: { HOME: tempDir, PATH: process.env.PATH ?? "/usr/bin:/bin", XDG_STATE_HOME: stateDir, AKM_BUNDLE_DIR: bundleDir },
+    })
+
+    expect(getFirstLogEntry(stateDir, "memory.log")).toContain("WORK/plan")
+  })
+
   it("logs the outcome of a failed akm Bash call in feedback.log", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")
@@ -1754,10 +1772,10 @@ exit 0
     expect(sessionLog.some((line) => line.includes("akm_failed\tauto-feedback") && line.includes("feedback workflows/code-review"))).toBe(true)
   })
 
-  itPosix("auto-feedback spends no akm call on file paths that are not concept IDs", () => {
+  itPosix("auto-feedback spends no akm call on file paths that are not refs", () => {
     // Each of these exists under the bundle, and `akm show` / `akm feedback`
     // answer "not in the index" for all of them: a task's ID drops `.yml`, and
-    // a skill is its directory, not the files inside it. 157 of the 238
+    // a skill is its directory, and SKILL.md is not a ref. 157 of the 238
     // akm_failed rows on one machine came from this shape.
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
@@ -1795,7 +1813,12 @@ exit 0
       },
     })
 
-    expect(existsSync(callLog)).toBe(false)
+    // Only the skill's script is a ref (akm#1432: skills/rollout/scripts/run.py); the
+    // task file and SKILL.md are not.
+    const calls = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+    expect(calls).toContain("skills/rollout/scripts/run.py")
+    expect(calls).not.toContain("nightly")
+    expect(calls).not.toContain("SKILL.md")
   })
 
   itPosix("auto-feedback skips a ref the quality probe cannot resolve, and probes it again next time", () => {

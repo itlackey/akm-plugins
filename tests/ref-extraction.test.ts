@@ -3,8 +3,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
+  akmRefFromValue,
   extractAkmRefsFromString,
   extractAllRefs,
+  extractRefsFromAkmOutput,
   validateLiveRefs,
   validateRefCandidates,
 } from "../claude/shared/ref-extraction"
@@ -187,13 +189,33 @@ describe("validateRefCandidates", () => {
     ).toEqual(["facts/pricing-tiers", "instructions/pr-review", "sessions/2026-08-03-retro"])
   })
 
-  it("rejects retired roots even when the file exists on disk", () => {
-    // A bundle carried over from 0.8 may still have wikis/ on disk; 0.9 does
-    // not scaffold or recognize it, so it must never validate as a ref.
+  it("accepts a ref outside the concept roots once akm named it, but never extracts one from prose", () => {
     const bundle = makeBundle()
     touch(path.join(bundle, "wikis", "legacy-page.md"))
 
-    expect(validateRefCandidates(["wikis/legacy-page"], [bundle])).toEqual([])
+    expect(validateRefCandidates(["wikis/legacy-page"], [bundle])).toEqual(["wikis/legacy-page"])
+    expect(extractAllRefs("see wikis/legacy-page and src/app.ts")).toEqual([])
+    expect(akmRefFromValue("wikis/legacy-page#intro")).toBe("wikis/legacy-page#intro")
+    expect(akmRefFromValue("WORK/plan")).toBe("WORK/plan")
+    expect(akmRefFromValue("skills/x/scripts/run.py")).toBe("skills/x/scripts/run.py")
+    expect(akmRefFromValue("a/../b")).toBeUndefined()
+    expect(akmRefFromValue("two words")).toBeUndefined()
+    expect(akmRefFromValue(undefined)).toBeUndefined()
+  })
+
+  it("never takes SKILL.md for a ref, and types env/task/secret by an ancestor folder only", () => {
+    // akm's recognizer: a skill's ref is its directory; an env/task/secret needs an
+    // env/ tasks/ secrets/ folder among the file's ancestors, not as its own name.
+    const bundle = makeBundle()
+    touch(path.join(bundle, "skills", "rollout", "SKILL.md"))
+    touch(path.join(bundle, "notes", "env.env"))
+    touch(path.join(bundle, "notes", "tasks.yml"))
+    touch(path.join(bundle, "notes", "secrets"))
+    touch(path.join(bundle, "notes", "env", "prod.env"))
+
+    expect(
+      validateRefCandidates(["skills/rollout/SKILL", "skills/rollout", "notes/env", "notes/tasks", "notes/secrets", "notes/env/prod"], [bundle]),
+    ).toEqual(["notes/env/prod", "skills/rollout"])
   })
 
   it("rejects traversal, malformed, retired, and shell-like candidates", () => {
@@ -233,5 +255,23 @@ grep 'memories/missing|knowledge/projects/akm/missing' file.md
 skills/bun-review handled it.
 `
     expect(validateLiveRefs(transcript, [bundle])).toEqual(["memories/rollout-notes", "skills/bun-review"])
+  })
+})
+
+describe("extractRefsFromAkmOutput", () => {
+  it("keeps every ref akm emits, whatever its first folder", () => {
+    const output = JSON.stringify({
+      hits: [{ ref: "WORK/plan" }, { ref: "skills/x/scripts/run.py" }, { ref: "reports/data.js" }],
+      items: [{ ref: "release" }, { ref: "team//wikis/page#intro" }, { ref: "not a ref" }],
+    })
+
+    expect(extractRefsFromAkmOutput(output)).toEqual(["WORK/plan", "skills/x/scripts/run.py", "reports/data.js", "release", "team//wikis/page#intro"])
+    expect(extractRefsFromAkmOutput(JSON.stringify({ ref: "WORK/plan", content: "see src/app.ts and skills/a" }))).toEqual(["WORK/plan", "skills/a"])
+    expect(extractRefsFromAkmOutput("plain text: skills/a src/app.ts")).toEqual(["skills/a"])
+  })
+
+  it("reads the ref: lines of curate's text format, whatever their first folder", () => {
+    const text = "1. Plan\n  ref: WORK/plan\n  ref: team//wikis/page\n  ref: reports/data.js\n  note: ref: src/app.ts\n  ref: not a ref\n"
+    expect(extractRefsFromAkmOutput(text)).toEqual(["WORK/plan", "team//wikis/page", "reports/data.js"])
   })
 })

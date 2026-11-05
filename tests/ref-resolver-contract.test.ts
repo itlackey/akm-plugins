@@ -107,7 +107,7 @@ describe("AKM 0.9 ref-resolver contract", () => {
         ],
         [bundle],
       ),
-    ).toEqual(["knowledge/release-notes.md", "scripts/deploy.sh", "secrets/api-token", "skills/rollout"])
+    ).toEqual(["knowledge/release-notes.md", "scripts/deploy.sh", "secrets/api-token", "skills/rollout", "skills/rollout/references/notes.md", "skills/rollout/scripts/run.py"])
   })
 
   test("resolves a task, a workflow and an env file by the ID akm gives them", () => {
@@ -158,16 +158,14 @@ describe("AKM 0.9 ref-resolver contract", () => {
     ])
   })
 
-  test("resolves a script or markdown file kept outside its type's directory by its path from the bundle root", () => {
-    // akm resolves a concept ID against its type's directory and, for a file
-    // kept elsewhere in the bundle, against the bundle root: a skill's script is
-    // scripts/skills/x/scripts/run.py and its reference page knowledge/skills/x/
-    // references/notes, a page under wikis/ is knowledge/wikis/page (checked
-    // against 0.9.20, where fake-akm-contract.test.ts runs the same refs through
-    // the real binary). Not a file at the bundle root, which akm does not index,
-    // and not an ID that repeats its type's directory.
+  test("resolves a file kept outside its type's directory by its path from the bundle root", () => {
+    // akm#1432: a ref is the file's bundle-relative path minus the type's own
+    // suffix, so a skill's script is skills/x/scripts/run.py, its reference page
+    // skills/x/references/notes and a page under wikis/ is wikis/page. No ref
+    // spells a type in front of the path any more, and the first folder is no
+    // type: WORK/plan and a bundle-root file (release) are refs too.
     const bundle = makeBundle()
-    for (const file of ["skills/rollout/scripts/run.py", "skills/rollout/references/notes.md", "wikis/page.md", "eval/check.ts", "top.md", "topscript.sh"]) {
+    for (const file of ["skills/rollout/scripts/run.py", "skills/rollout/references/notes.md", "wikis/page.md", "eval/check.ts", "top.md", "topscript.sh", "WORK/plan.md"]) {
       touch(path.join(bundle, file))
     }
     touch(path.join(bundle, "scripts", "deploy.sh"))
@@ -175,26 +173,43 @@ describe("AKM 0.9 ref-resolver contract", () => {
     expect(
       validateRefCandidates(
         [
-          "scripts/skills/rollout/scripts/run.py",
-          "knowledge/skills/rollout/references/notes",
-          "knowledge/wikis/page",
-          "knowledge/wikis/page.md",
-          "scripts/eval/check.ts",
-          "scripts/skills/rollout/references/notes.md",
-          "knowledge/top",
-          "scripts/topscript.sh",
-          "scripts/scripts/deploy.sh",
+          "skills/rollout/scripts/run.py",
+          "skills/rollout/references/notes",
+          "wikis/page",
+          "wikis/page.md",
+          "eval/check.ts",
+          "eval/check",
+          "top",
+          "topscript.sh",
+          "WORK/plan",
+          "scripts/deploy.sh",
           "knowledge/knowledge/release-notes",
         ],
         [bundle],
       ),
     ).toEqual([
-      "knowledge/skills/rollout/references/notes",
-      "knowledge/wikis/page",
-      "knowledge/wikis/page.md",
-      "scripts/eval/check.ts",
-      "scripts/skills/rollout/scripts/run.py",
+      "WORK/plan",
+      "eval/check.ts",
+      "scripts/deploy.sh",
+      "skills/rollout/references/notes",
+      "skills/rollout/scripts/run.py",
+      "top",
+      "topscript.sh",
+      "wikis/page",
+      "wikis/page.md",
     ])
+  })
+
+  test("still resolves the spelling akm used before #1432", () => {
+    // akm resolves it with one warning, so a ref taken from an older akm's output counts.
+    const bundle = makeBundle()
+    for (const file of ["skills/rollout/scripts/run.py", "skills/rollout/references/notes.md", "wikis/page.md"]) {
+      touch(path.join(bundle, file))
+    }
+
+    expect(
+      validateRefCandidates(["scripts/skills/rollout/scripts/run.py", "knowledge/skills/rollout/references/notes", "knowledge/wikis/page", "scripts/scripts/nothing.sh"], [bundle]),
+    ).toEqual(["knowledge/skills/rollout/references/notes", "knowledge/wikis/page", "scripts/skills/rollout/scripts/run.py"])
   })
 
   test("resolves a script only when its extension is one akm indexes as a script", () => {
@@ -248,15 +263,13 @@ describe("AKM 0.9 ref-resolver contract", () => {
     ])
   })
 
-  test("does not resolve concept roots the 0.9 bundle layout no longer defines", () => {
-    // `wikis` was a 0.8-era root. A bundle upgraded in place may still carry
-    // the directory, but 0.9 neither scaffolds it nor reports it in
-    // assetTypes, so the resolver must treat it as an ordinary path.
+  test("resolves a folder that is no concept root", () => {
+    // The first folder says nothing about the type (akm#1432); only the concept-root
+    // allowlist of extractAllRefs keeps prose out.
     const bundle = makeBundle()
     touch(path.join(bundle, "wikis", "legacy-page.md"))
-    touch(path.join(bundle, "vaults", "legacy-vault.md"))
 
-    expect(validateRefCandidates(["wikis/legacy-page", "vaults/legacy-vault"], [bundle])).toEqual([])
+    expect(validateRefCandidates(["wikis/legacy-page", "vaults/missing"], [bundle])).toEqual(["wikis/legacy-page"])
   })
 
   test("uses the concept path for qualified and fragmented refs", () => {

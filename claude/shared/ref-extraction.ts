@@ -23,7 +23,13 @@ import path from "node:path";
 // for byte in sync with opencode/index.ts and evals/tier2/metrics/feedback.ts.
 const REF_PATTERN =
   /(?<![A-Za-z0-9@._+/:=-])(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?(?![A-Za-z0-9@._+/#$=-])/g;
+// An akm ref is the asset's bundle-relative path minus its type suffix (akm#1432),
+// so its first folder says nothing about its type and may be any folder (`WORK/plan`,
+// `reports/data.js`) or absent (`release`). This is the whole-token grammar: any
+// ref akm emits. It is no filter on prose; the allowlist above is.
 const AKM_REF_STRICT =
+  /^(?:[A-Za-z0-9@._+-]+\/\/)?[A-Za-z0-9@._+-]+(?:\/[A-Za-z0-9._+@-]+)*(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?$/;
+const CONCEPT_ROOT_REF =
   /^(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?$/;
 const EDGE_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", "(", ")", "[", "]", "{", "}", "'", "\"", "`"]);
 
@@ -46,14 +52,56 @@ export function extractAllRefs(text: string): string[] {
   return [...refs];
 }
 
-/** Return whitespace-delimited tokens that are complete AKM refs. */
+/**
+ * Return whitespace-delimited tokens that are complete refs under a concept
+ * root. Free text is scanned, so the concept-root allowlist still applies; use
+ * {@link akmRefFromValue} for a value akm itself produced or was given as a ref.
+ */
 export function extractAkmRefsFromString(text: string): string[] {
   const refs = new Set<string>();
   for (const token of text.split(/\s+/)) {
     const normalized = normalizeToken(token);
-    if (normalized && AKM_REF_STRICT.test(normalized)) refs.add(normalized);
+    if (normalized && CONCEPT_ROOT_REF.test(normalized)) refs.add(normalized);
   }
   return [...refs];
+}
+
+/**
+ * The ref in a field that holds one (`ref` of a search/curate/show result, the
+ * `ref` argument of an akm call), whatever its first folder. akm decides what a
+ * ref is; this only rejects values that cannot be one.
+ */
+export function akmRefFromValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const ref = value.trim();
+  return AKM_REF_STRICT.test(ref) && !ref.split("#", 1)[0].split("//").pop()!.split("/").some((s) => s === "." || s === "..") ? ref : undefined;
+}
+
+/**
+ * The `ref` of a parsed akm result and of its `hits[]` / `items[]` (search,
+ * curate, show), whatever their first folder.
+ */
+export function refsOfAkmResult(result: unknown): string[] {
+  if (!result || typeof result !== "object") return [];
+  const r = result as Record<string, unknown>;
+  const entries = [r, ...(Array.isArray(r.hits) ? r.hits : []), ...(Array.isArray(r.items) ? r.items : [])];
+  const refs = entries.map((e) => (e && typeof e === "object" ? akmRefFromValue((e as Record<string, unknown>).ref) : undefined));
+  return [...new Set(refs.filter((ref): ref is string => !!ref))];
+}
+
+/**
+ * Refs in the text of an akm result: {@link refsOfAkmResult} for JSON, the
+ * `ref:` lines of text-format output, plus any concept-root ref in the text.
+ */
+export function extractRefsFromAkmOutput(text: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  const refLines = [...text.matchAll(/^\s*ref:\s*(\S+)\s*$/gm)].map((m) => akmRefFromValue(m[1]));
+  return [...new Set([...refsOfAkmResult(parsed), ...refLines.filter((r): r is string => !!r), ...extractAkmRefsFromString(text)])];
 }
 
 interface NormalizedRef {
@@ -63,7 +111,8 @@ interface NormalizedRef {
 
 function normalizeCandidate(candidate: string): NormalizedRef | null {
   const canonical = normalizeToken(candidate);
-  if (!AKM_REF_STRICT.test(canonical)) return null;
+  const ref = akmRefFromValue(canonical);
+  if (!ref) return null;
 
   const withoutFragment = canonical.split("#", 1)[0] ?? "";
   const separator = withoutFragment.indexOf("//");
@@ -82,7 +131,7 @@ function isFile(file: string): boolean {
   }
 }
 
-// The extensions akm indexes under scripts/ as a script (SCRIPT_EXTENSIONS in
+// The extensions akm indexes as a script (SCRIPT_EXTENSIONS in
 // core/recognition-util.js, 0.9.20). Any other file there is no asset: `akm show`
 // reads it off disk and answers without a `ref`, and `akm feedback` refuses it.
 const SCRIPT_EXTENSIONS = new Set([
@@ -91,67 +140,59 @@ const SCRIPT_EXTENSIONS = new Set([
 
 /** `<id>.md`, or the file itself when the ID spells the extension out (akm toggles it). */
 function markdownFile(directPath: string): boolean {
+  if (path.basename(directPath).replace(/\.md$/, "") === "SKILL") return false;
   return isFile(`${directPath}.md`) || (directPath.endsWith(".md") && isFile(directPath));
 }
 
-/** Is there an asset of `type` at `directPath`, the path its concept ID names under some root? */
-function isAsset(type: string, directPath: string): boolean {
-  if (type === "skills") return isFile(path.join(directPath, "SKILL.md"));
-  if (type === "scripts") return SCRIPT_EXTENSIONS.has(path.extname(directPath).toLowerCase()) && isFile(directPath);
-  if (type === "secrets") return !/\.(lock|sensitive)$/.test(directPath) && isFile(directPath);
-  if (type === "tasks") return isFile(`${directPath}.yml`);
-  if (type === "env") {
-    return isFile(`${directPath}.env`) || (path.basename(directPath) === "default" && isFile(path.join(path.dirname(directPath), ".env")));
-  }
-  return markdownFile(directPath);
-}
-
-// The types akm also resolves for a file kept outside the type's directory, by
-// its path from the bundle root: scripts (typed by extension) and the markdown
-// types (typed by content). A task, env, secret, workflow or skill needs a
-// directory of its type among the file's ancestors.
-const OUTSIDE_THEIR_DIRECTORY = new Set(["scripts", "agents", "commands", "facts", "instructions", "knowledge", "lessons", "memories", "sessions"]);
-
 /**
- * Resolve a concept ID under any local bundle root without invoking AKM.
- *
- * A concept ID is the asset's path with the extension its type owns dropped:
- * `.md` for most types (tolerated in the ID too), `.yml` for a task, `.env` for an env (the default env of a directory is
- * its `.env` file, ID env/default or env/<dir>/default). A skill is its
- * directory. Only scripts/ and secrets/ IDs keep the file's name, a script
- * needs one of akm's script extensions, and a secret is no `.lock` or
- * `.sensitive` marker. This is akm's placement rule (asset-placement.js, 0.9.20),
- * checked type by type against the real binary in fake-akm-contract.test.ts. A
- * file that merely exists is therefore not a ref: `akm show` and `akm feedback`
- * refuse workflows/x.yml (a workflow is `.md` only since akm 0.10), tasks/x.yml, env/x.env, skills/x/SKILL.md, skills/x/scripts/run.py and
- * scripts/x.html.
- *
- * A script or markdown file kept outside its type's directory is named by its
- * path from the bundle root, as akm names it: a skill's script is
- * scripts/skills/x/scripts/run.py, a page under wikis/ is knowledge/wikis/page.
- * akm does not index a file at the bundle root, and an ID that repeats its type
- * (knowledge/knowledge/x) names nothing. For markdown akm picks the type from
- * the file's content, which a path rule cannot see, so the file existing is the
- * whole check there; the other types are matched in their own directory only.
+ * Is there an asset whose ref is `directPath` (the ref resolved under a bundle
+ * root)? A ref is the file's bundle-relative path minus its type's suffix (akm
+ * #1432): `.md` for the markdown types (tolerated in the ref too), `/SKILL.md`
+ * for a skill, `.env` for an env (`default` names the directory's `.env`), `.yml`
+ * for a task; a script keeps its extension and a secret its name. The check is
+ * by suffix and never by the ref's first folder, which no longer says what the
+ * file is. A file that merely exists is no ref: `akm show` and `akm feedback`
+ * refuse tasks/x.yml, env/x.env, skills/x/SKILL.md, workflows/x.yml and
+ * scripts/x.html. An env/task/secret still has to sit under a folder of that
+ * name, since only the folder tells those files from any other `.env`/`.yml`/bare file.
  *
  * It is a rule, not a second resolver. The index also leaves out what its walk
  * skips (git-ignored files, dot-directories, bin/ and node_modules/, a reserved
- * index.md or log.md) and what it cannot parse (a task or workflow); none of that
- * is modelled here. A ref the walk or parser rejects costs one refused probe,
- * since auto-feedback runs `akm show` before it submits.
+ * index.md or log.md) and what it cannot parse; none of that is modelled here.
+ * A ref the walk or parser rejects costs one refused probe, since
+ * auto-feedback runs `akm show` before it submits.
  */
+function isAsset(directPath: string, ref: string): boolean {
+  if (isFile(path.join(directPath, "SKILL.md")) || markdownFile(directPath)) return true;
+  if (SCRIPT_EXTENSIONS.has(path.extname(directPath).toLowerCase()) && isFile(directPath)) return true;
+  const folders = ref.split("/").slice(0, -1);
+  if (folders.includes("env")) {
+    if (isFile(`${directPath}.env`)) return true;
+    if (path.basename(directPath) === "default" && isFile(path.join(path.dirname(directPath), ".env"))) return true;
+  }
+  if (folders.includes("tasks") && isFile(`${directPath}.yml`)) return true;
+  return folders.includes("secrets") && !/\.(lock|sensitive)$/.test(directPath) && isFile(directPath);
+}
+
+// akm before #1432 named a file kept outside its type's directory with that
+// folder in front (`scripts/skills/x/scripts/run.py`, `knowledge/wikis/page`) and
+// still resolves the old spelling, with a warning. These are the folders it used.
+const LEGACY_PREFIXES = new Set(["scripts", "agents", "commands", "facts", "instructions", "knowledge", "lessons", "memories", "sessions"]);
+
+/** Resolve a ref under any local bundle root without invoking AKM. */
 function conceptExistsInAnyBundle(conceptId: string, bundleRoots: readonly string[]): boolean {
-  const type = conceptId.split("/", 1)[0];
-  const rest = conceptId.slice(type.length + 1);
+  const head = conceptId.split("/", 1)[0];
+  const rest = conceptId.slice(head.length + 1);
   for (const root of bundleRoots) {
     if (!root) continue;
     const resolvedRoot = path.resolve(root);
+    const inside = (file: string) => file !== resolvedRoot && file.startsWith(`${resolvedRoot}${path.sep}`);
     const directPath = path.resolve(resolvedRoot, conceptId);
-    if (directPath !== resolvedRoot && !directPath.startsWith(`${resolvedRoot}${path.sep}`)) continue;
-    if (isAsset(type, directPath)) return true;
+    if (inside(directPath) && isAsset(directPath, conceptId)) return true;
 
-    if (OUTSIDE_THEIR_DIRECTORY.has(type) && rest.includes("/") && !rest.startsWith(`${type}/`)) {
-      if (isAsset(type, path.resolve(resolvedRoot, rest))) return true;
+    if (LEGACY_PREFIXES.has(head) && rest.includes("/") && !rest.startsWith(`${head}/`)) {
+      const legacyPath = path.resolve(resolvedRoot, rest);
+      if (inside(legacyPath) && isAsset(legacyPath, rest)) return true;
     }
   }
   return false;
