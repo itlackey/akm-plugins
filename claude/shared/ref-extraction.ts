@@ -89,7 +89,10 @@ export function refsOfAkmResult(result: unknown): string[] {
   return [...new Set(refs.filter((ref): ref is string => !!ref))];
 }
 
-/** Refs in the text of an akm result: {@link refsOfAkmResult} plus any concept-root ref in the text. */
+/**
+ * Refs in the text of an akm result: {@link refsOfAkmResult} for JSON, the
+ * `ref:` lines of text-format output, plus any concept-root ref in the text.
+ */
 export function extractRefsFromAkmOutput(text: string): string[] {
   let parsed: unknown;
   try {
@@ -97,7 +100,8 @@ export function extractRefsFromAkmOutput(text: string): string[] {
   } catch {
     parsed = undefined;
   }
-  return [...new Set([...refsOfAkmResult(parsed), ...extractAkmRefsFromString(text)])];
+  const refLines = [...text.matchAll(/^\s*ref:\s*(\S+)\s*$/gm)].map((m) => akmRefFromValue(m[1]));
+  return [...new Set([...refsOfAkmResult(parsed), ...refLines.filter((r): r is string => !!r), ...extractAkmRefsFromString(text)])];
 }
 
 interface NormalizedRef {

@@ -38,7 +38,6 @@ import {
   classifyToolFeedback,
   createFeedbackTracker,
   extractAkmRefsFromAllArgs,
-  extractToolRefs,
   type NegativeFeedback,
   parseToolOutput,
   spawnPositiveFeedback,

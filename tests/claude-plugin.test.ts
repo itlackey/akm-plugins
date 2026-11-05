@@ -668,6 +668,24 @@ exit 0
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemories/release-retro\takm show memories/release-retro --format json")
   })
 
+  it("records a ref outside the type folders from the JSON output of an akm Bash call", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    const bundleDir = makeBundle(tempDir, ["WORK/plan"])
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["post-tool", "success"], {
+      input: JSON.stringify({
+        tool: "Bash",
+        input: { command: "akm show WORK/plan --format json" },
+        output: "{\"type\":\"knowledge\",\"ref\":\"WORK/plan\",\"content\":\"Step one.\"}",
+      }),
+      env: { HOME: tempDir, PATH: process.env.PATH ?? "/usr/bin:/bin", XDG_STATE_HOME: stateDir, AKM_BUNDLE_DIR: bundleDir },
+    })
+
+    expect(getFirstLogEntry(stateDir, "memory.log")).toContain("WORK/plan")
+  })
+
   it("logs the outcome of a failed akm Bash call in feedback.log", () => {
     const tempDir = makeTempDir()
     const stateDir = path.join(tempDir, "state")

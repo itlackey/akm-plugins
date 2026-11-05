@@ -269,4 +269,9 @@ describe("extractRefsFromAkmOutput", () => {
     expect(extractRefsFromAkmOutput(JSON.stringify({ ref: "WORK/plan", content: "see src/app.ts and skills/a" }))).toEqual(["WORK/plan", "skills/a"])
     expect(extractRefsFromAkmOutput("plain text: skills/a src/app.ts")).toEqual(["skills/a"])
   })
+
+  it("reads the ref: lines of curate's text format, whatever their first folder", () => {
+    const text = "1. Plan\n  ref: WORK/plan\n  ref: team//wikis/page\n  ref: reports/data.js\n  note: ref: src/app.ts\n  ref: not a ref\n"
+    expect(extractRefsFromAkmOutput(text)).toEqual(["WORK/plan", "team//wikis/page", "reports/data.js"])
+  })
 })

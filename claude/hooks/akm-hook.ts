@@ -28,7 +28,7 @@ import {
 } from "../shared/learning-signals"
 import { isNonTaskPrompt, shouldRecall, stripLeadingEnvelopes } from "../shared/recall-policy"
 import { redactSecrets } from "../shared/redaction"
-import { extractAllRefs, validateRefCandidates } from "../shared/ref-extraction"
+import { extractAllRefs, extractRefsFromAkmOutput, validateRefCandidates } from "../shared/ref-extraction"
 import { RUN_TIMED_OUT, runPlan } from "../shared/spawn-plan"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
@@ -853,7 +853,8 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
   // them. Memoization cannot help: each Claude hook invocation is a fresh
   // sh+bun process. Reordering is the only fix that works.
   const commandCandidates = extractAllRefs(rawCommandText)
-  const outputCandidates = extractAllRefs(rawOutputText)
+  // The output of an akm command is akm's own: its refs are taken as emitted.
+  const outputCandidates = /(?:^|[\s;&|(])akm\s/.test(rawCommandText) ? akmOutputRefs(rawOutputText) : extractAllRefs(rawOutputText)
   const bundleRoots = commandCandidates.length > 0 || outputCandidates.length > 0 ? resolveStashRoots() : []
   const commandRefs = validateRefCandidates(commandCandidates, bundleRoots)
   const outputRefs = validateRefCandidates(outputCandidates, bundleRoots)
@@ -868,6 +869,11 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
       ? parsed.sessionId.replace(/[^A-Za-z0-9._-]/g, "")
       : ""
   return { toolName, commandText, outputText, statusText: mode || "success", refs, commandRefs, outputRefs, sid }
+}
+
+/** Refs in akm's own output: those it emits (any folder) plus the passive allowlist. */
+function akmOutputRefs(text: string): string[] {
+  return [...new Set([...extractRefsFromAkmOutput(text), ...extractAllRefs(text)])]
 }
 
 function posttoolNonBash(): string {
@@ -1711,7 +1717,7 @@ function curatePrompt(): string {
     // and are authoritative by construction. Validating would add a second
     // `akm info` spawn to a UserPromptSubmit hook that has already spent up to
     // CURATE_TIMEOUT seconds on the curate call itself.
-    refs: extractAllRefs(curated),
+    refs: akmOutputRefs(curated),
     outcome: { status: curated.trim() ? "ok" : "skipped" },
   })
   if (!curated.trim()) return ""
@@ -1874,7 +1880,7 @@ async function sessionStart(): Promise<string> {
     // Validate: the roots were already resolved above for the missing-bundle
     // warning, so the filesystem check costs no extra subprocess here — only a
     // handful of existsSync() calls on a path SessionStart has already stat'd.
-    refs: validateRefCandidates(extractAllRefs(curatedTrimmed), bundleRoots),
+    refs: validateRefCandidates(akmOutputRefs(curatedTrimmed), bundleRoots),
     outcome: { status: "ok" },
   })
   let body = SESSION_START_HEADER
