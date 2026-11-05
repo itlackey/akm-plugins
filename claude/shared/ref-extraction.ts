@@ -174,26 +174,14 @@ function isAsset(directPath: string, ref: string): boolean {
   return folders.includes("secrets") && !/\.(lock|sensitive)$/.test(directPath) && isFile(directPath);
 }
 
-// akm before #1432 named a file kept outside its type's directory with that
-// folder in front (`scripts/skills/x/scripts/run.py`, `knowledge/wikis/page`) and
-// still resolves the old spelling, with a warning. These are the folders it used.
-const LEGACY_PREFIXES = new Set(["scripts", "agents", "commands", "facts", "instructions", "knowledge", "lessons", "memories", "sessions"]);
-
 /** Resolve a ref under any local bundle root without invoking AKM. */
 function conceptExistsInAnyBundle(conceptId: string, bundleRoots: readonly string[]): boolean {
-  const head = conceptId.split("/", 1)[0];
-  const rest = conceptId.slice(head.length + 1);
   for (const root of bundleRoots) {
     if (!root) continue;
     const resolvedRoot = path.resolve(root);
     const inside = (file: string) => file !== resolvedRoot && file.startsWith(`${resolvedRoot}${path.sep}`);
     const directPath = path.resolve(resolvedRoot, conceptId);
     if (inside(directPath) && isAsset(directPath, conceptId)) return true;
-
-    if (LEGACY_PREFIXES.has(head) && rest.includes("/") && !rest.startsWith(`${head}/`)) {
-      const legacyPath = path.resolve(resolvedRoot, rest);
-      if (inside(legacyPath) && isAsset(legacyPath, rest)) return true;
-    }
   }
   return false;
 }

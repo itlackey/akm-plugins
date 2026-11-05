@@ -214,7 +214,7 @@ describe("fake-akm envelope contract", () => {
 
       // Every call is independent of the others, so they overlap.
       const concepts = ["knowledge/guide", "knowledge/guide.md", "tasks/nightly", "skills/rollout"]
-      const files = ["tasks/nightly.yml", "skills/rollout/SKILL.md", "skills/rollout/scripts/run.py"]
+      const files = ["tasks/nightly.yml", "skills/rollout/SKILL.md"]
       const calls = [
         ...concepts.map((ref) => ["--format", "json", "-q", "show", ref]),
         ...files.flatMap((ref) => [["--format", "json", "-q", "show", ref], ["feedback", ref, "--positive", "--format", "json", "-q"]]),
@@ -300,19 +300,19 @@ describe("fake-akm envelope contract", () => {
         "instructions/review",
         "knowledge/guide",
         "knowledge/guide.md",
-        "knowledge/skills/rollout/references/notes",
-        "knowledge/wikis/page",
         "lessons/rollback",
         "memories/notes",
         "memories/solo.derived",
         "scripts/deploy.sh",
-        "scripts/skills/rollout/scripts/run.py",
         "scripts/team/tool.py",
         "secrets/api-token",
         "secrets/tls.pem",
         "sessions/retro",
         "skills/rollout",
+        "skills/rollout/references/notes",
+        "skills/rollout/scripts/run.py",
         "tasks/nightly",
+        "wikis/page",
         "workflows/release",
         "workflows/release.md",
       ]
@@ -326,12 +326,15 @@ describe("fake-akm envelope contract", () => {
         "knowledge/guide.md.bak",
         "knowledge/knowledge/guide",
         "knowledge/missing",
+        "knowledge/skills/rollout/references/notes",
+        "knowledge/wikis/page",
         "knowledge/top",
         "memories/solo",
         "scripts/data.json",
         "scripts/deploy",
         "scripts/page.html",
         "scripts/scripts/deploy.sh",
+        "scripts/skills/rollout/scripts/run.py",
         "scripts/topscript.sh",
         "secrets/old.lock",
         "skills/rollout/SKILL.md",
@@ -355,12 +358,6 @@ describe("fake-akm envelope contract", () => {
       expect(canonical.filter((ref) => !accepted.get(ref))).toEqual([])
       expect(refused.filter((ref) => accepted.get(ref))).toEqual([])
       expect(validateRefCandidates([...canonical, ...refused], [bundle])).toEqual([...canonical].sort())
-      // The pinned akm predates akm#1432 and spells a file outside its type folder with the old
-      // prefix, so the new spelling cannot be put to the binary until the pin moves. Both are refs.
-      expect(validateRefCandidates(["skills/rollout/scripts/run.py", "skills/rollout/references/notes"], [bundle])).toEqual([
-        "skills/rollout/references/notes",
-        "skills/rollout/scripts/run.py",
-      ])
     } finally {
       cleanup(real)
     }
