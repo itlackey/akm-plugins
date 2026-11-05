@@ -47,12 +47,12 @@ if (!akmAvailable) {
 const REAL_AKM_TIMEOUT_MS = 30_000
 const REAL_AKM_CONCURRENCY = Math.max(2, Math.min(6, availableParallelism()))
 
-/** Is the installed akm-cli at or past 0.10.261107, the first with akm#1434 path refs? */
-function akmHasPathRefs(): boolean {
+/** Is the installed akm-cli at or past 0.10.<patch>? */
+function akmAtLeast(minPatch: number): boolean {
   try {
     const pkg = JSON.parse(readFileSync(path.join(repoRoot, "opencode/node_modules/akm-cli/package.json"), "utf8")) as { version: string }
     const [major, minor, patch] = pkg.version.split(/[.-]/).map(Number)
-    return major > 0 || minor > 10 || (minor === 10 && patch >= 261107)
+    return major > 0 || minor > 10 || (minor === 10 && patch >= minPatch)
   } catch {
     return false
   }
@@ -326,20 +326,18 @@ describe("fake-akm envelope contract", () => {
       ]
       // Each of these names a file akm has, and akm refuses it: `show` fails, or
       // answers without a ref, or `feedback` fails. A .yml workflow is not indexed at all since 0.10. Files at
-      // the bundle root are not indexed, and an ID may not repeat its type.
+      // the bundle root are not indexed.
       const refused = [
         "env/.env",
         "env/staging.env",
         "env/team/.env",
         "knowledge/guide.md.bak",
-        "knowledge/knowledge/guide",
         "knowledge/missing",
         "knowledge/top",
         "memories/solo",
         "scripts/data.json",
         "scripts/deploy",
         "scripts/page.html",
-        "scripts/scripts/deploy.sh",
         "scripts/topscript.sh",
         "secrets/old.lock",
         "skills/rollout/SKILL.md",
@@ -350,15 +348,20 @@ describe("fake-akm envelope contract", () => {
         "workflows/ship.yml",
       ]
 
-      // akm#1434 (0.10.261107) names a file outside its type folder by its bundle path and
-      // refuses the older spelling in `feedback`; before it, the reverse. The pin on main may
-      // predate it, so these are probed only against an akm that has it.
+      // akm#1434 (0.10.261107) names a file outside its type folder by its bundle path; akm#1440
+      // (0.10.261108) makes every command accept the older spelling again (one warning), as it
+      // accepts a type folder repeated in front of an ID. The pin on main may predate either, so
+      // each is probed only against an akm that has it.
       const pathRefs = ["skills/rollout/references/notes", "skills/rollout/scripts/run.py", "wikis/page"]
-      const oldSpellings = ["knowledge/skills/rollout/references/notes", "knowledge/wikis/page", "scripts/skills/rollout/scripts/run.py"]
-      if (akmHasPathRefs()) {
-        canonical.push(...pathRefs)
-        refused.push(...oldSpellings)
-      }
+      const oldSpellings = [
+        "knowledge/skills/rollout/references/notes",
+        "knowledge/wikis/page",
+        "scripts/skills/rollout/scripts/run.py",
+        "knowledge/knowledge/guide",
+        "scripts/scripts/deploy.sh",
+      ]
+      if (akmAtLeast(261107)) canonical.push(...pathRefs)
+      if (akmAtLeast(261108)) canonical.push(...oldSpellings)
 
       const accepts = async (ref: string) => {
         const show = await runAsync(process.execPath, [REAL_AKM, "--format", "json", "-q", "show", ref], realAkmEnv(real))

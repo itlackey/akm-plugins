@@ -162,7 +162,7 @@ describe("AKM 0.9 ref-resolver contract", () => {
     // akm#1432: a ref is the file's bundle-relative path minus the type's own
     // suffix, so a skill's script is skills/x/scripts/run.py, its reference page
     // skills/x/references/notes and a page under wikis/ is wikis/page. No ref
-    // spells a type in front of the path any more, and the first folder is no
+    // spells a type in front of the path any more (akm still resolves that spelling, akm#1440), and the first folder is no
     // type: WORK/plan and a bundle-root file (release) are refs too.
     const bundle = makeBundle()
     for (const file of ["skills/rollout/scripts/run.py", "skills/rollout/references/notes.md", "wikis/page.md", "eval/check.ts", "top.md", "topscript.sh", "WORK/plan.md"]) {
@@ -190,6 +190,7 @@ describe("AKM 0.9 ref-resolver contract", () => {
     ).toEqual([
       "WORK/plan",
       "eval/check.ts",
+      "knowledge/knowledge/release-notes",
       "scripts/deploy.sh",
       "skills/rollout/references/notes",
       "skills/rollout/scripts/run.py",
@@ -200,16 +201,16 @@ describe("AKM 0.9 ref-resolver contract", () => {
     ])
   })
 
-  test("names a file outside its type folder by its path, not the spelling akm used before #1432", () => {
-    // `show` still resolves the old spelling with a warning, but `feedback` refuses it.
+  test("resolves a file outside its type folder by its path and by the spelling akm used before #1432", () => {
+    // akm resolves the old spelling everywhere (akm#1440), with one warning.
     const bundle = makeBundle()
     for (const file of ["skills/rollout/scripts/run.py", "skills/rollout/references/notes.md", "wikis/page.md"]) {
       touch(path.join(bundle, file))
     }
 
     expect(
-      validateRefCandidates(["scripts/skills/rollout/scripts/run.py", "knowledge/skills/rollout/references/notes", "knowledge/wikis/page", "skills/rollout/scripts/run.py", "skills/rollout/references/notes", "wikis/page"], [bundle]),
-    ).toEqual(["skills/rollout/references/notes", "skills/rollout/scripts/run.py", "wikis/page"])
+      validateRefCandidates(["scripts/skills/rollout/scripts/run.py", "knowledge/skills/rollout/references/notes", "knowledge/wikis/page", "skills/rollout/scripts/run.py", "skills/rollout/references/notes", "wikis/page", "scripts/scripts/nothing.sh"], [bundle]),
+    ).toEqual(["knowledge/skills/rollout/references/notes", "knowledge/wikis/page", "scripts/skills/rollout/scripts/run.py", "skills/rollout/references/notes", "skills/rollout/scripts/run.py", "wikis/page"])
   })
 
   test("resolves a script only when its extension is one akm indexes as a script", () => {
