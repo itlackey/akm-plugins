@@ -19,7 +19,7 @@ import {
   createRetrospectiveNegativeRegex,
   shouldSubmitAutomaticFeedback,
 } from "../claude/shared/feedback-signals"
-import { akmRefFromValue, extractAkmRefsFromString, validateRefCandidates } from "../claude/shared/ref-extraction"
+import { akmRefFromValue, extractAkmRefsFromString, refsOfAkmResult, validateRefCandidates } from "../claude/shared/ref-extraction"
 import { type ResolvedAkmCommand, isCliError, runAkm } from "./akm-cli"
 import { type EventWriter, buildEventScope } from "./events"
 
@@ -64,37 +64,9 @@ export function classifyToolFeedback(value: unknown): "positive" | "negative" | 
 }
 
 /** Refs an akm tool call named (its `ref` argument) or returned (`ref`, `hits[]`, `items[]`). */
-export function extractToolRefs(toolName: string, args: Record<string, unknown>, output: unknown): string[] {
-  const refs = new Set<string>()
-  const addMatches = (value: unknown) => {
-    // The `ref` field of akm's own call or result: any first folder is valid.
-    const ref = akmRefFromValue(value)
-    if (ref) refs.add(ref)
-  }
-
-  for (const key of ["ref", "package_ref"]) addMatches(args[key])
-
-  if (output && typeof output === "object") {
-    const o = output as Record<string, unknown>
-    addMatches(o.ref)
-    if (Array.isArray(o.hits)) {
-      for (const hit of o.hits) {
-        if (hit && typeof hit === "object") addMatches((hit as Record<string, unknown>).ref)
-      }
-    }
-    // akmCurate returns { query, summary, items } — not `hits` — so without this
-    // branch a curate call yields no refs at all and nothing downstream (the
-    // write gate's already-shown credit, tool_observation, the feedback buffer)
-    // can see what the model was handed.
-    if (Array.isArray(o.items)) {
-      for (const item of o.items) {
-        if (item && typeof item === "object") addMatches((item as Record<string, unknown>).ref)
-      }
-    }
-    if (toolName === "akm_remember" && typeof o.ref === "string") addMatches(o.ref)
-  }
-
-  return [...refs]
+export function extractToolRefs(args: Record<string, unknown>, output: unknown): string[] {
+  const named = [args.ref, args.package_ref].map(akmRefFromValue).filter((ref): ref is string => !!ref)
+  return [...new Set([...named, ...refsOfAkmResult(output)])]
 }
 
 /** Refs mentioned anywhere in a tool call's arguments (any tool, not only akm's). */
@@ -246,7 +218,7 @@ export function createFeedbackTracker(options: { maxBufferEntries: number; now?:
     const candidateRefs = [...new Set([...extractAkmRefsFromAllArgs(input.args), ...extractAkmRefsFromString(input.outputText)])]
     const parsed = isAkmTool ? parseToolOutput(input.outputText) : null
     const refs = isAkmTool && parsed
-      ? extractToolRefs(input.tool, input.args, parsed)
+      ? extractToolRefs(input.args, parsed)
       : validateRefCandidates(candidateRefs, [(await input.getBundleDir()) ?? ""])
     const failedCall = classifyToolFeedback(parsed) === "negative"
     if (refs.length > 0) {
@@ -281,7 +253,7 @@ export function createFeedbackTracker(options: { maxBufferEntries: number; now?:
     writeEvent: EventWriter
   }): { outcome: "positive" | "negative" | undefined; refs: string[]; failedCall: boolean } {
     const outcome = classifyToolFeedback(input.parsed)
-    const refs = extractToolRefs(input.tool, input.args, input.parsed)
+    const refs = extractToolRefs(input.args, input.parsed)
     const failedCall = outcome === "negative"
     if (!failedCall) noteRecentRefs(input.sessionID, refs)
     input.writeEvent({

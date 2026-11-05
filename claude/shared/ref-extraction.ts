@@ -78,29 +78,26 @@ export function akmRefFromValue(value: unknown): string | undefined {
 }
 
 /**
- * Refs in the text of an akm result: the `ref` of the result itself and of its
- * `hits[]` / `items[]` (search, curate, show), whatever their first folder, plus
- * any concept-root ref found in the rest of the text.
+ * The `ref` of a parsed akm result and of its `hits[]` / `items[]` (search,
+ * curate, show), whatever their first folder.
  */
+export function refsOfAkmResult(result: unknown): string[] {
+  if (!result || typeof result !== "object") return [];
+  const r = result as Record<string, unknown>;
+  const entries = [r, ...(Array.isArray(r.hits) ? r.hits : []), ...(Array.isArray(r.items) ? r.items : [])];
+  const refs = entries.map((e) => (e && typeof e === "object" ? akmRefFromValue((e as Record<string, unknown>).ref) : undefined));
+  return [...new Set(refs.filter((ref): ref is string => !!ref))];
+}
+
+/** Refs in the text of an akm result: {@link refsOfAkmResult} plus any concept-root ref in the text. */
 export function extractRefsFromAkmOutput(text: string): string[] {
-  const refs = new Set<string>();
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     parsed = undefined;
   }
-  if (parsed && typeof parsed === "object") {
-    const result = parsed as Record<string, unknown>;
-    const add = (entry: unknown) => {
-      const ref = entry && typeof entry === "object" ? akmRefFromValue((entry as Record<string, unknown>).ref) : undefined;
-      if (ref) refs.add(ref);
-    };
-    add(result);
-    for (const list of [result.hits, result.items]) if (Array.isArray(list)) list.forEach(add);
-  }
-  for (const ref of extractAkmRefsFromString(text)) refs.add(ref);
-  return [...refs];
+  return [...new Set([...refsOfAkmResult(parsed), ...extractAkmRefsFromString(text)])];
 }
 
 interface NormalizedRef {
@@ -139,7 +136,7 @@ const SCRIPT_EXTENSIONS = new Set([
 
 /** `<id>.md`, or the file itself when the ID spells the extension out (akm toggles it). */
 function markdownFile(directPath: string): boolean {
-  if (path.basename(directPath) === "SKILL.md") return false;
+  if (path.basename(directPath).replace(/\.md$/, "") === "SKILL") return false;
   return isFile(`${directPath}.md`) || (directPath.endsWith(".md") && isFile(directPath));
 }
 
@@ -164,7 +161,7 @@ function markdownFile(directPath: string): boolean {
 function isAsset(directPath: string, ref: string): boolean {
   if (isFile(path.join(directPath, "SKILL.md")) || markdownFile(directPath)) return true;
   if (SCRIPT_EXTENSIONS.has(path.extname(directPath).toLowerCase()) && isFile(directPath)) return true;
-  const folders = ref.split("/");
+  const folders = ref.split("/").slice(0, -1);
   if (folders.includes("env")) {
     if (isFile(`${directPath}.env`)) return true;
     if (path.basename(directPath) === "default" && isFile(path.join(path.dirname(directPath), ".env"))) return true;

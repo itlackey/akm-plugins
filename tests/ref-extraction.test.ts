@@ -203,6 +203,21 @@ describe("validateRefCandidates", () => {
     expect(akmRefFromValue(undefined)).toBeUndefined()
   })
 
+  it("never takes SKILL.md for a ref, and types env/task/secret by an ancestor folder only", () => {
+    // akm's recognizer: a skill's ref is its directory; an env/task/secret needs an
+    // env/ tasks/ secrets/ folder among the file's ancestors, not as its own name.
+    const bundle = makeBundle()
+    touch(path.join(bundle, "skills", "rollout", "SKILL.md"))
+    touch(path.join(bundle, "notes", "env.env"))
+    touch(path.join(bundle, "notes", "tasks.yml"))
+    touch(path.join(bundle, "notes", "secrets"))
+    touch(path.join(bundle, "notes", "env", "prod.env"))
+
+    expect(
+      validateRefCandidates(["skills/rollout/SKILL", "skills/rollout", "notes/env", "notes/tasks", "notes/secrets", "notes/env/prod"], [bundle]),
+    ).toEqual(["notes/env/prod", "skills/rollout"])
+  })
+
   it("rejects traversal, malformed, retired, and shell-like candidates", () => {
     const bundle = makeBundle()
     touch(path.join(bundle, "memories", "real.md"))

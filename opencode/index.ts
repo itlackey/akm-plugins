@@ -867,15 +867,6 @@ async function runInProcess(
   }
 }
 
-// The AKM 0.9 asset-type vocabulary, in the singular form `--type` accepts.
-// This is exactly `akm info --format json` -> .assetTypes, sorted; keep the two
-// in step when akm adds a type. Note there is no `wiki` type in 0.9 — the entry
-// that used to be here made `type: "wiki"` a selectable enum value that akm
-// answers with an empty hit list rather than an error, i.e. a silent dead end,
-// while `instruction`, `session`, and `fact` could not be filtered for at all.
-// `any` is a tool-surface sentinel, not an akm type: it means "no filter" and is
-// stripped before the value reaches akm, so it sorts last.
-
 function isCliError(value: unknown): value is CliError {
   return !!value
     && typeof value === "object"
