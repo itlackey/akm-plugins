@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { availableParallelism, tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, type FakeAkmAsset } from "../evals/lib/fake-akm"
@@ -46,6 +46,17 @@ if (!akmAvailable) {
 // probe many refs also overlap their spawns, up to this many at a time.
 const REAL_AKM_TIMEOUT_MS = 30_000
 const REAL_AKM_CONCURRENCY = Math.max(2, Math.min(6, availableParallelism()))
+
+/** Is the installed akm-cli at or past 0.10.261107, the first with akm#1434 path refs? */
+function akmHasPathRefs(): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(repoRoot, "opencode/node_modules/akm-cli/package.json"), "utf8")) as { version: string }
+    const [major, minor, patch] = pkg.version.split(/[.-]/).map(Number)
+    return major > 0 || minor > 10 || (minor === 10 && patch >= 261107)
+  } catch {
+    return false
+  }
+}
 
 /**
  * Shape fingerprint used for comparison: sorted top-level keys for a JSON
@@ -214,7 +225,7 @@ describe("fake-akm envelope contract", () => {
 
       // Every call is independent of the others, so they overlap.
       const concepts = ["knowledge/guide", "knowledge/guide.md", "tasks/nightly", "skills/rollout"]
-      const files = ["tasks/nightly.yml", "skills/rollout/SKILL.md", "skills/rollout/scripts/run.py"]
+      const files = ["tasks/nightly.yml", "skills/rollout/SKILL.md"]
       const calls = [
         ...concepts.map((ref) => ["--format", "json", "-q", "show", ref]),
         ...files.flatMap((ref) => [["--format", "json", "-q", "show", ref], ["feedback", ref, "--positive", "--format", "json", "-q"]]),
@@ -300,13 +311,10 @@ describe("fake-akm envelope contract", () => {
         "instructions/review",
         "knowledge/guide",
         "knowledge/guide.md",
-        "knowledge/skills/rollout/references/notes",
-        "knowledge/wikis/page",
         "lessons/rollback",
         "memories/notes",
         "memories/solo.derived",
         "scripts/deploy.sh",
-        "scripts/skills/rollout/scripts/run.py",
         "scripts/team/tool.py",
         "secrets/api-token",
         "secrets/tls.pem",
@@ -342,6 +350,16 @@ describe("fake-akm envelope contract", () => {
         "workflows/ship.yml",
       ]
 
+      // akm#1434 (0.10.261107) names a file outside its type folder by its bundle path and
+      // refuses the older spelling in `feedback`; before it, the reverse. The pin on main may
+      // predate it, so these are probed only against an akm that has it.
+      const pathRefs = ["skills/rollout/references/notes", "skills/rollout/scripts/run.py", "wikis/page"]
+      const oldSpellings = ["knowledge/skills/rollout/references/notes", "knowledge/wikis/page", "scripts/skills/rollout/scripts/run.py"]
+      if (akmHasPathRefs()) {
+        canonical.push(...pathRefs)
+        refused.push(...oldSpellings)
+      }
+
       const accepts = async (ref: string) => {
         const show = await runAsync(process.execPath, [REAL_AKM, "--format", "json", "-q", "show", ref], realAkmEnv(real))
         const named = show.exitCode === 0 && typeof (JSON.parse(show.stdout) as { ref?: unknown }).ref === "string"
@@ -355,12 +373,6 @@ describe("fake-akm envelope contract", () => {
       expect(canonical.filter((ref) => !accepted.get(ref))).toEqual([])
       expect(refused.filter((ref) => accepted.get(ref))).toEqual([])
       expect(validateRefCandidates([...canonical, ...refused], [bundle])).toEqual([...canonical].sort())
-      // The pinned akm predates akm#1432 and spells a file outside its type folder with the old
-      // prefix, so the new spelling cannot be put to the binary until the pin moves. Both are refs.
-      expect(validateRefCandidates(["skills/rollout/scripts/run.py", "skills/rollout/references/notes"], [bundle])).toEqual([
-        "skills/rollout/references/notes",
-        "skills/rollout/scripts/run.py",
-      ])
     } finally {
       cleanup(real)
     }
