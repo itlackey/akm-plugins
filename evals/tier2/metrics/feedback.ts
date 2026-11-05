@@ -54,6 +54,7 @@
 
 import { readFileSync } from "node:fs"
 import path from "node:path"
+import { akmRefFromValue } from "../../../claude/shared/ref-extraction"
 import { createSandbox } from "../../lib/stash-sandbox"
 import { runClaudeHook } from "../harness/claude"
 import { createOpenCodeHarness } from "../harness/opencode"
@@ -98,14 +99,6 @@ function drivesFor(fixture: FeedbackFixture): Array<"success" | "failure"> {
   return [fixture.label === "positive" ? "success" : "failure"]
 }
 
-// AKM 0.9 ref grammar: [bundle//]conceptId[#fragment], where conceptId is the
-// asset's own path inside the bundle. Anchored, because this is tested against
-// a single argv element. Keep the concept-root list in lockstep with
-// claude/shared/ref-extraction.ts and opencode/index.ts — `env` is singular,
-// `facts`/`instructions`/`sessions` are new in 0.9, and there is no `wikis`.
-const REF_RE =
-  /^(?:[A-Za-z0-9@._+-]+\/\/)?(?:agents|commands|env|facts|instructions|knowledge|lessons|memories|scripts|secrets|sessions|skills|tasks|workflows)\/[A-Za-z0-9._/-]+(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]+)?$/
-
 // Inspect the call log for any `akm feedback <ref> --positive|--negative` calls.
 function readEmittedFeedback(callLog: string): Array<{ ref: string; sentiment: "positive" | "negative" }> {
   const calls = readCallLog(callLog)
@@ -115,7 +108,9 @@ function readEmittedFeedback(callLog: string): Array<{ ref: string; sentiment: "
     const positive = call.argv.includes("--positive")
     const negative = call.argv.includes("--negative")
     if (!positive && !negative) continue
-    const ref = call.argv.find((a) => REF_RE.test(a))
+    // The ref is the argument after the verb. Its first folder says nothing about
+    // its type (akm#1432), so any ref akm accepts counts.
+    const ref = akmRefFromValue(call.argv[call.argv.indexOf("feedback") + 1])
     if (!ref) continue
     out.push({ ref, sentiment: positive ? "positive" : "negative" })
   }

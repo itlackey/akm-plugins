@@ -109,13 +109,12 @@ function fileToAsset(filePath: string, type: string, conceptId: string, name: st
   }
 }
 
-// AKM 0.9 concept IDs are bundle-relative paths. The bundle README documents
-// that a `.md` extension is dropped when forming the ref
-// (`knowledge/auth/oauth-refresh-races.md` → `knowledge/auth/oauth-refresh-races`),
-// while any other extension is part of the ref (`scripts/lint.sh`). This
-// matters: claude/shared/ref-extraction.ts resolves a candidate by probing
-// `<root>/<conceptId>` and `<root>/<conceptId>.md` only, so a `scripts/lint`
-// ref for an on-disk `scripts/lint.sh` would fail validation and vanish.
+// AKM concept IDs are bundle-relative paths minus the type's own suffix
+// (akm#1432): `.md` is dropped (`knowledge/auth/oauth-refresh-races.md` becomes
+// `knowledge/auth/oauth-refresh-races`) while any other extension is part of the
+// ref (`scripts/lint.sh`). claude/shared/ref-extraction.ts resolves a candidate by
+// those suffixes, so a `scripts/lint` ref for an on-disk `scripts/lint.sh` would
+// fail validation and vanish.
 function conceptIdFor(dir: string, entry: string): string {
   return `${dir}/${entry.replace(/\.md$/i, "")}`
 }

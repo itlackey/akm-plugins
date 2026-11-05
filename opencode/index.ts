@@ -58,10 +58,10 @@ import {
   warnIfWriteGateInert,
 } from "../opencode-shared/write-gate"
 import { createLearning, createPendingProposals } from "../opencode-shared/learning"
-import { ASSET_TYPES, TOOL_SPECS, type ToolSpec, buildFeedbackArgs, buildRememberArgs, withProposedWarnings } from "../opencode-shared/tools"
+import { TOOL_SPECS, type ToolSpec, buildFeedbackArgs, buildRememberArgs, withProposedWarnings } from "../opencode-shared/tools"
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
-import { extractAkmRefsFromString, validateRefCandidates } from "../claude/shared/ref-extraction"
+import { extractRefsFromAkmOutput, validateRefCandidates } from "../claude/shared/ref-extraction"
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
@@ -112,8 +112,8 @@ const AKM_EXTRACT_MIN_INTERVAL_MS = extractMinIntervalMs()
 // claude/shared/ref-extraction.ts. This module deliberately keeps no local copy
 // of the concept-root regex: a second copy silently drifted from the canonical
 // AKM 0.9 root list (it still matched `wikis/` and never matched `facts/`,
-// `instructions/`, or `sessions/`). extractAkmRefsFromString() is the shared
-// whitespace-token extractor and is the single source of truth here.
+// `instructions/`, or `sessions/`). extractRefsFromAkmOutput() is the shared
+// extractor for akm's own output and is the single source of truth here.
 function readPackageVersion(): string {
   try {
     const raw = readFileSync(path.join(moduleDir, "package.json"), "utf8")
@@ -713,10 +713,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       stdout,
       stderr: "",
     })
-    const parsed = safeJsonParse<SearchResponse>(stdout)
-    const refs = args[0] === "search" || args[0] === "curate"
-      ? [...new Set([...(parsed?.hits?.flatMap((hit) => hit.ref ? [hit.ref] : []) ?? []), ...extractAkmRefsFromString(stdout)])]
-      : extractAkmRefsFromString(stdout)
+    const refs = extractRefsFromAkmOutput(stdout)
     feedbackTracker.noteRecentRefs(meta.sessionID, refs)
     if (meta.toolName === "akm_search") {
       await emitWorkflowTelemetry(client, "info", "akm.search.invoked", {
@@ -838,7 +835,7 @@ async function runInProcess(
       return result.output
     }
     const output = result.output
-    const refs = extractAkmRefsFromString(output)
+    const refs = extractRefsFromAkmOutput(output)
     feedbackTracker.noteRecentRefs(meta.sessionID, refs)
     await writePluginLog(client, "info", "AKM read call completed", {
       subsystem: "akm",
@@ -870,7 +867,6 @@ async function runInProcess(
   }
 }
 
-
 // The AKM 0.9 asset-type vocabulary, in the singular form `--type` accepts.
 // This is exactly `akm info --format json` -> .assetTypes, sorted; keep the two
 // in step when akm adds a type. Note there is no `wiki` type in 0.9 — the entry
@@ -879,54 +875,6 @@ async function runInProcess(
 // while `instruction`, `session`, and `fact` could not be filtered for at all.
 // `any` is a tool-surface sentinel, not an akm type: it means "no filter" and is
 // stripped before the value reaches akm, so it sorts last.
-
-// Derived from ASSET_TYPES so the enum published on the akm_search/akm_curate
-// tool surface and the type carried by search hits cannot drift apart again.
-type AssetType = Exclude<(typeof ASSET_TYPES)[number], "any">
-
-type SearchHit = {
-  type: AssetType | "registry" | "registry-asset"
-  ref?: string
-  id?: string
-  installRef?: string
-  editable?: boolean
-  name?: string
-  description?: string
-  score?: number
-  estimatedTokens?: number
-  whyMatched?: string[]
-  matchStage?: "exact" | "prefix" | "relaxed"
-  run?: string
-  origin?: string | null
-  size?: string
-  action?: string
-  editHint?: string
-  curated?: boolean
-  quality?: string
-  selectedRef?: string
-  parentRef?: string
-  fragmentOrdinal?: number
-  fragmentCount?: number
-  startLine?: number
-  endLine?: number
-  previousRef?: string
-  nextRef?: string
-  fragmentChars?: number
-  fragmentEstimatedTokens?: number
-  parentChars?: number
-  parentEstimatedTokens?: number
-}
-
-type SearchResponse = {
-  schemaVersion?: number
-  bundleDir?: string
-  hits?: SearchHit[]
-  registryHits?: SearchHit[]
-  source?: "local" | "registry" | "all"
-  timing?: { totalMs?: number; rankMs?: number; embedMs?: number }
-  warnings?: string[]
-  tip?: string
-}
 
 function isCliError(value: unknown): value is CliError {
   return !!value
@@ -1249,7 +1197,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
                 // exists), so against real 0.9 curate output it matched nothing
                 // and the prompt_recall event recorded an empty ref list on
                 // every turn.
-                const refs = extractAkmRefsFromString(curated ?? "")
+                const refs = extractRefsFromAkmOutput(curated ?? "")
                 writeStructuredEvent({
                   event: "prompt_recall",
                   sessionId: sessionID,

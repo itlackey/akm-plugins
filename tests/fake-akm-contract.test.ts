@@ -335,7 +335,6 @@ describe("fake-akm envelope contract", () => {
         "scripts/topscript.sh",
         "secrets/old.lock",
         "skills/rollout/SKILL.md",
-        "skills/rollout/scripts/run.py",
         "tasks/legacy",
         "tasks/legacy.yaml",
         "tasks/nightly.yml",
@@ -356,6 +355,12 @@ describe("fake-akm envelope contract", () => {
       expect(canonical.filter((ref) => !accepted.get(ref))).toEqual([])
       expect(refused.filter((ref) => accepted.get(ref))).toEqual([])
       expect(validateRefCandidates([...canonical, ...refused], [bundle])).toEqual([...canonical].sort())
+      // The pinned akm predates akm#1432 and spells a file outside its type folder with the old
+      // prefix, so the new spelling cannot be put to the binary until the pin moves. Both are refs.
+      expect(validateRefCandidates(["skills/rollout/scripts/run.py", "skills/rollout/references/notes"], [bundle])).toEqual([
+        "skills/rollout/references/notes",
+        "skills/rollout/scripts/run.py",
+      ])
     } finally {
       cleanup(real)
     }

@@ -21,7 +21,7 @@
 //   - `shell.create.before`   -> shellEnv(): AKM_* variables for shells.
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
-import { extractAkmRefsFromString } from "../claude/shared/ref-extraction"
+import { extractRefsFromAkmOutput } from "../claude/shared/ref-extraction"
 import { createBundleDirResolver } from "../opencode-shared/bundle"
 import { type EventWriter, writeOpencodeEvent } from "../opencode-shared/events"
 import {
@@ -370,7 +370,7 @@ export function createCore(options: CoreOptions) {
           sessionID,
           query: truncateLogText(decision.query, 200),
           reason: decision.reason,
-          refs: extractAkmRefsFromString(curated ?? ""),
+          refs: extractRefsFromAkmOutput(curated ?? ""),
           outcome: curated ? "ok" : "skipped",
         })
       })
@@ -615,7 +615,7 @@ export function createCore(options: CoreOptions) {
       log(outcome.ok ? "info" : "error", outcome.ok ? "AKM tool call completed" : "AKM tool call failed", {
         toolName: spec,
         sessionID: context.sessionID,
-        refs: extractAkmRefsFromString(outcome.text),
+        refs: extractRefsFromAkmOutput(outcome.text),
         ...(outcome.ok ? {} : { error: failureMessage(outcome.text) }),
       })
       return outcome

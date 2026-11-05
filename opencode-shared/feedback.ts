@@ -19,7 +19,7 @@ import {
   createRetrospectiveNegativeRegex,
   shouldSubmitAutomaticFeedback,
 } from "../claude/shared/feedback-signals"
-import { extractAkmRefsFromString, validateRefCandidates } from "../claude/shared/ref-extraction"
+import { akmRefFromValue, extractAkmRefsFromString, validateRefCandidates } from "../claude/shared/ref-extraction"
 import { type ResolvedAkmCommand, isCliError, runAkm } from "./akm-cli"
 import { type EventWriter, buildEventScope } from "./events"
 
@@ -67,8 +67,9 @@ export function classifyToolFeedback(value: unknown): "positive" | "negative" | 
 export function extractToolRefs(toolName: string, args: Record<string, unknown>, output: unknown): string[] {
   const refs = new Set<string>()
   const addMatches = (value: unknown) => {
-    if (typeof value !== "string") return
-    for (const ref of extractAkmRefsFromString(value)) refs.add(ref)
+    // The `ref` field of akm's own call or result: any first folder is valid.
+    const ref = akmRefFromValue(value)
+    if (ref) refs.add(ref)
   }
 
   for (const key of ["ref", "package_ref"]) addMatches(args[key])
