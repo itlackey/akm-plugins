@@ -685,4 +685,143 @@ describe("akm-opencode-v2 plugin", () => {
       expect(reasons().at(-1)).toBe("file-not-read")
     })
   })
+  describe("host session context (#146, #148)", () => {
+    const retrieval = { source: "team-bundle", filters: { team: ["a", "b"], channel: "c1" }, prefer: { project: "p1" } }
+    const setAkm = (sessionID: string, akm: Record<string, unknown> | undefined) => host!.sessionMetadata.set(sessionID, akm ? { akm } : {})
+    const argvOf = (verb: string) => fake.calls().filter((a) => a[0] === verb)
+
+    it("gives two sessions with different records different search and curate argv, one flag per value", async () => {
+      host = await startPlugin(project)
+      setAkm("ses_r1", { retrieval })
+      setAkm("ses_r2", { retrieval: { filters: { team: "z" } } })
+      await host.callTool("akm_search", { query: "nginx", source: "local" }, "ses_r1")
+      await host.callTool("akm_curate", { query: "configure nginx proxy" }, "ses_r1")
+      await host.callTool("akm_search", { query: "nginx" }, "ses_r2")
+      await host.callTool("akm_curate", { query: "configure nginx proxy" }, "ses_r2")
+      const [s1, s2] = argvOf("search")
+      const [c1, c2] = argvOf("curate")
+      // The host's source replaces the model's `local`; the filter flags follow it.
+      expect(s1).toEqual(["search", "nginx", "--from", "team-bundle", "--filter", "team=a", "--filter", "team=b", "--filter", "channel=c1", "--prefer", "project=p1", "--detail", "full", "--format", "json"])
+      expect(c1).toEqual(["curate", "configure nginx proxy", "--from", "team-bundle", "--filter", "team=a", "--filter", "team=b", "--filter", "channel=c1", "--prefer", "project=p1", "--format", "json"])
+      expect(s2).toEqual(["search", "nginx", "--filter", "team=z", "--detail", "full", "--format", "json"])
+      expect(c2).toEqual(["curate", "configure nginx proxy", "--filter", "team=z", "--format", "json"])
+    })
+
+    it("leaves argv and recall options exactly as before when there is no record", async () => {
+      host = await startPlugin(project)
+      setAkm("ses_n", undefined)
+      await host.callTool("akm_search", { query: "nginx", source: "local" }, "ses_n")
+      await host.callTool("akm_curate", { query: "configure nginx proxy" }, "ses_n")
+      await host.callTool("akm_remember", { content: "plain", name: "n" }, "ses_n")
+      expect(argvOf("search")[0]).toEqual(["search", "nginx", "--from", "local", "--detail", "full", "--format", "json"])
+      expect(argvOf("curate")[0]).toEqual(["curate", "configure nginx proxy", "--format", "json"])
+      expect(argvOf("remember")[0]).toEqual(["remember", "plain", "--name", "n", "--run", "ses_n", "--format", "json"])
+      await host.runPrompt("ses_n", PROMPT)
+      expect(Object.keys(curateCalls[0].options ?? {}).sort()).toEqual(["format", "limit"])
+    })
+
+    it("warns once and ignores a model source when the host set one", async () => {
+      host = await startPlugin(project)
+      setAkm("ses_w", { retrieval: { source: "team-bundle" } })
+      await host.callTool("akm_search", { query: "nginx", source: "registry" }, "ses_w")
+      await host.callTool("akm_curate", { query: "configure nginx", source: "all" }, "ses_w")
+      expect(argvOf("search")[0]).toContain("team-bundle")
+      expect(argvOf("search")[0]).not.toContain("registry")
+      expect(argvOf("curate")[0]).not.toContain("all")
+      expect(host.logs.filter((line) => line.message.includes("ignored the model's source"))).toHaveLength(1)
+    })
+
+    it("passes source, filters and prefer to prompt and startup recall", async () => {
+      host = await startPlugin(project)
+      await host.subscribed
+      setAkm("ses_p", { retrieval })
+      await host.runPrompt("ses_p", PROMPT)
+      expect(curateCalls[0].options).toMatchObject(retrieval)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_p2" }, location: { directory: project } })
+      setAkm("ses_p2", { retrieval: { filters: { team: "z" } } })
+      await settle(400)
+      const startup = curateCalls.find((c) => c.query.includes("fixture-project"))!
+      expect(startup.options?.filters).toEqual({ team: "z" })
+      expect(startup.options).not.toHaveProperty("source")
+    })
+
+    it("drops the recalled block on a metadata update and discards a result still in flight", async () => {
+      host = await startPlugin(project)
+      await host.subscribed
+      await host.runPrompt("ses_m", PROMPT)
+      expect((await host.runContext("ses_m", []))[0].text).toContain("AKM PROVENANCE")
+      await host.emit({ type: "session.metadata.updated", data: { sessionID: "ses_m", metadata: {} }, location: { directory: project } })
+      await settle(50)
+      expect((await host.runContext("ses_m", []))[0].text).not.toContain("AKM PROVENANCE")
+      // lastQuery was cleared, so the same prompt recalls again under the new settings.
+      const before = curateCalls.length
+      curateImpl = async () => {
+        await settle(200)
+        return "# stale result"
+      }
+      host.sessionMetadata.set("ses_m", { akm: { retrieval: { source: "old" } } })
+      const running = host.runPrompt("ses_m", PROMPT)
+      await settle(30)
+      expect(curateCalls.length).toBe(before + 1)
+      host.sessionMetadata.set("ses_m", { akm: { retrieval: { source: "new" } } })
+      await host.emit({ type: "session.metadata.updated", data: { sessionID: "ses_m", metadata: {} }, location: { directory: project } })
+      await running
+      await settle(300)
+      expect((await host.runContext("ses_m", []))[0].text).not.toContain("stale result")
+    })
+
+    it("maps metadata.akm.write onto remember: scope flags, bundle, and a leading frontmatter block", async () => {
+      host = await startPlugin(project)
+      setAkm("ses_x", { write: { bundle: "team-bundle", user: "u1", channel: "c1", metadata: { team: "x", tags: ["a", "b"] } } })
+      setAkm("ses_y", { write: { run: "run-7" } })
+      await host.callTool("akm_remember", { content: "use port 8443", name: "port" }, "ses_x")
+      await host.callTool("akm_remember", { content: "second" }, "ses_y")
+      // The call log is line-based, so the multi-line body is read from the raw log.
+      const raw = readFileSync(fake.callLog, "utf8")
+      expect(raw).toContain(['remember\t---\nteam: "x"\ntags: ["a","b"]\n---\nuse port 8443', "--name", "port", "--bundle", "team-bundle", "--user", "u1", "--run", "ses_x", "--channel", "c1", "--format", "json\n"].join("\t"))
+      const y = argvOf("remember").find((a) => a[1] === "second")
+      // Only the fields the host set replace the session-derived default.
+      expect(y).toEqual(["remember", "second", "--run", "run-7", "--format", "json"])
+    })
+
+    describe("write gate", () => {
+      const manifest = path.join(project, "service.yaml")
+      const read = (sessionID: string) =>
+        host!.runToolHook("execute.after", {
+          tool: "read",
+          sessionID,
+          id: "read_1",
+          input: { path: "service.yaml" },
+          status: "completed",
+          result: {
+            output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" },
+            content: [{ type: "text", text: "Read file service.yaml, lines 1-2\n1: apiVersion: inkwell/v2\n2: kind: Service" }],
+          },
+        })
+
+      it("searches with --from/--filter only, and does not share a cached answer across selections", async () => {
+        process.env.AKM_WRITE_GATE = "enforce"
+        resetWriteGateForTests()
+        writeFileSync(manifest, "apiVersion: inkwell/v2\nkind: Service\n")
+        host = await startPlugin(project)
+        setAkm("ses_g1", { retrieval })
+        setAkm("ses_g2", { retrieval: { source: "team-bundle", filters: { team: ["a", "b"], channel: "c1" } } }) // same selection, no prefer
+        setAkm("ses_g3", { retrieval: { filters: { team: "z" } } })
+        setAkm("ses_g4", undefined)
+        for (const id of ["ses_g1", "ses_g2", "ses_g3", "ses_g4"]) await read(id)
+        await settle(1500)
+        const searches = argvOf("search").filter((a) => a.includes("--detail") && a.includes("agent"))
+        // g1 and g2 share one selection, g3 and g4 each differ; the file declares two format tokens.
+        expect(searches).toHaveLength(6)
+        expect(searches.some((a) => a.includes("--prefer"))).toBe(false)
+        const forms = [...new Set(searches.map((a) => a.slice(a.indexOf("--from")).join(" ")))].sort()
+        expect(forms).toEqual([
+          "--from local --detail agent --format json",
+          "--from local --filter team=z --detail agent --format json",
+          "--from team-bundle --filter team=a --filter team=b --filter channel=c1 --detail agent --format json",
+        ])
+      })
+    })
+  })
+
 })

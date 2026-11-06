@@ -69,6 +69,15 @@ Differences from V1: the tools are `edit {path, oldString, newString}`, `write {
 
 Differences from V1 in general: V1 awaits some hooks synchronously; V2's helpers are asynchronous (pending count, bundle dir, negative feedback). `opencode run` hands the prompt to the hook as a JSON string literal; the plugin unwraps it exactly as V1 does so start-anchored signals still match. V2 has no equivalent of V1's bundle-missing warning in the hints, nor of V1's "AKM user feedback recorded" log line per message.
 
+## Session context from the host
+
+A host that embeds OpenCode 2 can set `metadata.akm` on a session; the plugin reads it at call time and never writes it.
+
+- `retrieval` = `{ source?, filters?, prefer? }` (a `filters`/`prefer` value is a string or a list). `akm_search` and `akm_curate` pass it as `--from`, `--filter` and `--prefer` (one flag per value); automatic recall passes it as the API's `source`, `filters` and `prefer`; the write gate's duplicate-check search gets `--from` and `--filter` only. A host `source` wins over the model's. A metadata update drops the recalled block. This is retrieval configuration, not authorization: `akm_show`, shells and writes are not scoped by it.
+- `write` = `{ bundle?, user?, agent?, run?, channel?, metadata? }`. `akm_remember` maps the scope fields to `--bundle/--user/--agent/--run/--channel`, replacing the session-derived value only where set, and puts `metadata` at the top of the body as frontmatter, which akm merges (akm#1449).
+
+No record means the arguments are unchanged.
+
 ## Environment
 
 | Variable | Default | Purpose |

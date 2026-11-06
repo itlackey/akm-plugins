@@ -4,6 +4,7 @@
 // V1 turns a spec into `tool.schema` arguments; V2 turns it into JSON Schema.
 // The read verbs' argv lives in akm-cli.ts (buildReadArgs).
 import { buildScopedArgs } from "./recall"
+import { type WriteContext, frontmatterBlock } from "./session-context"
 
 // The AKM 0.9 asset-type vocabulary, in the singular form `--type` accepts.
 // This is exactly `akm info --format json` -> .assetTypes, sorted; keep the two
@@ -122,11 +123,17 @@ export function toJsonSchema(spec: ToolSpec): Record<string, unknown> {
 export function buildRememberArgs(
   input: { content: string; name?: string; force?: boolean },
   context: Record<string, unknown> | undefined,
+  write?: WriteContext,
 ): string[] {
-  const args = ["remember", input.content]
+  // The host's metadata leads the body (akm merges it, akm#1449); a host scope value replaces the session-derived one.
+  const args = ["remember", `${frontmatterBlock(write?.metadata)}${input.content}`]
   if (input.name) args.push("--name", input.name)
   if (input.force) args.push("--force")
-  args.push(...buildScopedArgs(context))
+  if (write?.bundle) args.push("--bundle", write.bundle)
+  const scope = write
+    ? { ...context, user: write.user ?? context?.user, agent: write.agent ?? context?.agent, channel: write.channel ?? context?.channel, sessionID: write.run ?? context?.sessionID }
+    : context
+  args.push(...buildScopedArgs(scope))
   return args
 }
 

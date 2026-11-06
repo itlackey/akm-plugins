@@ -42,6 +42,7 @@ import {
   warnIfWriteGateInert,
 } from "../opencode-shared/write-gate"
 import { createLearning, createPendingProposals } from "../opencode-shared/learning"
+import { type Retrieval, type WriteContext, readRetrieval, readWrite, retrievalFlags } from "../opencode-shared/session-context"
 import {
   type CliError,
   type ResolvedAkmCommand,
@@ -98,6 +99,8 @@ export type CoreOptions = {
   writeEvent?: EventWriter
   /** How long a prompt hook may wait for curation before the request proceeds without it. */
   recallWaitMs?: number
+  /** The host's metadata for a session (`metadata.akm.retrieval` / `.write`), read at call time. Absent means none. */
+  sessionMetadata?: (sessionID: string) => Promise<Record<string, unknown> | undefined>
   /** Test seam: replaces command resolution. */
   resolveCommand?: () => ResolvedAkmCommand | CliError
   /** Test seam: replaces the extraction spawn. */
@@ -189,11 +192,16 @@ export function createCore(options: CoreOptions) {
     formatError,
     pathKey: "path",
     patchTool: "patch",
-    search: async (token) => {
+    selection: async (sessionID) => {
+      const retrieval = sessionID ? await retrievalFor(sessionID) : undefined
+      return retrieval && { source: retrieval.source, filters: retrieval.filters }
+    },
+    search: async (token, selection) => {
       const command = resolveCommand()
       if (isCliError(command)) throw new Error(command.error)
       // The PLUGIN's search, not the model's: a non-user event source keeps it out of akm's demand signals.
-      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--detail", "agent", "--format", "json"], {
+      // Local unless the host chose a source; its filters narrow it, `prefer` never applies to a duplicate check.
+      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", selection?.source ?? "local", ...retrievalFlags(selection, { from: false, prefer: false }), "--detail", "agent", "--format", "json"], {
         timeoutMs: WRITE_GATE_SEARCH_TIMEOUT_MS,
         env: { AKM_EVENT_SOURCE: "audit" },
         packageName: PACKAGE_NAME,
@@ -210,6 +218,19 @@ export function createCore(options: CoreOptions) {
     addBufferEntry: tracker.addBufferEntry,
     onSubmitted: (sessionID) => pendingProposals.invalidate(sessionID),
   })
+
+  async function akmMetadata(sessionID: string | undefined): Promise<Record<string, unknown> | undefined> {
+    if (!sessionID || !options.sessionMetadata) return undefined
+    try {
+      return await options.sessionMetadata(sessionID)
+    } catch (error: unknown) {
+      log("debug", "AKM could not read session metadata", { sessionID, error: formatError(error) })
+      return undefined
+    }
+  }
+  const retrievalFor = async (sessionID: string | undefined): Promise<Retrieval | undefined> => readRetrieval(await akmMetadata(sessionID))
+  const writeFor = async (sessionID: string | undefined): Promise<WriteContext | undefined> => readWrite(await akmMetadata(sessionID))
+  let sourceOverrideWarned = false
 
   function state(sessionID: string): SessionState {
     let existing = sessions.get(sessionID)
@@ -271,7 +292,7 @@ export function createCore(options: CoreOptions) {
     const owner = sessions.get(sessionID)
     owner?.controllers.add(controller)
     try {
-      const outcome = await recallCurate(query, { timeoutMs: CURATE_TIMEOUT_MS(), signal: controller.signal })
+      const outcome = await recallCurate(query, { timeoutMs: CURATE_TIMEOUT_MS(), signal: controller.signal, retrieval: await retrievalFor(sessionID) })
       if (outcome.ok) return outcome.text
       if (!outcome.aborted) log("warn", "AKM recall failed", { operation, sessionID, subsystem: "curation", error: outcome.error })
       return null
@@ -411,6 +432,7 @@ export function createCore(options: CoreOptions) {
 
   async function onSessionCreated(sessionID: string): Promise<void> {
     const st = state(sessionID)
+    const generation = st.generation
     const cwdContext = gatherCwdContext(options.directory)
     const [curated, hints, workflowRaw] = await Promise.all([
       AUTO_CURATE() && cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
@@ -418,7 +440,7 @@ export function createCore(options: CoreOptions) {
       runBestEffort(sessionID, ["--format", "json", "-q", "workflow", "list", "--active"], { operation: "active-workflow-summary" }),
     ])
     if (disposed || sessions.get(sessionID) !== st) return
-    if (curated && !st.curated) st.curated = curated
+    if (curated && !st.curated && st.generation === generation) st.curated = curated
     if (hints) st.hints = hints
     st.workflow = (workflowRaw && summarizeActiveWorkflows(workflowRaw)) || undefined
   }
@@ -558,6 +580,17 @@ export function createCore(options: CoreOptions) {
           // A turn finished: the V2 analogue of V1's per-turn `session.idle`.
           maybeExtract(sessionID)
           break
+        case "session.metadata.updated": {
+          // The host changed the session's retrieval settings: what was recalled under the old ones is stale,
+          // and a result still in flight is discarded by the generation bump.
+          const st = sessions.get(sessionID)
+          if (st) {
+            st.curated = undefined
+            st.lastQuery = undefined
+            st.generation++
+          }
+          break
+        }
         case "session.deleted":
           // The gate is the one feature whose total failure looks exactly like normal operation.
           warnIfWriteGateInert(gateHost)
@@ -589,7 +622,12 @@ export function createCore(options: CoreOptions) {
         const mapped = operation === "curate" || operation === "show"
           ? { ...input, type: input.type === "any" ? undefined : input.type }
           : { ...input, type: input.type === "any" ? undefined : input.type, includeProposed: input.include_proposed }
-        const result = await readVerbToolOutput(command, operation, mapped, callOptions)
+        const retrieval = await retrievalFor(context.sessionID)
+        if (retrieval?.source && input.source !== undefined && !sourceOverrideWarned) {
+          sourceOverrideWarned = true
+          log("warn", "AKM ignored the model's source: the host set one for this session", { toolName: spec, sessionID: context.sessionID })
+        }
+        const result = await readVerbToolOutput(command, operation, mapped, callOptions, retrieval)
         outcome = { ok: result.ok, text: operation === "search" && result.ok ? withProposedWarnings(result.output) : result.output }
       } else {
         if (isCliError(command)) return fail(command.error)
@@ -598,6 +636,7 @@ export function createCore(options: CoreOptions) {
           args = buildRememberArgs(
             { content: String(input.content ?? ""), name: input.name as string | undefined, force: input.force === true },
             { sessionID: context.sessionID },
+            await writeFor(context.sessionID),
           )
         } else {
           const built = buildFeedbackArgs(input as Parameters<typeof buildFeedbackArgs>[0])

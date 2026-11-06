@@ -10,6 +10,7 @@ import { execFile, execFileSync } from "node:child_process"
 import { createRequire } from "node:module"
 import { readFileSync } from "node:fs"
 import path from "node:path"
+import { type Retrieval, retrievalFlags } from "./session-context"
 
 export type CliError = { ok: false; error: string }
 
@@ -136,13 +137,14 @@ function stderrMessage(stderr: string): string | undefined {
 export type ReadOperation = "search" | "show" | "curate"
 
 /**
- * Build the argv for the three read verbs from the plugin tool arguments.
+ * Build the argv for the three read verbs from the plugin tool arguments and
+ * the session's retrieval record, if the host set one (#146).
  * Every verb is asked for `--format json`. `search` asks for `--detail full`
  * so a hit carries `description`/`tags` exactly as the in-process library
  * return did; `show` maps its `detail` (brief|normal|full, or `summary`, which
  * akm 0.10 folds into `--detail brief`).
  */
-export function buildReadArgs(operation: ReadOperation, input: Record<string, unknown>): string[] {
+export function buildReadArgs(operation: ReadOperation, input: Record<string, unknown>, retrieval?: Retrieval): string[] {
   const str = (key: string): string | undefined => {
     const value = input[key]
     return typeof value === "string" && value.length > 0 ? value : undefined
@@ -158,8 +160,10 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (type) args.push("--type", type)
     const limit = num("limit")
     if (limit !== undefined) args.push("--limit", String(limit))
-    const source = str("source")
+    // The host's source wins over the model's; its filters and prefer follow.
+    const source = retrieval?.source ? undefined : str("source")
     if (source) args.push("--from", source)
+    args.push(...retrievalFlags(retrieval))
     if (input.includeProposed === true) args.push("--include-proposed")
     args.push("--detail", "full")
   } else if (operation === "show") {
@@ -183,8 +187,10 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (type) args.push("--type", type)
     const limit = num("limit")
     if (limit !== undefined) args.push("--limit", String(limit))
-    const source = str("source")
+    // The host's source wins over the model's; its filters and prefer follow.
+    const source = retrieval?.source ? undefined : str("source")
     if (source) args.push("--from", source)
+    args.push(...retrievalFlags(retrieval))
     if (typeof pack === "number") args.push("--pack", String(pack))
   }
   args.push("--format", "json")
@@ -203,10 +209,11 @@ export async function runReadVerb(
   operation: ReadOperation,
   input: Record<string, unknown>,
   options: AkmRunOptions = {},
+  retrieval?: Retrieval,
 ): Promise<ReadResult> {
   let args: string[]
   try {
-    args = buildReadArgs(operation, input)
+    args = buildReadArgs(operation, input, retrieval)
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error), exitCode: null }
   }
@@ -226,9 +233,10 @@ export async function readVerbToolOutput(
   operation: ReadOperation,
   input: Record<string, unknown>,
   options: AkmRunOptions = {},
+  retrieval?: Retrieval,
 ): Promise<{ output: string; ok: boolean; error?: string }> {
   if (isCliError(command)) return { output: JSON.stringify(command), ok: false, error: command.error }
-  const result = await runReadVerb(command, operation, input, options)
+  const result = await runReadVerb(command, operation, input, options, retrieval)
   if (result.ok) return { output: result.output, ok: true }
   return { output: JSON.stringify({ ok: false, error: result.error }), ok: false, error: result.error }
 }

@@ -51,6 +51,7 @@ const plugin = Plugin.define({
         projectDirectory: ctx.location.project?.directory,
         pluginVersion: readPluginVersion(import.meta.url, PLUGIN_ID),
         moduleUrl: import.meta.url,
+        sessionMetadata: async (sessionID) => (await runPromise(ctx.session.get({ sessionID: sessionID as never }))).metadata,
         log: (level, message, extra) => {
           void runPromise(
             Effect.logWithLevel(LEVELS[level])(message).pipe(Effect.annotateLogs({ service: PLUGIN_ID, ...extra })),

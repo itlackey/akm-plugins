@@ -10,6 +10,7 @@ import path from "node:path"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
 import { type CurateOptions, loadCurate } from "./akm-api"
 import type { ResolvedAkmCommand } from "./akm-cli"
+import type { Retrieval } from "./session-context"
 
 export const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
 // #110 — same contract as the Claude hook's CURATE_MIN_SCORE/CURATE_TYPE (see
@@ -128,7 +129,7 @@ export type RecallOutcome =
  */
 export async function recallCurate(
   query: string,
-  options: { timeoutMs: number; signal?: AbortSignal },
+  options: { timeoutMs: number; signal?: AbortSignal; retrieval?: Retrieval },
 ): Promise<RecallOutcome> {
   const { signal } = options
   if (signal?.aborted) return { ok: false, error: "recall was aborted", aborted: true }
@@ -143,7 +144,7 @@ export async function recallCurate(
     onAbort = () => resolve({ ok: false, error: "recall was aborted", aborted: true })
     signal?.addEventListener("abort", onAbort, { once: true })
   })
-  const call = loadCurate().then((curate) => curate(query, buildCurateOptions()))
+  const call = loadCurate().then((curate) => curate(query, { ...buildCurateOptions(), ...options.retrieval }))
   const finished = call.then(
     (raw): RecallOutcome => {
       const body = String(raw ?? "").trim()

@@ -18,6 +18,8 @@ export type HostFake = {
   toolHooks: Map<string, Callback>
   shellHooks: Map<string, Callback>
   logs: LoggedLine[]
+  /** What `session.get` returns as the session's metadata, per session (the host's `metadata.akm` lives here). */
+  sessionMetadata: Map<string, Record<string, unknown>>
   /** Push a native event onto the stream the plugin subscribed to. */
   emit(event: unknown): Promise<void>
   /** Resolve once the plugin's event subscription is attached. */
@@ -39,6 +41,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
   const toolHooks = new Map<string, Callback>()
   const shellHooks = new Map<string, Callback>()
   const logs: LoggedLine[] = []
+  const sessionMetadata = new Map<string, Record<string, unknown>>()
   const events = await Effect.runPromise(Queue.unbounded<unknown>())
   let markSubscribed!: () => void
   const subscribed = new Promise<void>((resolve) => {
@@ -64,7 +67,10 @@ export async function startPlugin(directory: string): Promise<HostFake> {
       hook: (name: string, callback: Callback) => Effect.sync(() => (toolHooks.set(name, callback), registration)),
     },
     shell: { hook: (name: string, callback: Callback) => Effect.sync(() => (shellHooks.set(name, callback), registration)) },
-    session: { hook: (name: string, callback: Callback) => Effect.sync(() => (sessionHooks.set(name, callback), registration)) },
+    session: {
+      hook: (name: string, callback: Callback) => Effect.sync(() => (sessionHooks.set(name, callback), registration)),
+      get: (input: { sessionID: string }) => Effect.sync(() => ({ id: input.sessionID, metadata: sessionMetadata.get(input.sessionID) })),
+    },
     event: {
       subscribe: () => {
         markSubscribed()
@@ -93,6 +99,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
     sessionHooks,
     toolHooks,
     shellHooks,
+    sessionMetadata,
     logs,
     subscribed,
     emit: (event) => run(Queue.offer(events, event)).then(() => undefined),

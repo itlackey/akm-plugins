@@ -13,16 +13,21 @@
 import path from "node:path"
 import { type EventWriter, buildEventScope, opencodeEventLog } from "./events"
 import type { LearningLog } from "./learning"
+import type { Retrieval } from "./session-context"
 
 export type GateSearchHit = { name?: string; ref?: string; description?: string }
 export type GateSearchResponse = { hits?: GateSearchHit[] }
+/** `--from`/`--filter` for the duplicate-check search; never `prefer`, which only ranks. */
+export type GateSelection = Pick<Retrieval, "source" | "filters">
 
 export type GateHost = {
   log: LearningLog
   writeEvent: EventWriter
   formatError: (error: unknown) => string
-  /** One local `akm search <token>` through the public CLI; rejects on failure. */
-  search: (token: string) => Promise<GateSearchResponse | undefined>
+  /** One `akm search <token>` through the public CLI, local unless `selection` says otherwise; rejects on failure. */
+  search: (token: string, selection?: GateSelection) => Promise<GateSearchResponse | undefined>
+  /** The session's retrieval selection (#146) as the gate uses it; absent or undefined means the plain local search. */
+  selection?: (sessionID: string | undefined) => Promise<GateSelection | undefined>
   /** The argument key that names the target file (`filePath` on V1, `path` on V2). */
   pathKey: string
   /** The patch-envelope tool (`apply_patch` on V1, `patch` on V2): no file path to resolve. */
@@ -149,6 +154,12 @@ type Resolution =
 type CacheEntry = { resolution: Resolution; expiresAt: number }
 const identityCache = new Map<string, CacheEntry>()
 const identityInflight = new Map<string, Promise<Resolution>>()
+
+// A resolution depends on what the search was allowed to see, so the cache key
+// is the token plus the selection; no selection keeps the bare token.
+function cacheKey(token: string, selection: GateSelection | undefined): string {
+  return selection ? `${token}\0${JSON.stringify(selection)}` : token
+}
 
 // The ONLY read path into identityCache. Expiry is evaluated on read rather
 // than on a timer so nothing has to hold the process open, and the entry is
@@ -587,10 +598,11 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T | typeof
  * session.created, so a warm local search is ~130ms against a multi-second
  * model round-trip. Never rejects.
  */
-async function resolveIdentity(host: GateHost, token: string): Promise<Resolution> {
-  const cached = cachedResolution(token)
+async function resolveIdentity(host: GateHost, token: string, selection?: GateSelection): Promise<Resolution> {
+  const key = cacheKey(token, selection)
+  const cached = cachedResolution(key)
   if (cached) return cached
-  const inflight = identityInflight.get(token)
+  const inflight = identityInflight.get(key)
   if (inflight) return inflight
 
   const pending = (async (): Promise<Resolution> => {
@@ -601,37 +613,37 @@ async function resolveIdentity(host: GateHost, token: string): Promise<Resolutio
         // feedback ranking do not count it as demand, which would contaminate
         // the treatment arm of an observe-mode rollout. The model-initiated
         // akm_search tool deliberately stays attributed to the user.
-        host.search(token),
+        host.search(token, selection),
         WRITE_GATE_RESOLVE_TIMEOUT_MS,
       )
-      if (raced === WRITE_GATE_TIMEOUT) return rememberResolution(token, { status: "error", reason: "search-timeout" })
+      if (raced === WRITE_GATE_TIMEOUT) return rememberResolution(key, { status: "error", reason: "search-timeout" })
       const hits = Array.isArray((raced as GateSearchResponse | undefined)?.hits) ? (raced as GateSearchResponse).hits! : []
       for (const hit of hits) {
         if (!assetDeclaresFormat(token, hit as { name?: string })) continue
         const ref = typeof hit.ref === "string" ? hit.ref : ""
         if (!ref) continue
-        return rememberResolution(token, {
+        return rememberResolution(key, {
           status: "resolved",
           ref,
           description: typeof hit.description === "string" ? hit.description : "",
         })
       }
-      return rememberResolution(token, { status: "none", cause: hits.length === 0 ? "no-search-hits" : "no-declaration" })
+      return rememberResolution(key, { status: "none", cause: hits.length === 0 ? "no-search-hits" : "no-declaration" })
     } catch (error: unknown) {
       host.log("warn", "AKM write gate resolution failed", {
         subsystem: "write-gate",
         token,
         error: host.formatError(error),
       })
-      return rememberResolution(token, { status: "error", reason: "search-error" })
+      return rememberResolution(key, { status: "error", reason: "search-error" })
     } finally {
-      identityInflight.delete(token)
+      identityInflight.delete(key)
     }
   })()
   // Only register as in-flight if it is actually still in flight: a synchronous
   // throw from akmSearch settles `pending` before this line runs, and parking a
   // settled promise here would leave a Map entry nothing ever clears.
-  if (!cachedResolution(token)) identityInflight.set(token, pending)
+  if (!cachedResolution(key)) identityInflight.set(key, pending)
   return pending
 }
 
@@ -741,17 +753,17 @@ export function observeFileIdentity(
     tokens,
     recognized,
   })
-  for (const token of tokens) {
-    if (cachedResolution(token) || identityInflight.has(token)) continue
-    void (async () => {
-      try {
-        await resolveIdentity(host, token)
-      } catch {
-        // resolveIdentity never rejects; belt-and-braces so a future change
-        // cannot turn this into an unhandled rejection on the read path.
-      }
-    })()
+  const warm = (selection: GateSelection | undefined): void => {
+    for (const token of tokens) {
+      const key = cacheKey(token, selection)
+      if (cachedResolution(key) || identityInflight.has(key)) continue
+      // resolveIdentity never rejects; the catch keeps a future change from
+      // becoming an unhandled rejection on the read path.
+      void resolveIdentity(host, token, selection).catch(() => undefined)
+    }
   }
+  if (host.selection) void host.selection(sessionID).then(warm, () => warm(undefined))
+  else warm(undefined)
 }
 
 // --- write gate: decision (#99) ---------------------------------------------
@@ -939,8 +951,9 @@ export async function gateDecision(
   let noneCause: "no-search-hits" | "no-declaration" | undefined
   let errorReason: "search-timeout" | "search-error" | undefined
   let pendingToken: string | undefined
+  const selection = host.selection ? await host.selection(input.sessionID).catch(() => undefined) : undefined
   for (const token of tokens) {
-    const cached = cachedResolution(token)
+    const cached = cachedResolution(cacheKey(token, selection))
     if (cached?.status === "resolved") {
       resolved = { token, resolution: cached }
       break
@@ -950,14 +963,14 @@ export async function gateDecision(
     // reasons.
     if (cached?.status === "none") { noneCause = cached.cause === "no-declaration" ? "no-declaration" : noneCause ?? cached.cause; continue }
     if (cached?.status === "error") { errorReason = cached.reason; continue }
-    if (identityInflight.has(token)) pendingToken ??= token
+    if (identityInflight.has(cacheKey(token, selection))) pendingToken ??= token
   }
 
   if (!resolved && pendingToken) {
     // Bounded, and only ever awaits an ALREADY-RUNNING resolve started by the
     // read hook. It never STARTS one: a search on the blocking path would put
     // akm's latency in front of every edit the user makes.
-    const inflight = identityInflight.get(pendingToken)
+    const inflight = identityInflight.get(cacheKey(pendingToken, selection))
     if (inflight) {
       const raced = await raceWithTimeout(inflight, WRITE_GATE_INFLIGHT_WAIT_MS)
       if (raced !== WRITE_GATE_TIMEOUT && raced.status === "resolved") resolved = { token: pendingToken, resolution: raced }
