@@ -432,7 +432,6 @@ export function createCore(options: CoreOptions) {
 
   async function onSessionCreated(sessionID: string): Promise<void> {
     const st = state(sessionID)
-    const generation = st.generation
     const cwdContext = gatherCwdContext(options.directory)
     const [curated, hints, workflowRaw] = await Promise.all([
       AUTO_CURATE() && cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
@@ -440,7 +439,7 @@ export function createCore(options: CoreOptions) {
       runBestEffort(sessionID, ["--format", "json", "-q", "workflow", "list", "--active"], { operation: "active-workflow-summary" }),
     ])
     if (disposed || sessions.get(sessionID) !== st) return
-    if (curated && !st.curated && st.generation === generation) st.curated = curated
+    if (curated && !st.curated) st.curated = curated
     if (hints) st.hints = hints
     st.workflow = (workflowRaw && summarizeActiveWorkflows(workflowRaw)) || undefined
   }
@@ -632,11 +631,13 @@ export function createCore(options: CoreOptions) {
       } else {
         if (isCliError(command)) return fail(command.error)
         let args: string[]
+        let write: WriteContext | undefined
         if (spec === "akm_remember") {
+          write = await writeFor(context.sessionID)
           args = buildRememberArgs(
             { content: String(input.content ?? ""), name: input.name as string | undefined, force: input.force === true },
             { sessionID: context.sessionID },
-            await writeFor(context.sessionID),
+            write,
           )
         } else {
           const built = buildFeedbackArgs(input as Parameters<typeof buildFeedbackArgs>[0])
@@ -646,7 +647,9 @@ export function createCore(options: CoreOptions) {
           }
           args = built.args
         }
-        const result = await runAkm(command, [...args, "--format", "json"], callOptions)
+        // With host metadata the remember body ends the argv after `--` (buildRememberArgs), so the format flag goes before it.
+        const body = write?.metadata ? args.splice(-2) : []
+        const result = await runAkm(command, [...args, "--format", "json", ...body], callOptions)
         outcome = result.ok
           ? { ok: true, text: result.stdout.trim() || JSON.stringify({ ok: true }) }
           : { ok: false, text: JSON.stringify({ ok: false, error: result.error }) }

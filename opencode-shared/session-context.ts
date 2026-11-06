@@ -76,11 +76,8 @@ export function retrievalFlags(retrieval: Retrieval | undefined, options: { pref
   ]
 }
 
-/** `metadata` as a leading frontmatter block; JSON scalars and flow lists are valid YAML. */
+/** `metadata` as a leading frontmatter block; JSON strings and lists are valid YAML, and a quoted key stays a string (`null`, `~`). */
 export function frontmatterBlock(metadata: Selection | undefined): string {
-  const lines = Object.entries(metadata ?? {}).map(([key, value]) => {
-    const name = /^[A-Za-z0-9_.-]+$/.test(key) ? key : JSON.stringify(key)
-    return `${name}: ${JSON.stringify(value)}`
-  })
+  const lines = Object.entries(metadata ?? {}).map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`)
   return lines.length > 0 ? `---\n${lines.join("\n")}\n---\n` : ""
 }

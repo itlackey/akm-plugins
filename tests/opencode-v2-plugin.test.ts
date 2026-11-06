@@ -778,7 +778,8 @@ describe("akm-opencode-v2 plugin", () => {
       await host.callTool("akm_remember", { content: "second" }, "ses_y")
       // The call log is line-based, so the multi-line body is read from the raw log.
       const raw = readFileSync(fake.callLog, "utf8")
-      expect(raw).toContain(['remember\t---\nteam: "x"\ntags: ["a","b"]\n---\nuse port 8443', "--name", "port", "--bundle", "team-bundle", "--user", "u1", "--run", "ses_x", "--channel", "c1", "--format", "json\n"].join("\t"))
+      // akm would read a body starting with `---` as a flag, so it comes last, after `--`.
+      expect(raw).toContain(["remember", "--name", "port", "--bundle", "team-bundle", "--user", "u1", "--run", "ses_x", "--channel", "c1", "--format", "json", "--", '---\n"team": "x"\n"tags": ["a","b"]\n---\nuse port 8443\n'].join("\t"))
       const y = argvOf("remember").find((a) => a[1] === "second")
       // Only the fields the host set replace the session-derived default.
       expect(y).toEqual(["remember", "second", "--run", "run-7", "--format", "json"])

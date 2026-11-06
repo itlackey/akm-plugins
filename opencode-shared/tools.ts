@@ -126,7 +126,8 @@ export function buildRememberArgs(
   write?: WriteContext,
 ): string[] {
   // The host's metadata leads the body (akm merges it, akm#1449); a host scope value replaces the session-derived one.
-  const args = ["remember", `${frontmatterBlock(write?.metadata)}${input.content}`]
+  const block = frontmatterBlock(write?.metadata)
+  const args = block ? ["remember"] : ["remember", input.content]
   if (input.name) args.push("--name", input.name)
   if (input.force) args.push("--force")
   if (write?.bundle) args.push("--bundle", write.bundle)
@@ -134,6 +135,8 @@ export function buildRememberArgs(
     ? { ...context, user: write.user ?? context?.user, agent: write.agent ?? context?.agent, channel: write.channel ?? context?.channel, sessionID: write.run ?? context?.sessionID }
     : context
   args.push(...buildScopedArgs(scope))
+  // akm reads an argument that starts with `---` as a flag, so a body with frontmatter comes last, after `--`.
+  if (block) args.push("--", `${block}${input.content}`)
   return args
 }
 
