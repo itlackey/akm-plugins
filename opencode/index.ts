@@ -944,6 +944,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     formatError: formatCliError,
     pathKey: "filePath",
     patchTool: "apply_patch",
+    scope: async () => directory,
     search: async (token) => {
       const command = resolveAkmCommand()
       if (isCliError(command)) throw new Error(command.error)

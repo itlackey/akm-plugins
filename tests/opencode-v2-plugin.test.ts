@@ -748,6 +748,54 @@ describe("akm-opencode-v2 plugin", () => {
       expect(gate![gate!.indexOf("--project") + 1]).toBe("acme")
     })
 
+    describe("gate cache", () => {
+      const readFor = (h: HostFake, sessionID: string) =>
+        h.runToolHook("execute.after", {
+          tool: "read",
+          sessionID,
+          id: "read_1",
+          input: { path: "service.yaml" },
+          status: "completed",
+          result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
+        })
+      const gateSearches = () => argvOf("search").filter((a) => a.includes("--from") && a.includes("local") && a.includes("inkwell/v2"))
+
+      it("looks the same token up again for a session with another project, and once for the same one", async () => {
+        process.env.AKM_WRITE_GATE = "observe"
+        resetWriteGateForTests()
+        host = await startPlugin(project)
+        setProject("ses_a1", "acme")
+        setProject("ses_a2", "acme")
+        setProject("ses_b", "other")
+        await readFor(host, "ses_a1")
+        await settle(800)
+        await readFor(host, "ses_a2")
+        await settle(300)
+        expect(gateSearches()).toHaveLength(1)
+        await readFor(host, "ses_b")
+        await settle(800)
+        const searches = gateSearches()
+        expect(searches).toHaveLength(2)
+        expect(searches[0]).toContain("acme")
+        expect(searches[1]).toContain("other")
+      })
+
+      it("looks the same token up again for a plugin loaded in another directory", async () => {
+        process.env.AKM_WRITE_GATE = "observe"
+        resetWriteGateForTests()
+        host = await startPlugin(project)
+        await readFor(host, "ses_d1")
+        await settle(800)
+        await host.unload()
+        const other = path.join(root, "other-project")
+        mkdirSync(other, { recursive: true })
+        host = await startPlugin(other)
+        await readFor(host, "ses_d2")
+        await settle(800)
+        expect(gateSearches()).toHaveLength(2)
+      })
+    })
+
     it("falls back to the parent session's project, and the session's own wins", async () => {
       host = await startPlugin(project)
       setProject("ses_parent", "acme")

@@ -188,6 +188,7 @@ export function createCore(options: CoreOptions) {
     formatError,
     pathKey: "path",
     patchTool: "patch",
+    scope: async (sessionID) => `${options.directory}\0${(await projectFor(sessionID)) ?? ""}`,
     search: async (token, sessionID) => {
       const command = resolveCommand()
       if (isCliError(command)) throw new Error(command.error)
