@@ -160,6 +160,8 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (limit !== undefined) args.push("--limit", String(limit))
     const source = str("source")
     if (source) args.push("--from", source)
+    const project = str("project")
+    if (project) args.push("--project", project)
     if (input.includeProposed === true) args.push("--include-proposed")
     args.push("--detail", "full")
   } else if (operation === "show") {
@@ -185,6 +187,8 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (limit !== undefined) args.push("--limit", String(limit))
     const source = str("source")
     if (source) args.push("--from", source)
+    const project = str("project")
+    if (project) args.push("--project", project)
     if (typeof pack === "number") args.push("--pack", String(pack))
   }
   args.push("--format", "json")

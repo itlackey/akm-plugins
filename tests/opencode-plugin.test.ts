@@ -73,7 +73,7 @@ const mockPackCuratedHits = mock(async (input: Record<string, unknown>, budget: 
 // fake CLI decodes the argv back into the input each backend stub expects, runs
 // the stub, and answers the way the real CLI does: JSON on stdout, or a non-zero
 // exit with the `{ok:false,error}` envelope on stderr.
-const execFileCalls: Array<{ args: string[]; env: Record<string, string | undefined> }> = []
+const execFileCalls: Array<{ args: string[]; env: Record<string, string | undefined>; cwd?: string }> = []
 function decodeReadArgv(args: string[]): { verb: string; input: Record<string, unknown>; pack?: number; env?: string } {
   const verb = args[0]
   const flag = (name: string): string | undefined => {
@@ -95,7 +95,7 @@ function decodeReadArgv(args: string[]): { verb: string; input: Record<string, u
   return { verb, input, pack: flag("--pack") ? Number(flag("--pack")) : undefined }
 }
 const mockExecFile = mock((_command: string, args: string[], options: any, callback: (...cb: any[]) => void) => {
-  execFileCalls.push({ args, env: options?.env ?? {} })
+  execFileCalls.push({ args, env: options?.env ?? {}, cwd: options?.cwd })
   const decoded = decodeReadArgv(args)
   const run = async (): Promise<unknown> => {
     if (decoded.verb === "search") {
@@ -756,7 +756,7 @@ describe("akm-opencode plugin", () => {
       }
     })
 
-    it("records memories through the CLI with supported scope flags", async () => {
+    it("records memories through the CLI with no scope flags", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_remember.execute({
         content: "Deployment needs VPN",
@@ -772,19 +772,52 @@ describe("akm-opencode plugin", () => {
           "--name",
           "ops-vpn",
           "--force",
-          "--user",
-          "user-1",
-          "--agent",
-          "build",
-          "--run",
-          "run-1",
-          "--channel",
-          "review",
           "--format",
           "json",
         ],
         expect.objectContaining({ encoding: "utf8" }),
       )
+    })
+  })
+
+  describe("session directory", () => {
+    it("runs the read tools, recall and the write gate's search in the session directory", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_search.execute({ query: "review" } as any, createToolContext())
+      expect(execFileCalls.at(-1)).toMatchObject({ cwd: "/tmp/project" })
+
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "cwd-recall-1" } } } as any)
+      expect(curateCalls[0].options).toMatchObject({ cwd: projectDir })
+      expect(curateCalls[0].options).not.toHaveProperty("project")
+
+      execFileCalls.length = 0
+      await hooks["tool.execute.after"](
+        { tool: "read", sessionID: "cwd-gate-1", callID: "call-read", args: { filePath: "/app/service.yaml" }, directory: "/tmp/project" },
+        { output: ["<path>/app/service.yaml</path>", "<type>file</type>", "<content>", "1: apiVersion: inkwell/v2", "</content>"].join("\n"), title: "read" },
+      )
+      await Bun.sleep(50)
+      const gateSearch = execFileCalls.find((call) => call.args[0] === "search")
+      expect(gateSearch?.cwd).toBe(projectDir)
+      expect(gateSearch?.args).not.toContain("--project")
+    })
+
+    it("no longer exports AKM_PROJECT to shells or reads the scope variables", async () => {
+      process.env.AKM_USER_ID = "alice"
+      process.env.AKM_CHANNEL = "ops"
+      try {
+        const hooks = await AkmPlugin(createPluginInput())
+        const output = { env: {} as Record<string, string> }
+        await hooks["shell.env"]!({} as any, output as any)
+        expect(output.env).not.toHaveProperty("AKM_PROJECT")
+        await hooks.tool!.akm_remember.execute({ content: "x" } as any, createToolContext())
+        const remember = mockExecFileSync.mock.calls.find(([, args]) => Array.isArray(args) && args[0] === "remember")
+        expect(remember?.[1]).not.toContain("--user")
+        expect(remember?.[1]).not.toContain("--channel")
+        expect(remember?.[1]).not.toContain("--run")
+      } finally {
+        delete process.env.AKM_USER_ID
+        delete process.env.AKM_CHANNEL
+      }
     })
   })
 

@@ -20,7 +20,6 @@ import {
   applyContextBudget,
   autoMemoryEnabled,
   buildCurateOptions,
-  buildScopedArgs,
   createCuratedFileStore,
   extractMinIntervalMs,
   gatherCwdContext,
@@ -350,7 +349,7 @@ async function runRecall(
   query: string,
   meta: CliLogMeta & { operation: string },
 ): Promise<string | null> {
-  const outcome = await recallCurate(query, { timeoutMs: AKM_CURATE_TIMEOUT_MS })
+  const outcome = await recallCurate(query, { timeoutMs: AKM_CURATE_TIMEOUT_MS, cwd: meta.directory })
   if (outcome.ok) return outcome.text
   await writePluginLog(client, "warn", "AKM recall failed", {
     subsystem: "curation",
@@ -951,6 +950,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
       // This search is the PLUGIN's, not the model's: attribute it to a non-user event
       // source so akm's utility scores and feedback ranking do not count it as demand.
       const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--detail", "agent", "--format", "json"], {
+        cwd: directory,
         timeoutMs: 8_000,
         env: { AKM_EVENT_SOURCE: "audit" },
         packageName: "akm-opencode",
@@ -1142,7 +1142,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     },
     "shell.env": async (_input, output) => {
       try {
-        output.env.AKM_PROJECT = worktree
         output.env.AKM_PLUGIN_VERSION = PLUGIN_VERSION
         const bundleDir = await getAkmBundleDir(logClient)
         if (bundleDir) output.env.AKM_BUNDLE_DIR = bundleDir
@@ -1480,7 +1479,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         description: TOOL_SPECS.akm_remember.description,
         args: v1Args(TOOL_SPECS.akm_remember),
         async execute({ content, name, force }: { content: string; name?: string; force?: boolean }, context) {
-          const args = buildRememberArgs({ content, name, force }, context as unknown as Record<string, unknown>)
+          const args = buildRememberArgs({ content, name, force })
           return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_remember", sessionID: context.sessionID, directory: context.directory })
         },
       }),

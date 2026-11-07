@@ -15,10 +15,8 @@ export type EventWriter = (event: MemoryEventInput) => EventWriteResult
 
 export function buildEventScope(sessionID?: string, directory?: string, agent?: string) {
   return {
-    user: process.env.AKM_USER_ID,
     agent,
     run: sessionID,
-    channel: process.env.AKM_CHANNEL,
     project: directory,
     repo: process.env.AKM_REPO,
     branch: process.env.AKM_BRANCH,

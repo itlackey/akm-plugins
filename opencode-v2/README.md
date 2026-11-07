@@ -63,9 +63,13 @@ OpenCode 2 **does** have a native pre-tool hook that can block: `tool.hook("exec
 
 Differences from V1: the tools are `edit {path, oldString, newString}`, `write {path, content}` and, on `gpt-*` models, `patch {patchText}` (V1: `filePath` and `apply_patch`). As in V1 the gate cannot resolve a file from a patch envelope, so `patch` is a typed skip with one warning. A `read` result carries the file's raw text as structured `output.content`, which the gate scans directly instead of V1's numbered `<content>` rendering.
 
+### Projects
+
+Every `akm` call runs in the session's directory (in-process recall passes it as `cwd`), so akm resolves the user's project from the `projects` entry in its own config. `akm_remember` passes no `--run` or other scope flags. A host can override the project for a session by setting the string `metadata.akm.project` on it (or on its parent session): the plugin then passes `--project <name>` on that session's `search`, `curate` and `remember` calls, on its recall, and on the write gate's search. Nothing else is read from session metadata. This needs an `akm-cli` release that includes akm's projects support.
+
 ### Shell environment
 
-`shell.hook("create.before")` is V2's native equivalent of V1's `shell.env`: the host passes the full environment it is about to spawn a shell with and the plugin mutates it. Every shell the agent starts gets `AKM_PROJECT` (the project root), `AKM_PLUGIN_VERSION` and, when known, `AKM_BUNDLE_DIR` (from `AKM_BUNDLE_DIR` or `akm info`, asked once and cached). Verified against the 2.0.26 binary: a model-issued `shell` call sees the variables. This also applies to terminals the host creates through the same path.
+`shell.hook("create.before")` is V2's native equivalent of V1's `shell.env`: the host passes the full environment it is about to spawn a shell with and the plugin mutates it. Every shell the agent starts gets `AKM_PLUGIN_VERSION` and, when known, `AKM_BUNDLE_DIR` (from `AKM_BUNDLE_DIR` or `akm info`, asked once and cached). Verified against the 2.0.26 binary: a model-issued `shell` call sees the variables. This also applies to terminals the host creates through the same path.
 
 Differences from V1 in general: V1 awaits some hooks synchronously; V2's helpers are asynchronous (pending count, bundle dir, negative feedback). `opencode run` hands the prompt to the hook as a JSON string literal; the plugin unwraps it exactly as V1 does so start-anchored signals still match. V2 has no equivalent of V1's bundle-missing warning in the hints, nor of V1's "AKM user feedback recorded" log line per message.
 
@@ -85,7 +89,6 @@ Differences from V1 in general: V1 awaits some hooks synchronously; V2's helpers
 | `AKM_BUNDLE_DIR` | unset | Bundle location exported to shells and used to validate refs; otherwise asked from `akm info`. |
 | `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Seconds allowed for the pending-proposal count. |
 | `AKM_EXTRACT_MIN_INTERVAL_MS` | `600000` | Minimum gap between extractions for one session. |
-| `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Which scope flags `akm_remember` forwards. |
 
 ## Compatibility and updating
 

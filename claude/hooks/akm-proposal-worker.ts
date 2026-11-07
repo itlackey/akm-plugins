@@ -105,6 +105,7 @@ function run(): void {
     ], timeout)
     const child = spawnSync(plan.command, plan.args, {
       encoding: "utf8",
+      cwd: job.candidate.project && existsSync(job.candidate.project) ? job.candidate.project : undefined,
       timeout: plan.timeoutMs,
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 1024 * 1024,

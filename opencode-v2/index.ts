@@ -48,9 +48,9 @@ const plugin = Plugin.define({
 
       const core = createCore({
         directory: ctx.location.directory,
-        projectDirectory: ctx.location.project?.directory,
         pluginVersion: readPluginVersion(import.meta.url, PLUGIN_ID),
         moduleUrl: import.meta.url,
+        session: (sessionID) => runPromise(ctx.session.get({ sessionID: sessionID as never })),
         log: (level, message, extra) => {
           void runPromise(
             Effect.logWithLevel(LEVELS[level])(message).pipe(Effect.annotateLogs({ service: PLUGIN_ID, ...extra })),

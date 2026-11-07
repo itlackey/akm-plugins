@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
@@ -128,7 +128,7 @@ describe("akm-opencode-v2 plugin", () => {
     expect(JSON.parse((await host.callTool("akm_remember", { content: "use port 8443", name: "port-note" })).content).ok).toBe(true)
     expect(JSON.parse((await host.callTool("akm_feedback", { ref: "skills/nginx-proxy", sentiment: "positive" })).content).ok).toBe(true)
     const argv = fake.calls()
-    expect(argv.find((a) => a[0] === "remember")).toEqual(expect.arrayContaining(["remember", "use port 8443", "--name", "port-note", "--run", "ses_test"]))
+    expect(argv.find((a) => a[0] === "remember")).toEqual(["remember", "use port 8443", "--name", "port-note", "--format", "json"])
     expect(argv.find((a) => a[0] === "feedback")).toEqual(expect.arrayContaining(["feedback", "skills/nginx-proxy", "--positive"]))
 
     const before = fake.calls().length
@@ -294,11 +294,11 @@ describe("akm-opencode-v2 plugin", () => {
   })
 
   describe("automatic recall through akm-cli/api", () => {
-    it("asks the in-process curate for the contract's options: limit and text format, no cwd", async () => {
+    it("asks the in-process curate for the contract's options: limit, text format and the session directory", async () => {
       host = await startPlugin(project)
       await host.runPrompt("ses_opts", PROMPT)
       expect(curateCalls).toHaveLength(1)
-      expect(curateCalls[0].options).toEqual({ limit: 5, format: "text" })
+      expect(curateCalls[0].options).toEqual({ limit: 5, format: "text", cwd: project })
       // Recall starts no `akm curate` process: the in-process call replaced it.
       expect(fake.calls().some((a) => a.includes("curate"))).toBe(false)
     })
@@ -524,11 +524,11 @@ describe("akm-opencode-v2 plugin", () => {
   })
 
   describe("shell environment", () => {
-    it("exports the project, the plugin version and the bundle to every shell it starts", async () => {
+    it("exports the plugin version and the bundle to every shell it starts, and no project", async () => {
       process.env.AKM_BUNDLE_DIR = "/srv/bundle"
       host = await startPlugin(project)
       const env = await host.runShellCreate({ PATH: "/usr/bin" })
-      expect(env.AKM_PROJECT).toBe(project)
+      expect(env).not.toHaveProperty("AKM_PROJECT")
       expect(env.AKM_BUNDLE_DIR).toBe("/srv/bundle")
       expect(env.AKM_PLUGIN_VERSION).toMatch(/^\d+\.\d+\.\d+/)
       expect(env.PATH).toBe("/usr/bin")
@@ -545,7 +545,6 @@ describe("akm-opencode-v2 plugin", () => {
       await host.unload()
       host = await startPlugin(project)
       const env = await host.runShellCreate()
-      expect(env.AKM_PROJECT).toBe(project)
       expect(env.AKM_BUNDLE_DIR).toBeUndefined()
     })
   })
@@ -685,4 +684,98 @@ describe("akm-opencode-v2 plugin", () => {
       expect(reasons().at(-1)).toBe("file-not-read")
     })
   })
+  describe("session directory and project (akm projects)", () => {
+    const argvOf = (verb: string) => fake.calls().filter((a) => a[0] === verb)
+    const setProject = (sessionID: string, project: unknown, parentID?: string) =>
+      host!.sessions.set(sessionID, { ...(parentID ? { parentID } : {}), metadata: project === undefined ? {} : { akm: { project } } })
+
+    it("runs every search, curate and remember in the session directory and passes no project by default", async () => {
+      // A wrapper records the working directory of each akm call before running the fake.
+      const cwdLog = path.join(root, `cwd-${++counter}.log`)
+      const wrapper = path.join(root, `akm-cwd-${counter}.sh`)
+      writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\t%s\\n' "$PWD" "$1" >> ${cwdLog}\nexec ${fake.akmPath} "$@"\n`, { mode: 0o755 })
+      process.env.AKM_OPENCODE_CLI = wrapper
+      host = await startPlugin(project)
+      await host.callTool("akm_search", { query: "nginx" }, "ses_c")
+      await host.callTool("akm_curate", { query: "configure nginx proxy" }, "ses_c")
+      await host.callTool("akm_remember", { content: "note" }, "ses_c")
+      await host.callTool("akm_show", { ref: "skills/nginx-proxy" }, "ses_c")
+      await host.callTool("akm_feedback", { ref: "skills/nginx-proxy", sentiment: "positive" }, "ses_c")
+      const seen = readFileSync(cwdLog, "utf8").trim().split("\n").map((line) => line.split("\t"))
+      for (const verb of ["search", "curate", "remember", "show", "feedback"]) {
+        expect(seen.filter(([, v]) => v === verb).length).toBeGreaterThan(0)
+      }
+      for (const [dir] of seen) expect(realpathSync(dir)).toBe(realpathSync(project))
+      for (const verb of ["search", "curate", "remember", "show", "feedback"]) {
+        for (const argv of argvOf(verb)) expect(argv).not.toContain("--project")
+      }
+      await host.runPrompt("ses_c", PROMPT)
+      expect(curateCalls[0].options).toMatchObject({ cwd: project })
+      expect(curateCalls[0].options).not.toHaveProperty("project")
+    })
+
+    it("passes metadata.akm.project to search, curate, remember, recall and the format gate, and not to show or feedback", async () => {
+      process.env.AKM_WRITE_GATE = "observe"
+      resetWriteGateForTests()
+      host = await startPlugin(project)
+      setProject("ses_p", "acme")
+      await host.callTool("akm_search", { query: "nginx" }, "ses_p")
+      await host.callTool("akm_curate", { query: "configure nginx proxy" }, "ses_p")
+      await host.callTool("akm_remember", { content: "note", name: "n" }, "ses_p")
+      await host.callTool("akm_show", { ref: "skills/nginx-proxy" }, "ses_p")
+      await host.callTool("akm_feedback", { ref: "skills/nginx-proxy", sentiment: "positive" }, "ses_p")
+      expect(argvOf("search")[0]).toEqual(["search", "nginx", "--project", "acme", "--detail", "full", "--format", "json"])
+      expect(argvOf("curate")[0]).toEqual(["curate", "configure nginx proxy", "--project", "acme", "--format", "json"])
+      expect(argvOf("remember")[0]).toEqual(["remember", "note", "--name", "n", "--project", "acme", "--format", "json"])
+      expect(argvOf("show")[0]).not.toContain("--project")
+      expect(argvOf("feedback")[0]).not.toContain("--project")
+
+      await host.runPrompt("ses_p", PROMPT)
+      expect(curateCalls[0].options).toMatchObject({ cwd: project, project: "acme" })
+
+      const before = argvOf("search").length
+      await host.runToolHook("execute.after", {
+        tool: "read",
+        sessionID: "ses_p",
+        id: "read_1",
+        input: { path: "service.yaml" },
+        status: "completed",
+        result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
+      })
+      await settle(1200)
+      const gate = argvOf("search").slice(before).find((a) => a.includes("--from") && a.includes("local"))
+      expect(gate).toContain("--project")
+      expect(gate![gate!.indexOf("--project") + 1]).toBe("acme")
+    })
+
+    it("falls back to the parent session's project, and the session's own wins", async () => {
+      host = await startPlugin(project)
+      setProject("ses_parent", "acme")
+      setProject("ses_child", undefined, "ses_parent")
+      setProject("ses_own", "other", "ses_parent")
+      await host.callTool("akm_search", { query: "nginx" }, "ses_child")
+      await host.callTool("akm_search", { query: "nginx" }, "ses_own")
+      const [child, own] = argvOf("search")
+      expect(child).toContain("acme")
+      expect(own).toContain("other")
+      expect(own).not.toContain("acme")
+    })
+
+    it("ignores anything but a non-empty string, and a session the host cannot read", async () => {
+      host = await startPlugin(project)
+      setProject("ses_n", 42)
+      setProject("ses_e", "")
+      host.sessions.set("ses_other", { metadata: { akm: { retrieval: { source: "x" }, project: ["a"] } } })
+      for (const id of ["ses_n", "ses_e", "ses_other", "ses_unknown"]) await host.callTool("akm_search", { query: "nginx" }, id)
+      for (const argv of argvOf("search")) expect(argv).not.toContain("--project")
+    })
+
+    it("does not let the model supply a project", async () => {
+      host = await startPlugin(project)
+      await host.callTool("akm_search", { query: "nginx", project: "stolen" }, "ses_m")
+      await host.callTool("akm_curate", { query: "configure nginx proxy", project: "stolen" }, "ses_m")
+      for (const argv of [...argvOf("search"), ...argvOf("curate")]) expect(argv).not.toContain("--project")
+    })
+  })
+
 })

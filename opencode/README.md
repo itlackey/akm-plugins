@@ -47,7 +47,7 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 | `experimental.chat.system.transform` | Injects the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. |
 | `tool.execute.before` | The format-declaration write gate (`AKM_WRITE_GATE`, `observe` by default). Blocks the first `edit`/`write` to an existing file that declares a format your bundle documents and hands the model the ref to read. Once per file per session, released unconditionally on the retry. |
 | `tool.execute.after` | Tracks concepts used by AKM tools and checkpoints session observations. It also records what a file the session `read` declares about its own format, which is what the write gate above keys on. `write` is deliberately not a source: a file the session created is not one it needs the bundle to explain. The create itself is recorded on the write's `tool.execute.before` pass, so a later read-back of that file cannot re-arm the gate. |
-| `shell.env` | Exposes `AKM_PROJECT`, `AKM_PLUGIN_VERSION`, and the resolved `AKM_BUNDLE_DIR` to shell tools. |
+| `shell.env` | Exposes `AKM_PLUGIN_VERSION`, and the resolved `AKM_BUNDLE_DIR` to shell tools. |
 | `session.idle` | Runs interval-gated memory extraction (`AKM_AUTO_MEMORY=0` disables it). Fires after every turn, so it is rate-limited. |
 | `session.compacted` | Records a post-compaction event. |
 | `session.deleted` | Refreshes the local AKM index, warns once if the write gate saw write-path tool calls but never acted on any, then drops all per-session state and the temporary curation file. |
@@ -92,13 +92,10 @@ Every kill switch below is opt-out and reads the same way: only the literal `0` 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Which scope dimensions `akm_remember` forwards to the AKM CLI as flags. It does **not** gate what the plugin records locally — lifecycle events in `events.jsonl` always carry every dimension that has a value. |
-| `AKM_USER_ID` | unset | Value for the `user` dimension. |
-| `AKM_CHANNEL` | unset | Value for the `channel` dimension. |
 | `AKM_REPO` | unset | Repository label recorded on lifecycle events. |
 | `AKM_BRANCH` | unset | Branch label recorded on lifecycle events. |
 
-The `agent`, `run`, and `project` dimensions come from OpenCode itself (the active agent, the session ID, and the worktree), so they have no environment variable. `AKM_PROJECT` is *written* by the `shell.env` hook for shell tools to read; the plugin never reads it.
+Every `akm` call runs in the session's directory, so akm resolves the user's project from the `projects` entry in its own config; `akm_remember` passes no scope flags. The `AKM_SCOPE_KEYS`, `AKM_USER_ID`, `AKM_CHANNEL` and `AKM_PROJECT` variables are gone.
 
 ### Tuning
 

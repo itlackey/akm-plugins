@@ -192,19 +192,14 @@ The most useful settings are also exposed in Claude Code's `/plugin` configurati
 
 ### Scope
 
-Scope values are attached to the plugin's own lifecycle records in `events.jsonl`. The Claude hooks never invoke `akm remember`, so — unlike the OpenCode plugin — these are not forwarded to AKM as CLI flags.
+Every `akm` call a hook makes runs in the session's directory (the hook payload's `cwd`), so akm resolves the user's project from the `projects` entry in its own config. The plugin sets no scope or project of its own.
+
+Two labels are attached to the plugin's own lifecycle records in `events.jsonl`, next to the session ID:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AKM_SCOPE_KEYS` | `user,agent,run,channel` | Which of the four gated scope dimensions to record. Dropping a key omits it from local lifecycle records. |
-| `AKM_USER_ID` | unset | Value for the `user` dimension. Recorded only while `user` is in `AKM_SCOPE_KEYS`. |
-| `AKM_AGENT_ID` | unset | Value for the `agent` dimension. Recorded only while `agent` is in `AKM_SCOPE_KEYS`. |
-| `AKM_CHANNEL` | unset | Value for the `channel` dimension. Recorded only while `channel` is in `AKM_SCOPE_KEYS`. |
-| `AKM_PROJECT` | unset | Project label. Always recorded — `AKM_SCOPE_KEYS` does not gate it. |
 | `AKM_REPO` | unset | Repository label. Always recorded. |
 | `AKM_BRANCH` | unset | Branch label. Always recorded. |
-
-The `run` dimension is the Claude session ID and has no environment variable; it is gated by `AKM_SCOPE_KEYS` like the other three.
 
 ### Tuning
 

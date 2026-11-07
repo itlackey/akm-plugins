@@ -21,8 +21,8 @@ export type GateHost = {
   log: LearningLog
   writeEvent: EventWriter
   formatError: (error: unknown) => string
-  /** One local `akm search <token>` through the public CLI; rejects on failure. */
-  search: (token: string) => Promise<GateSearchResponse | undefined>
+  /** One local `akm search <token>` through the public CLI, run in the session's directory; rejects on failure. */
+  search: (token: string, sessionID?: string) => Promise<GateSearchResponse | undefined>
   /** The argument key that names the target file (`filePath` on V1, `path` on V2). */
   pathKey: string
   /** The patch-envelope tool (`apply_patch` on V1, `patch` on V2): no file path to resolve. */
@@ -587,7 +587,7 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T | typeof
  * session.created, so a warm local search is ~130ms against a multi-second
  * model round-trip. Never rejects.
  */
-async function resolveIdentity(host: GateHost, token: string): Promise<Resolution> {
+async function resolveIdentity(host: GateHost, token: string, sessionID?: string): Promise<Resolution> {
   const cached = cachedResolution(token)
   if (cached) return cached
   const inflight = identityInflight.get(token)
@@ -601,7 +601,7 @@ async function resolveIdentity(host: GateHost, token: string): Promise<Resolutio
         // feedback ranking do not count it as demand, which would contaminate
         // the treatment arm of an observe-mode rollout. The model-initiated
         // akm_search tool deliberately stays attributed to the user.
-        host.search(token),
+        host.search(token, sessionID),
         WRITE_GATE_RESOLVE_TIMEOUT_MS,
       )
       if (raced === WRITE_GATE_TIMEOUT) return rememberResolution(token, { status: "error", reason: "search-timeout" })
@@ -745,7 +745,7 @@ export function observeFileIdentity(
     if (cachedResolution(token) || identityInflight.has(token)) continue
     void (async () => {
       try {
-        await resolveIdentity(host, token)
+        await resolveIdentity(host, token, sessionID)
       } catch {
         // resolveIdentity never rejects; belt-and-braces so a future change
         // cannot turn this into an unhandled rejection on the read path.

@@ -58,7 +58,6 @@ import {
   RECALLED_CONTENT_PROVENANCE,
   applyContextBudget,
   autoMemoryEnabled,
-  buildScopedArgs,
   extractMinIntervalMs,
   formatWorkflowContext,
   gatherCwdContext,
@@ -90,8 +89,8 @@ export type CoreOptions = {
   directory: string
   /** The entrypoint's `import.meta.url`, so `akm-cli` resolves from the plugin package. */
   moduleUrl: string
-  /** The project (worktree) root, exported to shell environments as AKM_PROJECT. Defaults to `directory`. */
-  projectDirectory?: string
+  /** The host's session record (`parentID`, `metadata`), read at call time. Only `metadata.akm.project` is used. */
+  session?: (sessionID: string) => Promise<{ parentID?: string; metadata?: Record<string, unknown> } | undefined>
   /** The plugin's own version, exported to shell environments as AKM_PLUGIN_VERSION. */
   pluginVersion?: string
   /** Test seam: where structured memory events go. Defaults to the shared `opencode` ledger. */
@@ -189,11 +188,13 @@ export function createCore(options: CoreOptions) {
     formatError,
     pathKey: "path",
     patchTool: "patch",
-    search: async (token) => {
+    search: async (token, sessionID) => {
       const command = resolveCommand()
       if (isCliError(command)) throw new Error(command.error)
+      const project = await projectFor(sessionID)
       // The PLUGIN's search, not the model's: a non-user event source keeps it out of akm's demand signals.
-      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--detail", "agent", "--format", "json"], {
+      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", ...(project ? ["--project", project] : []), "--detail", "agent", "--format", "json"], {
+        cwd: options.directory,
         timeoutMs: WRITE_GATE_SEARCH_TIMEOUT_MS,
         env: { AKM_EVENT_SOURCE: "audit" },
         packageName: PACKAGE_NAME,
@@ -210,6 +211,23 @@ export function createCore(options: CoreOptions) {
     addBufferEntry: tracker.addBufferEntry,
     onSubmitted: (sessionID) => pendingProposals.invalidate(sessionID),
   })
+
+  /** The host's project name for this session: `metadata.akm.project`, else its parent session's. Never throws. */
+  async function projectFor(sessionID: string | undefined): Promise<string | undefined> {
+    if (!sessionID || !options.session) return undefined
+    const named = (metadata: Record<string, unknown> | undefined): string | undefined => {
+      const project = (metadata?.akm as { project?: unknown } | undefined)?.project
+      return typeof project === "string" && project ? project : undefined
+    }
+    try {
+      const info = await options.session(sessionID)
+      if (named(info?.metadata) || !info?.parentID) return named(info?.metadata)
+      return named((await options.session(info.parentID))?.metadata)
+    } catch (error: unknown) {
+      log("debug", "AKM could not read session metadata", { sessionID, error: formatError(error) })
+      return undefined
+    }
+  }
 
   function state(sessionID: string): SessionState {
     let existing = sessions.get(sessionID)
@@ -271,7 +289,12 @@ export function createCore(options: CoreOptions) {
     const owner = sessions.get(sessionID)
     owner?.controllers.add(controller)
     try {
-      const outcome = await recallCurate(query, { timeoutMs: CURATE_TIMEOUT_MS(), signal: controller.signal })
+      const outcome = await recallCurate(query, {
+        timeoutMs: CURATE_TIMEOUT_MS(),
+        signal: controller.signal,
+        cwd: options.directory,
+        project: await projectFor(sessionID),
+      })
       if (outcome.ok) return outcome.text
       if (!outcome.aborted) log("warn", "AKM recall failed", { operation, sessionID, subsystem: "curation", error: outcome.error })
       return null
@@ -533,7 +556,6 @@ export function createCore(options: CoreOptions) {
   async function shellEnv(env: Record<string, string | undefined>): Promise<void> {
     try {
       if (disposed) return
-      env.AKM_PROJECT = options.projectDirectory ?? options.directory
       if (options.pluginVersion) env.AKM_PLUGIN_VERSION = options.pluginVersion
       const dir = await getBundleDir()
       if (dir) env.AKM_BUNDLE_DIR = dir
@@ -589,7 +611,12 @@ export function createCore(options: CoreOptions) {
         const mapped = operation === "curate" || operation === "show"
           ? { ...input, type: input.type === "any" ? undefined : input.type }
           : { ...input, type: input.type === "any" ? undefined : input.type, includeProposed: input.include_proposed }
-        const result = await readVerbToolOutput(command, operation, mapped, callOptions)
+        const result = await readVerbToolOutput(
+          command,
+          operation,
+          operation === "show" ? mapped : { ...mapped, project: await projectFor(context.sessionID) },
+          callOptions,
+        )
         outcome = { ok: result.ok, text: operation === "search" && result.ok ? withProposedWarnings(result.output) : result.output }
       } else {
         if (isCliError(command)) return fail(command.error)
@@ -597,7 +624,7 @@ export function createCore(options: CoreOptions) {
         if (spec === "akm_remember") {
           args = buildRememberArgs(
             { content: String(input.content ?? ""), name: input.name as string | undefined, force: input.force === true },
-            { sessionID: context.sessionID },
+            await projectFor(context.sessionID),
           )
         } else {
           const built = buildFeedbackArgs(input as Parameters<typeof buildFeedbackArgs>[0])

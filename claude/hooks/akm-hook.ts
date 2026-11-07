@@ -184,7 +184,6 @@ const AUTO_HINTS = envFlag("AKM_AUTO_HINTS", true)
 // want that (e.g. CI runners, low-power dev machines) set
 // AKM_INDEX_ON_SESSION_END=0.
 const INDEX_ON_SESSION_END = flagSetting("AKM_INDEX_ON_SESSION_END", "INDEX_ON_SESSION_END", true)
-const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM bundle - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM bundle - assets relevant to this session"
 const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content. Only if an asset is wrong or stale, run `akm feedback <ref> --negative --reason \"<what is wrong and what it should say>\"`: that lowers its ranking. To correct a fact you have verified, also pass `--replace \"<exact current text>\" --with \"<corrected text>\" --source \"<URL, command or file>\"`. Use `--positive` when it helped. An asset that simply didn't fit your task is not negative feedback: record nothing."
@@ -315,11 +314,7 @@ function appendLog(filePath: string, ...fields: string[]) {
 
 function buildScope(sessionID: string) {
   return {
-    user: SCOPE_KEYS.includes("user") ? process.env.AKM_USER_ID : undefined,
-    agent: SCOPE_KEYS.includes("agent") ? process.env.AKM_AGENT_ID : undefined,
-    run: SCOPE_KEYS.includes("run") ? sessionID || undefined : undefined,
-    channel: SCOPE_KEYS.includes("channel") ? process.env.AKM_CHANNEL : undefined,
-    project: process.env.AKM_PROJECT,
+    run: sessionID || undefined,
     repo: process.env.AKM_REPO,
     branch: process.env.AKM_BRANCH,
   }
@@ -508,9 +503,17 @@ function logSubprocessFailure(kind: string, detail: Record<string, string | unde
   )
 }
 
+// The session's directory, from the hook payload's `cwd`. Every akm call this
+// process makes runs there, so akm resolves the user's project from it (a
+// directory that no longer exists is skipped: spawning in it would fail).
+let akmCwd: string | undefined
+
 function readStdin(): string {
   try {
-    return readFileSync(0, "utf8")
+    const raw = readFileSync(0, "utf8")
+    const cwd = safeJsonParse<{ cwd?: unknown }>(raw)?.cwd
+    if (typeof cwd === "string" && existsSync(cwd.trim())) akmCwd = cwd.trim()
+    return raw
   } catch {
     return ""
   }
@@ -531,7 +534,7 @@ const WINDOWS_PROGRAM_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"])
 // of akm: see spawn-plan.ts for why akm.cmd cannot be detached directly.
 function spawnDetachedAkm(command: string, args: string[], stdio: "ignore" | ["ignore", number | "ignore", number | "ignore"]) {
   const plan = runPlan(command, args, 0)
-  return spawn(plan.command, plan.args, { detached: true, stdio, windowsHide: true })
+  return spawn(plan.command, plan.args, { detached: true, stdio, windowsHide: true, cwd: akmCwd })
 }
 
 function findCommandOnPath(command: string): string | undefined {
@@ -622,6 +625,7 @@ function runCommand(command: string, args: string[], options?: { input?: string;
     const result = spawnSync(plan.command, plan.args, {
       encoding: "utf8",
       input: options?.input,
+      cwd: akmCwd,
       timeout: plan.timeoutMs,
       stdio: ["pipe", "pipe", options?.suppressStderr === false ? "pipe" : "ignore"],
       windowsHide: true,
@@ -687,6 +691,7 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
       stdin: input !== undefined ? new TextEncoder().encode(input) : "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      cwd: akmCwd,
       timeout: plan.timeoutMs,
       windowsHide: true,
     })
