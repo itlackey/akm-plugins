@@ -228,7 +228,8 @@ const SESSION_START_HEADER = [
 // the `refs:` field of memory events and out of the auto-feedback path. A local
 // "any path-like token" pattern used to shadow it and reintroduced exactly the
 // false positives the shared extractor exists to prevent.
-const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() || ""
+// Absolute, because akm is spawned in the session's directory, not this one.
+const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() ? path.resolve(process.env.AKM_LOCAL_BUILD_CLI.trim()) : ""
 const CURATED_DIR = path.join(STATE_DIR, "curated")
 
 function gatherCwdContext(): string {
@@ -345,7 +346,7 @@ function learningProposalMinConfidence(): number {
 
 function promptProject(rawInput: string): string {
   const parsed = safeJsonParse<Record<string, unknown>>(rawInput)
-  for (const value of [parsed?.cwd, parsed?.project_dir, parsed?.projectDir]) {
+  for (const value of [process.env.CLAUDE_PROJECT_DIR, parsed?.cwd, parsed?.project_dir, parsed?.projectDir]) {
     if (typeof value === "string" && value.trim()) return value.trim()
   }
   return process.cwd()
@@ -503,16 +504,22 @@ function logSubprocessFailure(kind: string, detail: Record<string, string | unde
   )
 }
 
-// The session's directory, from the hook payload's `cwd`. Every akm call this
-// process makes runs there, so akm resolves the user's project from it (a
-// directory that no longer exists is skipped: spawning in it would fail).
+// The session's directory: CLAUDE_PROJECT_DIR (stable for the session; the payload's
+// `cwd` follows the model's `cd`), else the payload's `cwd`, else this hook's own
+// directory. Every akm call this process makes runs there, so akm resolves the
+// user's project from it. A directory that no longer exists is skipped (spawning in
+// it would fail) and logged.
 let akmCwd: string | undefined
 
 function readStdin(): string {
   try {
     const raw = readFileSync(0, "utf8")
-    const cwd = safeJsonParse<{ cwd?: unknown }>(raw)?.cwd
-    if (typeof cwd === "string" && existsSync(cwd.trim())) akmCwd = cwd.trim()
+    const payloadCwd = safeJsonParse<{ cwd?: unknown }>(raw)?.cwd
+    const dir = process.env.CLAUDE_PROJECT_DIR?.trim() || (typeof payloadCwd === "string" ? payloadCwd.trim() : "")
+    if (dir) {
+      if (existsSync(dir)) akmCwd = dir
+      else appendLog(SESSION_LOG, "session_dir_missing", dir)
+    }
     return raw
   } catch {
     return ""
@@ -563,7 +570,7 @@ function findCommandOnPath(command: string): string | undefined {
         } else {
           accessSync(candidate, constants.X_OK)
         }
-        return candidate
+        return path.resolve(candidate)
       } catch {
         // keep searching
       }

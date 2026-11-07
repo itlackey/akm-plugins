@@ -69,13 +69,15 @@ export type LearningHost = {
   formatError: (error: unknown) => string
   /** Records the captured signal in the session buffer (same buffer the feedback tracker keeps). */
   addBufferEntry: (sessionID: string | undefined, entry: Omit<SessionBufferEntry, "timestamp">) => void
+  /** The host's project name for the session (`--project`), when it set one. */
+  projectFor?: (sessionID: string | undefined) => Promise<string | undefined>
   /** A proposal was queued: the pending-proposal count for this session is stale. */
   onSubmitted?: (sessionID: string | undefined) => void
 }
 
 export function createLearning(host: LearningHost) {
   /** Fire-and-forget semantic authoring; AKM owns the proposal and its review. */
-  function submitLearningProposal(candidate: ProposalCandidate, directory: string | undefined): void {
+  async function submitLearningProposal(candidate: ProposalCandidate, directory: string | undefined): Promise<void> {
     if (!autoLearningEnabled() || candidate.confidence < learningProposalMinConfidence()) return
     const command = host.resolveCommand()
     if (isCliError(command)) {
@@ -153,6 +155,7 @@ export function createLearning(host: LearningHost) {
       jobFile = created.jobFile
       taskFile = created.job.taskFile
       const timeoutMs = proposalTimeoutMs()
+      const project = await host.projectFor?.(candidate.sessionId)
       const child = spawn(
         command.command,
         [
@@ -163,6 +166,7 @@ export function createLearning(host: LearningHost) {
           reservation.proposalName,
           "--file",
           taskFile,
+          ...(project ? ["--project", project] : []),
           "--format",
           "json",
           "-q",
@@ -170,6 +174,7 @@ export function createLearning(host: LearningHost) {
           String(timeoutMs),
         ],
         {
+          cwd: directory,
           detached: true,
           stdio: ["ignore", "pipe", "pipe"],
           timeout: timeoutMs,
@@ -261,7 +266,7 @@ export function createLearning(host: LearningHost) {
           error: host.formatError(error),
         })
       }
-      if (signal.proposalType) submitLearningProposal(signal, directory)
+      if (signal.proposalType) void submitLearningProposal(signal, directory)
     }
 
     if (!autoSkillProposalsEnabled()) return
@@ -274,7 +279,7 @@ export function createLearning(host: LearningHost) {
         ...(sessionID ? { sessionId: sessionID } : {}),
         ...(signal ? { signal } : {}),
       })
-      if (workflow) submitLearningProposal(workflow, directory)
+      if (workflow) void submitLearningProposal(workflow, directory)
     } catch (error: unknown) {
       host.log("warn", "AKM recurring-workflow capture failed", {
         subsystem: "learning",

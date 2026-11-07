@@ -122,7 +122,7 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
         ...(options?.env?.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING === undefined ? { AKM_AUTO_LEARNING: "0" } : {}),
         ...options?.env,
       },
-      (key) => key.startsWith("AKM_") || key.startsWith("XDG_") || key.startsWith("CLAUDE_PLUGIN_OPTION_"),
+      (key) => key.startsWith("AKM_") || key.startsWith("XDG_") || key.startsWith("CLAUDE_PLUGIN_OPTION_") || key === "CLAUDE_PROJECT_DIR",
     ),
     stdio: [stdin, "pipe", "pipe"],
   })
@@ -2387,6 +2387,30 @@ exit 0
     expect(feedbackEvent.scope.agent).toBeUndefined()
     expect(feedbackEvent.scope.channel).toBeUndefined()
     expect(feedbackEvent.scope.project).toBeUndefined()
+  })
+
+  itPosix("auto-feedback prefers CLAUDE_PROJECT_DIR over the payload's cwd, and ignores a missing directory", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const projectDir = path.join(tempDir, "project-dir")
+    const movedDir = path.join(tempDir, "moved-to")
+    const log = path.join(tempDir, "akm.log")
+    const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
+    for (const dir of [binDir, stateDir, projectDir, movedDir]) mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(binDir, "akm"), `#!/usr/bin/env sh\nprintf '%s\\n' "$PWD" >> ${shellQuote(log)}\n${SHOW_ECHOES_REF}\nprintf '{"ok":true}\\n'\nexit 0\n`)
+    chmodSync(path.join(binDir, "akm"), 0o755)
+    const run = (env: Record<string, string>, cwd: string) =>
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({ session_id: "sess-pd", cwd, tool: "Bash", input: { command: "akm workflow run workflows/deploy" }, output: "{\"workflowRef\":\"workflows/deploy\"}" }),
+        env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir, AKM_BUNDLE_DIR: bundleDir, ...env },
+      })
+    run({ CLAUDE_PROJECT_DIR: projectDir }, movedDir)
+    for (const line of readFileSync(log, "utf8").trim().split("\n")) expect(realpathSync(line)).toBe(realpathSync(projectDir))
+    rmSync(log)
+    run({ CLAUDE_PROJECT_DIR: path.join(tempDir, "gone") }, movedDir)
+    expect(readFileSync(log, "utf8").trim().length).toBeGreaterThan(0) // still ran, in the hook's own directory
+    expect(readFileSync(path.join(stateDir, "akm-claude", "session.log"), "utf8")).toContain("session_dir_missing")
   })
 
   it("user-prompt-expansion records a retained AKM slash command", () => {

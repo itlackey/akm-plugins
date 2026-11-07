@@ -306,12 +306,18 @@ export function spawnSessionExtract(
   sessionID: string,
   onDone: (outcome: ExtractOutcome) => void,
   formatError: (error: unknown) => string = (e) => (e instanceof Error ? e.message : String(e)),
+  /** The session's directory (akm's working directory) and, when the host named one, its project. */
+  where: { cwd?: string; project?: string } = {},
 ): void {
   try {
     const child = spawn(
       command.command,
-      [...command.argsPrefix, "proposal", "extract", "--type", "opencode", "--session-id", sessionID, "--format", "json", "-q"],
-      { detached: true, stdio: ["ignore", "pipe", "pipe"] },
+      [
+        ...command.argsPrefix, "proposal", "extract", "--type", "opencode", "--session-id", sessionID,
+        ...(where.project ? ["--project", where.project] : []),
+        "--format", "json", "-q",
+      ],
+      { detached: true, stdio: ["ignore", "pipe", "pipe"], cwd: where.cwd },
     )
     let output = ""
     for (const stream of [child.stdout, child.stderr]) {

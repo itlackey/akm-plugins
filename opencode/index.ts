@@ -315,13 +315,18 @@ async function pruneStaleCuratedFiles(): Promise<void> {
 // Synchronous CLI invocation used by the lifecycle hooks — the plugin host does
 // not await these in a hot path, but we still cap execution time so a slow
 // stash never wedges the session loop.
-function runCliSyncRaw(args: string[], timeoutMs: number): { ok: true; stdout: string } | { ok: false; error: string } {
+// The directory the plugin was loaded for: akm's working directory for every call
+// that has no session directory of its own.
+let pluginDirectory: string | undefined
+
+function runCliSyncRaw(args: string[], timeoutMs: number, cwd?: string): { ok: true; stdout: string } | { ok: false; error: string } {
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) return { ok: false, error: command.error }
   try {
     const stdout = execResolvedAkm(command, args, {
       encoding: "utf8",
       timeout: timeoutMs,
+      cwd: cwd ?? pluginDirectory,
       stdio: ["ignore", "pipe", "pipe"],
     })
     return { ok: true, stdout }
@@ -439,6 +444,7 @@ function warmIndexInBackground(): void {
     // mis-parsed by the shell.) Matches maybeExtractSessionOnIdle/queueFeedback.
     // Errors here are never surfaced to the session.
     const child = spawn(command.command, [...command.argsPrefix, "index"], {
+      cwd: pluginDirectory,
       detached: true,
       stdio: "ignore",
     })
@@ -490,7 +496,7 @@ async function runCliSyncBestEffort(
   timeoutMs: number,
   meta: CliLogMeta & { subsystem: string; operation: string },
 ): Promise<string | null> {
-  const result = runCliSyncRaw(args, timeoutMs)
+  const result = runCliSyncRaw(args, timeoutMs, meta.directory)
   if (!result.ok) {
     await writePluginLog(client, "warn", "AKM synchronous helper failed", {
       subsystem: meta.subsystem,
@@ -511,7 +517,7 @@ const pendingProposals = createPendingProposals({
   list: async (args) => {
     const command = resolveAkmCommand()
     if (isCliError(command)) throw new Error(command.error)
-    return execResolvedAkm(command, args, { encoding: "utf8", timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS })
+    return execResolvedAkm(command, args, { encoding: "utf8", timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS, cwd: pluginDirectory })
   },
   formatError: formatCliError,
 })
@@ -554,7 +560,7 @@ function queueFeedback(client: LogCapableClient, ref: string, note: string, meta
     fail(command.error)
     return false
   }
-  return spawnPositiveFeedback(command, ref, note, fail, formatCliError)
+  return spawnPositiveFeedback(command, ref, note, fail, formatCliError, meta.directory ?? pluginDirectory)
 }
 
 async function maybeIndexSessionMemory(
@@ -670,7 +676,7 @@ function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, direct
       sessionID: sid,
       directory,
     })
-  }, formatCliError)
+  }, formatCliError, { cwd: directory ?? pluginDirectory })
 }
 
 function resolveAkmCommand(): ResolvedAkmCommand | CliError {
@@ -768,6 +774,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       const stdout = execResolvedAkm(command, fullArgs, {
         encoding: "utf8",
         timeout: 60_000,
+        cwd: meta.directory ?? pluginDirectory,
       })
     return recordSuccess(stdout)
   } catch (error: unknown) {
@@ -937,6 +944,7 @@ function v1Args(spec: ToolSpec): Record<string, any> {
 }
 
 const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
+  pluginDirectory = directory
   const logClient = client as unknown as LogCapableClient
   const gateHost: GateHost = {
     log: (level, message, extra) => void writePluginLog(logClient, level, message, extra),

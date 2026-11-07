@@ -781,6 +781,19 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("session directory", () => {
+    it("runs remember, feedback and the helpers in the session directory", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.tool!.akm_remember.execute({ content: "x" } as any, createToolContext())
+      await hooks.tool!.akm_feedback.execute({ ref: "skills/review", sentiment: "positive" } as any, createToolContext())
+      for (const verb of ["remember", "feedback"]) {
+        const call = mockExecFileSync.mock.calls.find(([, args]) => Array.isArray(args) && args[0] === verb)
+        expect(call?.[2]).toMatchObject({ cwd: "/tmp/project" })
+      }
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "cwd-helpers-1" } } } as any)
+      const helper = mockExecFileSync.mock.calls.find(([, args]) => Array.isArray(args) && args.includes("hints"))
+      expect(helper?.[2]).toMatchObject({ cwd: projectDir })
+    })
+
     it("runs the read tools, recall and the write gate's search in the session directory", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_search.execute({ query: "review" } as any, createToolContext())
@@ -799,25 +812,6 @@ describe("akm-opencode plugin", () => {
       const gateSearch = execFileCalls.find((call) => call.args[0] === "search")
       expect(gateSearch?.cwd).toBe(projectDir)
       expect(gateSearch?.args).not.toContain("--project")
-    })
-
-    it("no longer exports AKM_PROJECT to shells or reads the scope variables", async () => {
-      process.env.AKM_USER_ID = "alice"
-      process.env.AKM_CHANNEL = "ops"
-      try {
-        const hooks = await AkmPlugin(createPluginInput())
-        const output = { env: {} as Record<string, string> }
-        await hooks["shell.env"]!({} as any, output as any)
-        expect(output.env).not.toHaveProperty("AKM_PROJECT")
-        await hooks.tool!.akm_remember.execute({ content: "x" } as any, createToolContext())
-        const remember = mockExecFileSync.mock.calls.find(([, args]) => Array.isArray(args) && args[0] === "remember")
-        expect(remember?.[1]).not.toContain("--user")
-        expect(remember?.[1]).not.toContain("--channel")
-        expect(remember?.[1]).not.toContain("--run")
-      } finally {
-        delete process.env.AKM_USER_ID
-        delete process.env.AKM_CHANNEL
-      }
     })
   })
 

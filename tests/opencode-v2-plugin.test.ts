@@ -796,6 +796,47 @@ describe("akm-opencode-v2 plugin", () => {
       })
     })
 
+    it("runs extraction, learning proposals and positive feedback in the session directory, with the project on extract and proposal new", async () => {
+      const cwdLog = path.join(root, `cwd-${++counter}.log`)
+      const wrapper = path.join(root, `akm-cwd-${counter}.sh`)
+      writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\t%s %s\\n' "$PWD" "$1" "$2" >> ${cwdLog}\nexec ${fake.akmPath} "$@"\n`, { mode: 0o755 })
+      process.env.AKM_OPENCODE_CLI = wrapper
+      host = await startPlugin(project)
+      setProject("ses_x", "acme")
+      await host.runToolHook("execute.after", { tool: "akm_show", sessionID: "ses_x", id: "s1", input: { ref: "skills/nginx-proxy" }, status: "completed", result: { content: JSON.stringify({ type: "skill", ref: "skills/nginx-proxy", content: "x" }) } })
+      await host.runPrompt("ses_x", "Remember that we always deploy the staging stack with docker compose on port 8443")
+      await host.runPrompt("ses_x", "thanks, that worked perfectly")
+      await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_x" }, location: { directory: project } })
+      await settle(1000)
+      const seen = readFileSync(cwdLog, "utf8").trim().split("\n").map((line) => line.split("\t"))
+      for (const verb of ["proposal extract", "proposal new", "feedback skills/nginx-proxy"]) {
+        expect(seen.filter(([, v]) => v === verb).length).toBeGreaterThan(0)
+      }
+      for (const [dir] of seen) expect(realpathSync(dir)).toBe(realpathSync(project))
+      for (const kind of ["extract", "new"]) {
+        const argv = fake.calls().find((a) => a[0] === "proposal" && a[1] === kind)!
+        expect(argv[argv.indexOf("--project") + 1]).toBe("acme")
+      }
+      expect(argvOf("feedback")[0]).not.toContain("--project")
+    })
+
+    it("walks up to eight ancestors, trims the name, skips blank ones and warns when the session cannot be read", async () => {
+      host = await startPlugin(project)
+      setProject("ses_top", "  acme  ")
+      for (let i = 1; i <= 6; i++) host.sessions.set(`ses_l${i}`, { parentID: i === 1 ? "ses_top" : `ses_l${i - 1}`, metadata: { akm: { project: "   " } } })
+      host.sessions.set("ses_l7", { parentID: "ses_l6" })
+      await host.callTool("akm_search", { query: "nginx" }, "ses_l7")
+      expect(argvOf("search")[0]).toEqual(["search", "nginx", "--project", "acme", "--detail", "full", "--format", "json"])
+      // The ninth level is out of reach.
+      host.sessions.set("ses_deep", { parentID: "ses_l7" })
+      await host.callTool("akm_search", { query: "nginx" }, "ses_deep")
+      expect(argvOf("search")[1]).not.toContain("--project")
+
+      host.sessions.get = () => { throw new Error("boom") }
+      await host.callTool("akm_search", { query: "nginx" }, "ses_broken")
+      expect(host.logs.some((line) => line.level === "Warn" && line.message.includes("could not read session metadata"))).toBe(true)
+    })
+
     it("falls back to the parent session's project, and the session's own wins", async () => {
       host = await startPlugin(project)
       setProject("ses_parent", "acme")

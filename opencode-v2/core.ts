@@ -210,24 +210,29 @@ export function createCore(options: CoreOptions) {
     resolveCommand,
     formatError,
     addBufferEntry: tracker.addBufferEntry,
+    projectFor,
     onSubmitted: (sessionID) => pendingProposals.invalidate(sessionID),
   })
 
-  /** The host's project name for this session: `metadata.akm.project`, else its parent session's. Never throws. */
+  /**
+   * The host's project name for this session: the first non-blank `metadata.akm.project` on the session or
+   * its ancestors (at most 8 levels). Never throws; an unreadable session is logged, since without the
+   * override the call is wider than the host meant.
+   */
   async function projectFor(sessionID: string | undefined): Promise<string | undefined> {
-    if (!sessionID || !options.session) return undefined
-    const named = (metadata: Record<string, unknown> | undefined): string | undefined => {
-      const project = (metadata?.akm as { project?: unknown } | undefined)?.project
-      return typeof project === "string" && project ? project : undefined
-    }
+    if (!options.session) return undefined
     try {
-      const info = await options.session(sessionID)
-      if (named(info?.metadata) || !info?.parentID) return named(info?.metadata)
-      return named((await options.session(info.parentID))?.metadata)
+      let id = sessionID
+      for (let depth = 0; id && depth < 8; depth++) {
+        const info = await options.session(id)
+        const project = (info?.metadata?.akm as { project?: unknown } | undefined)?.project
+        if (typeof project === "string" && project.trim()) return project.trim()
+        id = info?.parentID
+      }
     } catch (error: unknown) {
-      log("debug", "AKM could not read session metadata", { sessionID, error: formatError(error) })
-      return undefined
+      log("warn", "AKM could not read session metadata; its project override was not applied", { sessionID, error: formatError(error) })
     }
+    return undefined
   }
 
   function state(sessionID: string): SessionState {
@@ -339,6 +344,7 @@ export function createCore(options: CoreOptions) {
       note,
       (error) => log("warn", "AKM auto-feedback failed", { subsystem: "feedback", toolName: "session.prompt", sessionID, ref, error }),
       formatError,
+      options.directory,
     )
   }
 
@@ -456,7 +462,7 @@ export function createCore(options: CoreOptions) {
     const command = resolveCommand()
     if (isCliError(command)) return // akm unavailable: the periodic `akm improve` extract pass is the backstop
     st.lastExtractAt = at
-    extractSession(
+    void projectFor(sessionID).then((project) => extractSession(
       command,
       sessionID,
       (outcome) => {
@@ -475,7 +481,8 @@ export function createCore(options: CoreOptions) {
         })
       },
       (error) => formatCliError(error, PACKAGE_NAME),
-    )
+      { cwd: options.directory, ...(project ? { project } : {}) },
+    ))
   }
 
   /**

@@ -407,7 +407,7 @@ function nonFlagArgs() {
   const out = []
   for (let i = 0; i < tail.length; i++) {
     const a = tail[i]
-    if (a === "--limit" || a === "--type" || a === "--from" || a === "--name" || a === "--reason" || a === "--run" || a === "--scope") {
+    if (a === "--limit" || a === "--type" || a === "--from" || a === "--name" || a === "--reason" || a === "--run" || a === "--scope" || a === "--project" || a === "--format" || a === "--detail") {
       i++
       continue
     }

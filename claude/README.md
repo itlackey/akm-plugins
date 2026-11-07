@@ -192,7 +192,7 @@ The most useful settings are also exposed in Claude Code's `/plugin` configurati
 
 ### Scope
 
-Every `akm` call a hook makes runs in the session's directory (the hook payload's `cwd`), so akm resolves the user's project from the `projects` entry in its own config. The plugin sets no scope or project of its own.
+Every `akm` call a hook makes runs in the session's directory (`CLAUDE_PROJECT_DIR` when set, otherwise the hook payload's `cwd`), so akm resolves the user's project from the `projects` entry in its own config.
 
 Two labels are attached to the plugin's own lifecycle records in `events.jsonl`, next to the session ID:
 
