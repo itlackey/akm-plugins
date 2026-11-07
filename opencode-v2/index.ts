@@ -141,13 +141,35 @@ const plugin = Plugin.define({
 
       // Session lifecycle: one native event subscription, closed with the plugin scope.
       const directory = ctx.location.directory
+      // Session events can arrive without a `location` (2.1.4 sends only `sessionID`); the session's
+      // own directory then decides whose it is. Remembered per session: it never changes.
+      const sessionDirectory = new Map<string, string>()
+      const ownsEvent = async (event: { location?: { directory?: string }; data?: unknown }): Promise<boolean> => {
+        // Other projects' sessions are not ours: one plugin instance per location.
+        const eventDirectory = event.location?.directory
+        if (eventDirectory) return eventDirectory === directory
+        const sessionID = (event.data as { sessionID?: unknown } | undefined)?.sessionID
+        if (typeof sessionID !== "string") return true
+        let owner = sessionDirectory.get(sessionID)
+        if (!owner) {
+          try {
+            owner = String((await runPromise(ctx.session.get({ sessionID: sessionID as never }))).location.directory)
+            sessionDirectory.set(sessionID, owner)
+          } catch {
+            return false // a session the host cannot tell us about is not ours to act on
+          }
+        }
+        return owner === directory
+      }
       yield* Effect.forkScoped(
-        Stream.runForEach(ctx.event.subscribe(), (event) => {
-          // Other projects' sessions are not ours: one plugin instance per location.
-          const eventDirectory = event.location?.directory
-          if (eventDirectory && eventDirectory !== directory) return Effect.void
-          return Effect.promise(() => core.onEvent(event as { type?: string; data?: unknown }))
-        }).pipe(
+        Stream.runForEach(ctx.event.subscribe(), (event) =>
+          Effect.promise(async () => {
+            const mine = await ownsEvent(event as { location?: { directory?: string }; data?: unknown })
+            const data = (event as { type?: string; data?: { sessionID?: unknown } })
+            if (data.type === "session.deleted" && typeof data.data?.sessionID === "string") sessionDirectory.delete(data.data.sessionID)
+            if (mine) await core.onEvent(event as { type?: string; data?: unknown })
+          }),
+        ).pipe(
           Effect.catchCause((cause) =>
             Effect.sync(() => core.log("error", "AKM event subscription ended", { error: String(cause).slice(0, 400) })),
           ),

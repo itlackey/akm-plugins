@@ -18,8 +18,8 @@ export type HostFake = {
   toolHooks: Map<string, Callback>
   shellHooks: Map<string, Callback>
   logs: LoggedLine[]
-  /** What `session.get` returns per session: its `parentID` and `metadata` (the host's `metadata.akm` lives here). */
-  sessions: Map<string, { parentID?: string; metadata?: Record<string, unknown> }>
+  /** What `session.get` returns per session: its `parentID`, `metadata` and `location` (the host's `metadata.akm` lives here). */
+  sessions: Map<string, { parentID?: string; metadata?: Record<string, unknown>; location?: { directory: string } }>
   /** Push a native event onto the stream the plugin subscribed to. */
   emit(event: unknown): Promise<void>
   /** Resolve once the plugin's event subscription is attached. */
@@ -41,7 +41,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
   const toolHooks = new Map<string, Callback>()
   const shellHooks = new Map<string, Callback>()
   const logs: LoggedLine[] = []
-  const sessions = new Map<string, { parentID?: string; metadata?: Record<string, unknown> }>()
+  const sessions = new Map<string, { parentID?: string; metadata?: Record<string, unknown>; location?: { directory: string } }>()
   const events = await Effect.runPromise(Queue.unbounded<unknown>())
   let markSubscribed!: () => void
   const subscribed = new Promise<void>((resolve) => {
@@ -69,7 +69,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
     shell: { hook: (name: string, callback: Callback) => Effect.sync(() => (shellHooks.set(name, callback), registration)) },
     session: {
       hook: (name: string, callback: Callback) => Effect.sync(() => (sessionHooks.set(name, callback), registration)),
-      get: (input: { sessionID: string }) => Effect.sync(() => ({ id: input.sessionID, ...sessions.get(input.sessionID) })),
+      get: (input: { sessionID: string }) => Effect.sync(() => ({ id: input.sessionID, location: { directory }, ...sessions.get(input.sessionID) })),
     },
     event: {
       subscribe: () => {

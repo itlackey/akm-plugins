@@ -684,6 +684,26 @@ describe("akm-opencode-v2 plugin", () => {
       expect(reasons().at(-1)).toBe("file-not-read")
     })
   })
+  it("lets only the session's own plugin instance handle a session event that carries no location", async () => {
+    const other = path.join(root, "other-instance")
+    mkdirSync(other, { recursive: true })
+    host = await startPlugin(project)
+    const second = await startPlugin(other)
+    try {
+      await host.subscribed
+      await second.subscribed
+      // The session lives in `project`; neither event names a location (OpenCode 2.1.4).
+      for (const h of [host, second]) h.sessions.set("ses_loc", { location: { directory: project } })
+      const event = { type: "session.execution.succeeded", data: { sessionID: "ses_loc" } }
+      await host.emit(event)
+      await second.emit(event)
+      await settle(600)
+      expect(fake.calls().filter((a) => a[0] === "proposal" && a[1] === "extract")).toHaveLength(1)
+    } finally {
+      await second.unload()
+    }
+  })
+
   describe("session directory and project (akm projects)", () => {
     const argvOf = (verb: string) => fake.calls().filter((a) => a[0] === verb)
     const setProject = (sessionID: string, project: unknown, parentID?: string) =>
