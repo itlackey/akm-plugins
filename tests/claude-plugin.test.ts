@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { IS_WINDOWS, hostEnv, itPosix } from "./host-runtime"
@@ -122,7 +122,7 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
         ...(options?.env?.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING === undefined ? { AKM_AUTO_LEARNING: "0" } : {}),
         ...options?.env,
       },
-      (key) => key.startsWith("AKM_") || key.startsWith("XDG_") || key.startsWith("CLAUDE_PLUGIN_OPTION_"),
+      (key) => key.startsWith("AKM_") || key.startsWith("XDG_") || key.startsWith("CLAUDE_PLUGIN_OPTION_") || key === "CLAUDE_PROJECT_DIR",
     ),
     stdio: [stdin, "pipe", "pipe"],
   })
@@ -1409,7 +1409,7 @@ exit 0
     const quotedLog = shellQuote(invokeLog)
 
     // Fake akm: version/install, index no-op, hints + curated output.
-    // The version MUST meet the plugin's minimum (0.10.261004)
+    // The version MUST meet the plugin's minimum (0.10.261111)
     // so the new SessionStart consent gate treats akm as healthy and proceeds
     // with the normal injected-context flow.
     writeFileSync(
@@ -2331,20 +2331,22 @@ exit 0
     expect(feedbackEvent.scope.run).toBe("sess-scope-1")
   })
 
-  itPosix("auto-feedback records env scope locally without passing scope flags to AKM", () => {
+  itPosix("auto-feedback ignores the removed scope variables and runs akm in the payload's cwd", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
+    const sessionDir = path.join(tempDir, "session-dir")
     const feedbackLog = path.join(tempDir, "akm-feedback.log")
     const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
     mkdirSync(binDir, { recursive: true })
     mkdirSync(stateDir, { recursive: true })
+    mkdirSync(sessionDir, { recursive: true })
     const quotedLog = shellQuote(feedbackLog)
 
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
-printf '%s\\n' "$*" >> ${quotedLog}
+printf '%s|%s\\n' "$PWD" "$*" >> ${quotedLog}
 ${SHOW_ECHOES_REF}
 printf '{"ok":true}\\n'
 exit 0
@@ -2355,6 +2357,7 @@ exit 0
     runHook(["auto-feedback", "success"], {
       input: JSON.stringify({
         session_id: "sess-scope-2",
+        cwd: sessionDir,
         tool: "Bash",
         input: { command: "akm workflow run workflows/deploy" },
         output: "{\"workflowRef\":\"workflows/deploy\"}",
@@ -2367,67 +2370,47 @@ exit 0
         AKM_USER_ID: "alice",
         AKM_AGENT_ID: "reviewer",
         AKM_CHANNEL: "pr-42",
+        AKM_PROJECT: "somewhere",
+        AKM_SCOPE_KEYS: "user",
       },
     })
 
-    const recorded = readFileSync(feedbackLog, "utf8")
-    expect(recorded).not.toContain("--user alice")
-    expect(recorded).not.toContain("--agent reviewer")
-    expect(recorded).not.toContain("--run sess-scope-2")
-    expect(recorded).not.toContain("--channel pr-42")
+    const recorded = readFileSync(feedbackLog, "utf8").trim().split("\n")
+    expect(recorded.length).toBeGreaterThan(0)
+    // Every akm call ran in the payload's directory (realpath: macOS tmp dirs are symlinks).
+    for (const line of recorded) expect(realpathSync(line.split("|")[0])).toBe(realpathSync(sessionDir))
+    expect(recorded.join("\n")).toContain("feedback workflows/deploy --positive")
+    expect(recorded.join("\n")).not.toMatch(/--(user|agent|channel|run|project)\b/)
     const feedbackEvent = readEvents(stateDir).find((event) => event.event === "feedback_recorded")
-    expect(feedbackEvent.scope).toMatchObject({
-      user: "alice",
-      agent: "reviewer",
-      run: "sess-scope-2",
-      channel: "pr-42",
-    })
+    expect(feedbackEvent.scope.run).toBe("sess-scope-2")
+    expect(feedbackEvent.scope.user).toBeUndefined()
+    expect(feedbackEvent.scope.agent).toBeUndefined()
+    expect(feedbackEvent.scope.channel).toBeUndefined()
+    expect(feedbackEvent.scope.project).toBeUndefined()
   })
 
-  itPosix("auto-feedback respects AKM_SCOPE_KEYS in local state without passing scope flags", () => {
+  itPosix("auto-feedback prefers CLAUDE_PROJECT_DIR over the payload's cwd, and ignores a missing directory", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
-    const feedbackLog = path.join(tempDir, "akm-feedback.log")
+    const projectDir = path.join(tempDir, "project-dir")
+    const movedDir = path.join(tempDir, "moved-to")
+    const log = path.join(tempDir, "akm.log")
     const bundleDir = makeBundle(tempDir, ["workflows/deploy"])
-    mkdirSync(binDir, { recursive: true })
-    mkdirSync(stateDir, { recursive: true })
-    const quotedLog = shellQuote(feedbackLog)
-
-    writeFileSync(
-      path.join(binDir, "akm"),
-      `#!/usr/bin/env sh
-printf '%s\\n' "$*" >> ${quotedLog}
-${SHOW_ECHOES_REF}
-printf '{"ok":true}\\n'
-exit 0
-`,
-    )
+    for (const dir of [binDir, stateDir, projectDir, movedDir]) mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(binDir, "akm"), `#!/usr/bin/env sh\nprintf '%s\\n' "$PWD" >> ${shellQuote(log)}\n${SHOW_ECHOES_REF}\nprintf '{"ok":true}\\n'\nexit 0\n`)
     chmodSync(path.join(binDir, "akm"), 0o755)
-
-    runHook(["auto-feedback", "success"], {
-      input: JSON.stringify({
-        session_id: "sess-scope-3",
-        tool: "Bash",
-        input: { command: "akm workflow run workflows/deploy" },
-        output: "{\"workflowRef\":\"workflows/deploy\"}",
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: `${binDir}:/usr/bin:/bin`,
-        XDG_STATE_HOME: stateDir,
-        AKM_BUNDLE_DIR: bundleDir,
-        AKM_USER_ID: "alice",
-        AKM_SCOPE_KEYS: "run",
-      },
-    })
-
-    const recorded = readFileSync(feedbackLog, "utf8")
-    expect(recorded).not.toContain("--run sess-scope-3")
-    expect(recorded).not.toContain("--user alice")
-    const feedbackEvent = readEvents(stateDir).find((event) => event.event === "feedback_recorded")
-    expect(feedbackEvent.scope.run).toBe("sess-scope-3")
-    expect(feedbackEvent.scope.user).toBeUndefined()
+    const run = (env: Record<string, string>, cwd: string) =>
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({ session_id: "sess-pd", cwd, tool: "Bash", input: { command: "akm workflow run workflows/deploy" }, output: "{\"workflowRef\":\"workflows/deploy\"}" }),
+        env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir, AKM_BUNDLE_DIR: bundleDir, ...env },
+      })
+    run({ CLAUDE_PROJECT_DIR: projectDir }, movedDir)
+    for (const line of readFileSync(log, "utf8").trim().split("\n")) expect(realpathSync(line)).toBe(realpathSync(projectDir))
+    rmSync(log)
+    run({ CLAUDE_PROJECT_DIR: path.join(tempDir, "gone") }, movedDir)
+    expect(readFileSync(log, "utf8").trim().length).toBeGreaterThan(0) // still ran, in the hook's own directory
+    expect(readFileSync(path.join(stateDir, "akm-claude", "session.log"), "utf8")).toContain("session_dir_missing")
   })
 
   it("user-prompt-expansion records a retained AKM slash command", () => {

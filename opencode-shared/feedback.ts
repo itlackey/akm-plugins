@@ -298,12 +298,14 @@ export function spawnPositiveFeedback(
   note: string,
   onFailure: (error: string) => void,
   formatError: (error: unknown) => string,
+  /** The session's directory, akm's working directory. */
+  cwd?: string,
 ): boolean {
   try {
     const child = spawn(
       command.command,
       [...command.argsPrefix, "feedback", ref, "--positive", "--reason", note, "--format", "json", "-q"],
-      { detached: true, stdio: "ignore" },
+      { detached: true, stdio: "ignore", cwd },
     )
     child.on("exit", (code, signal) => {
       if ((typeof code === "number" && code !== 0) || signal) {

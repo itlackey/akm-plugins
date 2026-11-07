@@ -11,8 +11,23 @@
 import { Plugin } from "@opencode/plugin/effect"
 import type { Tool } from "@opencode/schema/tool"
 import { Effect, Stream } from "effect"
+import { realpathSync } from "node:fs"
+import path from "node:path"
 import { readPluginVersion } from "../opencode-shared/bundle"
 import { type LogLevel, PLUGIN_ID, createCore } from "./core"
+
+/** Same directory despite a trailing slash or a symlink; falls back to the resolved path when it cannot be resolved. */
+function sameDirectory(a: string, b: string): boolean {
+  const real = (dir: string) => {
+    const resolved = path.resolve(dir)
+    try {
+      return realpathSync(resolved)
+    } catch {
+      return resolved
+    }
+  }
+  return real(a) === real(b)
+}
 
 type EffectContext = Parameters<Parameters<typeof Plugin.define>[0]["effect"]>[0]
 
@@ -48,9 +63,9 @@ const plugin = Plugin.define({
 
       const core = createCore({
         directory: ctx.location.directory,
-        projectDirectory: ctx.location.project?.directory,
         pluginVersion: readPluginVersion(import.meta.url, PLUGIN_ID),
         moduleUrl: import.meta.url,
+        session: (sessionID) => runPromise(ctx.session.get({ sessionID: sessionID as never })),
         log: (level, message, extra) => {
           void runPromise(
             Effect.logWithLevel(LEVELS[level])(message).pipe(Effect.annotateLogs({ service: PLUGIN_ID, ...extra })),
@@ -141,13 +156,35 @@ const plugin = Plugin.define({
 
       // Session lifecycle: one native event subscription, closed with the plugin scope.
       const directory = ctx.location.directory
+      // Session events can arrive without a `location` (2.1.4 sends only `sessionID`); the session's
+      // own directory then decides whose it is. Remembered per session: it never changes.
+      const sessionDirectory = new Map<string, string>()
+      const ownsEvent = async (event: { location?: { directory?: string }; data?: unknown }): Promise<boolean> => {
+        // Other projects' sessions are not ours: one plugin instance per location.
+        const eventDirectory = event.location?.directory
+        if (eventDirectory) return sameDirectory(eventDirectory, directory)
+        const sessionID = (event.data as { sessionID?: unknown } | undefined)?.sessionID
+        if (typeof sessionID !== "string") return true
+        let owner = sessionDirectory.get(sessionID)
+        if (!owner) {
+          try {
+            owner = String((await runPromise(ctx.session.get({ sessionID: sessionID as never }))).location.directory)
+            sessionDirectory.set(sessionID, owner)
+          } catch {
+            return false // a session the host cannot tell us about is not ours to act on
+          }
+        }
+        return sameDirectory(owner, directory)
+      }
       yield* Effect.forkScoped(
-        Stream.runForEach(ctx.event.subscribe(), (event) => {
-          // Other projects' sessions are not ours: one plugin instance per location.
-          const eventDirectory = event.location?.directory
-          if (eventDirectory && eventDirectory !== directory) return Effect.void
-          return Effect.promise(() => core.onEvent(event as { type?: string; data?: unknown }))
-        }).pipe(
+        Stream.runForEach(ctx.event.subscribe(), (event) =>
+          Effect.promise(async () => {
+            const mine = await ownsEvent(event as { location?: { directory?: string }; data?: unknown })
+            const data = (event as { type?: string; data?: { sessionID?: unknown } })
+            if (data.type === "session.deleted" && typeof data.data?.sessionID === "string") sessionDirectory.delete(data.data.sessionID)
+            if (mine) await core.onEvent(event as { type?: string; data?: unknown })
+          }),
+        ).pipe(
           Effect.catchCause((cause) =>
             Effect.sync(() => core.log("error", "AKM event subscription ended", { error: String(cause).slice(0, 400) })),
           ),

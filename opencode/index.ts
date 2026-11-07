@@ -20,7 +20,6 @@ import {
   applyContextBudget,
   autoMemoryEnabled,
   buildCurateOptions,
-  buildScopedArgs,
   createCuratedFileStore,
   extractMinIntervalMs,
   gatherCwdContext,
@@ -316,13 +315,18 @@ async function pruneStaleCuratedFiles(): Promise<void> {
 // Synchronous CLI invocation used by the lifecycle hooks — the plugin host does
 // not await these in a hot path, but we still cap execution time so a slow
 // stash never wedges the session loop.
-function runCliSyncRaw(args: string[], timeoutMs: number): { ok: true; stdout: string } | { ok: false; error: string } {
+// The directory the plugin was loaded for: akm's working directory for every call
+// that has no session directory of its own.
+let pluginDirectory: string | undefined
+
+function runCliSyncRaw(args: string[], timeoutMs: number, cwd?: string): { ok: true; stdout: string } | { ok: false; error: string } {
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) return { ok: false, error: command.error }
   try {
     const stdout = execResolvedAkm(command, args, {
       encoding: "utf8",
       timeout: timeoutMs,
+      cwd: cwd ?? pluginDirectory,
       stdio: ["ignore", "pipe", "pipe"],
     })
     return { ok: true, stdout }
@@ -350,7 +354,7 @@ async function runRecall(
   query: string,
   meta: CliLogMeta & { operation: string },
 ): Promise<string | null> {
-  const outcome = await recallCurate(query, { timeoutMs: AKM_CURATE_TIMEOUT_MS })
+  const outcome = await recallCurate(query, { timeoutMs: AKM_CURATE_TIMEOUT_MS, cwd: meta.directory })
   if (outcome.ok) return outcome.text
   await writePluginLog(client, "warn", "AKM recall failed", {
     subsystem: "curation",
@@ -440,6 +444,7 @@ function warmIndexInBackground(): void {
     // mis-parsed by the shell.) Matches maybeExtractSessionOnIdle/queueFeedback.
     // Errors here are never surfaced to the session.
     const child = spawn(command.command, [...command.argsPrefix, "index"], {
+      cwd: pluginDirectory,
       detached: true,
       stdio: "ignore",
     })
@@ -491,7 +496,7 @@ async function runCliSyncBestEffort(
   timeoutMs: number,
   meta: CliLogMeta & { subsystem: string; operation: string },
 ): Promise<string | null> {
-  const result = runCliSyncRaw(args, timeoutMs)
+  const result = runCliSyncRaw(args, timeoutMs, meta.directory)
   if (!result.ok) {
     await writePluginLog(client, "warn", "AKM synchronous helper failed", {
       subsystem: meta.subsystem,
@@ -512,7 +517,7 @@ const pendingProposals = createPendingProposals({
   list: async (args) => {
     const command = resolveAkmCommand()
     if (isCliError(command)) throw new Error(command.error)
-    return execResolvedAkm(command, args, { encoding: "utf8", timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS })
+    return execResolvedAkm(command, args, { encoding: "utf8", timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS, cwd: pluginDirectory })
   },
   formatError: formatCliError,
 })
@@ -555,7 +560,7 @@ function queueFeedback(client: LogCapableClient, ref: string, note: string, meta
     fail(command.error)
     return false
   }
-  return spawnPositiveFeedback(command, ref, note, fail, formatCliError)
+  return spawnPositiveFeedback(command, ref, note, fail, formatCliError, meta.directory ?? pluginDirectory)
 }
 
 async function maybeIndexSessionMemory(
@@ -671,7 +676,7 @@ function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, direct
       sessionID: sid,
       directory,
     })
-  }, formatCliError)
+  }, formatCliError, { cwd: directory ?? pluginDirectory })
 }
 
 function resolveAkmCommand(): ResolvedAkmCommand | CliError {
@@ -769,6 +774,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       const stdout = execResolvedAkm(command, fullArgs, {
         encoding: "utf8",
         timeout: 60_000,
+        cwd: meta.directory ?? pluginDirectory,
       })
     return recordSuccess(stdout)
   } catch (error: unknown) {
@@ -938,6 +944,7 @@ function v1Args(spec: ToolSpec): Record<string, any> {
 }
 
 const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
+  pluginDirectory = directory
   const logClient = client as unknown as LogCapableClient
   const gateHost: GateHost = {
     log: (level, message, extra) => void writePluginLog(logClient, level, message, extra),
@@ -945,12 +952,16 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     formatError: formatCliError,
     pathKey: "filePath",
     patchTool: "apply_patch",
+    // OpenCode 1 builds one plugin instance per directory (the hook inputs carry no directory of their own),
+    // so the directory this plugin was loaded for is the session's directory.
+    scope: async () => directory,
     search: async (token) => {
       const command = resolveAkmCommand()
       if (isCliError(command)) throw new Error(command.error)
       // This search is the PLUGIN's, not the model's: attribute it to a non-user event
       // source so akm's utility scores and feedback ranking do not count it as demand.
       const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--detail", "agent", "--format", "json"], {
+        cwd: directory,
         timeoutMs: 8_000,
         env: { AKM_EVENT_SOURCE: "audit" },
         packageName: "akm-opencode",
@@ -1142,7 +1153,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     },
     "shell.env": async (_input, output) => {
       try {
-        output.env.AKM_PROJECT = worktree
         output.env.AKM_PLUGIN_VERSION = PLUGIN_VERSION
         const bundleDir = await getAkmBundleDir(logClient)
         if (bundleDir) output.env.AKM_BUNDLE_DIR = bundleDir
@@ -1480,7 +1490,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         description: TOOL_SPECS.akm_remember.description,
         args: v1Args(TOOL_SPECS.akm_remember),
         async execute({ content, name, force }: { content: string; name?: string; force?: boolean }, context) {
-          const args = buildRememberArgs({ content, name, force }, context as unknown as Record<string, unknown>)
+          const args = buildRememberArgs({ content, name, force })
           return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_remember", sessionID: context.sessionID, directory: context.directory })
         },
       }),

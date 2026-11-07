@@ -3,7 +3,6 @@
 // schemas as plain data, and the pure argv builders for the two write verbs.
 // V1 turns a spec into `tool.schema` arguments; V2 turns it into JSON Schema.
 // The read verbs' argv lives in akm-cli.ts (buildReadArgs).
-import { buildScopedArgs } from "./recall"
 
 // The AKM 0.9 asset-type vocabulary, in the singular form `--type` accepts.
 // This is exactly `akm info --format json` -> .assetTypes, sorted; keep the two
@@ -121,12 +120,12 @@ export function toJsonSchema(spec: ToolSpec): Record<string, unknown> {
 
 export function buildRememberArgs(
   input: { content: string; name?: string; force?: boolean },
-  context: Record<string, unknown> | undefined,
+  project?: string,
 ): string[] {
   const args = ["remember", input.content]
   if (input.name) args.push("--name", input.name)
   if (input.force) args.push("--force")
-  args.push(...buildScopedArgs(context))
+  if (project) args.push("--project", project)
   return args
 }
 

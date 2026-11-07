@@ -44,7 +44,7 @@ const HARNESS_ARG = process.argv.find((arg) => arg.startsWith("--harness="))?.sl
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
 // is a separate concern: the package range passed to Bun/npm. `-0` is the lowest
 // prerelease of the floor, so the range admits the floor's own prereleases
-// (0.10.261004-beta) and every later release; npm `latest` may still be older.
+// (0.10.261111-beta) and every later release; npm `latest` may still be older.
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@>=${AKM_MIN_VERSION}-0`
 // The ref contains `>`, so it is double-quoted (works in sh, cmd and PowerShell) wherever it is shown as a command.
 const AKM_INSTALL_COMMAND = (manager: "bun" | "npm") => `${manager} install -g "${AKM_PACKAGE_REF}"`
@@ -184,7 +184,6 @@ const AUTO_HINTS = envFlag("AKM_AUTO_HINTS", true)
 // want that (e.g. CI runners, low-power dev machines) set
 // AKM_INDEX_ON_SESSION_END=0.
 const INDEX_ON_SESSION_END = flagSetting("AKM_INDEX_ON_SESSION_END", "INDEX_ON_SESSION_END", true)
-const SCOPE_KEYS = (process.env.AKM_SCOPE_KEYS ?? "user,agent,run,channel").split(",").map((part) => part.trim()).filter(Boolean)
 const CURATED_PROMPT_HEADER = "# AKM bundle - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM bundle - assets relevant to this session"
 const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content. Only if an asset is wrong or stale, run `akm feedback <ref> --negative --reason \"<what is wrong and what it should say>\"`: that lowers its ranking. To correct a fact you have verified, also pass `--replace \"<exact current text>\" --with \"<corrected text>\" --source \"<URL, command or file>\"`. Use `--positive` when it helped. An asset that simply didn't fit your task is not negative feedback: record nothing."
@@ -229,7 +228,8 @@ const SESSION_START_HEADER = [
 // the `refs:` field of memory events and out of the auto-feedback path. A local
 // "any path-like token" pattern used to shadow it and reintroduced exactly the
 // false positives the shared extractor exists to prevent.
-const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() || ""
+// Absolute, because akm is spawned in the session's directory, not this one.
+const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() ? path.resolve(process.env.AKM_LOCAL_BUILD_CLI.trim()) : ""
 const CURATED_DIR = path.join(STATE_DIR, "curated")
 
 function gatherCwdContext(): string {
@@ -315,11 +315,7 @@ function appendLog(filePath: string, ...fields: string[]) {
 
 function buildScope(sessionID: string) {
   return {
-    user: SCOPE_KEYS.includes("user") ? process.env.AKM_USER_ID : undefined,
-    agent: SCOPE_KEYS.includes("agent") ? process.env.AKM_AGENT_ID : undefined,
-    run: SCOPE_KEYS.includes("run") ? sessionID || undefined : undefined,
-    channel: SCOPE_KEYS.includes("channel") ? process.env.AKM_CHANNEL : undefined,
-    project: process.env.AKM_PROJECT,
+    run: sessionID || undefined,
     repo: process.env.AKM_REPO,
     branch: process.env.AKM_BRANCH,
   }
@@ -348,12 +344,19 @@ function learningProposalMinConfidence(): number {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.75
 }
 
-function promptProject(rawInput: string): string {
-  const parsed = safeJsonParse<Record<string, unknown>>(rawInput)
-  for (const value of [parsed?.cwd, parsed?.project_dir, parsed?.projectDir]) {
+// The session's directory for a hook payload: CLAUDE_PROJECT_DIR (stable for the
+// session; the payload's `cwd` follows the model's `cd`), else the payload's own
+// directory. One choice for akm's working directory and the project label.
+function payloadDirectory(parsed: Record<string, unknown> | undefined): string | undefined {
+  for (const value of [process.env.CLAUDE_PROJECT_DIR, parsed?.cwd, parsed?.project_dir, parsed?.projectDir]) {
     if (typeof value === "string" && value.trim()) return value.trim()
   }
-  return process.cwd()
+  return undefined
+}
+
+function promptProject(rawInput: string): string {
+  const dir = payloadDirectory(safeJsonParse<Record<string, unknown>>(rawInput))
+  return dir && existsSync(dir) ? dir : process.cwd()
 }
 
 /**
@@ -508,9 +511,20 @@ function logSubprocessFailure(kind: string, detail: Record<string, string | unde
   )
 }
 
+// The session's directory (payloadDirectory), else this hook's own directory. Every akm call this process makes runs there, so akm resolves the
+// user's project from it. A directory that no longer exists is skipped (spawning in
+// it would fail) and logged.
+let akmCwd: string | undefined
+
 function readStdin(): string {
   try {
-    return readFileSync(0, "utf8")
+    const raw = readFileSync(0, "utf8")
+    const dir = payloadDirectory(safeJsonParse<Record<string, unknown>>(raw))
+    if (dir) {
+      if (existsSync(dir)) akmCwd = dir
+      else appendLog(SESSION_LOG, "session_dir_missing", dir)
+    }
+    return raw
   } catch {
     return ""
   }
@@ -531,7 +545,7 @@ const WINDOWS_PROGRAM_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"])
 // of akm: see spawn-plan.ts for why akm.cmd cannot be detached directly.
 function spawnDetachedAkm(command: string, args: string[], stdio: "ignore" | ["ignore", number | "ignore", number | "ignore"]) {
   const plan = runPlan(command, args, 0)
-  return spawn(plan.command, plan.args, { detached: true, stdio, windowsHide: true })
+  return spawn(plan.command, plan.args, { detached: true, stdio, windowsHide: true, cwd: akmCwd })
 }
 
 function findCommandOnPath(command: string): string | undefined {
@@ -560,7 +574,7 @@ function findCommandOnPath(command: string): string | undefined {
         } else {
           accessSync(candidate, constants.X_OK)
         }
-        return candidate
+        return path.resolve(candidate)
       } catch {
         // keep searching
       }
@@ -622,6 +636,7 @@ function runCommand(command: string, args: string[], options?: { input?: string;
     const result = spawnSync(plan.command, plan.args, {
       encoding: "utf8",
       input: options?.input,
+      cwd: akmCwd,
       timeout: plan.timeoutMs,
       stdio: ["pipe", "pipe", options?.suppressStderr === false ? "pipe" : "ignore"],
       windowsHide: true,
@@ -687,6 +702,7 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
       stdin: input !== undefined ? new TextEncoder().encode(input) : "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      cwd: akmCwd,
       timeout: plan.timeoutMs,
       windowsHide: true,
     })
