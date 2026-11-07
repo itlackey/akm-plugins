@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
@@ -513,7 +513,7 @@ describe("akm-opencode-v2 plugin", () => {
       await host.unload()
 
       const wrapper = path.join(root, "akm-with-pending.sh")
-      writeFileSync(wrapper, `#!/bin/sh\nif [ "$1" = "proposal" ] && [ "$2" = "list" ]; then echo '{"proposals":[{"id":"a"},{"id":"b"}]}'; exit 0; fi\nexec ${fake.akmPath} "$@"\n`, { mode: 0o755 })
+      writeFileSync(wrapper, `#!/bin/sh\nif [ "$1" = "proposal" ] && [ "$2" = "list" ]; then echo '{"proposals":[{"id":"a"},{"id":"b"}]}'; exit 0; fi\nexec "${fake.akmPath}" "$@"\n`, { mode: 0o755 })
       process.env.AKM_OPENCODE_CLI = wrapper
       host = await startPlugin(project)
       const text = (await host.runContext("ses_n", []))[0].text
@@ -704,6 +704,19 @@ describe("akm-opencode-v2 plugin", () => {
     }
   })
 
+  it("recognises its own session through a trailing slash or a symlinked directory", async () => {
+    const link = path.join(root, `link-${++counter}`)
+    symlinkSync(project, link)
+    host = await startPlugin(project)
+    await host.subscribed
+    host.sessions.set("ses_slash", { location: { directory: `${project}/` } })
+    host.sessions.set("ses_link", { location: { directory: link } })
+    await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_slash" } })
+    await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_link" } })
+    await settle(600)
+    expect(fake.calls().filter((a) => a[0] === "proposal" && a[1] === "extract")).toHaveLength(2)
+  })
+
   describe("session directory and project (akm projects)", () => {
     const argvOf = (verb: string) => fake.calls().filter((a) => a[0] === verb)
     const setProject = (sessionID: string, project: unknown, parentID?: string) =>
@@ -713,7 +726,7 @@ describe("akm-opencode-v2 plugin", () => {
       // A wrapper records the working directory of each akm call before running the fake.
       const cwdLog = path.join(root, `cwd-${++counter}.log`)
       const wrapper = path.join(root, `akm-cwd-${counter}.sh`)
-      writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\t%s\\n' "$PWD" "$1" >> ${cwdLog}\nexec ${fake.akmPath} "$@"\n`, { mode: 0o755 })
+      writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\t%s\\n' "$PWD" "$1" >> "${cwdLog}"\nexec "${fake.akmPath}" "$@"\n`, { mode: 0o755 })
       process.env.AKM_OPENCODE_CLI = wrapper
       host = await startPlugin(project)
       await host.callTool("akm_search", { query: "nginx" }, "ses_c")
@@ -819,7 +832,7 @@ describe("akm-opencode-v2 plugin", () => {
     it("runs extraction, learning proposals and positive feedback in the session directory, with the project on extract and proposal new", async () => {
       const cwdLog = path.join(root, `cwd-${++counter}.log`)
       const wrapper = path.join(root, `akm-cwd-${counter}.sh`)
-      writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\t%s %s\\n' "$PWD" "$1" "$2" >> ${cwdLog}\nexec ${fake.akmPath} "$@"\n`, { mode: 0o755 })
+      writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\t%s %s\\n' "$PWD" "$1" "$2" >> "${cwdLog}"\nexec "${fake.akmPath}" "$@"\n`, { mode: 0o755 })
       process.env.AKM_OPENCODE_CLI = wrapper
       host = await startPlugin(project)
       setProject("ses_x", "acme")

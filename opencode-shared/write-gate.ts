@@ -744,18 +744,20 @@ export function observeFileIdentity(
     tokens,
     recognized,
   })
-  for (const token of tokens) {
-    void (async () => {
-      try {
-        const key = `${await host.scope(sessionID)}\0${token}`
-        if (cachedResolution(key) || identityInflight.has(key)) return
-        await resolveIdentity(host, token, sessionID, key)
-      } catch {
-        // resolveIdentity never rejects; belt-and-braces so a future change
-        // cannot turn this into an unhandled rejection on the read path.
+  if (tokens.length === 0) return
+  void (async () => {
+    try {
+      const scope = await host.scope(sessionID)
+      for (const token of tokens) {
+        const key = `${scope}\0${token}`
+        if (cachedResolution(key) || identityInflight.has(key)) continue
+        void resolveIdentity(host, token, sessionID, key)
       }
-    })()
-  }
+    } catch {
+      // resolveIdentity never rejects; belt-and-braces so a future change
+      // cannot turn this into an unhandled rejection on the read path.
+    }
+  })()
 }
 
 // --- write gate: decision (#99) ---------------------------------------------

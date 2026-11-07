@@ -952,6 +952,8 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     formatError: formatCliError,
     pathKey: "filePath",
     patchTool: "apply_patch",
+    // OpenCode 1 builds one plugin instance per directory (the hook inputs carry no directory of their own),
+    // so the directory this plugin was loaded for is the session's directory.
     scope: async () => directory,
     search: async (token) => {
       const command = resolveAkmCommand()

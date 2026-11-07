@@ -344,12 +344,19 @@ function learningProposalMinConfidence(): number {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.75
 }
 
-function promptProject(rawInput: string): string {
-  const parsed = safeJsonParse<Record<string, unknown>>(rawInput)
+// The session's directory for a hook payload: CLAUDE_PROJECT_DIR (stable for the
+// session; the payload's `cwd` follows the model's `cd`), else the payload's own
+// directory. One choice for akm's working directory and the project label.
+function payloadDirectory(parsed: Record<string, unknown> | undefined): string | undefined {
   for (const value of [process.env.CLAUDE_PROJECT_DIR, parsed?.cwd, parsed?.project_dir, parsed?.projectDir]) {
     if (typeof value === "string" && value.trim()) return value.trim()
   }
-  return process.cwd()
+  return undefined
+}
+
+function promptProject(rawInput: string): string {
+  const dir = payloadDirectory(safeJsonParse<Record<string, unknown>>(rawInput))
+  return dir && existsSync(dir) ? dir : process.cwd()
 }
 
 /**
@@ -504,9 +511,7 @@ function logSubprocessFailure(kind: string, detail: Record<string, string | unde
   )
 }
 
-// The session's directory: CLAUDE_PROJECT_DIR (stable for the session; the payload's
-// `cwd` follows the model's `cd`), else the payload's `cwd`, else this hook's own
-// directory. Every akm call this process makes runs there, so akm resolves the
+// The session's directory (payloadDirectory), else this hook's own directory. Every akm call this process makes runs there, so akm resolves the
 // user's project from it. A directory that no longer exists is skipped (spawning in
 // it would fail) and logged.
 let akmCwd: string | undefined
@@ -514,8 +519,7 @@ let akmCwd: string | undefined
 function readStdin(): string {
   try {
     const raw = readFileSync(0, "utf8")
-    const payloadCwd = safeJsonParse<{ cwd?: unknown }>(raw)?.cwd
-    const dir = process.env.CLAUDE_PROJECT_DIR?.trim() || (typeof payloadCwd === "string" ? payloadCwd.trim() : "")
+    const dir = payloadDirectory(safeJsonParse<Record<string, unknown>>(raw))
     if (dir) {
       if (existsSync(dir)) akmCwd = dir
       else appendLog(SESSION_LOG, "session_dir_missing", dir)

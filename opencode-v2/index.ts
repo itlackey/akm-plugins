@@ -11,8 +11,23 @@
 import { Plugin } from "@opencode/plugin/effect"
 import type { Tool } from "@opencode/schema/tool"
 import { Effect, Stream } from "effect"
+import { realpathSync } from "node:fs"
+import path from "node:path"
 import { readPluginVersion } from "../opencode-shared/bundle"
 import { type LogLevel, PLUGIN_ID, createCore } from "./core"
+
+/** Same directory despite a trailing slash or a symlink; falls back to the resolved path when it cannot be resolved. */
+function sameDirectory(a: string, b: string): boolean {
+  const real = (dir: string) => {
+    const resolved = path.resolve(dir)
+    try {
+      return realpathSync(resolved)
+    } catch {
+      return resolved
+    }
+  }
+  return real(a) === real(b)
+}
 
 type EffectContext = Parameters<Parameters<typeof Plugin.define>[0]["effect"]>[0]
 
@@ -147,7 +162,7 @@ const plugin = Plugin.define({
       const ownsEvent = async (event: { location?: { directory?: string }; data?: unknown }): Promise<boolean> => {
         // Other projects' sessions are not ours: one plugin instance per location.
         const eventDirectory = event.location?.directory
-        if (eventDirectory) return eventDirectory === directory
+        if (eventDirectory) return sameDirectory(eventDirectory, directory)
         const sessionID = (event.data as { sessionID?: unknown } | undefined)?.sessionID
         if (typeof sessionID !== "string") return true
         let owner = sessionDirectory.get(sessionID)
@@ -159,7 +174,7 @@ const plugin = Plugin.define({
             return false // a session the host cannot tell us about is not ours to act on
           }
         }
-        return owner === directory
+        return sameDirectory(owner, directory)
       }
       yield* Effect.forkScoped(
         Stream.runForEach(ctx.event.subscribe(), (event) =>
