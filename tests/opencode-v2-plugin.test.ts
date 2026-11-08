@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
+import { type FakeAkmConfig, installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
+import { makeBinDir, installScriptedAkm } from "./host-runtime"
 import { type CurateFn, setCurateForTests } from "../opencode-shared/akm-api"
 import { resetWriteGateForTests } from "../opencode-shared/write-gate"
 import { startPlugin, type HostFake } from "../opencode-v2/testing"
@@ -25,9 +26,9 @@ const assets = [
 ]
 
 let counter = 0
-function freshFakeAkm() {
+function freshFakeAkm(extra: Partial<FakeAkmConfig> = {}) {
   const dir = path.join(root, `fake-${++counter}`)
-  const fake = installFakeAkm({ binDir: dir, callLog: path.join(dir, "calls.log"), assets })
+  const fake = installFakeAkm({ binDir: dir, callLog: path.join(dir, "calls.log"), assets, ...extra })
   return { ...fake, calls: () => readCallLog(fake.callLog).map((call) => call.argv) }
 }
 
@@ -918,6 +919,122 @@ describe("akm-opencode-v2 plugin", () => {
       await host.callTool("akm_search", { query: "nginx", project: "stolen" }, "ses_m")
       await host.callTool("akm_curate", { query: "configure nginx proxy", project: "stolen" }, "ses_m")
       for (const argv of [...argvOf("search"), ...argvOf("curate")]) expect(argv).not.toContain("--project")
+    })
+  })
+
+  describe("session bootstrap: rules and most used assets (#154)", () => {
+    const rules = [
+      { ref: "rules/shared", type: "rule", name: "shared", description: "Shared rules", keywords: [], body: "---\ndescription: Shared rules\n---\n- Prefer small commits\n" },
+      { ref: "rules/acme", type: "rule", name: "acme", description: "Acme rules", keywords: [], project: "acme", body: "---\ndescription: Acme\nproject: acme\n---\n- Acme: never force push\n" },
+    ]
+    const usage = [{ ref: "skills/nginx-proxy", project: "acme" }, { ref: "skills/nginx-proxy", project: "acme" }, { ref: "knowledge/inkwell", project: "acme" }]
+    const withBootstrap = () => {
+      fake = freshFakeAkm({ assets: [...assets, ...rules], usage, projects: { acme: { paths: [project] } } })
+      process.env.AKM_OPENCODE_CLI = fake.akmPath
+    }
+    const listings = () => fake.calls().filter((a) => a[0] === "search" && a.includes("--by-usage")).length
+    const request = async (sessionID: string) => (await host!.runContext(sessionID, [{ type: "text", text: "base" }]))[0].text
+
+    it("a fresh session gets the project's rules, then its most used assets, ahead of the AKM guidance", async () => {
+      withBootstrap()
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_b" }, location: { directory: project } })
+      const text = await request("ses_b")
+      expect(text).toContain("## rules/acme\n- Acme: never force push")
+      expect(text).toContain("## rules/shared\n- Prefer small commits")
+      expect(text.indexOf("# AKM rules for this session")).toBeLessThan(text.indexOf("# AKM assets used most here"))
+      expect(text.indexOf("- skills/nginx-proxy")).toBeLessThan(text.indexOf("- knowledge/inkwell"))
+      expect(text.indexOf("# AKM assets used most here")).toBeLessThan(text.indexOf("AKM is available in this session"))
+    })
+
+    it("does not depend on automatic curation", async () => {
+      process.env.AKM_AUTO_CURATE = "0"
+      withBootstrap()
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_b" }, location: { directory: project } })
+      await settle(200)
+      expect(await request("ses_b")).toContain("## rules/acme")
+      expect(curateCalls).toHaveLength(0)
+    })
+
+    it("loads once per start, however many requests and prompts follow, and reads count as no demand", async () => {
+      withBootstrap()
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_b" }, location: { directory: project } })
+      await request("ses_b")
+      await host.runPrompt("ses_b", PROMPT)
+      await request("ses_b")
+      expect(listings()).toBe(1)
+      expect(existsSync(path.join(fake.binDir, "akm-usage-events.json"))).toBe(false)
+    })
+
+    it("reloads after each compaction, before the next request, and a duplicate event adds nothing", async () => {
+      withBootstrap()
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_b" }, location: { directory: project } })
+      await request("ses_b")
+      const compacted = { type: "session.compaction.ended", data: { sessionID: "ses_b", reason: "auto" }, location: { directory: project } }
+      await host.emit(compacted)
+      await host.emit(compacted)
+      await settle(200)
+      expect(await request("ses_b")).toContain("## rules/acme")
+      expect(listings()).toBe(2)
+    })
+
+    it("with 8 rules and a full curation every block still arrives whole: guidance, workflow and pending nag included", async () => {
+      const many = Array.from({ length: 8 }, (_, n) => ({ ref: `rules/m${n}`, type: "rule", name: `m${n}`, description: `m${n}`, keywords: [], body: `---\ndescription: m${n}\n---\n- ${"z".repeat(400)}\n` }))
+      fake = freshFakeAkm({ assets: [...assets, ...many], usage, projects: { acme: { paths: [project] } } })
+      process.env.AKM_OPENCODE_CLI = fake.akmPath
+      curateImpl = async () => ["# AKM curated", ...Array.from({ length: 5 }, (_, n) => `- knowledge/k${n} (knowledge): ${"d".repeat(150)}`)].join("\n")
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_m" }, location: { directory: project } })
+      await settle(300)
+      await host.runPrompt("ses_m", PROMPT)
+      const text = await request("ses_m")
+      expect(text).toContain("## rules/m0")
+      expect(text).toContain("knowledge/k4")
+      expect(text).toContain("An asset that simply didn't fit your task is not negative feedback") // the curated tip, whole
+      expect(text).toContain("AKM is available in this session") // the guidance
+      expect(text).not.toContain("[truncated for context]")
+    })
+
+    it("a child session gets no sections of its own", async () => {
+      withBootstrap()
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_kid", parentID: "ses_b" }, location: { directory: project } })
+      await settle(100)
+      expect(await request("ses_kid")).not.toContain("# AKM rules")
+      expect(listings()).toBe(0)
+    })
+
+    it("a session first seen at a request (a resumed one) is loaded then, once", async () => {
+      withBootstrap()
+      host = await startPlugin(project)
+      expect(await request("ses_resumed")).toContain("## rules/acme")
+      await request("ses_resumed")
+      expect(listings()).toBe(1)
+    })
+
+    it("passes the host's project override to akm", async () => {
+      fake = freshFakeAkm({ assets: [...assets, ...rules], usage, projects: { acme: { paths: [path.join(root, "nowhere")] } } })
+      process.env.AKM_OPENCODE_CLI = fake.akmPath
+      host = await startPlugin(project)
+      host.sessions.set("ses_o", { metadata: { akm: { project: "acme" } } })
+      await host.emit({ type: "session.created", data: { sessionID: "ses_o" }, location: { directory: project } })
+      expect(await request("ses_o")).toContain("## rules/acme")
+      expect(fake.calls().filter((a) => a[0] === "search" && a.includes("--by-usage")).every((a) => a.includes("--project") && a.includes("acme"))).toBe(true)
+    })
+
+    it("a failing akm leaves the guidance in place and logs the lookup", async () => {
+      const bin = makeBinDir(root, `failing-${++counter}`)
+      installScriptedAkm(bin, `if (args[0] === "--version") { console.log("akm 0.10.26101002"); process.exit(0) }\nprocess.stderr.write(JSON.stringify({ ok: false, error: "boom" }))\nprocess.exit(1)`)
+      process.env.AKM_OPENCODE_CLI = path.join(bin, "akm")
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_f" }, location: { directory: project } })
+      const text = await request("ses_f")
+      expect(text).toContain("AKM is available in this session")
+      expect(text).not.toContain("# AKM rules")
+      expect(host.logs.some((line) => line.message === "AKM session bootstrap lookup failed")).toBe(true)
     })
   })
 

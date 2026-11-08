@@ -5,6 +5,7 @@
 | File | What it covers |
 | --- | --- |
 | `opencode-v2-plugin.test.ts` | The OpenCode 2 plugin (`opencode-v2/index.ts`, `Plugin.define`): drives the real entrypoint through a fake host context (`opencode-v2/testing.ts`) and the fake `akm`: tool registration and schemas, tool calls through the public CLI, recall through a fake `akm-cli/api` (options, timeout, abort, failure logged), auto-feedback, learning proposals and the pending nag, the write gate, the shell environment, session extraction, failures logged not thrown, unload cleanup |
+| `session-bootstrap.test.ts` | The session bootstrap (#154): the shared loader against the fake akm (project by directory and by override, two projects, default-bundle fallback with no filters or preferences, no rules, no usage, budget, left-out note, failed lookups, reads that count as no demand), the duplicate-callback claim, the OpenCode per-session holder, and the `session-start` hook (start, clear, repeated compactions, duplicates, resume, `AKM_AUTO_CURATE=0`, a failing akm, prompt-time curate staying separate and rule-free) |
 | `opencode-shared.test.ts` | The pure argv/schema builders in `opencode-shared/` that both OpenCode plugins use |
 | `opencode-plugin.test.ts` | Full integration coverage for the OpenCode 1 plugin (`opencode/index.ts`): all tools, lifecycle hooks, proposal queue, improve/propose, env, secret, wiki, workflow, akm CLI resolution |
 | `claude-plugin.test.ts` | Claude Code plugin (`claude/hooks/akm-hook.ts`): hook wiring, command/doc parity assertions |

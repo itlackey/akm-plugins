@@ -41,15 +41,15 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 
 | Event | Behavior |
 | --- | --- |
-| `session.created` | Warms local data in the background, and prepares a bundle warning (when needed), an active-workflow summary, and curated context for the session. |
+| `session.created` | Warms local data in the background, and prepares a bundle warning (when needed), an active-workflow summary, curated context, and the project's rules and most-used assets for the session. |
 | `session.updated` | Backfills the bundle warning and the workflow summary for a session the plugin has not prepared yet. It does not re-run session-created work. |
 | `chat.message` | Records feedback/memory intent, captures corrections, guardrails, preferences, explicit memories, and positive feedback, and can schedule non-blocking curation. High-confidence durable signals submit asynchronous AKM proposals; recurring task intent across distinct sessions can submit a skill proposal. Only the text you typed counts; the synthetic parts OpenCode adds (an attached file's contents, the Read call that fetched it) are ignored. |
-| `experimental.chat.system.transform` | Injects the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. |
+| `experimental.chat.system.transform` | Injects the project's rules and most-used assets, the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. A session the plugin first sees here (a resumed one) has its rules and list loaded at that request. |
 | `tool.execute.before` | The format-declaration write gate (`AKM_WRITE_GATE`, `observe` by default). Blocks the first `edit`/`write` to an existing file that declares a format your bundle documents and hands the model the ref to read. Once per file per session, released unconditionally on the retry. |
 | `tool.execute.after` | Tracks concepts used by AKM tools and checkpoints session observations. It also records what a file the session `read` declares about its own format, which is what the write gate above keys on. `write` is deliberately not a source: a file the session created is not one it needs the bundle to explain. The create itself is recorded on the write's `tool.execute.before` pass, so a later read-back of that file cannot re-arm the gate. |
 | `shell.env` | Exposes `AKM_PLUGIN_VERSION` and the resolved `AKM_BUNDLE_DIR` to shell tools. |
 | `session.idle` | Runs interval-gated memory extraction (`AKM_AUTO_MEMORY=0` disables it). Fires after every turn, so it is rate-limited. |
-| `session.compacted` | Records a post-compaction event. |
+| `session.compacted` | Records a post-compaction event and reloads the project's rules and most-used assets from akm (duplicate events within 10 seconds load once), so the next request carries the current ones. |
 | `session.deleted` | Refreshes the local AKM index, warns once if the write gate saw write-path tool calls but never acted on any, then drops all per-session state and the temporary curation file. |
 
 The session observation buffer that retrospective feedback reads from survives every non-terminal event: it is bounded by `AKM_SESSION_BUFFER_MAX_ENTRIES` and dropped only on `session.deleted`. Discarding it at `session.idle` would empty it between turns, so "thanks, that worked" would credit nothing in exactly the sessions that used the most assets.
@@ -81,7 +81,7 @@ Every kill switch below is opt-out and reads the same way: only the literal `0` 
 | `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. When unset the plugin discovers it once per process by running `akm info`. The resolved value is re-exported to shell tools through the `shell.env` hook. |
 | `AKM_OPENCODE_CLI` | unset | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency, exec'd as-is. Used by the eval harness to substitute a deterministic shim. |
 | `AKM_READ_TOOL_TIMEOUT` | `60` | Seconds allowed for one `akm_search` / `akm_show` / `akm_curate` call. |
-| `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic prompt curation. |
+| `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic prompt curation. The rules and most-used assets load regardless. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback: the retrospective ("that worked") confirmation. |
 | `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. Native session extraction is controlled separately by `AKM_AUTO_MEMORY`. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable interval-gated native-session extraction through `akm proposal extract`. The Claude plugin honours the same variable for its `SessionEnd` extraction. |
@@ -104,9 +104,9 @@ Every `akm` call runs in the session's directory, so akm resolves the user's pro
 | `AKM_CURATE_LIMIT` | `5` | Maximum curated results injected per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length for automatic curation. |
 | `AKM_CURATE_TIMEOUT` | `8` | Timeout in seconds for AKM calls made by hooks. |
-| `AKM_CURATE_MIN_SCORE` | `0` (disabled) | Minimum per-item relevance score to keep a curated result. `0` preserves the long-standing behavior. Set it above `0` and items below the floor are dropped (no curated block at all when none survive), and the survivors are reordered so locally authored assets (lesson, memory, knowledge, skill, command, agent, instruction, fact, workflow, task, env, secret) come before imported website/wiki snapshots. Same contract as the Claude plugin's `AKM_CURATE_MIN_SCORE` — see `claude/README.md` for the full explanation, including why there is no universal default value. |
+| `AKM_CURATE_MIN_SCORE` | `0` (disabled) | Minimum per-item relevance score to keep a curated result. `0` preserves the long-standing behavior. Set it above `0` and items below the floor are dropped (no curated block at all when none survive), and the survivors are reordered so locally authored assets (lesson, memory, knowledge, skill, command, agent, instruction, rule, fact, workflow, task, env, secret) come before imported website/wiki snapshots. Same contract as the Claude plugin's `AKM_CURATE_MIN_SCORE` — see `claude/README.md` for the full explanation, including why there is no universal default value. |
 | `AKM_CURATE_TYPE` | unset | Passthrough for `akm curate --type`. |
-| `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum length of the AKM text injected into the system prompt on one turn. Past it the block is truncated with a marker. |
+| `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum length of the AKM text injected into the system prompt on one turn. Past it the block is truncated with a marker. The rules and most-used assets lead and take what the plugin's own guidance, notes and curated pointer leave; a rule is shown whole or left out, and a note says how many were left out. The most-used list names at most 10 assets and says when it was cut or left out to fit. A request waits at most 3 seconds for a slow load; it then goes out without the sections, which arrive with the next one. |
 | `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Timeout in seconds for the pending-proposal count. Floored at 0.5s. |
 | `AKM_SESSION_BUFFER_MAX_ENTRIES` | `200` | Per-session cap on buffered observations. Oldest entries are dropped first. |
 | `AKM_EXTRACT_MIN_INTERVAL_MS` | `600000` | Minimum gap between `akm proposal extract` runs for one session. `session.idle` fires after every turn, so without this gate extraction would flood. |

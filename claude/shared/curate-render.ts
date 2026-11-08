@@ -47,6 +47,7 @@ const AUTHORED_ASSET_TYPES = new Set([
   "command",
   "agent",
   "instruction",
+  "rule",
   "fact",
   "workflow",
   "task",

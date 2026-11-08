@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
@@ -28,6 +28,7 @@ import {
   type ProposalCandidate,
 } from "../shared/learning-signals"
 import { isNonTaskPrompt, shouldRecall, stripLeadingEnvelopes } from "../shared/recall-policy"
+import { DUPLICATE_WINDOW_MS, loadSessionBootstrap } from "../shared/session-bootstrap"
 import { redactSecrets } from "../shared/redaction"
 import { extractAllRefs, extractRefsFromAkmOutput, validateRefCandidates } from "../shared/ref-extraction"
 import { RUN_TIMED_OUT, runPlan } from "../shared/spawn-plan"
@@ -692,7 +693,7 @@ function akmRun(args: string[], input?: string, options?: { timeoutMs?: number }
  * had `timeout(1)` — so SessionStart's three parallel calls were unbounded
  * everywhere.
  */
-async function akmRunAsync(args: string[], input?: string): Promise<string> {
+async function akmRunAsync(args: string[], input?: string, env?: Record<string, string>): Promise<string> {
   const akm = resolveAkmCommandSpec()
   if (!akm) return ""
   const fullArgs = [...akm.argsPrefix, ...args]
@@ -703,6 +704,7 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
       stdout: "pipe",
       stderr: "pipe",
       cwd: akmCwd,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
       timeout: plan.timeoutMs,
       windowsHide: true,
     })
@@ -1763,9 +1765,63 @@ function curatePrompt(): string {
     return emitHookContext("UserPromptSubmit", `${tagged}\n\n${CURATED_CONTEXT_TAIL}`)
 }
 
+const BOOTSTRAP_DIR = path.join(STATE_DIR, "bootstrap")
+
+/** The rendered curation with as many whole hits as fit in `room` characters; "" when not even one does. */
+function fitCurated(curated: string, room: number): string {
+  const [head, ...hits] = curated.split("\n\n")
+  if (head.length > room) return ""
+  if (hits.length === 0) return head
+  const kept: string[] = []
+  let used = head.length
+  for (const hit of hits) {
+    if (used + hit.length + 2 > room) break
+    kept.push(hit)
+    used += hit.length + 2
+  }
+  return kept.length > 0 ? [head, ...kept].join("\n\n") : ""
+}
+
+/**
+ * Does this SessionStart load the rules and most-used list? Yes for a fresh start, a clear and a
+ * compaction (the new context holds none of it); no for a resume or fork (the transcript still has it) and
+ * for a duplicate callback of an event already loaded. `source` is the host's own field: Claude
+ * Code sends startup|resume|clear|compact|fork, and Codex the same; a missing one is a start.
+ *
+ * Duplicate callbacks run as separate processes at the same moment, so the claim is a marker file
+ * created exclusively (one wins), not a read-then-write.
+ */
+function bootstrapDue(sid: string, source: string): boolean {
+  // A resume and a fork carry the transcript, and with it the sections already loaded.
+  if (source === "resume" || source === "fork") return false
+  if (!sid) return true
+  const marker = path.join(BOOTSTRAP_DIR, `${sid}.${source || "startup"}`)
+  try {
+    mkdirSync(BOOTSTRAP_DIR, { recursive: true })
+    const now = Date.now()
+    for (const name of readdirSync(BOOTSTRAP_DIR)) {
+      try {
+        if (now - statSync(path.join(BOOTSTRAP_DIR, name)).mtimeMs > 60 * 60 * 1000) rmSync(path.join(BOOTSTRAP_DIR, name), { force: true })
+      } catch {}
+    }
+    try {
+      writeFileSync(marker, "", { flag: "wx", mode: 0o600 })
+      return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return true
+      if (now - statSync(marker).mtimeMs < DUPLICATE_WINDOW_MS) return false
+      writeFileSync(marker, "", { mode: 0o600 })
+      return true
+    }
+  } catch {
+    return true
+  }
+}
+
 async function sessionStart(): Promise<string> {
   const rawInput = readStdin()
   const sid = extractSessionId(rawInput)
+  const startSource = safeJsonParse<{ source?: unknown }>(rawInput)?.source
   const versionCheck = checkAkmVersion()
   if (!versionCheck.ok) {
     // checkAkmVersion() already logged the mismatch to the plugin state dir
@@ -1847,6 +1903,8 @@ async function sessionStart(): Promise<string> {
   // empty context is a leg that cannot succeed — skip it for the same reason a
   // disabled leg is skipped, rather than logging an akm_failed per session.
   const cwdContext = gatherCwdContext()
+  // The rules and most-used list load on their own, whatever AKM_AUTO_CURATE says.
+  const bootstrapWanted = bootstrapDue(sid, typeof startSource === "string" ? startSource : "")
   const [curatedRaw, pendingRaw, activeWorkflowRaw] = await Promise.all([
     AUTO_CURATE && cwdContext ? akmRunAsync(buildCurateArgs(cwdContext, CURATE_LIMIT)) : Promise.resolve(""),
     akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
@@ -1901,10 +1959,22 @@ async function sessionStart(): Promise<string> {
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (workflowSummary) body = `${body}\n\n${workflowSummary}`
-    // Same reasoning as the UserPromptSubmit path: inject the curation, do not
-    // point at it. The file remains the untruncated copy; emitHookContext trims
-    // what actually enters context to AKM_CONTEXT_BUDGET_CHARS.
-    if (curatedTrimmed) body = `${body}\n\n${tagRecalledContent(curatedTrimmed)}\n\n${CURATED_CONTEXT_TAIL}`
+  // Whole blocks only: the context is cut at the budget, and a cut lands mid-block (a half
+  // provenance banner, a clipped note). So the rules and list get what the footer leaves, and the
+  // curated block is added only with as many whole hits as then fit.
+  const footerRoom = SESSION_START_FOOTER.length + 2
+  if (bootstrapWanted) {
+    const bootstrap = await loadSessionBootstrap((args, env) => akmRunAsync(args, undefined, env), {
+      budgetChars: CONTEXT_BUDGET_CHARS - body.length - 2 - footerRoom,
+    })
+    if (bootstrap) body = `${body}\n\n${bootstrap}`
+  }
+  // Same reasoning as the UserPromptSubmit path: inject the curation, do not
+  // point at it. The file remains the untruncated copy.
+  const curatedBlock = curatedTrimmed
+    ? fitCurated(curatedTrimmed, CONTEXT_BUDGET_CHARS - body.length - footerRoom - 4 - tagRecalledContent("").length - CURATED_CONTEXT_TAIL.length)
+    : ""
+  if (curatedBlock) body = `${body}\n\n${tagRecalledContent(curatedBlock)}\n\n${CURATED_CONTEXT_TAIL}`
   body = `${body}\n\n${SESSION_START_FOOTER}`
   // The warnings also ride the user-visible channel: a missing bundle or a
   // failed extraction is the user's to fix, and telling only the model about it

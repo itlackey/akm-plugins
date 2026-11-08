@@ -819,6 +819,71 @@ describe("akm-opencode plugin", () => {
     })
   })
 
+  describe("session bootstrap: rules and most used assets (#154)", () => {
+    const bootstrapSearches = () => execFileCalls.filter((c) => c.args[0] === "search" && (c.args.includes("--by-usage") || c.args.includes("rule")))
+    beforeEach(() => {
+      mockAkmSearch.mockImplementation(async (input: Record<string, unknown>) => ({
+        schemaVersion: 1,
+        project: { name: "acme" }, // a project applies, so no default-bundle fallback
+        hits: input.query === "--by-usage" ? [{ type: "skill", ref: "skills/used-most", description: "Used most" }] : input.query === "" ? [{ type: "rule", ref: "rules/r1", description: "R1" }] : [],
+      }))
+      mockAkmShowUnified.mockImplementation(async (input: Record<string, unknown>) => ({ type: "rule", ref: input.ref, content: "---\ndescription: R1\n---\n- Keep changes small\n" }))
+    })
+    const transform = async (hooks: any, sessionID: string) => {
+      const output: { system: string[] } = { system: [] }
+      await hooks["experimental.chat.system.transform"]!({ sessionID } as any, output as any)
+      return output.system.join("\n")
+    }
+
+    it("a new session gets the rules and the most used list ahead of the guidance, read as no demand, in the session directory", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "boot-1" } } } as any)
+      const injected = await transform(hooks, "boot-1")
+      expect(injected).toContain("## rules/r1\n- Keep changes small")
+      expect(injected).toContain("- skills/used-most — Used most")
+      expect(injected.indexOf("# AKM assets used most here")).toBeLessThan(injected.indexOf("# AKM is available in this session"))
+      const calls = execFileCalls.filter((c) => ["search", "show"].includes(c.args[0]) && (c.args.includes("--by-usage") || c.args.includes("rule") || c.args[1] === "rules/r1"))
+      expect(calls.length).toBeGreaterThan(2)
+      for (const call of calls) {
+        expect(call.env.AKM_EVENT_SOURCE).toBe("unknown")
+        expect(call.cwd).toBe(projectDir)
+      }
+    })
+
+    it("loads once per session start however many requests follow, and again after each compaction, not for a duplicate event", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "boot-2" } } } as any)
+      await transform(hooks, "boot-2")
+      await transform(hooks, "boot-2")
+      expect(bootstrapSearches()).toHaveLength(2) // the rules listing and the usage list
+      const compacted = { event: { type: "session.compacted", properties: { sessionID: "boot-2" } } } as any
+      await hooks.event!(compacted)
+      await hooks.event!(compacted)
+      expect(await transform(hooks, "boot-2")).toContain("## rules/r1")
+      expect(bootstrapSearches()).toHaveLength(4)
+    })
+
+    it("a session first seen at a request (a resumed one) is loaded then", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      expect(await transform(hooks, "boot-resumed")).toContain("## rules/r1")
+      await transform(hooks, "boot-resumed")
+      expect(bootstrapSearches()).toHaveLength(2)
+    })
+
+    it("a failing lookup leaves the guidance in place and is logged", async () => {
+      mockAkmSearch.mockImplementation(async () => {
+        throw new Error("boom")
+      })
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput(client))
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "boot-3" } } } as any)
+      const injected = await transform(hooks, "boot-3")
+      expect(injected).toContain("# AKM is available in this session")
+      expect(injected).not.toContain("# AKM rules")
+      expect(JSON.stringify(client.app.log.mock.calls)).toContain("AKM session bootstrap lookup failed")
+    })
+  })
+
   describe("session context injection", () => {
     it("reads pending proposals only from the AKM 0.9.14 proposal-list envelope", async () => {
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {

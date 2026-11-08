@@ -19,6 +19,8 @@ import {
   AKM_HINTS_PREFIX,
   applyContextBudget,
   autoMemoryEnabled,
+  AKM_CURATED_POINTER_CHARS,
+  bootstrapBudgetChars,
   buildCurateOptions,
   createCuratedFileStore,
   extractMinIntervalMs,
@@ -32,6 +34,8 @@ import {
   unwrapJsonStringPrompt,
 } from "../opencode-shared/recall"
 import { createBundleDirResolver } from "../opencode-shared/bundle"
+import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
+import { loadSessionBootstrap } from "../claude/shared/session-bootstrap"
 import { buildEventScope, opencodeEventLog, writeOpencodeEvent } from "../opencode-shared/events"
 import {
   classifyToolFeedback,
@@ -961,6 +965,29 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
       return safeJsonParse<GateSearchResponse>(result.stdout)
     },
   }
+  // The rules and most-used list: loaded at session start and after each compaction, held per
+  // session, and sent with every request (the host rebuilds the system prompt each time).
+  // Independent of AKM_AUTO_CURATE.
+  const bootstrap = createSessionBootstrap((sessionID) =>
+    loadSessionBootstrap(
+      async (args, env) => {
+        const command = resolveAkmCommand()
+        if (isCliError(command)) return ""
+        const result = await runAkm(command, args, { cwd: directory, timeoutMs: AKM_CURATE_TIMEOUT_MS, env, packageName: "akm-opencode" })
+        if (result.ok) return result.stdout
+        await writePluginLog(logClient, "warn", "AKM session bootstrap lookup failed", {
+          subsystem: "bootstrap",
+          operation: "session-bootstrap",
+          sessionID,
+          directory,
+          args,
+          error: result.error,
+        })
+        return ""
+      },
+      { budgetChars: bootstrapBudgetChars(AKM_CURATED_POINTER_CHARS) },
+    ),
+  )
   const learning = createLearning({
     log: (level, message, extra) => void writePluginLog(logClient, level, message, extra),
     writeEvent: writeStructuredEvent,
@@ -992,6 +1019,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             // must never block or fail session.created (13: "tmp-file cleanup").
             void pruneStaleCuratedFiles()
             warmIndexInBackground()
+            void bootstrap.ensure(sid)
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
               const cwdContext = gatherCwdContext(directory)
               const curated = await runCurateForSession(logClient, sid, directory, cwdContext || undefined)
@@ -1040,6 +1068,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             maybeExtractSessionOnIdle(logClient, sid, directory)
           }
           if (type === "session.compacted") {
+            void bootstrap.compacted(sid)
             // 03-R1/06-M1: the session_checkpoint capture that used to feed
             // `memory.ref` here was removed along with the `remember --force`
             // write. Record the event as an explicit no-capture so
@@ -1061,6 +1090,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             // exactly like normal operation in the ledger, so say so out loud.
             warnIfWriteGateInert(gateHost)
             clearSessionState(sid)
+            bootstrap.clear(sid)
           }
         }
       } catch (error: unknown) {
@@ -1100,7 +1130,12 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         // 60s-cached, so reading it once per transform costs nothing; it was
         // previously awaited three times inside a single expression.
         const pendingBlock = await pendingProposals.contextBlock(sid)
+        // A session the plugin first sees here (a resumed one) is loaded now; a compaction's
+        // reload finishes before this request goes out.
+        void bootstrap.ensure(sid)
         const blocks = [
+          // The rules lead: they are the standing guidance, and the budget cuts from the end.
+          await bootstrap.text(sid),
           // Payload before framing. applyContextBudget() truncates the first
           // block that overflows and then stops, so whatever leads this array
           // is the thing that cannot be starved: other blocks must not drop the
