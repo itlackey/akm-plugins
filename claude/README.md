@@ -52,7 +52,7 @@ Hooks are non-blocking and keep local, redacted state for feedback and memory ca
 
 | Event | Behavior |
 | --- | --- |
-| `SessionStart` | Verifies Bun and AKM availability, warms AKM data, and injects the AKM discovery guidance plus hints, pending proposals, active workflows, and curated context when available. Surfaces a missing bundle or a failed previous extraction to both the model and the user. |
+| `SessionStart` | Verifies Bun and AKM availability, warms AKM data, and injects the AKM discovery guidance plus pending proposals, active workflows, and curated context when available. Surfaces a missing bundle or a failed previous extraction to both the model and the user. |
 | `UserPromptSubmit` | Curates substantive prompts and supplies the result as additional context. It also captures explicit memories, corrections, guardrails, preferences, and positive feedback. High-confidence durable signals are authored asynchronously with `akm proposal new`; repeated task intent across distinct sessions can produce a skill proposal. Retrospective praise still credits concepts the session recently touched. Only text you typed counts: subagent hand-backs, cross-session messages, task notifications, the post-compaction continuation and, under Codex, a prompt a subagent received are never recorded as intent, learned from, or read as praise. A harness block such as `<system-reminder>` in front of what you typed is set aside, and the rest is the prompt. |
 | `UserPromptExpansion` | Records use of the five AKM slash commands. |
 | `PostToolUse` / `PostToolUseFailure` | Records tool observations. A successful `akm` command that used a concept also submits deduplicated positive feedback for eligible concepts; a failed one submits nothing and logs a warning naming its concepts, which are not remembered as used, so later praise does not credit them. |
@@ -89,7 +89,7 @@ Codex gets:
 
 - the AKM skill, which drives the `akm` CLI;
 - the five commands, as skills. Codex converts a plugin's `commands/*.md` into skills when it installs the plugin; they are listed as `akm:source-command-akm-search` and so on (type `$` or run `/skills` to pick one). It skips a command that has a `$ARGUMENTS` or `$1` placeholder, so the commands take their input as the text the user gave with them: in Codex that is the request, in Claude Code an `ARGUMENTS:` line it appends to the command;
-- the `SessionStart` hook (`session-start`): checks Bun and AKM, warms AKM data, and injects the AKM primer with hints, pending proposals, active workflows and curated context when available. It tells you and the model when AKM or its bundle is missing;
+- the `SessionStart` hook (`session-start`): checks Bun and AKM, warms AKM data, and injects the AKM primer with pending proposals, active workflows and curated context when available. It tells you and the model when AKM or its bundle is missing;
 - the `UserPromptSubmit` hook (`curate-prompt`): curates substantive prompts and adds the result as context. It also captures explicit memories, corrections, guardrails and preferences, which become reviewable proposals ([Automatic learning proposals](#automatic-learning-proposals)).
 
 On macOS and Linux the hooks go through `hooks/akm-hook.sh`; on Windows each hook's `commandWindows` runs `hooks/akm-hook.ts` directly (see [Windows](#windows)).
@@ -186,7 +186,6 @@ The most useful settings are also exposed in Claude Code's `/plugin` configurati
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. Always off under Codex. |
 | `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. This does not disable native session extraction; use `AKM_AUTO_MEMORY=0` for that. |
-| `AKM_AUTO_HINTS` | `1` | Set to `0` to skip the session-start `akm hints` call. |
 | `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable native-session extraction through `akm proposal extract`. The OpenCode plugin honours the same variable for its interval-gated extraction. |
 | `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the `akm index` refresh at session end. Useful on CI runners and low-power machines; the periodic `akm improve` pass remains the backstop. |
 

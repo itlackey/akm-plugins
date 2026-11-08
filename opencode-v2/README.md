@@ -45,7 +45,7 @@ How each V1 responsibility maps onto the OpenCode 2 plugin API (built against 2.
 | Write gate (`tool.execute.before`) | `tool.hook("execute.before")` | See "Write gate" below. |
 | `shell.env` | `shell.hook("create.before")` | See "Shell environment" below. |
 | Tool post-processing | `tool.hook("execute.after")` | Notes touched refs (above), logs the outcome of the plugin's own tools. |
-| Session lifecycle (`event`) | `event.subscribe()`, one subscription closed with the plugin scope | `session.created`: prepares hints, the active-workflow summary and project-anchored curation. `session.execution.succeeded` (end of a turn, the analogue of V1's `session.idle`): interval-gated session extraction. `session.deleted`: aborts that session's in-flight recall and `akm` calls and drops its state (feedback refs, gate bookkeeping, pending count). Events for other projects' locations are ignored. |
+| Session lifecycle (`event`) | `event.subscribe()`, one subscription closed with the plugin scope | `session.created`: prepares the active-workflow summary and project-anchored curation. `session.execution.succeeded` (end of a turn, the analogue of V1's `session.idle`): interval-gated session extraction. `session.deleted`: aborts that session's in-flight recall and `akm` calls and drops its state (feedback refs, gate bookkeeping, pending count). Events for other projects' locations are ignored. |
 | Five tools | `tool.transform` with JSON Schema inputs | Registered on load; re-registered on tool reload. |
 | `client.app.log` | Effect logging (`Effect.logWithLevel`) from the plugin's own fiber context | The Promise plugin API has no logger, so this is an Effect plugin: diagnostics reach OpenCode's logger (its log file; `--print-logs` mirrors it to stderr), redacted with the shared redactor. The plugin never writes to the console. |
 
@@ -99,8 +99,8 @@ Both plugins pin the same `akm-cli` and use only its public CLI, against the sam
 Round 1, with recall still going through the CLI: verified against the real binary `@opencode/cli@2.0.26` (`opencode serve`, sandboxed `HOME`/`XDG_*`) with the tarball produced by `npm pack` installed by `npm install`, a local OpenAI-compatible mock standing in for the model (no credentials or paid inference), and a stub `akm` that logs its argv:
 
 - the built plugin loads and reports `status: active`; a load failure is logged by the host (`failed to load plugin`), not disguised as success;
-- creating a session delivers `session.created`, and the plugin runs `akm hints`, `akm workflow list --active` and a project-anchored `akm curate`;
-- a user prompt runs `akm curate <prompt>` through the `prompt` hook, and the model request that follows carries the recalled block with its provenance banner, the hints and the standing AKM rules in its system message;
+- creating a session delivers `session.created`, and the plugin runs `akm workflow list --active` and a project-anchored `akm curate`;
+- a user prompt runs `akm curate <prompt>` through the `prompt` hook, and the model request that follows carries the recalled block with its provenance banner and the standing AKM rules in its system message;
 - the five tools are offered to the model as direct tool calls, and a model-issued `akm_search` call executes `akm search nginx --detail full --format json` and returns its output as the tool result;
 - when the turn ends, `akm proposal extract --type opencode --session-id <the real session id>` runs, and its `LLM_NOT_CONFIGURED` failure is logged with AKM's code and hint;
 - a failing `akm` call is logged through OpenCode's logger and the plugin prints nothing to stdout/stderr.

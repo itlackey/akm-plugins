@@ -88,7 +88,7 @@ const BUNDLED_AKM_API_VERSION = readBundledAkmVersion()
 
 // Per-session state that drives the compound-engineering loop.
 // These maps are keyed by OpenCode sessionID.
-const sessionHints = new Map<string, string>()
+const sessionBundleWarning = new Map<string, string>()
 const sessionCurated = new Map<string, string>()
 const sessionWorkflow = new Map<string, string>()
 const sessionCuratedFile = new Map<string, string>()
@@ -269,7 +269,7 @@ function writeCuratedFile(sessionID: string, content: string): string | null {
   return filePath
 }
 
-// 13: "Memory leaks" — session.deleted cleanup only cleared sessionHints,
+// 13: "Memory leaks" — session.deleted cleanup only cleared sessionBundleWarning,
 // sessionCurated, sessionWorkflow, the curated-version tracking pair, and
 // sessionBuffer. It missed retrospectiveState and the per-session
 // pendingProposalSummaryCache entry
@@ -279,7 +279,7 @@ function writeCuratedFile(sessionID: string, content: string): string | null {
 // would only need one line added here instead of another hand-maintained list
 // at the session.deleted call site.
 function clearSessionState(sessionID: string): void {
-  sessionHints.delete(sessionID)
+  sessionBundleWarning.delete(sessionID)
   sessionCurated.delete(sessionID)
   curatedFiles.remove(sessionCuratedFile.get(sessionID))
   sessionCuratedFile.delete(sessionID)
@@ -382,15 +382,6 @@ async function runCurateForSession(client: LogCapableClient, sessionID: string, 
   return runRecall(client, trimmed, { toolName: "session.start", sessionID, directory, operation: "session-curate" })
 }
 
-async function runHintsForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
-  return runCliSyncBestEffort(client, ["--format", "text", "-q", "hints"], AKM_CURATE_TIMEOUT_MS, {
-    toolName: "session.start",
-    sessionID,
-    subsystem: "hints",
-    operation: "session-hints",
-  })
-}
-
 async function runWorkflowSummaryForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
   const raw = await runCliSyncBestEffort(client, ["--format", "json", "-q", "workflow", "list", "--active"], AKM_CURATE_TIMEOUT_MS, {
     toolName: "session.start",
@@ -421,7 +412,7 @@ async function getAkmBundleDir(client?: LogCapableClient): Promise<string | unde
 // OpenCode side — the agent just kept calling verbs that answer with nothing.
 // The Claude hook has warned about this since 0.8
 // (gatherSessionStartWarnings); this is the same wording, delivered through
-// the sessionHints slot so it rides the system transform instead of needing a
+// the sessionBundleWarning slot so it rides the system transform instead of needing a
 // channel of its own.
 async function getAkmBundleWarning(client: LogCapableClient): Promise<string> {
   const bundleDir = await getAkmBundleDir(client)
@@ -960,7 +951,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
       if (isCliError(command)) throw new Error(command.error)
       // This search is the PLUGIN's, not the model's: attribute it to a non-user event
       // source so akm's utility scores and feedback ranking do not count it as demand.
-      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", "--detail", "agent", "--format", "json"], {
+      const result = await runAkm(command, ["search", token, "--limit", "5", "--detail", "agent", "--format", "json"], {
         cwd: directory,
         timeoutMs: 8_000,
         env: { AKM_EVENT_SOURCE: "audit" },
@@ -981,7 +972,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
   return {
     // Events cover the lifecycle boundaries that Claude Code exposes as
     // SessionStart / Stop / PreCompact. We use them to warm the stash, capture
-    // hints for the next system transform, and flush per-session memories.
+    // the bundle warning for the next system transform, and flush per-session memories.
     event: async ({ event }: { event: { type: string; properties?: unknown } }) => {
       try {
         const type = event?.type
@@ -1011,11 +1002,9 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
               }
             }
           }
-          if (!sessionHints.has(sid)) {
+          if (!sessionBundleWarning.has(sid)) {
             const bundleWarning = await getAkmBundleWarning(logClient)
-            const hints = await runHintsForSession(logClient, sid)
-            const body = [bundleWarning, hints].filter(Boolean).join("\n\n")
-            if (body) sessionHints.set(sid, body)
+            if (bundleWarning) sessionBundleWarning.set(sid, bundleWarning)
           }
           if (!sessionWorkflow.has(sid)) {
             sessionWorkflow.set(sid, await runWorkflowSummaryForSession(logClient, sid) ?? "")
@@ -1066,7 +1055,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           }
           // Drop per-session state (every session-keyed Map, plus the curated
           // tmp file) so a re-created session does not inherit stale
-          // hints/curation and the tmp file does not leak (13: "Memory leaks").
+          // bundle-warning/curation and the tmp file does not leak (13: "Memory leaks").
           if (type === "session.deleted") {
             // #99: the gate is the one akm feature whose total failure looks
             // exactly like normal operation in the ledger, so say so out loud.
@@ -1107,21 +1096,20 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           if (writeCuratedFile(sid, curated)) sessionCuratedInjectedVersion.set(sid, curatedVersion)
         }
         const curatedFile = sessionCuratedFile.get(sid)
-        const hints = sessionHints.get(sid)
+        const bundleWarning = sessionBundleWarning.get(sid)
         // 60s-cached, so reading it once per transform costs nothing; it was
         // previously awaited three times inside a single expression.
         const pendingBlock = await pendingProposals.contextBlock(sid)
         const blocks = [
           // Payload before framing. applyContextBudget() truncates the first
           // block that overflows and then stops, so whatever leads this array
-          // is the thing that cannot be starved: `akm hints` output is
-          // unbounded stash-authored text, and a large one must not drop the
+          // is the thing that cannot be starved: other blocks must not drop the
           // curated-stash pointer, the plugin's actual deliverable.
           curatedFile
             ? `AKM bundle curation written to \`${curatedFile}\`. Read that file to discover assets relevant to this session. ${AKM_CURATED_TAIL}`
             : "",
-          // The rules go in with or without `akm hints` output, which is empty on a fresh stash.
-          hints ? `${AKM_HINTS_PREFIX}\n\n${hints}` : AKM_HINTS_PREFIX,
+          // The rules go in with or without a bundle warning.
+          bundleWarning ? `${AKM_HINTS_PREFIX}\n\n${bundleWarning}` : AKM_HINTS_PREFIX,
           sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
           pendingBlock,
         ]

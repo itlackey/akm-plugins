@@ -170,13 +170,14 @@ describe("akm-opencode-v2 plugin", () => {
     expect(curateCalls).toHaveLength(0)
   })
 
-  it("session start curates for the project, loads hints, and cleans up on delete", async () => {
+  it("session start curates for the project, lists active workflows, never runs hints, and cleans up on delete", async () => {
     host = await startPlugin(project)
     await host.subscribed
     await host.emit({ type: "session.created", data: { sessionID: "ses_s", location: { directory: project } }, location: { directory: project } })
     await settle(400)
     const argv = fake.calls()
-    expect(argv.some((a) => a.includes("hints"))).toBe(true)
+    expect(argv.some((a) => a.includes("workflow"))).toBe(true)
+    expect(argv.some((a) => a.includes("hints"))).toBe(false)
     expect(curateCalls.some((c) => c.query.includes("fixture-project"))).toBe(true)
     const withState = await host.runContext("ses_s", [])
     expect(withState[0].text).toContain("AKM PROVENANCE")
@@ -215,7 +216,7 @@ describe("akm-opencode-v2 plugin", () => {
     await host.runPrompt("ses_child", PROMPT)
     await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_child" }, ...at })
     await settle(400)
-    expect(fake.calls().some((a) => a.includes("hints"))).toBe(false)
+    expect(fake.calls().some((a) => a.includes("workflow"))).toBe(false)
     expect(curateCalls).toHaveLength(0)
     expect(fake.calls().some((a) => a[1] === "extract")).toBe(false)
 
@@ -776,8 +777,10 @@ describe("akm-opencode-v2 plugin", () => {
         result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
       })
       await settle(1200)
-      const gate = argvOf("search").slice(before).find((a) => a.includes("--from") && a.includes("local"))
+      const gate = argvOf("search").slice(before).find((a) => a.includes("--detail") && a.includes("agent"))
       expect(gate).toContain("--project")
+      // #159: no plugin-owned source override; the project's `from` decides.
+      expect(gate).not.toContain("--from")
       expect(gate![gate!.indexOf("--project") + 1]).toBe("acme")
     })
 
@@ -791,7 +794,7 @@ describe("akm-opencode-v2 plugin", () => {
           status: "completed",
           result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
         })
-      const gateSearches = () => argvOf("search").filter((a) => a.includes("--from") && a.includes("local") && a.includes("inkwell/v2"))
+      const gateSearches = () => argvOf("search").filter((a) => a.includes("agent") && a.includes("inkwell/v2"))
 
       it("looks the same token up again for a session with another project, and once for the same one", async () => {
         process.env.AKM_WRITE_GATE = "observe"

@@ -175,7 +175,6 @@ const AUTO_SKILL_PROPOSALS = envFlag("AKM_AUTO_SKILL_PROPOSALS", true)
 // Prompt-time learning proposals have their own AKM_AUTO_LEARNING switch.
 const AUTO_MEMORY = envFlag("AKM_AUTO_MEMORY", true)
 const AUTO_CURATE = envFlag("AKM_AUTO_CURATE", true)
-const AUTO_HINTS = envFlag("AKM_AUTO_HINTS", true)
 // SessionEnd `akm index` is opt-OUT (default enabled) because this is the only
 // index refresh either plugin makes at the end of a session — OpenCode's runs
 // once too, on session.deleted (never on session.idle, which fires after every
@@ -977,6 +976,14 @@ function postToolBatch(): string {
  * attacker-influenceable. Emit only run id + ref + status + current step so an
  * injected title/param can never pose as a trusted instruction to the subagent.
  */
+function formatRunAge(updatedAt: unknown, now: number = Date.now()): string {
+  const then = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN
+  if (!Number.isFinite(then) || then > now) return "unknown"
+  const hours = Math.floor((now - then) / 3_600_000)
+  if (hours < 1) return "<1h ago"
+  return hours < 48 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`
+}
+
 function summarizeActiveWorkflows(raw: string): string {
   if (!raw || raw === "[]") return ""
   let parsed: unknown
@@ -999,9 +1006,10 @@ function summarizeActiveWorkflows(raw: string): string {
       ref: str(run.workflowRef),
       status: str(run.status),
       currentStepId: str(run.currentStepId),
+      updated: formatRunAge(run.updatedAt),
     }
   })
-  return `# Active workflow (run ids + status only)\n${JSON.stringify(reduced)}`
+  return `# Active workflow (run ids, status and age only; whether it applies to this task is unknown)\n${JSON.stringify(reduced)}`
 }
 
 function subagentStart(): string {
@@ -1830,14 +1838,14 @@ async function sessionStart(): Promise<string> {
   const extractWarning = lastExtractFailureWarning()
   if (extractWarning) sessionWarnings.push(extractWarning)
 
-  // #71 perceived-latency fix: hints, curate, proposals and the active-workflow
+  // #71 perceived-latency fix: curate, proposals and the active-workflow
   // list have no inter-dependency — issue them concurrently via Promise.all
   // instead of running them sequentially. Worst-case wall-clock stays at
   // ~1×CURATE_TIMEOUT however many of them hit the same embedding bottleneck,
-  // which is why the fourth call costs nothing.
+  // which is why the third call costs nothing.
   //
-  // A disabled leg resolves to "" without spawning at all: AKM_AUTO_HINTS=0 /
-  // AKM_AUTO_CURATE=0 have to mean "no subprocess", not "spawn it and throw the
+  // A disabled leg resolves to "" without spawning at all: AKM_AUTO_CURATE=0
+  // has to mean "no subprocess", not "spawn it and throw the
   // result away".
   //
   // #89: gatherCwdContext() is empty when the cwd has none of its indicator
@@ -1846,13 +1854,11 @@ async function sessionStart(): Promise<string> {
   // empty context is a leg that cannot succeed — skip it for the same reason a
   // disabled leg is skipped, rather than logging an akm_failed per session.
   const cwdContext = gatherCwdContext()
-  const [hintsRaw, curatedRaw, pendingRaw, activeWorkflowRaw] = await Promise.all([
-    AUTO_HINTS ? akmRunAsync(["--format", "text", "-q", "hints"]) : Promise.resolve(""),
+  const [curatedRaw, pendingRaw, activeWorkflowRaw] = await Promise.all([
     AUTO_CURATE && cwdContext ? akmRunAsync(buildCurateArgs(cwdContext, CURATE_LIMIT)) : Promise.resolve(""),
     akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
     akmRunAsync(["--format", "json", "-q", "workflow", "list", "--active"]),
   ])
-  const hints = hintsRaw.trim()
   const curatedTrimmed = (CURATE_MIN_SCORE > 0 ? renderCuratedJson(curatedRaw, cwdContext) : curatedRaw).trim()
   let curatedFile = ""
   if (curatedTrimmed) {
@@ -1863,11 +1869,10 @@ async function sessionStart(): Promise<string> {
   }
   const pendingItems = safeJsonParse<Record<string, unknown>>(pendingRaw)
   const pending = Array.isArray(pendingItems?.proposals) ? pendingItems.proposals.length : 0
-  // The banner used to point at `akm proposal list --status pending` — the
-  // exact listing this hook just ran to produce the count. Point at the next
-  // useful step instead.
+  // Availability is information, not a task: review only when the user's work
+  // involves proposals, and only they authorize accepting or rejecting one.
   const PENDING_NEXT_STEPS =
-    'Inspect one with `akm proposal show <id>`, then `akm proposal accept <id>` or `akm proposal reject <id> --reason "..."`.'
+    "Review them (`akm proposal show <id>`) only if the user's task involves proposals; accepting or rejecting needs the user's approval."
   const pendingSummary =
     pending <= 0
       ? ""
@@ -1883,7 +1888,7 @@ async function sessionStart(): Promise<string> {
   // No early return for a quiet stash. The header + footer below are the whole
   // point of SessionStart — they tell the agent that akm exists, which lookup
   // verb to reach for, and that the surface is five commands wide. On the most
-  // common profile of all (fresh install, nothing curated, no hints, no
+  // common profile of all (fresh install, nothing curated, no
   // proposals) an early return here made SessionStart emit zero bytes, so the
   // header and footer were unreachable exactly when they were most needed. The
   // optional blocks still append only when non-empty, and the version gate
@@ -1903,7 +1908,6 @@ async function sessionStart(): Promise<string> {
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (workflowSummary) body = `${body}\n\n${workflowSummary}`
-  if (hints) body = `${body}\n\n${hints}`
     // Same reasoning as the UserPromptSubmit path: inject the curation, do not
     // point at it. The file remains the untruncated copy; emitHookContext trims
     // what actually enters context to AKM_CONTEXT_BUDGET_CHARS.

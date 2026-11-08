@@ -304,7 +304,7 @@ export function formatPendingProposalContext(count: number): string {
     "# AKM pending proposals",
     "",
     summaryLine,
-    "Use the AKM CLI to review them; mutating proposal actions require explicit user approval.",
+    "Review them only if the user's task involves proposals; mutating proposal actions require explicit user approval.",
     PROPOSED_QUALITY_WARNING,
   ].join("\n")
 }

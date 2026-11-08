@@ -158,16 +158,16 @@ export function renderCuratedJsonResponse(raw: string | null, query: string): st
 // implemented; one comment, not a second mechanism.
 
 // What every session's system prompt says about AKM: a few rules, with
-// `akm hints` and `akm help` for the rest. The 2.5 KiB doctrine this replaces
+// `akm help` for the rest. The 2.5 KiB doctrine this replaces
 // sent small models searching the stash instead of doing their task. The
 // trigger says "writing or editing" on purpose: with "from scratch", edit-shaped
 // tasks never engaged (issue #94).
 export const AKM_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
-  "- Assets for this project (skills, knowledge, memories, workflows) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
+  "- Assets for this project (skills, knowledge, memories, lessons, workflows) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
   "- Record `akm_feedback` on an asset when it helped, or when its content proved wrong or stale; keep durable project knowledge with `akm_remember`.",
-  "- `akm hints` has this bundle's conventions; `akm help` has the CLI.",
+  "- `akm help` has the CLI.",
 ].join("\n")
 
 export const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content. Only if an asset is wrong or stale, call `akm_feedback <ref> negative` with a note saying <what is wrong and what it should say>: that lowers its ranking. To correct a fact you have verified, also pass `replace`, `with` and `source`. Use `positive` when it helped. An asset that simply didn't fit your task is not negative feedback: record nothing."
@@ -364,6 +364,15 @@ export function truncateLogText(value: string, limit = 1_000): string {
 
 // --- active workflows -----------------------------------------------------------
 
+/** Bounded age of a run's last update; anything that is not a past ISO timestamp reads as unknown. */
+export function formatRunAge(updatedAt: unknown, now: number = Date.now()): string {
+  const then = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN
+  if (!Number.isFinite(then) || then > now) return "update time unknown"
+  const hours = Math.floor((now - then) / 3_600_000)
+  if (hours < 1) return "updated <1h ago"
+  return hours < 48 ? `updated ${hours}h ago` : `updated ${Math.floor(hours / 24)}d ago`
+}
+
 export function summarizeWorkflowList(value: unknown): string | null {
   if (Array.isArray(value)) {
     const lines = value
@@ -375,7 +384,7 @@ export function summarizeWorkflowList(value: unknown): string | null {
         const state = typeof record.status === "string" ? record.status : null
         const step = typeof record.currentStepId === "string" ? record.currentStepId : null
         if (!id && !ref && !state && !step) return null
-        return `- ${ref ?? "workflow"} (${id ?? "run"})${state ? ` — ${state}` : ""}${step ? ` — next: ${step}` : ""}`
+        return `- ${ref ?? "workflow"} (${id ?? "run"})${state ? ` — ${state}` : ""}${step ? ` — next: ${step}` : ""} — ${formatRunAge(record.updatedAt)}`
       })
       .filter((line): line is string => !!line)
     return lines.length > 0 ? lines.join("\n") : null
@@ -398,7 +407,7 @@ export function summarizeActiveWorkflows(raw: string): string | null {
 }
 
 export function formatWorkflowContext(summary: string): string {
-  return `# AKM active workflows\n${summary}`
+  return `# AKM active workflows (whether one applies to this task is unknown)\n${summary}`
 }
 
 /**

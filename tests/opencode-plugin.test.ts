@@ -790,7 +790,7 @@ describe("akm-opencode plugin", () => {
         expect(call?.[2]).toMatchObject({ cwd: "/tmp/project" })
       }
       await hooks.event!({ event: { type: "session.created", properties: { sessionID: "cwd-helpers-1" } } } as any)
-      const helper = mockExecFileSync.mock.calls.find(([, args]) => Array.isArray(args) && args.includes("hints"))
+      const helper = mockExecFileSync.mock.calls.find(([, args]) => Array.isArray(args) && args.includes("workflow"))
       expect(helper?.[2]).toMatchObject({ cwd: projectDir })
     })
 
@@ -812,6 +812,8 @@ describe("akm-opencode plugin", () => {
       const gateSearch = execFileCalls.find((call) => call.args[0] === "search")
       expect(gateSearch?.cwd).toBe(projectDir)
       expect(gateSearch?.args).not.toContain("--project")
+      // #159: the project's configured sources decide what the gate can find.
+      expect(gateSearch?.args).not.toContain("--from")
     })
   })
 
@@ -924,7 +926,6 @@ describe("akm-opencode plugin", () => {
       // merge into it rather than ride in as a second entry (#121).
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
         if (args?.[0] === "--version") return "akm 0.9.14\n"
-        if (args?.includes("hints")) return "stash-authored hint text"
         if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
         return "mock output"
       })
@@ -934,12 +935,11 @@ describe("akm-opencode plugin", () => {
       await hooks["experimental.chat.system.transform"]!({ sessionID: "single-system-1" } as any, output as any)
 
       // Multiple blocks are live for this session (curated pointer + doctrine
-      // + hints), and they must still arrive merged into the host's one entry.
+      // + workflow), and they must still arrive merged into the host's one entry.
       expect(output.system).toHaveLength(1)
       expect(output.system[0]!.startsWith("HOST PROMPT\n\n")).toBe(true)
       expect(output.system[0]).toContain("AKM bundle curation written to")
       expect(output.system[0]).toContain("# AKM is available in this session")
-      expect(output.system[0]).toContain("stash-authored hint text")
       expect(output.system[0]!.indexOf("AKM bundle curation written to")).toBeLessThan(
         output.system[0]!.indexOf("# AKM is available in this session"),
       )
@@ -951,7 +951,6 @@ describe("akm-opencode plugin", () => {
       // belong at the end of the LAST entry, never prepended to entry 0.
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
         if (args?.[0] === "--version") return "akm 0.9.14\n"
-        if (args?.includes("hints")) return "stash-authored hint text"
         if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
         return "mock output"
       })
@@ -986,26 +985,6 @@ describe("akm-opencode plugin", () => {
       await hooks["experimental.chat.system.transform"]!({} as any, output as any)
 
       expect(output.system).toEqual(["HOST PROMPT"])
-    })
-
-    it("keeps the curated pointer when a large hints payload overruns the context budget", async () => {
-      // applyContextBudget truncates the first block that overflows and then
-      // stops, so block order decides what can be starved. `akm hints` is
-      // unbounded stash-authored text; when the doctrine+hints block led the
-      // array, a large hints output silently dropped the curated-stash pointer
-      // — the plugin's actual deliverable — for the whole session.
-      mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "--version") return "akm 0.9.14\n"
-        if (args?.includes("hints")) return "h".repeat(8000)
-        if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
-        return "mock output"
-      })
-      const hooks = await AkmPlugin(createPluginInput())
-      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "budget-starve-1" } } } as any)
-      const output: { system: string[] } = { system: [] }
-      await hooks["experimental.chat.system.transform"]!({ sessionID: "budget-starve-1" } as any, output as any)
-
-      expect(output.system.join("\n")).toContain("AKM bundle curation written to")
     })
 
     it("tags the curated file with the recalled-content provenance banner", async () => {
