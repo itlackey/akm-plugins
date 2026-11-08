@@ -871,21 +871,27 @@ describe("akm-opencode plugin", () => {
       return output.system.join("\n")
     }
 
-    it("tells an operator once per session that a retired learning opt-out is no longer read, and stays silent for on values", async () => {
-      const hooks = await AkmPlugin(createPluginInput())
+    it("logs once per session that a retired learning opt-out is no longer read, never in the system context, and stays silent for on values", async () => {
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput(client))
       const needle = "akm setup --learning off"
+      const notices = () => (client.app.log as any).mock.calls.map(([call]: any[]) => call.body).filter((body: any) => body.message.includes(needle))
       const previous = { memory: process.env.AKM_AUTO_MEMORY, learning: process.env.AKM_AUTO_LEARNING }
       try {
         process.env.AKM_AUTO_LEARNING = "0"
         await hooks.event!({ event: { type: "session.created", properties: { sessionID: "retired-off" } } } as any)
-        const off = await transform(hooks, "retired-off")
-        expect(off.split(needle).length - 1).toBe(1)
-        expect(off).toContain("AKM_AUTO_LEARNING")
-        expect(off).toContain("your opt-out is not applied")
+        await transform(hooks, "retired-off")
+        const second = await transform(hooks, "retired-off")
+        expect(notices()).toHaveLength(1)
+        expect(notices()[0].level).toBe("warn")
+        expect(notices()[0].message).toContain("AKM_AUTO_LEARNING")
+        expect(notices()[0].message).toContain("your opt-out is not applied")
+        expect(second).not.toContain(needle)
 
         process.env.AKM_AUTO_LEARNING = "1"
         process.env.AKM_AUTO_MEMORY = "1"
         await hooks.event!({ event: { type: "session.created", properties: { sessionID: "retired-on" } } } as any)
+        expect(notices()).toHaveLength(1)
         expect(await transform(hooks, "retired-on")).not.toContain(needle)
       } finally {
         for (const [key, value] of [["AKM_AUTO_MEMORY", previous.memory], ["AKM_AUTO_LEARNING", previous.learning]] as const) {

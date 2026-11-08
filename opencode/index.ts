@@ -419,13 +419,11 @@ async function getAkmBundleDir(client?: LogCapableClient): Promise<string | unde
 // channel of its own.
 async function getAkmBundleWarning(client: LogCapableClient): Promise<string> {
   const bundleDir = await getAkmBundleDir(client)
-  const retired = retiredLearningFlagNotice()
-  const missing = !bundleDir
-    ? "No AKM default bundle is configured. Run `akm setup` or set `AKM_BUNDLE_DIR`."
-    : !existsSync(bundleDir)
-      ? `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\` or set \`AKM_BUNDLE_DIR\` to an existing bundle.`
-      : ""
-  return [missing, retired].filter(Boolean).join("\n")
+  if (!bundleDir) return "No AKM default bundle is configured. Run `akm setup` or set `AKM_BUNDLE_DIR`."
+  if (!existsSync(bundleDir)) {
+    return `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\` or set \`AKM_BUNDLE_DIR\` to an existing bundle.`
+  }
+  return ""
 }
 
 function warmIndexInBackground(): void {
@@ -1012,6 +1010,8 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           if (type === "session.created") {
             // Best-effort, fire-and-forget, fully error-trapped internally —
             // must never block or fail session.created (13: "tmp-file cleanup").
+            const retired = retiredLearningFlagNotice()
+            if (retired) void writePluginLog(logClient, "warn", retired, { subsystem: "learning", sessionID: sid })
             void pruneStaleCuratedFiles()
             warmIndexInBackground()
             void bootstrap.ensure(sid)
