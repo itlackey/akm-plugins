@@ -26,13 +26,13 @@ configs, and secrets via the `akm` CLI (v0.9.14+).
 
 **Finding assets:**
 
-Use `akm curate` (primary) for task-oriented discovery — it applies LLM reranking, returns relevance scores, and filters cross-domain noise. Use `akm search` only when you already know an asset exists and need its exact ref.
+Use `akm curate` (primary) for task-oriented discovery — it picks the assets worth loading for a task, with a preview, run details and related support refs per hit. Use `akm search` only when you already know an asset exists and need its exact ref.
 
-The curator automatically boosts assets that match the current cwd's project anchor, so an explicit project name in the query is no longer required for ranking. Including it still helps the reranker frame intent — keep concrete task descriptions over abstract ones:
+When the working directory matches a project in akm's `projects` config, that project's filters apply to curate and search, so the project name is not needed in the query. Concrete task descriptions still retrieve better than abstract ones:
 ```sh
-akm curate "<task>"   # PRIMARY: LLM-reranked, scored; auto-project-boost enabled by default
-# Good: akm curate "akm CLI improve command performance analysis" (explicit framing)
-# Bad:  akm curate "improve performance analysis"  # too generic — less for the reranker to bite into
+akm curate "<task>"   # PRIMARY
+# Good: akm curate "akm CLI improve command performance analysis"
+# Bad:  akm curate "improve performance analysis"  # too generic
 ```
 
 Fall back to `akm search` only for known-ref lookups:
