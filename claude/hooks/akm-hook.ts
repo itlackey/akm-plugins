@@ -1761,17 +1761,31 @@ function curatePrompt(): string {
 
 const BOOTSTRAP_DIR = path.join(STATE_DIR, "bootstrap")
 
+/** The rendered curation with as many whole hits as fit in `room` characters; "" when not even one does. */
+function fitCurated(curated: string, room: number): string {
+  const [head, ...hits] = curated.split("\n\n")
+  const kept: string[] = []
+  let used = head.length
+  for (const hit of hits) {
+    if (used + hit.length + 2 > room) break
+    kept.push(hit)
+    used += hit.length + 2
+  }
+  return kept.length > 0 ? [head, ...kept].join("\n\n") : ""
+}
+
 /**
  * Does this SessionStart load the rules and most-used list? Yes for a fresh start, a clear and a
- * compaction (the new context holds none of it); no for a resume (the transcript still has it) and
+ * compaction (the new context holds none of it); no for a resume or fork (the transcript still has it) and
  * for a duplicate callback of an event already loaded. `source` is the host's own field: Claude
- * Code sends startup|resume|clear|compact, Codex what it supports; a missing one is a start.
+ * Code sends startup|resume|clear|compact|fork, and Codex the same; a missing one is a start.
  *
  * Duplicate callbacks run as separate processes at the same moment, so the claim is a marker file
  * created exclusively (one wins), not a read-then-write.
  */
 function bootstrapDue(sid: string, source: string): boolean {
-  if (source === "resume") return false
+  // A resume and a fork carry the transcript, and with it the sections already loaded.
+  if (source === "resume" || source === "fork") return false
   if (!sid) return true
   const marker = path.join(BOOTSTRAP_DIR, `${sid}.${source || "startup"}`)
   try {
@@ -1937,16 +1951,22 @@ async function sessionStart(): Promise<string> {
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (workflowSummary) body = `${body}\n\n${workflowSummary}`
+  // Whole blocks only: the context is cut at the budget, and a cut lands mid-block (a half
+  // provenance banner, a clipped note). So the rules and list get what the footer leaves, and the
+  // curated block is added only with as many whole hits as then fit.
+  const footerRoom = SESSION_START_FOOTER.length + 2
   if (bootstrapWanted) {
     const bootstrap = await loadSessionBootstrap((args, env) => akmRunAsync(args, undefined, env), {
-      budgetChars: CONTEXT_BUDGET_CHARS - body.length - 2,
+      budgetChars: CONTEXT_BUDGET_CHARS - body.length - 2 - footerRoom,
     })
     if (bootstrap) body = `${body}\n\n${bootstrap}`
   }
-    // Same reasoning as the UserPromptSubmit path: inject the curation, do not
-    // point at it. The file remains the untruncated copy; emitHookContext trims
-    // what actually enters context to AKM_CONTEXT_BUDGET_CHARS.
-    if (curatedTrimmed) body = `${body}\n\n${tagRecalledContent(curatedTrimmed)}\n\n${CURATED_CONTEXT_TAIL}`
+  // Same reasoning as the UserPromptSubmit path: inject the curation, do not
+  // point at it. The file remains the untruncated copy.
+  const curatedBlock = curatedTrimmed
+    ? fitCurated(curatedTrimmed, CONTEXT_BUDGET_CHARS - body.length - footerRoom - 4 - tagRecalledContent("").length - CURATED_CONTEXT_TAIL.length)
+    : ""
+  if (curatedBlock) body = `${body}\n\n${tagRecalledContent(curatedBlock)}\n\n${CURATED_CONTEXT_TAIL}`
   body = `${body}\n\n${SESSION_START_FOOTER}`
   // The warnings also ride the user-visible channel: a missing bundle or a
   // failed extraction is the user's to fix, and telling only the model about it

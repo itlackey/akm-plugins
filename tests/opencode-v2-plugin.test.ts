@@ -981,6 +981,32 @@ describe("akm-opencode-v2 plugin", () => {
       expect(listings()).toBe(2)
     })
 
+    it("with 8 rules and a full curation every block still arrives whole: guidance, workflow and pending nag included", async () => {
+      const many = Array.from({ length: 8 }, (_, n) => ({ ref: `rules/m${n}`, type: "rule", name: `m${n}`, description: `m${n}`, keywords: [], body: `---\ndescription: m${n}\n---\n- ${"z".repeat(400)}\n` }))
+      fake = freshFakeAkm({ assets: [...assets, ...many], usage, projects: { acme: { paths: [project] } } })
+      process.env.AKM_OPENCODE_CLI = fake.akmPath
+      curateImpl = async () => JSON.stringify({ items: Array.from({ length: 5 }, (_, n) => ({ type: "knowledge", name: `k${n}`, ref: `knowledge/k${n}`, description: "d".repeat(150) })) })
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_m" }, location: { directory: project } })
+      await settle(300)
+      await host.runPrompt("ses_m", PROMPT)
+      const text = await request("ses_m")
+      expect(text).toContain("## rules/m0")
+      expect(text).toContain("knowledge/k4")
+      expect(text).toContain("An asset that simply didn't fit your task is not negative feedback") // the curated tip, whole
+      expect(text).toContain("AKM is available in this session") // the guidance
+      expect(text).not.toContain("[truncated for context]")
+    })
+
+    it("a child session gets no sections of its own", async () => {
+      withBootstrap()
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_kid", parentID: "ses_b" }, location: { directory: project } })
+      await settle(100)
+      expect(await request("ses_kid")).not.toContain("# AKM rules")
+      expect(listings()).toBe(0)
+    })
+
     it("a session first seen at a request (a resumed one) is loaded then, once", async () => {
       withBootstrap()
       host = await startPlugin(project)

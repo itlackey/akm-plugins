@@ -1,26 +1,12 @@
 /**
- * #110 — client-side filtering and rendering for `akm curate`'s `--format
- * json` response, used only by the opt-in relevance-floor path
- * (AKM_CURATE_MIN_SCORE) in both hooks.
- *
- * Why this exists: `akm curate --format text` (the default the hooks have
- * always used) never prints a per-item relevance score — `formatCuratePlain`
- * on the CLI side has no `score` line — so the hooks had no way to tell "five
- * weak hits" from "five strong hits" and always emitted whatever the CLI
- * returned. `--detail agent` DOES carry `score` (and `type`) on each item in
- * `--format json`, so the fix lives here: switch to JSON, decide, and render
- * just enough text to stay useful — NOT a full port of the CLI's own
- * formatter (next-steps footer, warnings block, etc. — the hooks already
- * append their own tip line and provenance banner around this).
- *
- * This module is intentionally not wired into the default (score-floor
- * disabled) code path: that path keeps calling `--format text` exactly as
- * before, so existing behavior — and every test that fakes the CLI's text
- * output — is untouched. See akm-plugins#110 for the fuller design tradeoff
- * (a renderer that fully replaces `--format text` in all cases, so
- * type-priority ranking could apply unconditionally rather than only when
- * the floor is enabled, was considered and deferred as a larger, riskier
- * change than this issue's evidence justified doing in one pass).
+ * Client-side handling of `akm curate`'s `--format json` response, used by both
+ * hooks and both OpenCode plugins for every automatic curate: drop the `rule`
+ * hits (the session bootstrap carries the rules), keep the requested number of
+ * the rest, apply the opt-in relevance floor and authored-first ranking
+ * (AKM_CURATE_MIN_SCORE, #110) when it is set, and render just enough text to
+ * stay useful — NOT a full port of the CLI's own formatter (next-steps footer,
+ * warnings block, etc. — the hooks already append their own tip line and
+ * provenance banner around this).
  */
 
 export interface CuratedItem {
@@ -87,8 +73,8 @@ export function ordinaryCuratedItems(rawItems: unknown, limit: number): CuratedI
  * reason to drop it would repeat the mistake #107 fixed on the extract side
  * (a specific wrong guess is worse than none).
  *
- * akm-cli has already decided which N items are the top-N for this query;
- * this only decides which of those N are worth showing, and in what order —
+ * akm-cli has already decided which items are the top ones for this query;
+ * this only decides which of those are worth showing, and in what order —
  * it never asks the CLI for more candidates to backfill a dropped slot, so a
  * strict floor can legitimately shrink the result set to nothing.
  */

@@ -178,12 +178,22 @@ function getContextBudgetChars(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 4000
 }
 
+/** Room kept for the active-workflow and pending-proposal blocks that ride after the guidance. */
+const AKM_NOTE_BLOCKS_RESERVE = 600
+
 /**
- * What the session bootstrap may use of the context budget: the rest after the plugin's own
- * guidance and the curated pointer, which ride beside it. Rules come first within it.
+ * What the session bootstrap may use of the context budget: what is left after the plugin's own
+ * guidance, the note blocks, and the curated block (`curatedChars`: its pointer or its banner,
+ * hits and tip), which ride beside it. Rules come first within it.
  */
-export function bootstrapBudgetChars(): number {
-  return Math.max(0, getContextBudgetChars() - AKM_HINTS_PREFIX.length - AKM_CURATED_TAIL.length - 500)
+export function bootstrapBudgetChars(curatedChars: number): number {
+  return Math.max(0, getContextBudgetChars() - AKM_HINTS_PREFIX.length - AKM_NOTE_BLOCKS_RESERVE - curatedChars)
+}
+
+/** V1 sends a pointer to the curated file; V2 sends the curated text itself. */
+export const AKM_CURATED_POINTER_CHARS = AKM_CURATED_TAIL.length + 200
+export function curatedTextChars(): number {
+  return RECALLED_CONTENT_PROVENANCE.length + AKM_CURATED_TAIL.length + AKM_CURATE_LIMIT * 200
 }
 
 function truncateContextBlock(block: string, maxChars: number): string {

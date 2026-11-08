@@ -19,6 +19,7 @@ import {
   AKM_HINTS_PREFIX,
   applyContextBudget,
   autoMemoryEnabled,
+  AKM_CURATED_POINTER_CHARS,
   bootstrapBudgetChars,
   buildCurateOptions,
   createCuratedFileStore,
@@ -984,7 +985,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         })
         return ""
       },
-      { budgetChars: bootstrapBudgetChars() },
+      { budgetChars: bootstrapBudgetChars(AKM_CURATED_POINTER_CHARS) },
     ),
   )
   const learning = createLearning({
@@ -1018,7 +1019,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             // must never block or fail session.created (13: "tmp-file cleanup").
             void pruneStaleCuratedFiles()
             warmIndexInBackground()
-            await bootstrap.ensure(sid)
+            void bootstrap.ensure(sid)
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
               const cwdContext = gatherCwdContext(directory)
               const curated = await runCurateForSession(logClient, sid, directory, cwdContext || undefined)
@@ -1067,7 +1068,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             maybeExtractSessionOnIdle(logClient, sid, directory)
           }
           if (type === "session.compacted") {
-            await bootstrap.compacted(sid)
+            void bootstrap.compacted(sid)
             // 03-R1/06-M1: the session_checkpoint capture that used to feed
             // `memory.ref` here was removed along with the `remember --force`
             // write. Record the event as an explicit no-capture so
@@ -1131,7 +1132,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         const pendingBlock = await pendingProposals.contextBlock(sid)
         // A session the plugin first sees here (a resumed one) is loaded now; a compaction's
         // reload finishes before this request goes out.
-        await bootstrap.ensure(sid)
+        void bootstrap.ensure(sid)
         const blocks = [
           // The rules lead: they are the standing guidance, and the budget cuts from the end.
           await bootstrap.text(sid),

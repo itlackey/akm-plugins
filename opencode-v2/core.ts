@@ -63,6 +63,7 @@ import {
   applyContextBudget,
   autoMemoryEnabled,
   bootstrapBudgetChars,
+  curatedTextChars,
   extractMinIntervalMs,
   formatWorkflowContext,
   gatherCwdContext,
@@ -198,7 +199,7 @@ export function createCore(options: CoreOptions) {
         log("warn", "AKM session bootstrap lookup failed", { operation: "session-bootstrap", sessionID, args, error: result.error })
         return ""
       },
-      { project: await projectFor(sessionID), budgetChars: bootstrapBudgetChars() },
+      { project: await projectFor(sessionID), budgetChars: bootstrapBudgetChars(curatedTextChars()) },
     )
   })
   const gateHost: GateHost = {
@@ -447,10 +448,11 @@ export function createCore(options: CoreOptions) {
       const st = sessions.get(sessionID)
       // A session the plugin first sees here (a resumed one) is loaded now; a compaction's reload
       // finishes before this request goes out.
-      await bootstrap.ensure(sessionID)
+      // A subagent's child session works inside its parent's context: no sections of its own.
+      if (!childSessions.has(sessionID)) void bootstrap.ensure(sessionID)
       const blocks = [
         // The rules lead: they are the standing guidance, and the budget cuts from the end.
-        await bootstrap.text(sessionID),
+        childSessions.has(sessionID) ? "" : await bootstrap.text(sessionID),
         st?.curated ? `${RECALLED_CONTENT_PROVENANCE}${st.curated}${AKM_CURATED_TAIL}` : "",
         AKM_HINTS_PREFIX,
         st?.workflow ? formatWorkflowContext(st.workflow) : "",
@@ -466,7 +468,7 @@ export function createCore(options: CoreOptions) {
 
   async function onSessionCreated(sessionID: string): Promise<void> {
     const st = state(sessionID)
-    const bootstrapped = bootstrap.ensure(sessionID)
+    void bootstrap.ensure(sessionID)
     const cwdContext = gatherCwdContext(options.directory)
     const [curated, workflowRaw] = await Promise.all([
       AUTO_CURATE() && cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
@@ -475,7 +477,6 @@ export function createCore(options: CoreOptions) {
     if (disposed || sessions.get(sessionID) !== st) return
     if (curated && !st.curated) st.curated = curated
     st.workflow = (workflowRaw && summarizeActiveWorkflows(workflowRaw)) || undefined
-    await bootstrapped
   }
 
   /** Min-interval-gated, fire-and-forget extraction of a native session into the proposal queue. */
@@ -610,7 +611,7 @@ export function createCore(options: CoreOptions) {
           else await onSessionCreated(sessionID)
           break
         case "session.compaction.ended":
-          await bootstrap.compacted(sessionID)
+          if (!childSessions.has(sessionID)) void bootstrap.compacted(sessionID)
           break
         case "session.execution.succeeded":
           // A turn finished: the V2 analogue of V1's per-turn `session.idle`.

@@ -21,11 +21,14 @@ const DESCRIPTION_MAX_CHARS = 160
 const SHOW_BATCH = 8
 // Room kept for the left-out note after the last rule that fits.
 const NOTE_RESERVE = 220
+const USAGE_LEFT_OUT_NOTE = "(The list of most-used assets was left out to fit the context budget.)"
 const USAGE_CUT_NOTE = "(The list was cut to fit the context budget.)"
 const READ_ENV = { AKM_EVENT_SOURCE: "unknown" }
 
 /** Callbacks for one start or compaction event arrive together; one load serves them all. */
-export const DUPLICATE_WINDOW_MS = 30_000
+export const DUPLICATE_WINDOW_MS = 10_000
+/** The whole load gives up after this: well inside a hook's 120 s, and akm calls have timeouts of their own. */
+export const LOAD_DEADLINE_MS = 30_000
 
 /**
  * True when this start/compaction event (`key`: session plus kind) has not been loaded in the
@@ -69,6 +72,8 @@ export type BootstrapOptions = {
   project?: string
   /** Characters this block may use; rule text comes first, then the list. */
   budgetChars: number
+  /** Test seam: how long the whole load may take. */
+  deadlineMs?: number
 }
 
 /**
@@ -92,10 +97,13 @@ const usageArgs = (scope: string[]) => ["search", "--by-usage", "--limit", Strin
 
 async function load(run: BootstrapRun, options: BootstrapOptions): Promise<string> {
   if (options.budgetChars <= 0) return ""
+  const deadline = Date.now() + (options.deadlineMs ?? LOAD_DEADLINE_MS)
   const list = async (build: (scope: string[]) => string[], scope: string[]) => parseListing(await run(build(scope), READ_ENV))
   const override = options.project ? ["--project", options.project] : []
   let [rules, usage] = await Promise.all([list(rulesArgs, override), list(usageArgs, override)])
   if (!rules.project && !usage.project) {
+    // A lookup that failed says nothing about the project: do not guess one (or none).
+    if (!rules.ok || !usage.ok) return ""
     // No project applies: the default bundle alone, never every configured bundle.
     const configured = await run(["config", "get", "defaultBundle", "-q"], READ_ENV)
     let name = ""
@@ -116,9 +124,11 @@ async function load(run: BootstrapRun, options: BootstrapOptions): Promise<strin
     const bodies: string[] = []
     let used = heading.length + NOTE_RESERVE
     let full = false
-    for (let start = 0; start < total && !full; start += SHOW_BATCH) {
+    for (let start = 0; start < total && !full && Date.now() < deadline; start += SHOW_BATCH) {
       const batch = rules.hits.slice(start, start + SHOW_BATCH)
       const shown = await Promise.all(batch.map((hit) => run(["show", hit.ref, "--format", "json", "-q", ...override], READ_ENV)))
+      // A whole batch that reads nothing means akm is not answering: stop rather than try every rule.
+      if (shown.every((out) => !out)) break
       for (let i = 0; i < batch.length; i++) {
         let body = ""
         try {
@@ -140,7 +150,7 @@ async function load(run: BootstrapRun, options: BootstrapOptions): Promise<strin
     const cut = total >= RULES_LIST_LIMIT
     const note =
       leftOut > 0 || cut
-        ? `Not every rule is shown: ${leftOut} of ${cut ? `the first ${total}` : total} left out (context budget or unreadable)${cut ? `, and akm listed no more than ${RULES_LIST_LIMIT}` : ""}. List them with \`akm search "" --type rule\`.`
+        ? `Not every rule is shown: ${leftOut} of ${cut ? `the first ${total}` : total} left out (context budget or unreadable)${cut ? `, and akm listed no more than ${RULES_LIST_LIMIT}` : ""}. List them with \`akm search "" --type rule --limit 200\`.`
         : ""
     if (bodies.length > 0 || note) {
       const text = [heading, ...bodies, ...(note ? [note] : [])].join("\n\n")
@@ -161,6 +171,7 @@ async function load(run: BootstrapRun, options: BootstrapOptions): Promise<strin
       used += line.length + 1
     }
     if (lines.length > 0) sections.push([heading, ...lines, ...(lines.length < usage.hits.length ? [USAGE_CUT_NOTE] : [])].join("\n"))
+    else if (remaining >= USAGE_LEFT_OUT_NOTE.length) sections.push(USAGE_LEFT_OUT_NOTE)
   }
 
   return sections.join("\n\n")

@@ -12,13 +12,16 @@ export type SessionBootstrap = {
   ensure(sessionID: string): Promise<void>
   /** Load again after a compaction: the new context holds none of it. */
   compacted(sessionID: string): Promise<void>
-  /** The held text once any load in flight has finished; "" when there is none. */
+  /**
+   * The held text, after any load in flight has finished or `waitMs` has passed, whichever is
+   * first: a slow akm must not hold a request back. The load carries on for the next one.
+   */
   text(sessionID: string): Promise<string>
   clear(sessionID: string): void
 }
 
 /** `load` renders the bootstrap for a session and returns "" when it has nothing or a lookup failed. */
-export function createSessionBootstrap(load: (sessionID: string) => Promise<string>): SessionBootstrap {
+export function createSessionBootstrap(load: (sessionID: string) => Promise<string>, waitMs = 3_000): SessionBootstrap {
   const texts = new Map<string, string>()
   const loading = new Map<string, Promise<void>>()
   const started = new Set<string>()
@@ -46,7 +49,12 @@ export function createSessionBootstrap(load: (sessionID: string) => Promise<stri
     ensure: (sessionID) => (started.has(sessionID) ? loading.get(sessionID) ?? Promise.resolve() : refresh(sessionID, "start")),
     compacted: (sessionID) => refresh(sessionID, "compact"),
     async text(sessionID) {
-      await loading.get(sessionID)
+      const inFlight = loading.get(sessionID)
+      if (inFlight) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([inFlight, new Promise<void>((resolve) => (timer = setTimeout(resolve, waitMs)))])
+        if (timer) clearTimeout(timer)
+      }
       return texts.get(sessionID) ?? ""
     },
     clear(sessionID) {

@@ -40,6 +40,8 @@ export type FakeAkmAsset = {
   // The `project` frontmatter key. A rule applies to the project of that name, or to every
   // project and to none when it has no `project`.
   project?: string
+  // The bundle the asset lives in. `--from <name>` keeps only that bundle's assets (and unplaced ones).
+  bundle?: string
 }
 
 export type FakeAkmConfig = {
@@ -348,7 +350,7 @@ function tokens(s) {
 function rank(query, limit) {
   const q = new Set(tokens(query))
   if (q.size === 0) return []
-  const scored = idx.assets.filter((a) => a.type !== "rule").map((a) => {
+  const scored = idx.assets.filter((a) => a.type !== "rule" && inFrom(a)).map((a) => {
     const haystack = new Set([...tokens(a.description), ...a.keywords.flatMap(tokens), ...tokens(a.name)])
     let score = 0
     let matched = 0
@@ -466,9 +468,13 @@ function resolveProject() {
   }
   return best ? { name: best.name, path: best.path } : undefined
 }
+function inFrom(a) {
+  const from = flagValue("--from")
+  return !from || from === "local" || from === "all" || a.bundle === undefined || a.bundle === from
+}
 function applicableRules(project) {
   return idx.assets
-    .filter((a) => a.type === "rule" && (a.project === undefined || (project && a.project === project.name)))
+    .filter((a) => inFrom(a) && a.type === "rule" && (a.project === undefined || (project && a.project === project.name)))
     .sort((a, b) => a.ref.localeCompare(b.ref))
 }
 function toHit(a) {
@@ -488,7 +494,7 @@ function usageList(project, limit) {
     if ((event.source || "user") !== "user") continue
     if (project && event.project !== project.name) continue
     const asset = idx.assets.find((a) => a.ref === event.ref)
-    if (!asset || asset.type === "rule") continue
+    if (!asset || asset.type === "rule" || !inFrom(asset)) continue
     if (project && asset.project !== undefined && asset.project !== project.name) continue
     counts.set(asset.ref, (counts.get(asset.ref) || 0) + 1)
   }
