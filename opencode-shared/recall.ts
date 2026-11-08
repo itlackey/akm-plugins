@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { runAge } from "../claude/shared/run-age"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
 import { type CurateOptions, loadCurate } from "./akm-api"
 import type { ResolvedAkmCommand } from "./akm-cli"
@@ -366,11 +367,8 @@ export function truncateLogText(value: string, limit = 1_000): string {
 
 /** Bounded age of a run's last update; anything that is not a past ISO timestamp reads as unknown. */
 export function formatRunAge(updatedAt: unknown, now: number = Date.now()): string {
-  const then = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN
-  if (!Number.isFinite(then) || then > now) return "update time unknown"
-  const hours = Math.floor((now - then) / 3_600_000)
-  if (hours < 1) return "updated <1h ago"
-  return hours < 48 ? `updated ${hours}h ago` : `updated ${Math.floor(hours / 24)}d ago`
+  const age = runAge(updatedAt, now)
+  return age === "unknown" ? "update time unknown" : `updated ${age}`
 }
 
 export function summarizeWorkflowList(value: unknown): string | null {

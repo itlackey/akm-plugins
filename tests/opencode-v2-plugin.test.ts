@@ -520,7 +520,7 @@ describe("akm-opencode-v2 plugin", () => {
       const text = (await host.runContext("ses_n", []))[0].text
       expect(text).toContain("# AKM pending proposals")
       expect(text).toContain("There are 2 pending AKM proposals.")
-      expect(text).toContain("mutating proposal actions require explicit user approval")
+      expect(text).toContain("accepting or rejecting needs the user's approval")
     })
   })
 
@@ -782,6 +782,24 @@ describe("akm-opencode-v2 plugin", () => {
       // #159: no plugin-owned source override; the project's `from` decides.
       expect(gate).not.toContain("--from")
       expect(gate![gate!.indexOf("--project") + 1]).toBe("acme")
+    })
+
+    it("sends the exact gate argv, with no --from, when the session has no project", async () => {
+      process.env.AKM_WRITE_GATE = "observe"
+      resetWriteGateForTests()
+      host = await startPlugin(project)
+      const before = argvOf("search").length
+      await host.runToolHook("execute.after", {
+        tool: "read",
+        sessionID: "ses_np",
+        id: "read_1",
+        input: { path: "service.yaml" },
+        status: "completed",
+        result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
+      })
+      await settle(1200)
+      const gate = argvOf("search").slice(before).find((a) => a.includes("agent") && a.includes("inkwell/v2"))
+      expect(gate).toEqual(["search", "inkwell/v2", "--limit", "5", "--detail", "agent", "--format", "json"])
     })
 
     describe("gate cache", () => {

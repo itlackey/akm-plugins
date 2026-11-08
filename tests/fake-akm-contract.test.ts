@@ -567,3 +567,57 @@ function cleanup(env: { root: string }) {
     // best-effort
   }
 }
+
+// #159: the format-guidance gate's search, as the plugins build it (no `--from`), against a real akm.
+// Unscoped guidance sits in an excluded bundle, the current space, a global bundle and the default bundle.
+describe("format-guidance gate search selects by the project's sources", () => {
+  const gateArgv = (project?: string) => ["search", "formatproof", "--limit", "5", ...(project ? ["--project", project] : []), "--detail", "agent", "--format", "json", "-q"]
+
+  test.skipIf(!akmAvailable)("honours the project's `from` by directory and by name, and falls back to all local without a project", () => {
+    const real = makeRealEnv()
+    try {
+      const env = realAkmEnv(real)
+      const run = (cwd: string, args: string[]) => {
+        const result = Bun.spawnSync([process.execPath, REAL_AKM, ...args], { env, cwd, stdout: "pipe", stderr: "pipe" })
+        if (result.exitCode !== 0) throw new Error(`akm ${args.join(" ")} exited ${result.exitCode}: ${result.stderr.toString()}`)
+        return result.stdout.toString()
+      }
+      const refs = (cwd: string, args: string[]) =>
+        ((JSON.parse(run(cwd, args)) as { hits?: Array<{ ref: string }> }).hits ?? []).map((hit) => hit.ref).sort()
+
+      const defaultName = (JSON.parse(run(real.root, ["bundle", "list", "--format", "json", "-q"])) as { defaultBundle: string }).defaultBundle
+      mkdirSync(path.join(real.AKM_BUNDLE_DIR, "knowledge"), { recursive: true })
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "knowledge", "format-proof-default.md"), "---\ndescription: formatproof guidance from default\n---\nformatproof body for default only\n")
+      for (const name of ["global", "space-101", "space-102"]) {
+        const dir = path.join(real.root, "bundles", name)
+        mkdirSync(path.join(dir, "knowledge"), { recursive: true })
+        writeFileSync(path.join(dir, "knowledge", `format-proof-${name}.md`), `---\ndescription: formatproof guidance from ${name}\n---\nformatproof body for ${name} only\n`)
+        run(real.root, ["bundle", "add", dir, "--name", name, "-q"])
+      }
+      const projectDir = path.join(real.root, "work", "one", "101")
+      const elsewhere = path.join(real.root, "work", "two")
+      mkdirSync(projectDir, { recursive: true })
+      mkdirSync(elsewhere, { recursive: true })
+      run(real.root, ["config", "set", "projects", JSON.stringify({ "one-101": { paths: [projectDir], from: [defaultName, "global", "space-101"] } }), "-q"])
+      run(real.root, ["index", "-q"])
+
+      const expected = [
+        "global//knowledge/format-proof-global",
+        "space-101//knowledge/format-proof-space-101",
+      ]
+      const inProject = refs(projectDir, gateArgv())
+      expect(inProject).toContain(expected[0])
+      expect(inProject).toContain(expected[1])
+      expect(inProject.some((ref) => ref.includes("space-102"))).toBe(false)
+      expect(refs(real.root, gateArgv("one-101"))).toEqual(inProject)
+
+      // The removed override: `--from local` pulls the excluded space back in.
+      expect(refs(projectDir, [...gateArgv(), "--from", "local"]).some((ref) => ref.includes("space-102"))).toBe(true)
+
+      // No project: every local bundle.
+      expect(refs(elsewhere, gateArgv()).some((ref) => ref.includes("space-102"))).toBe(true)
+    } finally {
+      cleanup(real)
+    }
+  }, REAL_AKM_TIMEOUT_MS)
+})

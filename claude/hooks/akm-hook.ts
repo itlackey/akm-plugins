@@ -6,6 +6,7 @@ import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { AKM_MIN_VERSION, meetsAkmMinVersion } from "../shared/akm-version"
+import { runAge } from "../shared/run-age"
 import { valid } from "../shared/vendor-semver"
 import {
   classifyFeedbackSignal,
@@ -681,7 +682,7 @@ function akmRun(args: string[], input?: string, options?: { timeoutMs?: number }
  * Async variant of `akmRun` — same args + behavior, but returns Promise<string>
  * so independent akm invocations can be issued concurrently via Promise.all.
  *
- * Used by `sessionStart` (#71) to run hints + curate + proposals in parallel
+ * Used by `sessionStart` (#71) to run curate + proposals + workflows in parallel
  * instead of sequentially. Worst-case perceived latency drops from ~3×timeout
  * to ~1×timeout for the typical case where all three calls hit the same
  * embedding/LLM bottleneck.
@@ -973,17 +974,9 @@ function postToolBatch(): string {
  * 07 P1-B: reduce `akm workflow list --active` output before injecting it into
  * subagent context. The raw list carries `workflowTitle` (verbatim from a
  * workflow asset's frontmatter) and `params` (arbitrary user input) — both
- * attacker-influenceable. Emit only run id + ref + status + current step so an
+ * attacker-influenceable. Emit only run id + ref + status + current step + age so an
  * injected title/param can never pose as a trusted instruction to the subagent.
  */
-function formatRunAge(updatedAt: unknown, now: number = Date.now()): string {
-  const then = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN
-  if (!Number.isFinite(then) || then > now) return "unknown"
-  const hours = Math.floor((now - then) / 3_600_000)
-  if (hours < 1) return "<1h ago"
-  return hours < 48 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`
-}
-
 function summarizeActiveWorkflows(raw: string): string {
   if (!raw || raw === "[]") return ""
   let parsed: unknown
@@ -1006,7 +999,7 @@ function summarizeActiveWorkflows(raw: string): string {
       ref: str(run.workflowRef),
       status: str(run.status),
       currentStepId: str(run.currentStepId),
-      updated: formatRunAge(run.updatedAt),
+      updated: runAge(run.updatedAt),
     }
   })
   return `# Active workflow (run ids, status and age only; whether it applies to this task is unknown)\n${JSON.stringify(reduced)}`
@@ -1872,7 +1865,7 @@ async function sessionStart(): Promise<string> {
   // Availability is information, not a task: review only when the user's work
   // involves proposals, and only they authorize accepting or rejecting one.
   const PENDING_NEXT_STEPS =
-    "Review them (`akm proposal show <id>`) only if the user's task involves proposals; accepting or rejecting needs the user's approval."
+    "Only if the user's task involves proposals, review them with `akm proposal list` and `akm proposal show <id>`; accepting or rejecting needs the user's approval."
   const pendingSummary =
     pending <= 0
       ? ""
@@ -1881,7 +1874,7 @@ async function sessionStart(): Promise<string> {
         : `There are ${pending} pending AKM proposals. ${PENDING_NEXT_STEPS}`
   // The active-workflow list used to reach subagents only, which is backwards:
   // the main session is the one that can run `akm workflow resume`. Same
-  // reduction function as subagentStart() — run ids and status only, never the
+  // reduction function as subagentStart() — run ids, status and age only, never the
   // attacker-influenceable workflowTitle/params.
   const workflowSummary = summarizeActiveWorkflows(activeWorkflowRaw.trim())
 

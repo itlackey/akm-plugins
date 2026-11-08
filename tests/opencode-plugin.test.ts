@@ -792,6 +792,8 @@ describe("akm-opencode plugin", () => {
       await hooks.event!({ event: { type: "session.created", properties: { sessionID: "cwd-helpers-1" } } } as any)
       const helper = mockExecFileSync.mock.calls.find(([, args]) => Array.isArray(args) && args.includes("workflow"))
       expect(helper?.[2]).toMatchObject({ cwd: projectDir })
+      // #155: session start never runs `akm hints`.
+      expect(mockExecFileSync.mock.calls.some(([, args]) => Array.isArray(args) && args.includes("hints"))).toBe(false)
     })
 
     it("runs the read tools, recall and the write gate's search in the session directory", async () => {

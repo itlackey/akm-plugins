@@ -269,7 +269,7 @@ function writeCuratedFile(sessionID: string, content: string): string | null {
   return filePath
 }
 
-// 13: "Memory leaks" — session.deleted cleanup only cleared sessionBundleWarning,
+// 13: "Memory leaks" — session.deleted cleanup only cleared the bundle-warning map,
 // sessionCurated, sessionWorkflow, the curated-version tracking pair, and
 // sessionBuffer. It missed retrospectiveState and the per-session
 // pendingProposalSummaryCache entry

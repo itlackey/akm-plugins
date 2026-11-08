@@ -80,8 +80,8 @@ describe("opencode-shared session context", () => {
   it("presents pending proposals as information gated on the user's task", () => {
     const text = formatPendingProposalContext(2)
     expect(text).toContain("There are 2 pending AKM proposals.")
-    expect(text).toContain("only if the user's task involves proposals")
-    expect(text).toContain("require explicit user approval")
+    expect(text).toContain("Only if the user's task involves proposals")
+    expect(text).toContain("accepting or rejecting needs the user's approval")
   })
 
   it("names lessons among the assets and no longer points at `akm hints`", () => {

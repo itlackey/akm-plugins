@@ -71,7 +71,7 @@ Every `akm` call runs in the session's directory (in-process recall passes it as
 
 `shell.hook("create.before")` is V2's native equivalent of V1's `shell.env`: the host passes the full environment it is about to spawn a shell with and the plugin mutates it. Every shell the agent starts gets `AKM_PLUGIN_VERSION` and, when known, `AKM_BUNDLE_DIR` (from `AKM_BUNDLE_DIR` or `akm info`, asked once and cached). Verified against the 2.0.26 binary: a model-issued `shell` call sees the variables. This also applies to terminals the host creates through the same path.
 
-Differences from V1 in general: V1 awaits some hooks synchronously; V2's helpers are asynchronous (pending count, bundle dir, negative feedback). `opencode run` hands the prompt to the hook as a JSON string literal; the plugin unwraps it exactly as V1 does so start-anchored signals still match. V2 has no equivalent of V1's bundle-missing warning in the hints, nor of V1's "AKM user feedback recorded" log line per message.
+Differences from V1 in general: V1 awaits some hooks synchronously; V2's helpers are asynchronous (pending count, bundle dir, negative feedback). `opencode run` hands the prompt to the hook as a JSON string literal; the plugin unwraps it exactly as V1 does so start-anchored signals still match. V2 has no equivalent of V1's bundle-missing warning, nor of V1's "AKM user feedback recorded" log line per message.
 
 ## Environment
 

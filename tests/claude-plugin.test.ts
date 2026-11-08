@@ -3445,7 +3445,7 @@ exit 0
       )
       const context = withQueue.payload.hookSpecificOutput.additionalContext as string
       expect(context).toContain("There are 2 pending AKM proposals.")
-      expect(context).toContain("only if the user's task involves proposals")
+      expect(context).toContain("Only if the user's task involves proposals")
       expect(context).toContain("needs the user's approval")
       expect(context).not.toContain("proposal accept")
       expect(context).not.toContain("proposal reject")
