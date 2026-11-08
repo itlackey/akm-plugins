@@ -575,6 +575,7 @@ if (verb === "info") {
         "task",
         "session",
         "fact",
+        "rule",
       ],
       searchModes: ["fts"],
       semanticSearch: { mode: "off", status: "disabled" },
