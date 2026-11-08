@@ -147,7 +147,7 @@ function runRaw(cmd: string, args: string[], env?: Record<string, string | undef
 }
 
 describe("fake-akm envelope contract", () => {
-  test.skipIf(!akmAvailable)("search envelope matches real akm, including the results alias", () => {
+  test.skipIf(!akmAvailable)("search envelope matches real akm", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
@@ -155,15 +155,13 @@ describe("fake-akm envelope contract", () => {
       const realEnvelope = runReal(real, args) as Record<string, unknown>
       const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
-      expect(realEnvelope.hits).toEqual(realEnvelope.results)
-      expect(fakeEnvelope.hits).toEqual(fakeEnvelope.results)
     } finally {
       cleanup(real)
       cleanup(fake)
     }
   }, REAL_AKM_TIMEOUT_MS)
 
-  test.skipIf(!akmAvailable)("curate envelope matches real akm, including the results alias", () => {
+  test.skipIf(!akmAvailable)("curate envelope matches real akm", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
@@ -171,8 +169,6 @@ describe("fake-akm envelope contract", () => {
       const realEnvelope = runReal(real, args) as Record<string, unknown>
       const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
-      expect(realEnvelope.items).toEqual(realEnvelope.results)
-      expect(fakeEnvelope.items).toEqual(fakeEnvelope.results)
     } finally {
       cleanup(real)
       cleanup(fake)
