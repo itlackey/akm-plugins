@@ -369,7 +369,7 @@ function emitText(hits) {
 }
 
 function emitSearchJson(hits) {
-  process.stdout.write(JSON.stringify({ hits, searchMode: "keyword", results: hits }))
+  process.stdout.write(JSON.stringify({ hits, searchMode: "keyword" }))
 }
 
 function emitCurateJson(query, hits) {
@@ -377,7 +377,6 @@ function emitCurateJson(query, hits) {
     ...hit,
     source: "local",
     followUp: "akm show " + hit.ref,
-    reason: 'Fake lexical match for "' + query + '".',
   }))
   process.stdout.write(
     JSON.stringify({
@@ -389,7 +388,6 @@ function emitCurateJson(query, hits) {
         (items.length > 0 ? ": " + items.map((item) => item.ref).join(", ") + "." : "."),
       items,
       searchMode: "keyword",
-      results: items,
     }),
   )
 }
@@ -599,7 +597,7 @@ if (verb === "config") {
 // envelope exercises the parse path without inventing fixture state.
 if (verb === "workflow" && tail[0] === "list") {
   const runs = []
-  process.stdout.write(JSON.stringify({ ok: true, runs, shape: "workflow-list", schemaVersion: 1, results: runs }))
+  process.stdout.write(JSON.stringify({ ok: true, runs, shape: "workflow-list", schemaVersion: 1 }))
   process.exit(0)
 }
 
@@ -608,7 +606,7 @@ if (verb === "workflow" && tail[0] === "list") {
 // surface a pending-proposal count in the session-start header.
 if (verb === "proposal" && tail[0] === "list") {
   const proposals = []
-  process.stdout.write(JSON.stringify({ totalCount: 0, proposals, results: proposals }))
+  process.stdout.write(JSON.stringify({ totalCount: 0, proposals }))
   process.exit(0)
 }
 
