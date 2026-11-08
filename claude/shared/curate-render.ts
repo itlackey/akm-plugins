@@ -47,6 +47,7 @@ const AUTHORED_ASSET_TYPES = new Set([
   "command",
   "agent",
   "instruction",
+  "rule",
   "fact",
   "workflow",
   "task",
@@ -56,6 +57,26 @@ const AUTHORED_ASSET_TYPES = new Set([
 
 function isAuthoredType(type: unknown): boolean {
   return typeof type === "string" && AUTHORED_ASSET_TYPES.has(type)
+}
+
+/**
+ * What to ask `akm curate` for so that `limit` ordinary hits survive dropping the rules. Rules lead
+ * an untyped curate, capped at half the page, so a page of twice the limit always keeps `limit` of
+ * the rest; `ordinaryCuratedItems` slices back to `limit`.
+ */
+export function curatePageSize(limit: number): number {
+  return limit * 2
+}
+
+/**
+ * The first `limit` hits that are not rules, in akm's order. The session bootstrap already put the
+ * rules in context, and the lead akm gives them in curate would repeat them on every prompt.
+ */
+export function ordinaryCuratedItems(rawItems: unknown, limit: number): CuratedItem[] {
+  if (!Array.isArray(rawItems)) return []
+  return rawItems
+    .filter((item): item is CuratedItem => !!item && typeof item === "object" && (item as CuratedItem).type !== "rule")
+    .slice(0, limit)
 }
 
 /**
@@ -85,6 +106,15 @@ export function filterAndRankCuratedItems(rawItems: unknown, minScore: number): 
       return rankDiff !== 0 ? rankDiff : a.index - b.index
     })
     .map(({ item }) => item)
+}
+
+/**
+ * What an automatic curate shows: `limit` ordinary hits, put through the relevance floor and the
+ * authored-first ranking only when a floor is set.
+ */
+export function curatedItemsToShow(rawItems: unknown, limit: number, minScore: number): CuratedItem[] {
+  const items = ordinaryCuratedItems(rawItems, limit)
+  return minScore > 0 ? filterAndRankCuratedItems(items, minScore) : items
 }
 
 /**

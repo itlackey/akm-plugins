@@ -621,3 +621,67 @@ describe("format-guidance gate search selects by the project's sources", () => {
     }
   }, REAL_AKM_TIMEOUT_MS)
 })
+
+// #154: the rules listing, the usage list and the rule read the session bootstrap makes (akm#1512).
+// A real akm that does not have them yet (`--by-usage` unknown) skips this until the pin moves past it.
+const supportsProjectRules =
+  akmAvailable && spawnSync(process.execPath, [REAL_AKM, "search", "--help"]).stdout.includes("--by-usage")
+
+describe("session bootstrap calls match the project-rules contract", () => {
+  test.skipIf(!supportsProjectRules)("rules listing, usage list and rule read have the real envelopes, with and without a project", () => {
+    const real = makeRealEnv()
+    const projectDir = path.join(real.root, "work", "acme")
+    const elsewhere = path.join(real.root, "elsewhere")
+    const rulesBody = (extra: string) => `---\ndescription: a rule\n${extra}---\n- keep it small\n`
+    const assets: FakeAkmAsset[] = [
+      { ref: "rules/shared", type: "rule", name: "shared", description: "a rule", keywords: [], body: rulesBody("") },
+      { ref: "skills/deploy", type: "skill", name: "deploy", description: "deploy it", keywords: [] },
+    ]
+    const fake = installFakeAkm({ binDir: path.join(real.root, "fakebin"), callLog: path.join(real.root, "fake.log"), assets, projects: { acme: { paths: [projectDir] } } })
+    try {
+      for (const dir of [projectDir, elsewhere]) mkdirSync(dir, { recursive: true })
+      mkdirSync(path.join(real.AKM_BUNDLE_DIR, "rules"), { recursive: true })
+      mkdirSync(path.join(real.AKM_BUNDLE_DIR, "skills", "deploy"), { recursive: true })
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "rules", "shared.md"), rulesBody(""))
+      writeFileSync(path.join(real.AKM_BUNDLE_DIR, "skills", "deploy", "SKILL.md"), "---\nname: deploy\ndescription: deploy it\n---\nsteps\n")
+      const env = realAkmEnv(real)
+      const run = (cwd: string, args: string[]) => {
+        const result = Bun.spawnSync([process.execPath, REAL_AKM, ...args], { env, cwd, stdout: "pipe", stderr: "pipe" })
+        if (result.exitCode !== 0) throw new Error(`akm ${args.join(" ")} exited ${result.exitCode}: ${result.stderr.toString()}`)
+        return result.stdout.toString()
+      }
+      run(real.root, ["config", "set", "projects", JSON.stringify({ acme: { paths: [projectDir] } }), "-q"])
+      run(real.root, ["index", "-q"])
+      const fakeRun = (cwd: string, args: string[]) => {
+        const result = Bun.spawnSync([fake.akmPath, ...args], { cwd, stdout: "pipe", stderr: "pipe" })
+        return result.stdout.toString()
+      }
+      const rules = ["search", "", "--type", "rule", "--limit", "200", "--detail", "normal", "--format", "json", "-q"]
+      const usage = ["search", "--by-usage", "--limit", "10", "--detail", "normal", "--format", "json", "-q"]
+      const noProject = ["--project", "none"]
+      // One shown skill in the project, so the usage list has a hit to shape.
+      run(projectDir, ["show", "skills/deploy", "--format", "json", "-q"])
+      fakeRun(projectDir, ["show", "skills/deploy", "--format", "json", "-q"])
+
+      for (const [cwd, extra] of [[projectDir, []], [elsewhere, noProject]] as Array<[string, string[]]>) {
+        for (const args of [rules, usage]) {
+          const realOut = JSON.parse(run(cwd, [...args, ...extra])) as { hits: Array<Record<string, unknown>>; project?: unknown }
+          const fakeOut = JSON.parse(fakeRun(cwd, [...args, ...extra])) as { hits: Array<Record<string, unknown>>; project?: unknown }
+          expect(envelopeShape(fakeOut)).toEqual(envelopeShape(realOut))
+          expect(fakeOut.hits.map((hit) => hit.ref)).toEqual(realOut.hits.map((hit) => hit.ref))
+          // The fields the bootstrap reads.
+          for (const hit of [...realOut.hits, ...fakeOut.hits]) expect(typeof hit.ref).toBe("string")
+          for (const hit of [...realOut.hits, ...fakeOut.hits]) expect(typeof hit.description).toBe("string")
+        }
+      }
+      // A rule read answers its full file as `content`.
+      const realShow = JSON.parse(run(projectDir, ["show", "rules/shared", "--format", "json", "-q"])) as { content: string }
+      const fakeShow = JSON.parse(fakeRun(projectDir, ["show", "rules/shared", "--format", "json", "-q"])) as { content: string }
+      expect(fakeShow.content).toBe(realShow.content)
+      // `config get defaultBundle` is a bare JSON string.
+      expect(typeof JSON.parse(run(real.root, ["config", "get", "defaultBundle", "-q"]))).toBe("string")
+    } finally {
+      cleanup(real)
+    }
+  }, REAL_AKM_TIMEOUT_MS)
+})

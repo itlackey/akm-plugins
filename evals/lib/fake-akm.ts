@@ -35,6 +35,11 @@ export type FakeAkmAsset = {
   name: string
   description: string
   keywords: string[]
+  // The file's text, frontmatter included: what `akm show --format json` answers as `content`.
+  body?: string
+  // The `project` frontmatter key. A rule applies to the project of that name, or to every
+  // project and to none when it has no `project`.
+  project?: string
 }
 
 export type FakeAkmConfig = {
@@ -47,6 +52,12 @@ export type FakeAkmConfig = {
   assets: FakeAkmAsset[] | { stashDir: string }
   // Optional: how many results `curate` returns by default. Hook overrides via --limit.
   defaultLimit?: number
+  // Configured projects (akm's `projects` config): a call in (a directory under) one of `paths`,
+  // or with `--project <name>`, runs under that project; otherwise under none.
+  projects?: Record<string, { paths: string[] }>
+  // `akm show` events recorded before the test starts. Only source "user" (the default) counts
+  // for `search --by-usage`.
+  usage?: Array<{ ref: string; project?: string; source?: string }>
 }
 
 export type LoadedFakeAkm = {
@@ -106,6 +117,8 @@ function fileToAsset(filePath: string, type: string, conceptId: string, name: st
     name,
     description,
     keywords,
+    body,
+    ...(typeof fm.project === "string" ? { project: fm.project } : {}),
   }
 }
 
@@ -140,6 +153,7 @@ export function loadFixtureStash(stashDir: string): FakeAkmAsset[] {
     { dir: "agents", type: "agent", layout: "file" },
     { dir: "knowledge", type: "knowledge", layout: "file" },
     { dir: "instructions", type: "instruction", layout: "file" },
+    { dir: "rules", type: "rule", layout: "file" },
     { dir: "facts", type: "fact", layout: "file" },
     { dir: "memories", type: "memory", layout: "file" },
     { dir: "lessons", type: "lesson", layout: "file" },
@@ -204,6 +218,8 @@ export function installFakeAkm(config: FakeAkmConfig): LoadedFakeAkm {
         callLog: config.callLog,
         bundleDir,
         assets,
+        projects: config.projects ?? {},
+        usage: config.usage ?? [],
       },
       null,
       2,
@@ -288,7 +304,7 @@ export function readStdinForCall(callLog: string, callId: string): string | null
 // truncation or stripping that earlier versions of this framework would
 // silently miss.
 const RANK_HELPER_JS = `#!/usr/bin/env node
-import { readFileSync, appendFileSync, mkdirSync, existsSync, writeFileSync } from "node:fs"
+import { readFileSync, appendFileSync, mkdirSync, existsSync, writeFileSync, realpathSync } from "node:fs"
 import path from "node:path"
 
 const indexPath = process.argv[2]
@@ -332,7 +348,7 @@ function tokens(s) {
 function rank(query, limit) {
   const q = new Set(tokens(query))
   if (q.size === 0) return []
-  const scored = idx.assets.map((a) => {
+  const scored = idx.assets.filter((a) => a.type !== "rule").map((a) => {
     const haystack = new Set([...tokens(a.description), ...a.keywords.flatMap(tokens), ...tokens(a.name)])
     let score = 0
     let matched = 0
@@ -368,11 +384,11 @@ function emitText(hits) {
   }
 }
 
-function emitSearchJson(hits) {
-  process.stdout.write(JSON.stringify({ hits, searchMode: "keyword" }))
+function emitSearchJson(hits, project) {
+  process.stdout.write(JSON.stringify({ hits, searchMode: "keyword", ...(project ? { project } : {}) }))
 }
 
-function emitCurateJson(query, hits) {
+function emitCurateJson(query, hits, project) {
   const items = hits.map((hit) => ({
     ...hit,
     source: "local",
@@ -388,6 +404,7 @@ function emitCurateJson(query, hits) {
         (items.length > 0 ? ": " + items.map((item) => item.ref).join(", ") + "." : "."),
       items,
       searchMode: "keyword",
+      ...(project ? { project } : {}),
     }),
   )
 }
@@ -416,12 +433,89 @@ function nonFlagArgs() {
   return out
 }
 
+// --- projects, rules and usage ----------------------------------------------
+// Mirrors akm's project-rules contract: a call runs under the project \`--project\` names
+// (\`none\`: no project), else the one whose configured path contains the working directory,
+// else none, and a response says which in a top-level \`project\`. An unknown \`--project\` name
+// is accepted here (real akm rejects it). A rule applies when it names that project or no project;
+// untyped search and curate lead with the applicable rules, at most half the page.
+// \`search --by-usage\` lists the eligible assets shown by a user, most shown first.
+function flagValue(name) {
+  const i = argv.indexOf(name)
+  return i >= 0 ? argv[i + 1] : undefined
+}
+function realPath(p) {
+  try {
+    return realpathSync(p)
+  } catch {
+    return p
+  }
+}
+function resolveProject() {
+  const flag = flagValue("--project")
+  if (flag === "none") return undefined
+  if (flag !== undefined) return { name: flag }
+  const cwd = realPath(process.cwd())
+  let best
+  for (const [name, project] of Object.entries(idx.projects || {})) {
+    for (const configured of project.paths || []) {
+      const root = realPath(configured)
+      if (cwd !== root && !cwd.startsWith(root.endsWith("/") ? root : root + "/")) continue
+      if (!best || root.length > best.length) best = { name, path: configured, length: root.length }
+    }
+  }
+  return best ? { name: best.name, path: best.path } : undefined
+}
+function applicableRules(project) {
+  return idx.assets
+    .filter((a) => a.type === "rule" && (a.project === undefined || (project && a.project === project.name)))
+    .sort((a, b) => a.ref.localeCompare(b.ref))
+}
+function toHit(a) {
+  return { ref: a.ref, type: a.type, name: a.name, description: a.description, score: 1 }
+}
+const usageStore = path.join(path.dirname(idx.callLog), "akm-usage-events.json")
+function usageEvents() {
+  let recorded = []
+  try {
+    recorded = JSON.parse(readFileSync(usageStore, "utf8"))
+  } catch {}
+  return (idx.usage || []).concat(recorded)
+}
+function usageList(project, limit) {
+  const counts = new Map()
+  for (const event of usageEvents()) {
+    if ((event.source || "user") !== "user") continue
+    if (project && event.project !== project.name) continue
+    const asset = idx.assets.find((a) => a.ref === event.ref)
+    if (!asset || asset.type === "rule") continue
+    if (project && asset.project !== undefined && asset.project !== project.name) continue
+    counts.set(asset.ref, (counts.get(asset.ref) || 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([ref]) => toHit(idx.assets.find((a) => a.ref === ref)))
+}
+
+if (verb === "search" && (argv.includes("--by-usage") || flagValue("--type") === "rule")) {
+  const project = resolveProject()
+  const limit = getLimit()
+  const hits = argv.includes("--by-usage") ? usageList(project, limit) : applicableRules(project).slice(0, limit).map(toHit)
+  process.stdout.write(JSON.stringify({ hits, searchMode: "keyword", ...(project ? { project } : {}) }))
+  process.exit(0)
+}
+
 if (verb === "curate" || verb === "search") {
   const query = nonFlagArgs().join(" ")
-  const hits = rank(query, getLimit())
+  const project = resolveProject()
+  const limit = getLimit()
+  const typed = flagValue("--type")
+  const lead = (typed === undefined || typed === "any" ? applicableRules(project) : []).slice(0, Math.ceil(limit / 2)).map(toHit)
+  const hits = lead.concat(rank(query, limit - lead.length))
   if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
-    if (verb === "curate") emitCurateJson(query, hits)
-    else emitSearchJson(hits)
+    if (verb === "curate") emitCurateJson(query, hits, project)
+    else emitSearchJson(hits, project)
   } else {
     emitText(hits)
   }
@@ -690,8 +784,31 @@ if (verb === "show") {
     process.stderr.write(JSON.stringify({ ok: false, error: "Stash asset not found for ref: " + wanted, code: "ASSET_NOT_FOUND" }) + "\\n")
     process.exit(1)
   }
+  // A show by a user is demand: it is recorded with the project it ran under. The plugins' own
+  // reads run with AKM_EVENT_SOURCE=unknown (or audit), which is not.
+  const eventSource = process.env.AKM_EVENT_SOURCE || "user"
+  if (eventSource !== "unknown" && eventSource !== "audit") {
+    const project = resolveProject()
+    let recorded = []
+    try {
+      recorded = JSON.parse(readFileSync(usageStore, "utf8"))
+    } catch {}
+    recorded.push({ ref: asset.ref, source: eventSource, ...(project ? { project: project.name } : {}) })
+    try {
+      writeFileSync(usageStore, JSON.stringify(recorded))
+    } catch {}
+  }
   if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
-    process.stdout.write(JSON.stringify({ type: asset.type, name: asset.name, ref: asset.ref, origin: "bundle", description: asset.description }))
+    process.stdout.write(
+      JSON.stringify({
+        type: asset.type,
+        name: asset.name,
+        ref: asset.ref,
+        origin: "bundle",
+        description: asset.description,
+        ...(asset.body !== undefined ? { content: asset.body } : {}),
+      }),
+    )
   }
   process.exit(0)
 }

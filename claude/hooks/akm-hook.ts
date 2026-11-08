@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs"
+import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
@@ -15,7 +15,7 @@ import {
   createRetrospectiveNegativeRegex,
   shouldSubmitAutomaticFeedback,
 } from "../shared/feedback-signals"
-import { filterAndRankCuratedItems, renderCuratedItems } from "../shared/curate-render"
+import { curatePageSize, curatedItemsToShow, renderCuratedItems } from "../shared/curate-render"
 import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import {
   appendCapturedLearningSignal,
@@ -28,6 +28,7 @@ import {
   type ProposalCandidate,
 } from "../shared/learning-signals"
 import { isNonTaskPrompt, shouldRecall, stripLeadingEnvelopes } from "../shared/recall-policy"
+import { DUPLICATE_WINDOW_MS, loadSessionBootstrap } from "../shared/session-bootstrap"
 import { redactSecrets } from "../shared/redaction"
 import { extractAllRefs, extractRefsFromAkmOutput, validateRefCandidates } from "../shared/ref-extraction"
 import { RUN_TIMED_OUT, runPlan } from "../shared/spawn-plan"
@@ -93,14 +94,12 @@ const CURATE_LIMIT = Number(process.env.AKM_CURATE_LIMIT ?? pluginOption("CURATE
 const CURATE_TIMEOUT = Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8
 // #110 — unset by default (0 disables the check entirely, matching every
 // other CURATE_* tunable's "0 means off" convention). akm curate has always
-// returned CURATE_LIMIT results whether or not any of them scored well, and
-// `--format text` (the default curate call) never printed a score, so there
-// was no signal to filter on. When this is a positive number, both curate
-// call sites switch from `--format text` to `--format json`, drop items
-// scoring below it, and — since that response already carries per-item
-// `type` too — rank authored assets (lesson/memory/knowledge/skill/...)
-// ahead of imported website/wiki snapshots. If nothing survives the floor,
-// no curated block is written at all, same as a query with no signal.
+// returned CURATE_LIMIT results whether or not any of them scored well. When
+// this is a positive number, items scoring below it are dropped and — since
+// each item carries its `type` — authored assets (lesson/memory/knowledge/
+// skill/...) rank ahead of imported website/wiki snapshots. If nothing
+// survives the floor, no curated block is written at all, same as a query
+// with no signal.
 const CURATE_MIN_SCORE = Number(process.env.AKM_CURATE_MIN_SCORE ?? "0") || 0
 // #110 — passthrough for `akm curate --type`, unset by default. Lets a user
 // narrow curation to their own authored types (e.g. `lesson,memory` is not
@@ -692,7 +691,7 @@ function akmRun(args: string[], input?: string, options?: { timeoutMs?: number }
  * had `timeout(1)` — so SessionStart's three parallel calls were unbounded
  * everywhere.
  */
-async function akmRunAsync(args: string[], input?: string): Promise<string> {
+async function akmRunAsync(args: string[], input?: string, env?: Record<string, string>): Promise<string> {
   const akm = resolveAkmCommandSpec()
   if (!akm) return ""
   const fullArgs = [...akm.argsPrefix, ...args]
@@ -703,6 +702,7 @@ async function akmRunAsync(args: string[], input?: string): Promise<string> {
       stdout: "pipe",
       stderr: "pipe",
       cwd: akmCwd,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
       timeout: plan.timeoutMs,
       windowsHide: true,
     })
@@ -1647,30 +1647,26 @@ function captureRetrospectiveFeedback(text: string, sid: string) {
 }
 
 // #110 — shared argv-building for both curate call sites (curatePrompt,
-// sessionStart): appends `--type` when AKM_CURATE_TYPE is set, and requests
-// `--format json` instead of the long-standing `--format text` only when the
-// AKM_CURATE_MIN_SCORE floor is enabled for this call, since that is the
-// only situation the per-item `score`/`type` fields (renderCuratedJson
-// below) are needed for. With the floor disabled this produces the exact
-// argv curatePrompt() has always sent, so that (default, tested) path is
-// unchanged.
+// sessionStart): appends `--type` when AKM_CURATE_TYPE is set. It always asks
+// for `--format json`, so renderCuratedJson can drop the rules akm now leads an
+// untyped curate with (the session bootstrap already carries them), and asks for
+// a page twice the limit so that `limit` ordinary hits are left after the drop.
 function buildCurateArgs(query: string, limit: number): string[] {
-  const args = ["curate", query, "--limit", String(limit), "--detail", "agent", "-q"]
+  const args = ["curate", query, "--limit", String(curatePageSize(limit)), "--detail", "agent", "-q"]
   if (CURATE_TYPE) args.push("--type", CURATE_TYPE)
-  args.push("--format", CURATE_MIN_SCORE > 0 ? "json" : "text")
+  args.push("--format", "json")
   return args
 }
 
-// #110 — the AKM_CURATE_MIN_SCORE-enabled path: decode a `--format json`
-// curate response, apply the relevance floor + authored-type-first ranking
-// (claude/shared/curate-render.ts), and render what survives back into the
-// same kind of plain text `--format text` would have produced. Returns ""
-// both when nothing survives the floor (by design — no curated block at all)
-// and when the response fails to parse (fails closed, same as every other
-// akm response this hook reads).
+// Decode a `--format json` curate response, keep CURATE_LIMIT ordinary hits (no
+// rules), apply the AKM_CURATE_MIN_SCORE relevance floor and authored-type-first
+// ranking (claude/shared/curate-render.ts) when a floor is set, and render what
+// survives as plain text. Returns "" both when nothing survives (by design — no
+// curated block at all) and when the response fails to parse (fails closed, same
+// as every other akm response this hook reads).
 function renderCuratedJson(raw: string, query: string): string {
   const parsed = safeJsonParse<{ items?: unknown }>(raw.trim())
-  const items = filterAndRankCuratedItems(parsed?.items, CURATE_MIN_SCORE)
+  const items = curatedItemsToShow(parsed?.items, CURATE_LIMIT, CURATE_MIN_SCORE)
   return items.length > 0 ? renderCuratedItems(query, items) : ""
 }
 
@@ -1723,7 +1719,7 @@ function curatePrompt(): string {
     return ""
   }
   const curatedRaw = akmRun(buildCurateArgs(text, CURATE_LIMIT))
-  const curated = CURATE_MIN_SCORE > 0 ? renderCuratedJson(curatedRaw, text) : curatedRaw
+  const curated = renderCuratedJson(curatedRaw, text)
   writeMemoryEvent({
     event: "prompt_recall",
     sessionId: sid || undefined,
@@ -1763,9 +1759,47 @@ function curatePrompt(): string {
     return emitHookContext("UserPromptSubmit", `${tagged}\n\n${CURATED_CONTEXT_TAIL}`)
 }
 
+const BOOTSTRAP_DIR = path.join(STATE_DIR, "bootstrap")
+
+/**
+ * Does this SessionStart load the rules and most-used list? Yes for a fresh start, a clear and a
+ * compaction (the new context holds none of it); no for a resume (the transcript still has it) and
+ * for a duplicate callback of an event already loaded. `source` is the host's own field: Claude
+ * Code sends startup|resume|clear|compact, Codex what it supports; a missing one is a start.
+ *
+ * Duplicate callbacks run as separate processes at the same moment, so the claim is a marker file
+ * created exclusively (one wins), not a read-then-write.
+ */
+function bootstrapDue(sid: string, source: string): boolean {
+  if (source === "resume") return false
+  if (!sid) return true
+  const marker = path.join(BOOTSTRAP_DIR, `${sid}.${source || "startup"}`)
+  try {
+    mkdirSync(BOOTSTRAP_DIR, { recursive: true })
+    const now = Date.now()
+    for (const name of readdirSync(BOOTSTRAP_DIR)) {
+      try {
+        if (now - statSync(path.join(BOOTSTRAP_DIR, name)).mtimeMs > 60 * 60 * 1000) rmSync(path.join(BOOTSTRAP_DIR, name), { force: true })
+      } catch {}
+    }
+    try {
+      writeFileSync(marker, "", { flag: "wx", mode: 0o600 })
+      return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return true
+      if (now - statSync(marker).mtimeMs < DUPLICATE_WINDOW_MS) return false
+      writeFileSync(marker, "", { mode: 0o600 })
+      return true
+    }
+  } catch {
+    return true
+  }
+}
+
 async function sessionStart(): Promise<string> {
   const rawInput = readStdin()
   const sid = extractSessionId(rawInput)
+  const startSource = safeJsonParse<{ source?: unknown }>(rawInput)?.source
   const versionCheck = checkAkmVersion()
   if (!versionCheck.ok) {
     // checkAkmVersion() already logged the mismatch to the plugin state dir
@@ -1847,12 +1881,14 @@ async function sessionStart(): Promise<string> {
   // empty context is a leg that cannot succeed — skip it for the same reason a
   // disabled leg is skipped, rather than logging an akm_failed per session.
   const cwdContext = gatherCwdContext()
+  // The rules and most-used list load on their own, whatever AKM_AUTO_CURATE says.
+  const bootstrapWanted = bootstrapDue(sid, typeof startSource === "string" ? startSource : "")
   const [curatedRaw, pendingRaw, activeWorkflowRaw] = await Promise.all([
     AUTO_CURATE && cwdContext ? akmRunAsync(buildCurateArgs(cwdContext, CURATE_LIMIT)) : Promise.resolve(""),
     akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
     akmRunAsync(["--format", "json", "-q", "workflow", "list", "--active"]),
   ])
-  const curatedTrimmed = (CURATE_MIN_SCORE > 0 ? renderCuratedJson(curatedRaw, cwdContext) : curatedRaw).trim()
+  const curatedTrimmed = renderCuratedJson(curatedRaw, cwdContext).trim()
   let curatedFile = ""
   if (curatedTrimmed) {
     curatedFile = path.join(CURATED_DIR, `session-${sid || "unknown"}.md`)
@@ -1901,6 +1937,12 @@ async function sessionStart(): Promise<string> {
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (workflowSummary) body = `${body}\n\n${workflowSummary}`
+  if (bootstrapWanted) {
+    const bootstrap = await loadSessionBootstrap((args, env) => akmRunAsync(args, undefined, env), {
+      budgetChars: CONTEXT_BUDGET_CHARS - body.length - 2,
+    })
+    if (bootstrap) body = `${body}\n\n${bootstrap}`
+  }
     // Same reasoning as the UserPromptSubmit path: inject the curation, do not
     // point at it. The file remains the untruncated copy; emitHookContext trims
     // what actually enters context to AKM_CONTEXT_BUDGET_CHARS.

@@ -10,11 +10,13 @@
 //     time (recallWaitMs); a slower curation keeps running and lands on the
 //     NEXT request instead of stalling this one.
 //   - `session.context` hook  -> contextText(): the recalled block, framed as
-//     DATA with its provenance banner, plus the standing AKM rules, within the
-//     context budget. Pushed on EVERY request (the host rebuilds `system` each
-//     time), so it survives compaction.
-//   - event stream            -> onEvent(): session lifecycle; the extraction
-//     checkpoint and state cleanup.
+//     DATA with its provenance banner, plus the project's rules and most-used
+//     assets and the standing AKM guidance, within the context budget. Pushed on
+//     EVERY request (the host rebuilds `system` each time), so it survives
+//     compaction; the rules and list are loaded from akm when the session
+//     starts and again when a compaction ends.
+//   - event stream            -> onEvent(): session lifecycle; the compaction
+//     reload, the extraction checkpoint and state cleanup.
 //   - `tool.execute.before`   -> onToolBefore(): the write gate.
 //   - `tool.execute.after`    -> onToolResult(): touched refs for auto-feedback.
 //   - `session.prompt` also feeds auto-feedback and learning proposals.
@@ -22,7 +24,9 @@
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractRefsFromAkmOutput } from "../claude/shared/ref-extraction"
+import { loadSessionBootstrap } from "../claude/shared/session-bootstrap"
 import { createBundleDirResolver } from "../opencode-shared/bundle"
+import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
 import { type EventWriter, writeOpencodeEvent } from "../opencode-shared/events"
 import {
   type NegativeFeedback,
@@ -58,6 +62,7 @@ import {
   RECALLED_CONTENT_PROVENANCE,
   applyContextBudget,
   autoMemoryEnabled,
+  bootstrapBudgetChars,
   extractMinIntervalMs,
   formatWorkflowContext,
   gatherCwdContext,
@@ -181,6 +186,21 @@ export function createCore(options: CoreOptions) {
     },
     formatError,
   })
+  // The project's rules and most-used assets: loaded when a session starts and when a compaction
+  // ends, held per session, and sent with every request. Independent of AKM_AUTO_CURATE.
+  const bootstrap = createSessionBootstrap(async (sessionID) => {
+    const command = resolveCommand()
+    if (isCliError(command)) return ""
+    return loadSessionBootstrap(
+      async (args, env) => {
+        const result = await runAkm(command, args, { timeoutMs: CURATE_TIMEOUT_MS(), cwd: options.directory, env, packageName: PACKAGE_NAME })
+        if (result.ok) return result.stdout
+        log("warn", "AKM session bootstrap lookup failed", { operation: "session-bootstrap", sessionID, args, error: result.error })
+        return ""
+      },
+      { project: await projectFor(sessionID), budgetChars: bootstrapBudgetChars() },
+    )
+  })
   const gateHost: GateHost = {
     log,
     writeEvent,
@@ -249,6 +269,7 @@ export function createCore(options: CoreOptions) {
     clearGateSession(sessionID)
     tracker.clear(sessionID)
     pendingProposals.invalidate(sessionID)
+    bootstrap.clear(sessionID)
     if (!existing) return
     for (const controller of existing.controllers) controller.abort()
     existing.controllers.clear()
@@ -424,7 +445,12 @@ export function createCore(options: CoreOptions) {
     try {
       if (disposed) return ""
       const st = sessions.get(sessionID)
+      // A session the plugin first sees here (a resumed one) is loaded now; a compaction's reload
+      // finishes before this request goes out.
+      await bootstrap.ensure(sessionID)
       const blocks = [
+        // The rules lead: they are the standing guidance, and the budget cuts from the end.
+        await bootstrap.text(sessionID),
         st?.curated ? `${RECALLED_CONTENT_PROVENANCE}${st.curated}${AKM_CURATED_TAIL}` : "",
         AKM_HINTS_PREFIX,
         st?.workflow ? formatWorkflowContext(st.workflow) : "",
@@ -440,6 +466,7 @@ export function createCore(options: CoreOptions) {
 
   async function onSessionCreated(sessionID: string): Promise<void> {
     const st = state(sessionID)
+    const bootstrapped = bootstrap.ensure(sessionID)
     const cwdContext = gatherCwdContext(options.directory)
     const [curated, workflowRaw] = await Promise.all([
       AUTO_CURATE() && cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
@@ -448,6 +475,7 @@ export function createCore(options: CoreOptions) {
     if (disposed || sessions.get(sessionID) !== st) return
     if (curated && !st.curated) st.curated = curated
     st.workflow = (workflowRaw && summarizeActiveWorkflows(workflowRaw)) || undefined
+    await bootstrapped
   }
 
   /** Min-interval-gated, fire-and-forget extraction of a native session into the proposal queue. */
@@ -580,6 +608,9 @@ export function createCore(options: CoreOptions) {
         case "session.created":
           if (typeof data.parentID === "string") childSessions.add(sessionID)
           else await onSessionCreated(sessionID)
+          break
+        case "session.compaction.ended":
+          await bootstrap.compacted(sessionID)
           break
         case "session.execution.succeeded":
           // A turn finished: the V2 analogue of V1's per-turn `session.idle`.
