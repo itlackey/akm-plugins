@@ -26,9 +26,10 @@ import { type EventWriter, buildEventScope, opencodeEventLog, opencodeStateDir }
 import { parseToolOutput, type SessionBufferEntry } from "./feedback"
 import { AKM_EXTRACT_OUTPUT_MAX_CHARS, truncateLogText, unrefChildStream } from "./recall"
 
+export { retiredLearningFlagNotice } from "../claude/shared/learning-signals"
+
 export type LearningLog = (level: "debug" | "info" | "warn" | "error", message: string, extra: Record<string, unknown>) => void
 
-const autoLearningEnabled = (): boolean => (process.env.AKM_AUTO_LEARNING ?? "1") !== "0"
 const autoSkillProposalsEnabled = (): boolean => (process.env.AKM_AUTO_SKILL_PROPOSALS ?? "1") !== "0"
 const proposalTimeoutMs = (): number => Math.max(1_000, Number(process.env.AKM_LEARNING_PROPOSAL_TIMEOUT_MS ?? "600000") || 600_000)
 
@@ -39,12 +40,14 @@ function learningProposalMinConfidence(): number {
 
 function parseLearningProposalEnvelope(raw: string): {
   ok?: boolean
+  skipped?: string
   ref?: string
   proposalId?: string
   error?: string
 } {
   const parsed = parseToolOutput(raw) as {
     ok?: unknown
+    skipped?: unknown
     ref?: unknown
     error?: unknown
     proposal?: { id?: unknown; ref?: unknown }
@@ -52,6 +55,7 @@ function parseLearningProposalEnvelope(raw: string): {
   if (!parsed || typeof parsed !== "object") return {}
   return {
     ...(typeof parsed.ok === "boolean" ? { ok: parsed.ok } : {}),
+    ...(typeof parsed.skipped === "string" ? { skipped: parsed.skipped } : {}),
     ...(typeof parsed.ref === "string"
       ? { ref: parsed.ref }
       : typeof parsed.proposal?.ref === "string"
@@ -78,7 +82,7 @@ export type LearningHost = {
 export function createLearning(host: LearningHost) {
   /** Fire-and-forget semantic authoring; AKM owns the proposal and its review. */
   async function submitLearningProposal(candidate: ProposalCandidate, directory: string | undefined): Promise<void> {
-    if (!autoLearningEnabled() || candidate.confidence < learningProposalMinConfidence()) return
+    if (candidate.confidence < learningProposalMinConfidence()) return
     const command = host.resolveCommand()
     if (isCliError(command)) {
       host.log("warn", "AKM learning proposal skipped", {
@@ -170,6 +174,7 @@ export function createLearning(host: LearningHost) {
           "--format",
           "json",
           "-q",
+          "--if-learning",
           "--timeout-ms",
           String(timeoutMs),
         ],
@@ -199,6 +204,12 @@ export function createLearning(host: LearningHost) {
         const envelope = stdoutEnvelope.ok === undefined && !stdoutEnvelope.error
           ? parseLearningProposalEnvelope(stderrBody)
           : stdoutEnvelope
+        // akm's learning switch is off: nothing was submitted, and nothing failed.
+        if (envelope.ok === true && envelope.skipped === "learning-off" && code === 0 && !signal) {
+          settled = true
+          removeLearningProposalJob(jobFile, taskFile)
+          return
+        }
         const failed = envelope.ok !== true || (typeof code === "number" && code !== 0) || !!signal
         if (failed) {
           finish("failed", {
@@ -228,7 +239,6 @@ export function createLearning(host: LearningHost) {
     project: string,
     directory: string | undefined,
   ): void {
-    if (!autoLearningEnabled()) return
     const stateDir = opencodeStateDir()
     const signal = captureLearningSignal({
       text,

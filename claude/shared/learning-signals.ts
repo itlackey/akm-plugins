@@ -715,3 +715,24 @@ export function removeLearningProposalJob(jobFile: string, taskFile: string): vo
     } catch {}
   }
 }
+
+const RETIRED_FLAG_OFF_VALUES = new Set(["0", "false", "off", "no"])
+
+/**
+ * `AKM_AUTO_MEMORY` and `AKM_AUTO_LEARNING` (and the Claude `auto_learning`
+ * option) are no longer read: learning follows akm's own switch. One line for
+ * session start when one of them is still set to an off value, because that
+ * opt-out has just stopped applying; "" when none is, or only on values are.
+ */
+export function retiredLearningFlagNotice(env: NodeJS.ProcessEnv = process.env): string {
+  const set = [
+    ["AKM_AUTO_MEMORY", env.AKM_AUTO_MEMORY, false],
+    ["AKM_AUTO_LEARNING", env.AKM_AUTO_LEARNING, false],
+    ["CLAUDE_PLUGIN_OPTION_AUTO_LEARNING", env.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING, true],
+  ].flatMap(([name, value, loose]) => {
+    const v = typeof value === "string" ? value.trim().toLowerCase() : ""
+    return (loose ? RETIRED_FLAG_OFF_VALUES.has(v) : v === "0") ? [name as string] : []
+  })
+  if (set.length === 0) return ""
+  return `${set.join(" and ")} ${set.length === 1 ? "is" : "are"} set to off, but the plugin no longer reads ${set.length === 1 ? "it" : "them"}: your opt-out is not applied and learning now follows akm's own setting. To turn learning off, run \`akm setup --learning off\`.`
+}

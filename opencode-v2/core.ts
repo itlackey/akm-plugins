@@ -45,7 +45,7 @@ import {
   observeFileIdentity,
   warnIfWriteGateInert,
 } from "../opencode-shared/write-gate"
-import { createLearning, createPendingProposals } from "../opencode-shared/learning"
+import { createLearning, createPendingProposals, retiredLearningFlagNotice } from "../opencode-shared/learning"
 import {
   type CliError,
   type ResolvedAkmCommand,
@@ -61,7 +61,6 @@ import {
   AKM_HINTS_PREFIX,
   RECALLED_CONTENT_PROVENANCE,
   applyContextBudget,
-  autoMemoryEnabled,
   bootstrapBudgetChars,
   curatedTextChars,
   extractMinIntervalMs,
@@ -467,6 +466,8 @@ export function createCore(options: CoreOptions) {
   }
 
   async function onSessionCreated(sessionID: string): Promise<void> {
+    const retired = retiredLearningFlagNotice()
+    if (retired) log("warn", retired, { subsystem: "learning", sessionID })
     const st = state(sessionID)
     void bootstrap.ensure(sessionID)
     const cwdContext = gatherCwdContext(options.directory)
@@ -481,7 +482,7 @@ export function createCore(options: CoreOptions) {
 
   /** Min-interval-gated, fire-and-forget extraction of a native session into the proposal queue. */
   function maybeExtract(sessionID: string): void {
-    if (disposed || !autoMemoryEnabled() || childSessions.has(sessionID)) return
+    if (disposed || childSessions.has(sessionID)) return
     const st = state(sessionID)
     const at = now()
     if (at - st.lastExtractAt < extractMinIntervalMs()) return

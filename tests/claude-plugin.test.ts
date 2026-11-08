@@ -119,7 +119,7 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
         // Unit tests opt out unless a case explicitly exercises proposal
         // submission; otherwise a test that inherits a real akm on PATH could
         // enqueue a proposal in the developer's actual bundle.
-        ...(options?.env?.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING === undefined ? { AKM_AUTO_LEARNING: "0" } : {}),
+        ...(options?.env?.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING === undefined ? { AKM_FAKE_LEARNING: "off" } : {}),
         ...options?.env,
       },
       (key) => key.startsWith("AKM_") || key.startsWith("XDG_") || key.startsWith("CLAUDE_PLUGIN_OPTION_") || key === "CLAUDE_PROJECT_DIR",
@@ -184,7 +184,8 @@ describe("Claude plugin metadata", () => {
     expect(plugin.hooks.TaskCompleted).toBeDefined()
     expect(plugin.hooks.PostCompact).toBeDefined()
     expect(plugin.hooks.SessionEnd).toBeDefined()
-    expect(plugin.userConfig.auto_learning.default).toBe(true)
+    expect(plugin.userConfig.auto_learning).toBeUndefined()
+    expect(plugin.userConfig.auto_feedback.default).toBe(true)
     expect(plugin.version).toBe(pkg.version)
     // plugin.json's version wins; a copy in the marketplace entry would only drift.
     expect(marketplace.plugins[0].version).toBeUndefined()
@@ -611,7 +612,6 @@ exit 0
       XDG_STATE_HOME: stateDir,
       AKM_AUTO_CURATE: "0",
       AKM_AUTO_FEEDBACK: "0",
-      AKM_AUTO_LEARNING: "1",
       AKM_AUTO_SKILL_PROPOSALS: "0",
     }
     const input = JSON.stringify({
@@ -630,6 +630,8 @@ exit 0
     expect(readFileSync(callLog, "utf8")).toMatch(
       /proposal new instruction use-pnpm-not-npm-repository-[a-f0-9]{8} --file /,
     )
+    // Every automatic `proposal new` asks akm to skip itself when learning is off.
+    expect(readFileSync(callLog, "utf8").split("\n").filter((line) => line.includes("proposal new")).every((line) => line.includes(" --if-learning"))).toBe(true)
     const task = readFileSync(taskCopy, "utf8")
     expect(task).toContain("untrusted evidence")
     expect(task).toContain("no, use pnpm not npm for this repository")
@@ -642,6 +644,51 @@ exit 0
       .split("\n")
       .filter((line) => line.includes("proposal new"))
     expect(proposalCalls).toHaveLength(1)
+  })
+
+  itPosix("a learning-off `skipped` answer from akm is a quiet no-op: not submitted, not failed", async () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    const stateDir = path.join(tempDir, "state")
+    const callLog = path.join(tempDir, "akm-calls.log")
+    mkdirSync(binDir, { recursive: true })
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(binDir, "akm"),
+      `#!/usr/bin/env sh
+printf '%s\\n' "$*" >> ${shellQuote(callLog)}
+printf '{"schemaVersion":2,"ok":true,"skipped":"learning-off"}\\n'
+exit 0
+`,
+    )
+    chmodSync(path.join(binDir, "akm"), 0o755)
+    const env = {
+      HOME: tempDir,
+      PATH: `${binDir}:/usr/bin:/bin`,
+      XDG_STATE_HOME: stateDir,
+      AKM_AUTO_CURATE: "0",
+      AKM_AUTO_FEEDBACK: "0",
+      AKM_AUTO_SKILL_PROPOSALS: "0",
+    }
+    const input = JSON.stringify({ session_id: "sess-skipped", cwd: "/tmp/acme-project", prompt: "no, use pnpm not npm for this repository" })
+
+    expect(runHook(["curate-prompt"], { input, env })).toBe("")
+    const calls = await waitFor(() => {
+      const text = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+      return text.includes("proposal new") ? text : undefined
+    })
+    expect(calls).toContain(" --if-learning")
+    // The detached worker has had time to record an outcome, if it were going to.
+    await Bun.sleep(500)
+    const ledger = readFileSync(path.join(stateDir, "akm-claude/learning-proposals.jsonl"), "utf8")
+    expect(ledger).not.toContain('"status":"submitted"')
+    expect(ledger).not.toContain('"status":"failed"')
+    const workerLog = path.join(stateDir, "akm-claude/learning-proposals.log")
+    const logged = existsSync(workerLog) ? readFileSync(workerLog, "utf8") : ""
+    expect(logged).not.toContain("\tsubmitted\t")
+    expect(logged).not.toContain("\tfailed\t")
+    // The jobs are cleaned up, and a session-start nag has nothing to count.
+    expect(existsSync(path.join(stateDir, "akm-claude/proposal-jobs")) ? readdirSync(path.join(stateDir, "akm-claude/proposal-jobs")).length : 0).toBe(0)
   })
 
   it("records successful system feedback and memory concept IDs for akm Bash calls", () => {
@@ -1217,7 +1264,6 @@ exit 0
           PATH: `${binDir}:/usr/bin:/bin`,
           XDG_STATE_HOME: stateDir,
           AKM_AUTO_CURATE: "0",
-          AKM_AUTO_LEARNING: "1",
           // Capture the signal, but never spawn a detached proposal worker.
           AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1",
         },
@@ -3181,41 +3227,29 @@ exit 0
         expect(runSessionEnd("1")).toContain("index_spawned")
       })
 
-      itPosix("auto_learning controls prompt capture, and an explicit env var still wins", () => {
-        function captured(option: string, explicitEnv?: string) {
-          const tempDir = makeTempDir()
-          const binDir = path.join(tempDir, "bin")
-          const stateDir = path.join(tempDir, "state")
-          const callLog = path.join(tempDir, "akm-calls.log")
-          mkdirSync(binDir, { recursive: true })
-          mkdirSync(stateDir, { recursive: true })
-          makeLoggingAkm(binDir, callLog)
-
-          runHook(["curate-prompt"], {
-            input: JSON.stringify({
-              session_id: "sess-option-learning",
-              cwd: "/tmp/option-learning",
-              prompt: "I prefer pnpm for package scripts",
-            }),
-            env: {
-              HOME: tempDir,
-              PATH: `${binDir}:/usr/bin:/bin`,
-              XDG_STATE_HOME: stateDir,
-              AKM_AUTO_CURATE: "0",
-              AKM_AUTO_FEEDBACK: "0",
-              AKM_AUTO_SKILL_PROPOSALS: "0",
-              AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1",
-              CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: option,
-              ...(explicitEnv === undefined ? {} : { AKM_AUTO_LEARNING: explicitEnv }),
-            },
-          })
-
-          return existsSync(path.join(stateDir, "akm-claude", "learning-signals.jsonl"))
+      itPosix("warns once at session start that a retired learning opt-out is no longer read", () => {
+        const contextOf = (env: Record<string, string>) => {
+          const { stdout } = runSessionStart(env)
+          return JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext as string
         }
+        const needle = "akm setup --learning off"
+        const count = (text: string) => text.split(needle).length - 1
 
-        expect(captured("false")).toBe(false)
-        expect(captured("true")).toBe(true)
-        expect(captured("false", "1")).toBe(true)
+        for (const off of [
+          { AKM_AUTO_MEMORY: "0" },
+          { AKM_AUTO_LEARNING: "0" },
+          { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "false" },
+        ]) {
+          const context = contextOf(off)
+          expect(count(context)).toBe(1)
+          expect(context).toContain("your opt-out is not applied")
+          expect(context).toContain(Object.keys(off)[0])
+        }
+        // Two of them set: still one line.
+        expect(count(contextOf({ AKM_AUTO_MEMORY: "0", AKM_AUTO_LEARNING: "0" }))).toBe(1)
+        // On values, and nothing set, add nothing.
+        expect(count(contextOf({ AKM_AUTO_MEMORY: "1", AKM_AUTO_LEARNING: "1", CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "true" }))).toBe(0)
+        expect(count(contextOf({}))).toBe(0)
       })
     })
 
@@ -3262,7 +3296,7 @@ exit 0
       expect(getFirstLogEntry(stateDir, "memory.log")).toContain("user\tintent")
     })
 
-    itPosix("AKM_AUTO_MEMORY=0 skips the SessionEnd extraction entirely", () => {
+    itPosix("SessionEnd extraction always spawns: the retired AKM_AUTO_MEMORY=0 no longer skips it", async () => {
       const tempDir = makeTempDir()
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
@@ -3270,20 +3304,20 @@ exit 0
       mkdirSync(binDir, { recursive: true })
       mkdirSync(stateDir, { recursive: true })
       makeLoggingAkm(binDir, callLog)
+      const transcriptPath = path.join(tempDir, "sess-always.jsonl")
+      writeFileSync(transcriptPath, '{"type":"user"}\n')
 
       expect(
         runHook(["extract-session"], {
-          input: JSON.stringify({ session_id: "sess-no-memory", reason: "other" }),
-          env: {
-            HOME: tempDir,
-            PATH: `${binDir}:/usr/bin:/bin`,
-            XDG_STATE_HOME: stateDir,
-            AKM_AUTO_MEMORY: "0",
-          },
+          input: JSON.stringify({ session_id: "sess-always", reason: "other", transcript_path: transcriptPath }),
+          env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir, AKM_AUTO_MEMORY: "0" },
         }),
       ).toBe("")
-      expect(existsSync(path.join(stateDir, "akm-claude/extract.log"))).toBe(false)
-      expect(existsSync(callLog)).toBe(false)
+      const calls = await waitFor(() => {
+        const text = existsSync(callLog) ? readFileSync(callLog, "utf8") : ""
+        return text.includes("proposal extract") ? text : undefined
+      })
+      expect(calls).toContain("proposal extract --type claude --session-id sess-always")
     })
 
     itPosix("treats any AKM_AUTO_FEEDBACK value other than 0 as enabled, matching OpenCode", () => {
@@ -3680,6 +3714,33 @@ exit 0
       )
 
       expect(payload.hookSpecificOutput.additionalContext).not.toContain("harvested nothing")
+      expect(payload.systemMessage).toBeUndefined()
+    })
+
+    itPosix("stays quiet for the learning-off extract no-op, warnings[] and all", () => {
+      // What akm answers to `proposal extract` while its learning switch is off:
+      // ok:true, nothing processed, nothing skipped, one explanatory warning.
+      // It is the user's own choice, so it must not nag at every session start.
+      const { payload } = runSessionStartWithExtractLog(
+        [
+          "2026-01-02T00:00:00Z\tproposal_extract\tsess-new",
+          JSON.stringify({
+            ok: true,
+            schemaVersion: 1,
+            shape: "extract-result",
+            sessionsProcessed: 0,
+            sessionsSkipped: 0,
+            candidatesCreated: 0,
+            proposals: [],
+            sessions: [],
+            warnings: ["extract is disabled by improve.strategies.<strategy>.processes.extract.enabled: false in your config"],
+          }),
+          "",
+        ].join("\n"),
+      )
+
+      expect(payload.hookSpecificOutput.additionalContext).not.toContain("harvested nothing")
+      expect(payload.hookSpecificOutput.additionalContext).not.toContain("extract is disabled")
       expect(payload.systemMessage).toBeUndefined()
     })
 

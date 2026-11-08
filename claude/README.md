@@ -79,7 +79,7 @@ At session start, and again after each compaction, the `SessionStart` hook puts 
 
 ### Automatic learning proposals
 
-The prompt hook uses a conservative local classifier as a fast first pass. Explicit `remember:` requests, durable preferences, guardrails, and corrections above the confidence floor are redacted, deduplicated per project, then sent to a detached proposal-authoring worker. The worker submits an `instruction` or `memory` through `akm proposal new`; it never edits `CLAUDE.md`, `AGENTS.md`, rules, commands, or project files. AKM's normal proposal commands own review, acceptance, rejection, and later improvement. Proposal authoring requires the AKM agent profile configured by `akm setup`; failures are retained in the proposal ledger and worker log.
+The prompt hook uses a conservative local classifier as a fast first pass. Explicit `remember:` requests, durable preferences, guardrails, and corrections above the confidence floor are redacted, deduplicated per project, then sent to a detached proposal-authoring worker. The worker submits an `instruction` or `memory` through `akm proposal new`; it never edits `CLAUDE.md`, `AGENTS.md`, rules, commands, or project files. AKM's normal proposal commands own review, acceptance, rejection, and later improvement. Proposal authoring requires the AKM agent profile configured by `akm setup`; failures are retained in the proposal ledger and worker log. Learning is controlled by AKM, not by the plugin: `akm setup --learning on|off`. `AKM_AUTO_MEMORY`, `AKM_AUTO_LEARNING` and the `auto_learning` option were removed; if one is still set to an off value, session start says it is no longer read.
 
 Positive feedback is retained as evidence and continues to drive feedback for recently used assets, but praise by itself does not create a content-free proposal. Separately, short task intents are compared within the project. A similar intent must occur in at least three distinct sessions before the plugin submits a cross-platform `skill` proposal. Exact and near-duplicate submissions are suppressed by the durable ledger under the plugin state directory.
 
@@ -183,7 +183,7 @@ Independently of any permission rule, the AKM skill instructs the agent to get e
 
 Every kill switch below is opt-out and reads the same way: only the literal `0` disables it. Any other value — including `false` — leaves the feature on.
 
-The most useful settings are also exposed in Claude Code's `/plugin` configuration dialog: **AKM bundle directory**, **Record feedback automatically**, **Propose durable learnings automatically**, **Curated results per prompt**, and **Refresh the AKM index when a session ends**. They are aliases for `AKM_BUNDLE_DIR`, `AKM_AUTO_FEEDBACK`, `AKM_AUTO_LEARNING`, `AKM_CURATE_LIMIT`, and `AKM_INDEX_ON_SESSION_END`. An environment variable you set yourself always wins over the dialog, so exporting one of these pins it regardless of what the UI shows.
+The most useful settings are also exposed in Claude Code's `/plugin` configuration dialog: **AKM bundle directory**, **Record feedback automatically**, **Curated results per prompt**, and **Refresh the AKM index when a session ends**. They are aliases for `AKM_BUNDLE_DIR`, `AKM_AUTO_FEEDBACK`, `AKM_CURATE_LIMIT`, and `AKM_INDEX_ON_SESSION_END`. An environment variable you set yourself always wins over the dialog, so exporting one of these pins it regardless of what the UI shows.
 
 ### Core
 
@@ -196,8 +196,6 @@ The most useful settings are also exposed in Claude Code's `/plugin` configurati
 | `AKM_PLUGIN_HARNESS` | `claude-code` | Host the hook labels its records with. The Codex manifest sets it to `codex` on macOS and Linux (on Windows it passes `--harness=codex` instead); leave it alone otherwise. |
 | `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working, and so does the session rules and most-used assets load. |
 | `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. Always off under Codex. |
-| `AKM_AUTO_LEARNING` | `1` | Set to `0` to disable prompt-signal capture and automatic learning/skill proposal submission. This does not disable native session extraction; use `AKM_AUTO_MEMORY=0` for that. |
-| `AKM_AUTO_MEMORY` | `1` | Set to `0` to disable native-session extraction through `akm proposal extract`. The OpenCode plugin honours the same variable for its interval-gated extraction. |
 | `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the `akm index` refresh at session end. Useful on CI runners and low-power machines; the periodic `akm improve` pass remains the backstop. |
 
 ### Scope

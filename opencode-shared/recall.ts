@@ -298,10 +298,6 @@ export function extractMinIntervalMs(): number {
   return Number.isFinite(raw) && raw >= 0 ? raw : 10 * 60 * 1000 // default 10 min
 }
 
-export function autoMemoryEnabled(): boolean {
-  return (process.env.AKM_AUTO_MEMORY ?? "1") !== "0"
-}
-
 // `unref()` exists on the net.Socket node hands back for a piped child stream,
 // but not on the `Readable` the @types/node signature advertises.
 export function unrefChildStream(stream: unknown): void {

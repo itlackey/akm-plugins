@@ -62,7 +62,7 @@ async function waitFor<T>(probe: () => T | undefined, timeoutMs = IS_WINDOWS ? 3
 async function settle(sandbox: Sandbox, expected: { index: number; extract?: boolean }) {
   await waitFor(() => (readCallLog(sandbox.callLog).filter((call) => call.argv[0] === "index").length >= expected.index ? true : undefined))
   if (expected.extract) {
-    await waitFor(() => (readFileSync(path.join(sandbox.stateDir, "extract.log"), "utf8").includes("LLM_NOT_CONFIGURED") ? true : undefined))
+    await waitFor(() => (readFileSync(path.join(sandbox.stateDir, "extract.log"), "utf8").includes("\"ok\"") ? true : undefined))
   }
 }
 
@@ -92,7 +92,7 @@ function sandboxEnv(sandbox: Sandbox, extra: Record<string, string | undefined> 
       XDG_STATE_HOME: sandbox.xdgState,
       PATH: sandboxPath(sandbox.binDir),
       // A test that exercises proposal submission turns this on itself.
-      AKM_AUTO_LEARNING: "0",
+      AKM_FAKE_LEARNING: "off",
       ...extra,
     },
     (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name),
@@ -449,7 +449,7 @@ if (${hangsWhen}) {
       handlerFor("curate-prompt"),
       sandbox,
       { ...(payloadFor("curate-prompt", sandbox) as object), prompt: "no, use pnpm not npm for this repository" },
-      { AKM_AUTO_LEARNING: "1", AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_LEARNING_PROPOSAL_TIMEOUT_MS: "3000" },
+      { AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_LEARNING_PROPOSAL_TIMEOUT_MS: "3000" },
     )
 
     expect(result.exitCode).toBe(0)

@@ -705,7 +705,16 @@ if (verb === "proposal" && tail[0] === "list") {
 // Learning capture is intentionally fire-and-forget in both plugins. The fake
 // does not run an authoring agent, but it returns the success fields the
 // plugin's completion bookkeeping consumes so evals exercise that boundary.
+// A fake-only switch standing in for akm's own learning setting: AKM_FAKE_LEARNING=off
+// makes \`--if-learning\` answer the real skipped envelope (pinned against PR 1516's akm)
+// and \`proposal extract\` the real no-op. Learning is on when unset.
+const learningOff = (process.env.AKM_FAKE_LEARNING || "").trim().toLowerCase() === "off"
+
 if (verb === "proposal" && tail[0] === "new") {
+  if (learningOff && argv.includes("--if-learning")) {
+    process.stdout.write(JSON.stringify({ schemaVersion: 2, ok: true, skipped: "learning-off" }))
+    process.exit(0)
+  }
   const type = tail[1] || "instruction"
   const name = tail[2] || "captured-learning"
   const ref = (type === "skill" ? "skills/" : type === "memory" ? "memories/" : "instructions/") + name
@@ -744,6 +753,22 @@ if (verb === "proposal" && tail[0] === "new") {
 // binary. Writing to stderr here is the documented fake-CLI exception to the
 // no-stderr-logging rule in AGENTS.md.
 if (verb === "proposal" && tail[0] === "extract") {
+  if (learningOff) {
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        schemaVersion: 1,
+        shape: "extract-result",
+        sessionsProcessed: 0,
+        sessionsSkipped: 0,
+        candidatesCreated: 0,
+        proposals: [],
+        sessions: [],
+        warnings: ["extract is disabled by improve.strategies.<strategy>.processes.extract.enabled: false in your config"],
+      }),
+    )
+    process.exit(0)
+  }
   process.stderr.write(
     JSON.stringify({
       ok: false,

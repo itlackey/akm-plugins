@@ -13,7 +13,6 @@ import type { PluginInput } from "@opencode-ai/plugin"
 // tests would be appending to — the developer's real ~/.local/state tree.
 const eventStateDir = mkdtempSync(path.join(tmpdir(), "akm-opencode-test-state-"))
 process.env.XDG_STATE_HOME = eventStateDir
-process.env.AKM_AUTO_LEARNING = "1"
 process.env.AKM_AUTO_SKILL_PROPOSALS = "1"
 const eventLogPath = path.join(eventStateDir, "akm-opencode", "events.jsonl")
 
@@ -354,7 +353,7 @@ describe("akm-opencode plugin", () => {
       expect(proposalCalls()).toHaveLength(1)
       const args = proposalCalls()[0]?.[1] as string[]
       expect(args).toEqual(expect.arrayContaining([
-        "proposal", "new", "instruction", "--file", "--format", "json", "-q", "--timeout-ms", "600000",
+        "proposal", "new", "instruction", "--file", "--format", "json", "-q", "--if-learning", "--timeout-ms", "600000",
       ]))
       const taskFile = args[args.indexOf("--file") + 1]
       expect(readFileSync(taskFile, "utf8")).toContain("no, use pnpm not npm for this repository")
@@ -364,6 +363,43 @@ describe("akm-opencode plugin", () => {
       expect(proposalCalls()).toHaveLength(1)
       const signalLog = readFileSync(path.join(eventStateDir, "akm-opencode", "learning-signals.jsonl"), "utf8")
       expect(signalLog).toContain('"kind":"preference"')
+    })
+
+    it("treats akm's learning-off `skipped` answer as a quiet no-op: not submitted, not failed", async () => {
+      const { EventEmitter } = await import("node:events")
+      const makeStream = () => Object.assign(new EventEmitter(), { setEncoding() {}, unref() {} })
+      const stdout = makeStream()
+      const stderr = makeStream()
+      const childHandlers = new Map<string, (...args: any[]) => void>()
+      mockSpawn.mockImplementationOnce((() => ({
+        stdout,
+        stderr,
+        on: (event: string, handler: (...args: any[]) => void) => childHandlers.set(event, handler),
+        unref: () => undefined,
+      })) as any)
+
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput(client))
+      await hooks["chat.message"]!(
+        { sessionID: "learning-skipped-1", messageID: "message-1", agent: "build" } as any,
+        { parts: [{ type: "text", text: "I prefer Bun for scripts in this repository" }] } as any,
+      )
+      const proposalCall = mockSpawn.mock.calls.find(([, args]: any[]) =>
+        Array.isArray(args) && args[0] === "proposal" && args[1] === "new") as any[] | undefined
+      const args = proposalCall?.[1] as string[]
+      expect(args).toContain("--if-learning")
+      const taskFile = args[args.indexOf("--file") + 1]
+
+      stdout.emit("data", JSON.stringify({ schemaVersion: 2, ok: true, skipped: "learning-off" }))
+      childHandlers.get("close")?.(0, null)
+
+      expect(existsSync(taskFile)).toBe(false)
+      const ledger = readFileSync(path.join(eventStateDir, "akm-opencode", "learning-proposals.jsonl"), "utf8")
+      const mine = ledger.split("\n").filter((line) => line.includes("learning-skipped-1"))
+      expect(mine.some((line) => line.includes('"status":"submitted"') || line.includes('"status":"failed"'))).toBe(false)
+      const messages = (client.app.log as any).mock.calls.map(([call]: any[]) => call.body.message)
+      expect(messages).not.toContain("AKM learning proposal submitted")
+      expect(messages).not.toContain("AKM learning proposal failed")
     })
 
     it("unwraps the JSON-string text shape emitted by opencode run before classifying", async () => {
@@ -835,6 +871,30 @@ describe("akm-opencode plugin", () => {
       return output.system.join("\n")
     }
 
+    it("tells an operator once per session that a retired learning opt-out is no longer read, and stays silent for on values", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const needle = "akm setup --learning off"
+      const previous = { memory: process.env.AKM_AUTO_MEMORY, learning: process.env.AKM_AUTO_LEARNING }
+      try {
+        process.env.AKM_AUTO_LEARNING = "0"
+        await hooks.event!({ event: { type: "session.created", properties: { sessionID: "retired-off" } } } as any)
+        const off = await transform(hooks, "retired-off")
+        expect(off.split(needle).length - 1).toBe(1)
+        expect(off).toContain("AKM_AUTO_LEARNING")
+        expect(off).toContain("your opt-out is not applied")
+
+        process.env.AKM_AUTO_LEARNING = "1"
+        process.env.AKM_AUTO_MEMORY = "1"
+        await hooks.event!({ event: { type: "session.created", properties: { sessionID: "retired-on" } } } as any)
+        expect(await transform(hooks, "retired-on")).not.toContain(needle)
+      } finally {
+        for (const [key, value] of [["AKM_AUTO_MEMORY", previous.memory], ["AKM_AUTO_LEARNING", previous.learning]] as const) {
+          if (value === undefined) delete process.env[key]
+          else process.env[key] = value
+        }
+      }
+    })
+
     it("a new session gets the rules and the most used list ahead of the guidance, read as no demand, in the session directory", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.event!({ event: { type: "session.created", properties: { sessionID: "boot-1" } } } as any)
@@ -1209,10 +1269,7 @@ describe("akm-opencode plugin", () => {
       expect(indexCalls()).toBe(1)
     })
 
-    it("AKM_AUTO_MEMORY=0 skips the session.idle extraction entirely", async () => {
-      // Same kill switch as the Claude hook's SessionEnd extract: this controls
-      // native-transcript extraction on both harnesses. Prompt-time learning
-      // proposals use the separate AKM_AUTO_LEARNING switch.
+    it("session.idle extraction always spawns: the retired AKM_AUTO_MEMORY=0 no longer skips it", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       const extractCalls = () =>
         mockSpawn.mock.calls.filter(([, args]: any[]) => Array.isArray(args) && args[0] === "proposal" && args[1] === "extract").length
@@ -1221,16 +1278,41 @@ describe("akm-opencode plugin", () => {
       process.env.AKM_AUTO_MEMORY = "0"
       try {
         await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "auto-memory-off" } } } as any)
-        expect(extractCalls()).toBe(0)
+        expect(extractCalls()).toBe(1)
       } finally {
         if (previous === undefined) delete process.env.AKM_AUTO_MEMORY
         else process.env.AKM_AUTO_MEMORY = previous
       }
+    })
 
-      // ...and the default still harvests. A different session id, because the
-      // gate returns before the min-interval bookkeeping.
-      await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "auto-memory-on" } } } as any)
-      expect(extractCalls()).toBe(1)
+    it("a learning-off extract (ok:true, nothing processed) completes quietly, with no failure logged", async () => {
+      const { EventEmitter } = await import("node:events")
+      const makeStream = () => Object.assign(new EventEmitter(), { setEncoding() {}, unref() {} })
+      const stdout = makeStream()
+      const stderr = makeStream()
+      const childHandlers = new Map<string, (...args: any[]) => void>()
+      mockSpawn.mockImplementationOnce((() => ({
+        stdout,
+        stderr,
+        on: (event: string, handler: (...args: any[]) => void) => childHandlers.set(event, handler),
+        unref: () => undefined,
+      })) as any)
+
+      const client = createMockClient()
+      const hooks = await AkmPlugin(createPluginInput(client))
+      await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "idle-extract-learning-off" } } } as any)
+      stdout.emit("data", JSON.stringify({
+        ok: true,
+        shape: "extract-result",
+        sessionsProcessed: 0,
+        sessionsSkipped: 0,
+        warnings: ["extract is disabled by improve.strategies.<strategy>.processes.extract.enabled: false in your config"],
+      }))
+      childHandlers.get("close")?.(0, null)
+
+      const messages = (client.app.log as any).mock.calls.map(([call]: any[]) => call.body.message)
+      expect(messages).toContain("AKM extract completed")
+      expect(messages).not.toContain("AKM extract failed")
     })
 
     it("surfaces a failed session extract through the plugin log", async () => {

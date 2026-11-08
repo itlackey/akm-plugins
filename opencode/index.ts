@@ -18,7 +18,6 @@ import {
   AKM_CURATED_TAIL,
   AKM_HINTS_PREFIX,
   applyContextBudget,
-  autoMemoryEnabled,
   AKM_CURATED_POINTER_CHARS,
   bootstrapBudgetChars,
   buildCurateOptions,
@@ -59,7 +58,7 @@ import {
   resetWriteGateForTests,
   warnIfWriteGateInert,
 } from "../opencode-shared/write-gate"
-import { createLearning, createPendingProposals } from "../opencode-shared/learning"
+import { createLearning, createPendingProposals, retiredLearningFlagNotice } from "../opencode-shared/learning"
 import { TOOL_SPECS, type ToolSpec, buildFeedbackArgs, buildRememberArgs, withProposedWarnings } from "../opencode-shared/tools"
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
@@ -420,11 +419,13 @@ async function getAkmBundleDir(client?: LogCapableClient): Promise<string | unde
 // channel of its own.
 async function getAkmBundleWarning(client: LogCapableClient): Promise<string> {
   const bundleDir = await getAkmBundleDir(client)
-  if (!bundleDir) return "No AKM default bundle is configured. Run `akm setup` or set `AKM_BUNDLE_DIR`."
-  if (!existsSync(bundleDir)) {
-    return `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\` or set \`AKM_BUNDLE_DIR\` to an existing bundle.`
-  }
-  return ""
+  const retired = retiredLearningFlagNotice()
+  const missing = !bundleDir
+    ? "No AKM default bundle is configured. Run `akm setup` or set `AKM_BUNDLE_DIR`."
+    : !existsSync(bundleDir)
+      ? `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\` or set \`AKM_BUNDLE_DIR\` to an existing bundle.`
+      : ""
+  return [missing, retired].filter(Boolean).join("\n")
 }
 
 function warmIndexInBackground(): void {
@@ -625,12 +626,6 @@ function extractSessionIdFromEvent(payload: unknown): string | undefined {
  * regardless of exit status, so the actionable code/hint reaches the log.
  */
 function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, directory: string | undefined): void {
-  // AKM_AUTO_MEMORY=0 turns native-transcript extraction off, matching the
-  // Claude hook's SessionEnd behavior. Prompt-time correction/preference
-  // proposals use AKM_AUTO_LEARNING. Read per call rather than at import, like
-  // shouldIndexOnSessionEnd(), because the plugin process outlives many
-  // sessions.
-  if (!autoMemoryEnabled()) return
   const now = Date.now()
   const last = sessionLastExtractAt.get(sid) ?? 0
   if (now - last < AKM_EXTRACT_MIN_INTERVAL_MS) return

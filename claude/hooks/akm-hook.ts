@@ -26,6 +26,7 @@ import {
   removeLearningProposalJob,
   reserveLearningProposal,
   type ProposalCandidate,
+  retiredLearningFlagNotice,
 } from "../shared/learning-signals"
 import { isNonTaskPrompt, shouldRecall, stripLeadingEnvelopes } from "../shared/recall-policy"
 import { DUPLICATE_WINDOW_MS, loadSessionBootstrap } from "../shared/session-bootstrap"
@@ -169,13 +170,12 @@ function flagSetting(envName: string, optionKey: string, defaultOn: boolean): bo
 // registers no PostToolUse hook; this keeps the hook itself from submitting
 // feedback, for a tool event or for the session's log under a "that worked".
 const AUTO_FEEDBACK = HARNESS !== "codex" && flagSetting("AKM_AUTO_FEEDBACK", "AUTO_FEEDBACK", true)
-const AUTO_LEARNING = flagSetting("AKM_AUTO_LEARNING", "AUTO_LEARNING", true)
 const AUTO_SKILL_PROPOSALS = envFlag("AKM_AUTO_SKILL_PROPOSALS", true)
-// AKM_AUTO_MEMORY gates native-transcript extraction. That path is exactly one
-// `akm proposal extract` spawn on each harness — SessionEnd here (see
-// extractSession()), session.idle on OpenCode (maybeExtractSessionOnIdle).
-// Prompt-time learning proposals have their own AKM_AUTO_LEARNING switch.
-const AUTO_MEMORY = envFlag("AKM_AUTO_MEMORY", true)
+// Native-transcript extraction is exactly one `akm proposal extract` spawn on
+// each harness — SessionEnd here (see extractSession()), session.idle on
+// OpenCode (maybeExtractSessionOnIdle). Whether learning is on is akm's own
+// switch (`akm setup --learning on|off`): with it off, akm makes extract and
+// `proposal new --if-learning` no-ops.
 const AUTO_CURATE = envFlag("AKM_AUTO_CURATE", true)
 // SessionEnd `akm index` is opt-OUT (default enabled) because this is the only
 // index refresh either plugin makes at the end of a session — OpenCode's runs
@@ -366,7 +366,7 @@ function promptProject(rawInput: string): string {
  * `akm proposal new` call, result parsing, durable status, and cleanup.
  */
 function submitLearningProposal(candidate: ProposalCandidate): void {
-  if (!AUTO_LEARNING || candidate.confidence < learningProposalMinConfidence()) return
+  if (candidate.confidence < learningProposalMinConfidence()) return
   const akm = resolveAkmCommandSpec()
   if (!akm) {
     appendLog(LEARNING_PROPOSAL_LOG, "skipped", candidate.kind, "akm unavailable")
@@ -419,7 +419,6 @@ function submitLearningProposal(candidate: ProposalCandidate): void {
 
 /** Capture prompt evidence first; proposal authoring/review stays in AKM. */
 function capturePromptLearning(rawInput: string, text: string, sid: string): void {
-  if (!AUTO_LEARNING) return
   const project = promptProject(rawInput)
   const signal = captureLearningSignal({
     text,
@@ -1393,6 +1392,9 @@ function gatherSessionStartWarnings(bundleRoots: readonly string[]): string[] {
     appendLog(SESSION_LOG, "bundle_missing", bundleDir ?? "(unconfigured)")
   }
 
+  const retired = retiredLearningFlagNotice()
+  if (retired) warnings.push(retired)
+
   return warnings
 }
 
@@ -2005,9 +2007,6 @@ async function sessionStart(): Promise<string> {
  * recorded in session.log. Still detached, still unref'd, still no wait.
  */
 function extractSession(): string {
-  // AKM_AUTO_MEMORY=0 turns native-session extraction off. Prompt-time
-  // correction/preference proposals are controlled by AKM_AUTO_LEARNING.
-  if (!AUTO_MEMORY) return ""
   const raw = readStdin()
   const sid = extractSessionId(raw)
   if (!sid) return ""

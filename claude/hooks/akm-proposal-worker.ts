@@ -27,16 +27,18 @@ function appendWorkerLog(job: LearningProposalJob, status: string, detail: strin
   }
 }
 
-function parseResult(raw: string): { ok?: boolean; ref?: string; proposalId?: string; error?: string } {
+function parseResult(raw: string): { ok?: boolean; skipped?: string; ref?: string; proposalId?: string; error?: string } {
   try {
     const parsed = JSON.parse(raw) as {
       ok?: unknown
+      skipped?: unknown
       ref?: unknown
       error?: unknown
       proposal?: { id?: unknown; ref?: unknown }
     }
     return {
       ...(typeof parsed.ok === "boolean" ? { ok: parsed.ok } : {}),
+      ...(typeof parsed.skipped === "string" ? { skipped: parsed.skipped } : {}),
       ...(typeof parsed.ref === "string"
         ? { ref: parsed.ref }
         : typeof parsed.proposal?.ref === "string"
@@ -97,6 +99,7 @@ function run(): void {
       job.reservation.proposalName,
       "--file",
       job.taskFile,
+      "--if-learning",
       "--format",
       "json",
       "-q",
@@ -114,6 +117,8 @@ function run(): void {
     const stdout = typeof child.stdout === "string" ? child.stdout.trim() : ""
     const stderr = typeof child.stderr === "string" ? child.stderr.trim() : ""
     const parsed = parseResult(stdout)
+    // akm's learning switch is off: nothing was submitted, and nothing failed.
+    if (child.status === 0 && parsed.ok === true && parsed.skipped === "learning-off") return
     const succeeded = child.status === 0 && parsed.ok === true
     if (succeeded) {
       recordLearningProposalStatus({

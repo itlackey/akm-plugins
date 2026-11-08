@@ -398,7 +398,7 @@ describe("Codex hook runtime", () => {
         CLAUDE_PLUGIN_ROOT: pluginDir,
         CLAUDE_PLUGIN_DATA: sandbox.dataDir,
         // A test that opts into proposal submission sets this itself.
-        AKM_AUTO_LEARNING: "0",
+        AKM_FAKE_LEARNING: "off",
         ...env,
       },
       (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name),
@@ -516,7 +516,7 @@ describe("Codex hook runtime", () => {
         sandbox,
         { prompt, ...extra },
         // Capture the signal, but never spawn a detached proposal worker.
-        { AKM_AUTO_LEARNING: "1", AKM_AUTO_CURATE: "0", AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1" },
+        { AKM_AUTO_CURATE: "0", AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1" },
       )
       return {
         memoryLog: existsSync(path.join(sandbox.dataDir, "memory.log")) ? readFileSync(path.join(sandbox.dataDir, "memory.log"), "utf8") : "",
@@ -590,7 +590,7 @@ console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: {
       "UserPromptSubmit",
       sandbox,
       { prompt: "no, use pnpm not npm for this repository" },
-      { AKM_AUTO_LEARNING: "1", AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0" },
+      { AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0" },
     )
 
     // The worker is detached: it writes learning_proposal once akm answers.
