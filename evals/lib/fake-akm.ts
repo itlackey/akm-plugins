@@ -350,7 +350,7 @@ function tokens(s) {
 function rank(query, limit) {
   const q = new Set(tokens(query))
   if (q.size === 0) return []
-  const scored = idx.assets.filter((a) => a.type !== "rule" && inFrom(a)).map((a) => {
+  const scored = idx.assets.filter((a) => inFrom(a)).map((a) => {
     const haystack = new Set([...tokens(a.description), ...a.keywords.flatMap(tokens), ...tokens(a.name)])
     let score = 0
     let matched = 0
@@ -439,8 +439,7 @@ function nonFlagArgs() {
 // Mirrors akm's project-rules contract: a call runs under the project \`--project\` names
 // (\`none\`: no project), else the one whose configured path contains the working directory,
 // else none, and a response says which in a top-level \`project\`. An unknown \`--project\` name
-// is accepted here (real akm rejects it). A rule applies when it names that project or no project;
-// untyped search and curate lead with the applicable rules, at most half the page.
+// is accepted here (real akm rejects it). A rule applies when it names that project or no project.
 // \`search --by-usage\` lists the eligible assets shown by a user, most shown first.
 function flagValue(name) {
   const i = argv.indexOf(name)
@@ -516,9 +515,7 @@ if (verb === "curate" || verb === "search") {
   const query = nonFlagArgs().join(" ")
   const project = resolveProject()
   const limit = getLimit()
-  const typed = flagValue("--type")
-  const lead = (typed === undefined || typed === "any" ? applicableRules(project) : []).slice(0, Math.ceil(limit / 2)).map(toHit)
-  const hits = lead.concat(rank(query, limit - lead.length))
+  const hits = rank(query, limit)
   if (argv.includes("--format") && argv[argv.indexOf("--format") + 1] === "json") {
     if (verb === "curate") emitCurateJson(query, hits, project)
     else emitSearchJson(hits, project)

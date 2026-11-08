@@ -101,10 +101,10 @@ Every `akm` call runs in the session's directory, so akm resolves the user's pro
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AKM_CURATE_LIMIT` | `5` | Maximum curated results injected per prompt (akm is asked for twice as many, because rules lead its page and are dropped here). |
+| `AKM_CURATE_LIMIT` | `5` | Maximum curated results injected per prompt. |
 | `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length for automatic curation. |
 | `AKM_CURATE_TIMEOUT` | `8` | Timeout in seconds for AKM calls made by hooks. |
-| `AKM_CURATE_MIN_SCORE` | `0` (disabled) | Minimum per-item relevance score to keep a curated result. `0` shows the first `AKM_CURATE_LIMIT` non-rule hits, in akm's order. Set it above `0` and items below the floor are dropped (no curated block at all when none survive), and the survivors are reordered so locally authored assets (lesson, memory, knowledge, skill, command, agent, instruction, rule, fact, workflow, task, env, secret) come before imported website/wiki snapshots. Same contract as the Claude plugin's `AKM_CURATE_MIN_SCORE` — see `claude/README.md` for the full explanation, including why there is no universal default value. |
+| `AKM_CURATE_MIN_SCORE` | `0` (disabled) | Minimum per-item relevance score to keep a curated result. `0` preserves the long-standing behavior. Set it above `0` and items below the floor are dropped (no curated block at all when none survive), and the survivors are reordered so locally authored assets (lesson, memory, knowledge, skill, command, agent, instruction, rule, fact, workflow, task, env, secret) come before imported website/wiki snapshots. Same contract as the Claude plugin's `AKM_CURATE_MIN_SCORE` — see `claude/README.md` for the full explanation, including why there is no universal default value. |
 | `AKM_CURATE_TYPE` | unset | Passthrough for `akm curate --type`. |
 | `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum length of the AKM text injected into the system prompt on one turn. Past it the block is truncated with a marker. The rules and most-used assets lead and take what the plugin's own guidance, notes and curated pointer leave; a rule is shown whole or left out, and a note says how many were left out. The most-used list names at most 10 assets and says when it was cut or left out to fit. A request waits at most 3 seconds for a slow load; it then goes out without the sections, which arrive with the next one. |
 | `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Timeout in seconds for the pending-proposal count. Floored at 0.5s. |

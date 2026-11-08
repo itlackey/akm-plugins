@@ -15,7 +15,7 @@ import {
   createRetrospectiveNegativeRegex,
   shouldSubmitAutomaticFeedback,
 } from "../shared/feedback-signals"
-import { curatePageSize, curatedItemsToShow, renderCuratedItems } from "../shared/curate-render"
+import { filterAndRankCuratedItems, renderCuratedItems } from "../shared/curate-render"
 import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import {
   appendCapturedLearningSignal,
@@ -94,12 +94,14 @@ const CURATE_LIMIT = Number(process.env.AKM_CURATE_LIMIT ?? pluginOption("CURATE
 const CURATE_TIMEOUT = Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8
 // #110 — unset by default (0 disables the check entirely, matching every
 // other CURATE_* tunable's "0 means off" convention). akm curate has always
-// returned CURATE_LIMIT results whether or not any of them scored well. When
-// this is a positive number, items scoring below it are dropped and — since
-// each item carries its `type` — authored assets (lesson/memory/knowledge/
-// skill/...) rank ahead of imported website/wiki snapshots. If nothing
-// survives the floor, no curated block is written at all, same as a query
-// with no signal.
+// returned CURATE_LIMIT results whether or not any of them scored well, and
+// `--format text` (the default curate call) never printed a score, so there
+// was no signal to filter on. When this is a positive number, both curate
+// call sites switch from `--format text` to `--format json`, drop items
+// scoring below it, and — since that response already carries per-item
+// `type` too — rank authored assets (lesson/memory/knowledge/skill/...)
+// ahead of imported website/wiki snapshots. If nothing survives the floor,
+// no curated block is written at all, same as a query with no signal.
 const CURATE_MIN_SCORE = Number(process.env.AKM_CURATE_MIN_SCORE ?? "0") || 0
 // #110 — passthrough for `akm curate --type`, unset by default. Lets a user
 // narrow curation to their own authored types (e.g. `lesson,memory` is not
@@ -1647,26 +1649,30 @@ function captureRetrospectiveFeedback(text: string, sid: string) {
 }
 
 // #110 — shared argv-building for both curate call sites (curatePrompt,
-// sessionStart): appends `--type` when AKM_CURATE_TYPE is set. It always asks
-// for `--format json`, so renderCuratedJson can drop the rules akm now leads an
-// untyped curate with (the session bootstrap already carries them), and asks for
-// a page twice the limit so that `limit` ordinary hits are left after the drop.
+// sessionStart): appends `--type` when AKM_CURATE_TYPE is set, and requests
+// `--format json` instead of the long-standing `--format text` only when the
+// AKM_CURATE_MIN_SCORE floor is enabled for this call, since that is the
+// only situation the per-item `score`/`type` fields (renderCuratedJson
+// below) are needed for. With the floor disabled this produces the exact
+// argv curatePrompt() has always sent, so that (default, tested) path is
+// unchanged.
 function buildCurateArgs(query: string, limit: number): string[] {
-  const args = ["curate", query, "--limit", String(curatePageSize(limit)), "--detail", "agent", "-q"]
+  const args = ["curate", query, "--limit", String(limit), "--detail", "agent", "-q"]
   if (CURATE_TYPE) args.push("--type", CURATE_TYPE)
-  args.push("--format", "json")
+  args.push("--format", CURATE_MIN_SCORE > 0 ? "json" : "text")
   return args
 }
 
-// Decode a `--format json` curate response, keep CURATE_LIMIT ordinary hits (no
-// rules), apply the AKM_CURATE_MIN_SCORE relevance floor and authored-type-first
-// ranking (claude/shared/curate-render.ts) when a floor is set, and render what
-// survives as plain text. Returns "" both when nothing survives (by design — no
-// curated block at all) and when the response fails to parse (fails closed, same
-// as every other akm response this hook reads).
+// #110 — the AKM_CURATE_MIN_SCORE-enabled path: decode a `--format json`
+// curate response, apply the relevance floor + authored-type-first ranking
+// (claude/shared/curate-render.ts), and render what survives back into the
+// same kind of plain text `--format text` would have produced. Returns ""
+// both when nothing survives the floor (by design — no curated block at all)
+// and when the response fails to parse (fails closed, same as every other
+// akm response this hook reads).
 function renderCuratedJson(raw: string, query: string): string {
   const parsed = safeJsonParse<{ items?: unknown }>(raw.trim())
-  const items = curatedItemsToShow(parsed?.items, CURATE_LIMIT, CURATE_MIN_SCORE)
+  const items = filterAndRankCuratedItems(parsed?.items, CURATE_MIN_SCORE)
   return items.length > 0 ? renderCuratedItems(query, items) : ""
 }
 
@@ -1719,7 +1725,7 @@ function curatePrompt(): string {
     return ""
   }
   const curatedRaw = akmRun(buildCurateArgs(text, CURATE_LIMIT))
-  const curated = renderCuratedJson(curatedRaw, text)
+  const curated = CURATE_MIN_SCORE > 0 ? renderCuratedJson(curatedRaw, text) : curatedRaw
   writeMemoryEvent({
     event: "prompt_recall",
     sessionId: sid || undefined,
@@ -1764,6 +1770,8 @@ const BOOTSTRAP_DIR = path.join(STATE_DIR, "bootstrap")
 /** The rendered curation with as many whole hits as fit in `room` characters; "" when not even one does. */
 function fitCurated(curated: string, room: number): string {
   const [head, ...hits] = curated.split("\n\n")
+  if (head.length > room) return ""
+  if (hits.length === 0) return head
   const kept: string[] = []
   let used = head.length
   for (const hit of hits) {
@@ -1902,7 +1910,7 @@ async function sessionStart(): Promise<string> {
     akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
     akmRunAsync(["--format", "json", "-q", "workflow", "list", "--active"]),
   ])
-  const curatedTrimmed = renderCuratedJson(curatedRaw, cwdContext).trim()
+  const curatedTrimmed = (CURATE_MIN_SCORE > 0 ? renderCuratedJson(curatedRaw, cwdContext) : curatedRaw).trim()
   let curatedFile = ""
   if (curatedTrimmed) {
     curatedFile = path.join(CURATED_DIR, `session-${sid || "unknown"}.md`)

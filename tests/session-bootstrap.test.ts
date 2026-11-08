@@ -413,7 +413,7 @@ describe("session-start hook", () => {
     expect(bootstrapCalls(world)).toBe(0)
   })
 
-  itPosix("prompt-time curate neither reloads the bootstrap nor repeats the rules akm leads curate with", () => {
+  itPosix("prompt-time curate does not reload the bootstrap", () => {
     const world = makeWorld()
     startHook(world, { source: "startup" })
     const before = bootstrapCalls(world)
@@ -431,10 +431,8 @@ describe("session-start hook", () => {
     expect(bootstrapCalls(world)).toBe(before)
     const curate = calls(world).find((a) => a[0] === "curate" && a[1] === prompt)
     expect(curate).toBeDefined()
-    // Asked for a page twice the limit (default 5), because rules lead the page in akm.
-    expect(curate?.join(" ")).toContain("--limit 10")
+    expect(curate?.join(" ")).toContain("--limit 5")
     const injected = result.stdout ? (JSON.parse(result.stdout).hookSpecificOutput.additionalContext as string) : ""
-    expect(injected).not.toContain("rules/")
     for (const ref of ["skills/deploy", "skills/review"]) expect(injected).toContain(ref)
   })
 

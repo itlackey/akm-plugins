@@ -60,35 +60,20 @@ function probe(env: Record<string, string>): Probe {
 }
 
 describe("#110 opencode curate floor and type filter", () => {
-  test("default (unset) asks for json and a page twice the limit, with no type", () => {
-    const { options, rendered } = probe({ AKM_CURATE_MIN_SCORE: "", AKM_CURATE_TYPE: "" })
+  test("default (unset) asks for the long-standing text format and does not filter", () => {
+    const { options } = probe({ AKM_CURATE_MIN_SCORE: "", AKM_CURATE_TYPE: "" })
 
-    // json so the rules akm leads an untyped curate with can be dropped, and twice the limit so
-    // the limit of ordinary hits is left after the drop.
-    expect(options.format).toBe("json")
+    // The pre-#110 request, unchanged: no type, and text rather than json.
+    expect(options.format).toBe("text")
     expect(options).not.toHaveProperty("type")
     expect(options).not.toHaveProperty("cwd")
-    expect(options.limit).toBe(10)
-    // No floor and no re-ranking: every hit, in akm's order.
-    expect(rendered).toContain("best-practices")
-    expect(rendered!.indexOf("youtube-abc")).toBeLessThan(rendered!.indexOf("memories/a-memory"))
+    expect(options.limit).toBe(5)
   })
 
-  test("rules are dropped from what recall shows and do not take an ordinary hit's place", () => {
-    const script = `
-      const { AkmPlugin } = await import(${JSON.stringify(path.join(repoRoot, "opencode/index.ts"))})
-      const items = [
-        ...[1, 2, 3, 4, 5].map((n) => ({ ref: "rules/r" + n, type: "rule", name: "r" + n })),
-        ...[1, 2, 3, 4, 5, 6].map((n) => ({ ref: "knowledge/k" + n, type: "knowledge", name: "k" + n })),
-      ]
-      process.stdout.write(JSON.stringify({ rendered: AkmPlugin.__renderCuratedJsonResponseForTests(JSON.stringify({ items }), "q") }))
-    `
-    const result = Bun.spawnSync(["bun", "-e", script], { cwd: repoRoot, env: { ...process.env, AKM_CURATE_MIN_SCORE: "" }, stdout: "pipe", stderr: "pipe" })
-    const rendered = JSON.parse(result.stdout.toString()).rendered as string
-    expect(rendered).not.toContain("rules/")
-    // The limit (5) of ordinary hits, not the 5 that fit beside the rules.
-    for (const n of [1, 2, 3, 4, 5]) expect(rendered).toContain(`knowledge/k${n}`)
-    expect(rendered).not.toContain("knowledge/k6")
+  test("a floor switches the request to json, because scores are only needed then", () => {
+    const { options } = probe({ AKM_CURATE_MIN_SCORE: "5" })
+
+    expect(options.format).toBe("json")
   })
 
   test("AKM_CURATE_TYPE is passed through to akm as the curate type", () => {

@@ -42,7 +42,7 @@ const curateCalls: Array<{ query: string; options: Parameters<CurateFn>[1] }> = 
 const defaultCurate: CurateFn = async (query) => {
   const words = query.toLowerCase().split(/\W+/)
   const hit = assets.filter((a) => a.keywords.some((k) => words.includes(k)))
-  return hit.length === 0 ? "" : JSON.stringify({ items: hit.map((a) => ({ type: a.type, name: a.name, ref: a.ref, description: a.description })) })
+  return hit.length === 0 ? "" : ["# AKM curated", ...hit.map((a) => `- ${a.ref} (${a.type}): ${a.description}`)].join("\n")
 }
 
 let curateImpl: CurateFn = defaultCurate
@@ -296,11 +296,11 @@ describe("akm-opencode-v2 plugin", () => {
   })
 
   describe("automatic recall through akm-cli/api", () => {
-    it("asks the in-process curate for the contract's options: a page twice the limit, json and the session directory", async () => {
+    it("asks the in-process curate for the contract's options: limit, text format and the session directory", async () => {
       host = await startPlugin(project)
       await host.runPrompt("ses_opts", PROMPT)
       expect(curateCalls).toHaveLength(1)
-      expect(curateCalls[0].options).toEqual({ limit: 10, format: "json", cwd: project })
+      expect(curateCalls[0].options).toEqual({ limit: 5, format: "text", cwd: project })
       // Recall starts no `akm curate` process: the in-process call replaced it.
       expect(fake.calls().some((a) => a.includes("curate"))).toBe(false)
     })
@@ -318,7 +318,7 @@ describe("akm-opencode-v2 plugin", () => {
       const failure = host.logs.find((line) => line.message === "AKM recall failed")
       expect(failure?.level).toBe("Warn")
       expect(String(failure?.annotations.error)).toContain("timed out")
-      finish(JSON.stringify({ items: [{ type: "skill", name: "late", ref: "skills/late" }] }))
+      finish("# AKM curated\n- skills/late")
       await settle(50)
       const system = await host.runContext("ses_slow", [{ type: "text", text: "base" }])
       expect(system[0].text).not.toContain("skills/late")
@@ -334,7 +334,7 @@ describe("akm-opencode-v2 plugin", () => {
       await host.runPrompt("ses_gone", PROMPT)
       await host.emit({ type: "session.deleted", data: { sessionID: "ses_gone" }, location: { directory: project } })
       await settle(100)
-      finish(JSON.stringify({ items: [{ type: "skill", name: "after-delete", ref: "skills/after-delete" }] }))
+      finish("# AKM curated\n- skills/after-delete")
       await settle(50)
       expect(host.logs.some((line) => line.message === "AKM recall failed")).toBe(false)
       expect((await host.runContext("ses_gone", []))[0].text).not.toContain("skills/after-delete")
@@ -985,7 +985,7 @@ describe("akm-opencode-v2 plugin", () => {
       const many = Array.from({ length: 8 }, (_, n) => ({ ref: `rules/m${n}`, type: "rule", name: `m${n}`, description: `m${n}`, keywords: [], body: `---\ndescription: m${n}\n---\n- ${"z".repeat(400)}\n` }))
       fake = freshFakeAkm({ assets: [...assets, ...many], usage, projects: { acme: { paths: [project] } } })
       process.env.AKM_OPENCODE_CLI = fake.akmPath
-      curateImpl = async () => JSON.stringify({ items: Array.from({ length: 5 }, (_, n) => ({ type: "knowledge", name: `k${n}`, ref: `knowledge/k${n}`, description: "d".repeat(150) })) })
+      curateImpl = async () => ["# AKM curated", ...Array.from({ length: 5 }, (_, n) => `- knowledge/k${n} (knowledge): ${"d".repeat(150)}`)].join("\n")
       host = await startPlugin(project)
       await host.emit({ type: "session.created", data: { sessionID: "ses_m" }, location: { directory: project } })
       await settle(300)

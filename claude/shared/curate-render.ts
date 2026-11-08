@@ -1,12 +1,26 @@
 /**
- * Client-side handling of `akm curate`'s `--format json` response, used by both
- * hooks and both OpenCode plugins for every automatic curate: drop the `rule`
- * hits (the session bootstrap carries the rules), keep the requested number of
- * the rest, apply the opt-in relevance floor and authored-first ranking
- * (AKM_CURATE_MIN_SCORE, #110) when it is set, and render just enough text to
- * stay useful — NOT a full port of the CLI's own formatter (next-steps footer,
- * warnings block, etc. — the hooks already append their own tip line and
- * provenance banner around this).
+ * #110 — client-side filtering and rendering for `akm curate`'s `--format
+ * json` response, used only by the opt-in relevance-floor path
+ * (AKM_CURATE_MIN_SCORE) in both hooks.
+ *
+ * Why this exists: `akm curate --format text` (the default the hooks have
+ * always used) never prints a per-item relevance score — `formatCuratePlain`
+ * on the CLI side has no `score` line — so the hooks had no way to tell "five
+ * weak hits" from "five strong hits" and always emitted whatever the CLI
+ * returned. `--detail agent` DOES carry `score` (and `type`) on each item in
+ * `--format json`, so the fix lives here: switch to JSON, decide, and render
+ * just enough text to stay useful — NOT a full port of the CLI's own
+ * formatter (next-steps footer, warnings block, etc. — the hooks already
+ * append their own tip line and provenance banner around this).
+ *
+ * This module is intentionally not wired into the default (score-floor
+ * disabled) code path: that path keeps calling `--format text` exactly as
+ * before, so existing behavior — and every test that fakes the CLI's text
+ * output — is untouched. See akm-plugins#110 for the fuller design tradeoff
+ * (a renderer that fully replaces `--format text` in all cases, so
+ * type-priority ranking could apply unconditionally rather than only when
+ * the floor is enabled, was considered and deferred as a larger, riskier
+ * change than this issue's evidence justified doing in one pass).
  */
 
 export interface CuratedItem {
@@ -46,26 +60,6 @@ function isAuthoredType(type: unknown): boolean {
 }
 
 /**
- * What to ask `akm curate` for so that `limit` ordinary hits survive dropping the rules. Rules lead
- * an untyped curate, capped at half the page, so a page of twice the limit always keeps `limit` of
- * the rest; `ordinaryCuratedItems` slices back to `limit`.
- */
-export function curatePageSize(limit: number): number {
-  return limit * 2
-}
-
-/**
- * The first `limit` hits that are not rules, in akm's order. The session bootstrap already put the
- * rules in context, and the lead akm gives them in curate would repeat them on every prompt.
- */
-export function ordinaryCuratedItems(rawItems: unknown, limit: number): CuratedItem[] {
-  if (!Array.isArray(rawItems)) return []
-  return rawItems
-    .filter((item): item is CuratedItem => !!item && typeof item === "object" && (item as CuratedItem).type !== "rule")
-    .slice(0, limit)
-}
-
-/**
  * Keep items scoring at or above `minScore`, then stable-sort authored asset
  * types ahead of imported/scraped ones. Items with no numeric `score` are
  * kept regardless of `minScore` — a missing score is not evidence the item is
@@ -73,8 +67,8 @@ export function ordinaryCuratedItems(rawItems: unknown, limit: number): CuratedI
  * reason to drop it would repeat the mistake #107 fixed on the extract side
  * (a specific wrong guess is worse than none).
  *
- * akm-cli has already decided which items are the top ones for this query;
- * this only decides which of those are worth showing, and in what order —
+ * akm-cli has already decided which N items are the top-N for this query;
+ * this only decides which of those N are worth showing, and in what order —
  * it never asks the CLI for more candidates to backfill a dropped slot, so a
  * strict floor can legitimately shrink the result set to nothing.
  */
@@ -92,15 +86,6 @@ export function filterAndRankCuratedItems(rawItems: unknown, minScore: number): 
       return rankDiff !== 0 ? rankDiff : a.index - b.index
     })
     .map(({ item }) => item)
-}
-
-/**
- * What an automatic curate shows: `limit` ordinary hits, put through the relevance floor and the
- * authored-first ranking only when a floor is set.
- */
-export function curatedItemsToShow(rawItems: unknown, limit: number, minScore: number): CuratedItem[] {
-  const items = ordinaryCuratedItems(rawItems, limit)
-  return minScore > 0 ? filterAndRankCuratedItems(items, minScore) : items
 }
 
 /**
