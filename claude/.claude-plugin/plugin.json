@@ -70,7 +70,7 @@
               "session-start"
             ],
             "timeout": 120,
-            "statusMessage": "Checking the AKM CLI and loading bundle hints..."
+            "statusMessage": "Checking the AKM CLI and loading AKM context..."
           }
         ]
       }

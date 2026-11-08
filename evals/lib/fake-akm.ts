@@ -8,7 +8,7 @@
 // keyword match (computed in the shim's parent process and baked into the
 // shell script as a static lookup table). It also implements the subset of
 // `akm` verbs the hooks actually call: `curate`, `feedback`, `remember`,
-// `index`, `hints`, `info`, `search`, `config get`/`config set`,
+// `index`, `info`, `search`, `config get`/`config set`,
 // `workflow list`, `proposal list`/`new`, `extract`, `--version`. Non-agent
 // envelope shapes are pinned against a real `akm` binary by
 // tests/fake-akm-contract.test.ts; `proposal new` is an authoring-agent boundary
@@ -425,13 +425,6 @@ if (verb === "curate" || verb === "search") {
   } else {
     emitText(hits)
   }
-  process.exit(0)
-}
-
-if (verb === "hints") {
-  // SessionStart calls this. Emit a small static blurb so the hook has
-  // something to inject; keeps the pipeline exercised.
-  process.stdout.write("Bundle health: 15 assets. Run \`akm search <query>\`.\\n")
   process.exit(0)
 }
 

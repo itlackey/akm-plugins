@@ -115,7 +115,6 @@ export type ToolDefinition = {
 
 type SessionState = {
   curated?: string
-  hints?: string
   workflow?: string
   lastQuery?: string
   generation: number
@@ -194,7 +193,7 @@ export function createCore(options: CoreOptions) {
       if (isCliError(command)) throw new Error(command.error)
       const project = await projectFor(sessionID)
       // The PLUGIN's search, not the model's: a non-user event source keeps it out of akm's demand signals.
-      const result = await runAkm(command, ["search", token, "--limit", "5", "--from", "local", ...(project ? ["--project", project] : []), "--detail", "agent", "--format", "json"], {
+      const result = await runAkm(command, ["search", token, "--limit", "5", ...(project ? ["--project", project] : []), "--detail", "agent", "--format", "json"], {
         cwd: options.directory,
         timeoutMs: WRITE_GATE_SEARCH_TIMEOUT_MS,
         env: { AKM_EVENT_SOURCE: "audit" },
@@ -427,7 +426,7 @@ export function createCore(options: CoreOptions) {
       const st = sessions.get(sessionID)
       const blocks = [
         st?.curated ? `${RECALLED_CONTENT_PROVENANCE}${st.curated}${AKM_CURATED_TAIL}` : "",
-        st?.hints ? `${AKM_HINTS_PREFIX}\n\n${st.hints}` : AKM_HINTS_PREFIX,
+        AKM_HINTS_PREFIX,
         st?.workflow ? formatWorkflowContext(st.workflow) : "",
         // The pending-proposal nag: only when something awaits review (cached for a minute).
         await pendingProposals.contextBlock(sessionID),
@@ -442,14 +441,12 @@ export function createCore(options: CoreOptions) {
   async function onSessionCreated(sessionID: string): Promise<void> {
     const st = state(sessionID)
     const cwdContext = gatherCwdContext(options.directory)
-    const [curated, hints, workflowRaw] = await Promise.all([
+    const [curated, workflowRaw] = await Promise.all([
       AUTO_CURATE() && cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
-      runBestEffort(sessionID, ["--format", "text", "-q", "hints"], { operation: "session-hints" }),
       runBestEffort(sessionID, ["--format", "json", "-q", "workflow", "list", "--active"], { operation: "active-workflow-summary" }),
     ])
     if (disposed || sessions.get(sessionID) !== st) return
     if (curated && !st.curated) st.curated = curated
-    if (hints) st.hints = hints
     st.workflow = (workflowRaw && summarizeActiveWorkflows(workflowRaw)) || undefined
   }
 

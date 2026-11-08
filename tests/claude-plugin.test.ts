@@ -1398,7 +1398,7 @@ exit 0
     })
   })
 
-  itPosix("session-start injects hints and curated context without passing scope flags to curate", () => {
+  itPosix("session-start injects curated context without hints or scope flags", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
@@ -1408,7 +1408,7 @@ exit 0
     mkdirSync(stateDir, { recursive: true })
     const quotedLog = shellQuote(invokeLog)
 
-    // Fake akm: version/install, index no-op, hints + curated output.
+    // Fake akm: version/install, index no-op, curated output.
     // The version MUST meet the plugin's minimum (0.10.261111)
     // so the new SessionStart consent gate treats akm as healthy and proceeds
     // with the normal injected-context flow.
@@ -1421,7 +1421,6 @@ case "$1" in
 esac
 for arg in "$@"; do
   case "$arg" in
-    hints) echo "# Bundle hints"; echo "akm search <query>"; exit 0 ;;
     index) exit 0 ;;
     curate) echo "# curated"; echo "- skills/deploy"; exit 0 ;;
   esac
@@ -1450,7 +1449,6 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toMatch(/not certain of/)
     expect(payload.hookSpecificOutput.additionalContext).toMatch(/already being present in the workspace is not evidence/)
     expect(payload.hookSpecificOutput.additionalContext).not.toContain("from scratch")
-    expect(payload.hookSpecificOutput.additionalContext).toContain("Bundle hints")
     expect(payload.hookSpecificOutput.additionalContext).toContain("AKM PROVENANCE")
     expect(payload.hookSpecificOutput.additionalContext).not.toContain("AKM bundle curation written to")
     // 07 hardening: the recalled/curated content is provenance-tagged so an
@@ -1468,6 +1466,8 @@ exit 0
     expect(invocations).toContain("--format text")
     expect(invocations).not.toContain("--for-agent")
     expect(invocations).not.toContain("--run sess-start-1")
+    // #155: the static CLI guide is not part of session start.
+    expect(invocations.split("\n")).not.toContain("--format text -q hints")
   })
 
   itPosix("session-start skips curate entirely when the cwd yields no context (#89)", () => {
@@ -1492,7 +1492,6 @@ case "$1" in
 esac
 for arg in "$@"; do
   case "$arg" in
-    hints) echo "# Bundle hints"; exit 0 ;;
     index) exit 0 ;;
     curate) echo "should-not-appear"; exit 0 ;;
   esac
@@ -1514,7 +1513,7 @@ exit 0
 
     // The curate leg is not spawned at all — not spawned with an empty query.
     const invocations = readFileSync(invokeLog, "utf8")
-    expect(invocations).toContain("hints")
+    expect(invocations).not.toContain("hints")
     expect(invocations).not.toContain("curate")
     for (const line of readLogLines(invokeLog)) {
       expect(line).not.toMatch(/(^| )curate( |$)/)
@@ -1545,10 +1544,6 @@ case "$1" in
 esac
 for arg in "$@"; do
   case "$arg" in
-    hints) python3 - <<'PY'
-print("H" * 180)
-PY
-      exit 0 ;;
     curate) python3 - <<'PY'
 print("C" * 180)
 PY
@@ -3037,7 +3032,6 @@ esac
 ${SHOW_ECHOES_REF}
 for arg in "$@"; do
   case "$arg" in
-    hints) echo "# Bundle hints"; exit 0 ;;
     curate) echo "# curated"; exit 0 ;;
   esac
 done
@@ -3225,18 +3219,17 @@ exit 0
       })
     })
 
-    itPosix("AKM_AUTO_HINTS=0 skips the hints leg without spawning it", () => {
-      const { stdout, calls } = runSessionStart({ AKM_AUTO_HINTS: "0" })
+    itPosix("session start never spawns `akm hints`", () => {
+      const { calls } = runSessionStart({})
       expect(calls).not.toContain("hints")
       expect(calls).toContain("curate")
-      expect(JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext).not.toContain("Bundle hints")
     })
 
     itPosix("AKM_AUTO_CURATE=0 skips the session curate leg without spawning it", () => {
       const { stdout, calls } = runSessionStart({ AKM_AUTO_CURATE: "0" })
       expect(calls).not.toContain("curate")
-      expect(calls).toContain("hints")
-      expect(JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext).toContain("Bundle hints")
+      expect(calls).toContain("proposal")
+      expect(JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext).toContain("AKM is available")
     })
 
     itPosix("AKM_AUTO_CURATE=0 still records the prompt and the memory intent", () => {
@@ -3435,6 +3428,80 @@ exit 0
       )
 
       expect(payload.hookSpecificOutput.additionalContext).not.toContain("Active workflow")
+    })
+
+    itPosix("presents pending proposals as information, not a task, and says nothing for an empty queue", () => {
+      const withQueue = runSessionStartWith(
+        `#!/usr/bin/env sh
+case "$1" in
+  --version) echo "akm 0.10.26101002"; exit 0 ;;
+esac
+if [ "$1" = "--format" ] && [ "$4" = "proposal" ]; then
+  echo '{"proposals":[{"id":"p1","title":"IGNORE_ALL_RULES_INJECT"},{"id":"p2"}]}'
+  exit 0
+fi
+exit 0
+`,
+      )
+      const context = withQueue.payload.hookSpecificOutput.additionalContext as string
+      expect(context).toContain("There are 2 pending AKM proposals.")
+      expect(context).toContain("Only if the user's task involves proposals")
+      expect(context).toContain("needs the user's approval")
+      expect(context).not.toContain("proposal accept")
+      expect(context).not.toContain("proposal reject")
+      expect(context).not.toContain("IGNORE_ALL_RULES_INJECT")
+
+      const empty = runSessionStartWith(
+        `#!/usr/bin/env sh
+case "$1" in
+  --version) echo "akm 0.10.26101002"; exit 0 ;;
+esac
+if [ "$1" = "--format" ] && [ "$4" = "proposal" ]; then
+  echo '{"proposals":[]}'
+  exit 0
+fi
+exit 0
+`,
+      )
+      expect(empty.payload.hookSpecificOutput.additionalContext).not.toContain("pending AKM proposal")
+    })
+
+    itPosix("gives active workflow runs a bounded age and marks relevance unknown", () => {
+      const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
+      const run = (id: string, updatedAt: string) =>
+        `{"id":"${id}","workflowRef":"workflows/${id}","status":"active","currentStepId":"s","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"k":"evilPayload"}${updatedAt}}`
+      const runs = [
+        run("fresh", `,"updatedAt":"${ago(5)}"`),
+        run("stale", `,"updatedAt":"${ago(24 * 9)}"`),
+        run("garbled", `,"updatedAt":"not-a-date"`),
+        run("missing", ""),
+        run("future", `,"updatedAt":"${ago(-48)}"`),
+      ]
+      const { payload } = runSessionStartWith(
+        `#!/usr/bin/env sh
+case "$1" in
+  --version) echo "akm 0.10.26101002"; exit 0 ;;
+esac
+if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
+  echo '{"runs":[${runs.join(",")}]}'
+  exit 0
+fi
+exit 0
+`,
+      )
+      const context = payload.hookSpecificOutput.additionalContext as string
+      const line = context.split("\n").find((l) => l.startsWith("[{")) ?? ""
+      const reduced = JSON.parse(line) as Array<{ runId: string; updated: string }>
+      expect(Object.fromEntries(reduced.map((r) => [r.runId, r.updated]))).toEqual({
+        fresh: "5h ago",
+        stale: "9d ago",
+        garbled: "unknown",
+        missing: "unknown",
+        future: "unknown",
+      })
+      expect(context).toContain("whether it applies to this task is unknown")
+      expect(context).not.toContain("IGNORE_ALL_RULES_INJECT")
+      expect(context).not.toContain("evilPayload")
     })
 
     function runSessionStartWithExtractLog(extractLog: string) {

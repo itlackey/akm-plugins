@@ -296,7 +296,7 @@ describe("checkAkmVersion", () => {
 
   itPosix("session-start ships the header and footer on a healthy CLI with a completely quiet stash", () => {
     // The most common profile there is: akm installed and in range, bundle
-    // present, but nothing curated, no hints and no pending proposals. This
+    // present, but nothing curated and no pending proposals. This
     // test used to assert only that stdout did NOT contain "AKM is NOT
     // available" — which the empty string satisfies, and the empty string is
     // exactly what this path emitted. SessionStart's whole job (tell the agent

@@ -429,7 +429,7 @@ if (${hangsWhen}) {
 
   it("session-start: a timed-out akm in its parallel calls leaves no process behind", async () => {
     const sandbox = makeSandbox({ withAkm: false })
-    const pids = installHangingAkm(sandbox, 'args.includes("hints")')
+    const pids = installHangingAkm(sandbox, 'args.includes("proposal")')
 
     const started = Date.now()
     const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), { AKM_CURATE_TIMEOUT: "3" })

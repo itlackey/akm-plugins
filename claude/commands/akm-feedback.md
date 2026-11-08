@@ -12,8 +12,6 @@ To correct a wrong fact in the asset's text, attach the exact fix, but only when
 
 An asset that simply didn't fit the task is not negative feedback: record nothing. A failed akm command (for example `akm show` erroring) is not feedback on the asset — do not record it.
 
-AKM rejects feedback on ineligible refs: `memories/`, `env/`, `secrets/`, and `lessons/` concepts, plus any concept whose quality is `proposed`. Decline those locally and say why rather than shelling out to be rejected.
-
 Run:
 
 ```sh
