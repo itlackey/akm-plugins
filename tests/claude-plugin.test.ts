@@ -443,7 +443,8 @@ exit 0
     expect(payload.hookSpecificOutput.additionalContext).toContain("update or reinstall the AKM plugin")
     expect(payload.systemMessage).toContain("dependencies are not installed")
     expect(payload.systemMessage).not.toContain("install -g")
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain(`akm_missing\tpath\t${path.join(pluginRoot, "node_modules/akm-cli/dist/cli.js")}`)
+    // The hook logs the long path; a Windows temp dir can be an 8.3 short path.
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain(`akm_missing\tpath\t${path.join(realpathSync.native(pluginRoot), "node_modules/akm-cli/dist/cli.js")}`)
   })
 
   it("takes the plugin root the host exports (CLAUDE_PLUGIN_ROOT, else PLUGIN_ROOT) over the directory the hook sits in", () => {
