@@ -540,7 +540,7 @@ export function createCore(options: CoreOptions) {
     }
   }
 
-  /** `akm info`'s bundle directory (or AKM_BUNDLE_DIR), cached; undefined when akm cannot say. */
+  /** `akm info`'s bundle directory, cached; undefined when akm cannot say. */
   function getBundleDir(): Promise<string | undefined> {
     return bundleDir.get(() => runBestEffort(undefined, ["info", "--format", "json", "-q"], { operation: "get-bundle-dir" }))
   }
@@ -590,16 +590,13 @@ export function createCore(options: CoreOptions) {
   }
 
   /**
-   * `shell.create.before` body: tell every shell the agent starts which project
-   * and plugin it is running under, and where the bundle is, so `akm` run from
-   * the shell resolves the same bundle. Mutates `env` in place. Never throws.
+   * `shell.create.before` body: tell every shell the agent starts which plugin
+   * version it is running under. Mutates `env` in place. Never throws.
    */
   async function shellEnv(env: Record<string, string | undefined>): Promise<void> {
     try {
       if (disposed) return
       if (options.pluginVersion) env.AKM_PLUGIN_VERSION = options.pluginVersion
-      const dir = await getBundleDir()
-      if (dir) env.AKM_BUNDLE_DIR = dir
     } catch (error: unknown) {
       log("error", "AKM shell.create.before hook failed", { hook: "shell.create.before", error: formatError(error) })
     }

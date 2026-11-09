@@ -1100,20 +1100,24 @@ describe("akm-opencode plugin", () => {
     })
 
     it("rides the missing-bundle warning into the system transform", async () => {
-      const previous = process.env.AKM_BUNDLE_DIR
-      process.env.AKM_BUNDLE_DIR = "/nonexistent-akm-opencode-bundle"
+      // The bundle root is `akm info`'s answer; the beforeEach mock is restored for the next test.
+      mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
+        if (args?.[0] === "info") return JSON.stringify({ bundleDir: "/nonexistent-akm-opencode-bundle" })
+        return "mock output"
+      })
       try {
-        const hooks = await AkmPlugin(createPluginInput())
+        // A fresh module instance: the bundle root is cached for the life of the plugin process.
+        const fresh = await import("../opencode/index.ts?bundle-warning")
+        const hooks = await fresh.AkmPlugin(createPluginInput())
         await hooks.event!({ event: { type: "session.created", properties: { sessionID: "bundle-warn-1" } } } as any)
         const output: { system: string[] } = { system: [] }
         await hooks["experimental.chat.system.transform"]!({ sessionID: "bundle-warn-1" } as any, output as any)
 
         expect(output.system.join("\n")).toContain(
-          "AKM bundle directory `/nonexistent-akm-opencode-bundle` does not exist. Run `akm setup` or set `AKM_BUNDLE_DIR` to an existing bundle.",
+          "AKM bundle directory `/nonexistent-akm-opencode-bundle` does not exist. Run `akm setup`.",
         )
       } finally {
-        if (previous === undefined) delete process.env.AKM_BUNDLE_DIR
-        else process.env.AKM_BUNDLE_DIR = previous
+        mockExecFileSync.mockClear()
       }
     })
 

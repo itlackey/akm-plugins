@@ -99,8 +99,24 @@ function permissionBits(filePath: string) {
   return statSync(filePath).mode & 0o777
 }
 
+// The hook takes the bundle root from `akm info`, as akm 0.11 no longer reads AKM_BUNDLE_DIR. A scripted akm
+// stub that is given AKM_BUNDLE_DIR answers `info` from it, ahead of anything the stub logs, as the real akm does.
+const INFO_MARKER = "# answers info from AKM_BUNDLE_DIR"
+function answerInfoFromBundleEnv(env: Record<string, string> | undefined) {
+  if (!env?.AKM_BUNDLE_DIR || !env.PATH) return
+  const stub = path.join(env.PATH.split(path.delimiter)[0], "akm")
+  // Only a stub the test wrote under its own temp dir; never a real akm found through PATH.
+  if (!existsSync(stub) || !realpathSync(stub).startsWith(realpathSync(tmpdir()) + path.sep)) return
+  const text = readFileSync(stub, "utf8")
+  if (!text.startsWith("#!") || text.includes(INFO_MARKER)) return
+  const [shebang, ...rest] = text.split("\n")
+  const handler = `${INFO_MARKER}\nif [ "$1" = "info" ]; then printf '{"bundleDir":"%s"}\\n' "$AKM_BUNDLE_DIR"; exit 0; fi`
+  writeFileSync(stub, [shebang, handler, ...rest].join("\n"))
+}
+
 function runHook(args: string[], options?: { input?: string; env?: Record<string, string>; cwd?: string; script?: string }) {
   let stdin: "ignore" | Blob = "ignore"
+  answerInfoFromBundleEnv(options?.env)
 
   if (options?.input !== undefined) {
     const inputPath = path.join(makeTempDir(), "stdin.txt")

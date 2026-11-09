@@ -67,12 +67,13 @@ export function createSandbox(opts: SandboxOptions = {}): Sandbox {
     XDG_STATE_HOME: stateDir,
     XDG_CONFIG_HOME: configDir,
     XDG_CACHE_HOME: cacheDir,
-    // AKM 0.9 bundle-root override. Both plugins read this first
-    // (claude/hooks/akm-hook.ts resolveStashRoots(), opencode/index.ts
-    // getAkmBundleDir()); without it they fall back to `akm info --format
-    // json` → .bundleDir. Ref validation early-returns [] when no bundle root
-    // resolves, so an unset AKM_BUNDLE_DIR silently disables ALL ref
-    // extraction — and therefore all auto-feedback.
+    // Bundle-root override for the fake akm and akm 0.10 (newer akm no longer
+    // reads it). The plugins no longer read it themselves: they take the bundle
+    // root from `akm info` (claude/hooks/akm-hook.ts resolveStashRoots(),
+    // opencode/index.ts getAkmBundleDir()), which answers from this variable.
+    // Ref validation early-returns [] when no bundle root resolves, so an unset
+    // AKM_BUNDLE_DIR silently disables ALL ref extraction — and therefore all
+    // auto-feedback.
     AKM_BUNDLE_DIR: stashDir,
     // Point the OpenCode plugin at the deterministic shim instead of the
     // akm-cli dependency it would otherwise resolve. Claude's hook reaches the

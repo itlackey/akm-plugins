@@ -384,16 +384,12 @@ function capturePromptLearning(rawInput: string, text: string, sid: string): voi
 }
 
 /**
- * Resolve the bundle root used for ref validation. Prefer AKM_BUNDLE_DIR (akm's
- * own location variable) so tests and sandboxed harnesses do not need to spawn
- * AKM, then fall back to `akm info`.
+ * Resolve the bundle root used for ref validation: `akm info`'s `bundleDir`.
  *
  * Returns an array because future work may surface multiple roots; today
  * the array has at most one entry.
  */
 function resolveStashRoots(): string[] {
-  const envOverride = process.env.AKM_BUNDLE_DIR?.trim()
-  if (envOverride) return [envOverride]
   if (akmAvailable()) {
     const raw = akmRun(["info", "--format", "json", "-q"]).trim()
     if (raw) {
@@ -724,7 +720,7 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
   const commandText = sanitize(rawCommandText)
   const outputText = sanitize(rawOutputText)
   // Extract BEFORE resolving. resolveStashRoots() shells out to `akm info`
-  // whenever AKM_BUNDLE_DIR is unset, and validateRefCandidates() throws the
+  // on every call, and validateRefCandidates() throws the
   // roots away outright on an empty candidate list — so resolving first meant
   // an `akm info` spawn on every ref-free tool event, which is nearly all of
   // them. Memoization cannot help: each Claude hook invocation is a fresh
@@ -1218,8 +1214,8 @@ function gatherSessionStartWarnings(bundleRoots: readonly string[]): string[] {
   if (!bundleDir || !existsSync(bundleDir)) {
     warnings.push(
       bundleDir
-        ? `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\` or set \`AKM_BUNDLE_DIR\` to an existing bundle.`
-        : "No AKM default bundle is configured. Run `akm setup` or set `AKM_BUNDLE_DIR`.",
+        ? `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\`.`
+        : "No AKM default bundle is configured. Run `akm setup`.",
     )
     appendLog(SESSION_LOG, "bundle_missing", bundleDir ?? "(unconfigured)")
   }
