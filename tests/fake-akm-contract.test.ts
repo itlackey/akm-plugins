@@ -187,7 +187,10 @@ describe("fake-akm envelope contract", () => {
     const fake = makeFakeEnv()
     try {
       const realEnvelope = runReal(real, ["--format", "json", "-q", "info"]) as Record<string, unknown>
+      // Without this the fake plays an akm that predates `learning`.
+      process.env.AKM_FAKE_LEARNING = "on"
       const fakeEnvelope = runFake(fake.akmPath, ["--format", "json", "-q", "info"]) as Record<string, unknown>
+      delete process.env.AKM_FAKE_LEARNING
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
       // The two fields the plugins actually consume: .bundleDir (the bundle
       // root every ref resolves against) and .assetTypes (the 0.9 asset-type

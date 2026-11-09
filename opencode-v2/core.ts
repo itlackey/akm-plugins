@@ -24,6 +24,7 @@
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractRefsFromAkmOutput } from "../claude/shared/ref-extraction"
+import { noteRetiredLearningEnv } from "../claude/shared/learning-switch"
 import { loadSessionBootstrap } from "../claude/shared/session-bootstrap"
 import { createBundleDirResolver } from "../opencode-shared/bundle"
 import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
@@ -61,7 +62,6 @@ import {
   AKM_HINTS_PREFIX,
   RECALLED_CONTENT_PROVENANCE,
   applyContextBudget,
-  autoMemoryEnabled,
   bootstrapBudgetChars,
   curatedTextChars,
   extractMinIntervalMs,
@@ -467,6 +467,7 @@ export function createCore(options: CoreOptions) {
   }
 
   async function onSessionCreated(sessionID: string): Promise<void> {
+    noteRetiredLearningEnv((message) => log("warn", message, { subsystem: "learning", sessionID }))
     const st = state(sessionID)
     void bootstrap.ensure(sessionID)
     const cwdContext = gatherCwdContext(options.directory)
@@ -481,7 +482,7 @@ export function createCore(options: CoreOptions) {
 
   /** Min-interval-gated, fire-and-forget extraction of a native session into the proposal queue. */
   function maybeExtract(sessionID: string): void {
-    if (disposed || !autoMemoryEnabled() || childSessions.has(sessionID)) return
+    if (disposed || childSessions.has(sessionID)) return
     const st = state(sessionID)
     const at = now()
     if (at - st.lastExtractAt < extractMinIntervalMs()) return

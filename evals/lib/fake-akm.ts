@@ -545,7 +545,27 @@ function xdgDir(akmVar, xdgVar, fallback) {
   return require("node:path").join(root, "akm")
 }
 
+// Learning, as akm 0.10's \`info\` reports it and \`setup --learning on|off\` flips it. A test-only
+// AKM_FAKE_LEARNING=on|off sets the starting state; unset, \`info\` carries no \`learning\` (an
+// older akm).
+const learningStatePath = path.join(path.dirname(idx.callLog), "akm-learning.json")
+function learningOn() {
+  try {
+    return JSON.parse(readFileSync(learningStatePath, "utf8")).on
+  } catch {}
+  const initial = (process.env.AKM_FAKE_LEARNING || "").trim().toLowerCase()
+  return initial === "on" ? true : initial === "off" ? false : undefined
+}
+
+if (verb === "setup" && tail[0] === "--learning") {
+  const on = tail[1] === "on"
+  writeFileSync(learningStatePath, JSON.stringify({ on }))
+  process.stdout.write(JSON.stringify({ learning: { on, harness: null, scheduled: false } }))
+  process.exit(0)
+}
+
 if (verb === "info") {
+  const learning = learningOn()
   const bundleDir = (process.env.AKM_BUNDLE_DIR || idx.bundleDir || "").trim()
   const byType = {}
   for (const a of idx.assets) byType[a.type] = (byType[a.type] || 0) + 1
@@ -589,6 +609,7 @@ if (verb === "info") {
         hasEmbeddings: false,
         vecAvailable: false,
       },
+      ...(learning === undefined ? {} : { learning: { on: learning, harness: null, scheduled: false } }),
       shape: "info",
     }),
   )

@@ -89,7 +89,7 @@ function makeSandbox() {
         XDG_DATA_HOME: path.join(home, ".data"),
         XDG_CACHE_HOME: path.join(home, ".cache"),
         PATH: sandboxPath(binDir),
-        AKM_AUTO_LEARNING: "0",
+        CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0",
         AKM_BUNDLE_DIR: fixtureStash,
         ...extra,
       },

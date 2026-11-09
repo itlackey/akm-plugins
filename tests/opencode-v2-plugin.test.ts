@@ -48,7 +48,7 @@ const defaultCurate: CurateFn = async (query) => {
 let curateImpl: CurateFn = defaultCurate
 let host: HostFake | undefined
 let fake: ReturnType<typeof freshFakeAkm>
-const ENV_KEYS = ["AKM_OPENCODE_CLI", "AKM_EXTRACT_MIN_INTERVAL_MS", "AKM_AUTO_MEMORY", "AKM_AUTO_CURATE", "AKM_RECALL_WAIT_MS", "AKM_CURATE_TIMEOUT", "AKM_AUTO_FEEDBACK", "AKM_AUTO_LEARNING", "AKM_AUTO_SKILL_PROPOSALS", "AKM_BUNDLE_DIR", "AKM_WRITE_GATE", "XDG_STATE_HOME"]
+const ENV_KEYS = ["AKM_OPENCODE_CLI", "AKM_EXTRACT_MIN_INTERVAL_MS", "AKM_AUTO_CURATE", "AKM_RECALL_WAIT_MS", "AKM_CURATE_TIMEOUT", "AKM_AUTO_FEEDBACK", "AKM_FAKE_LEARNING", "AKM_AUTO_SKILL_PROPOSALS", "AKM_BUNDLE_DIR", "AKM_WRITE_GATE", "XDG_STATE_HOME"]
 const saved: Record<string, string | undefined> = {}
 
 beforeEach(() => {
@@ -65,7 +65,7 @@ beforeEach(() => {
   fake = freshFakeAkm()
   process.env.AKM_OPENCODE_CLI = fake.akmPath
   process.env.AKM_EXTRACT_MIN_INTERVAL_MS = "600000"
-  delete process.env.AKM_AUTO_MEMORY
+  delete process.env.AKM_FAKE_LEARNING
   delete process.env.AKM_AUTO_CURATE
 })
 
@@ -227,15 +227,9 @@ describe("akm-opencode-v2 plugin", () => {
     expect(fake.calls().filter((a) => a[1] === "extract")).toHaveLength(1)
   })
 
-  it("honours AKM_AUTO_MEMORY=0 and ignores events from other projects", async () => {
-    process.env.AKM_AUTO_MEMORY = "0"
+  it("ignores events from other projects", async () => {
     host = await startPlugin(project)
     await host.subscribed
-    await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_m" }, location: { directory: project } })
-    await settle(300)
-    expect(fake.calls().some((a) => a[1] === "extract")).toBe(false)
-
-    delete process.env.AKM_AUTO_MEMORY
     await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_o" }, location: { directory: "/somewhere/else" } })
     await settle(300)
     expect(fake.calls().some((a) => a[1] === "extract")).toBe(false)
@@ -472,7 +466,7 @@ describe("akm-opencode-v2 plugin", () => {
       expect(ledger).toContain('"event":"learning_proposal"')
     })
 
-    it("does not propose the same lesson twice, and is off with AKM_AUTO_LEARNING=0", async () => {
+    it("does not propose the same lesson twice", async () => {
       host = await startPlugin(project)
       const message = "Remember that release branches are cut from main every second Thursday"
       await host.runPrompt("ses_l", message)
@@ -480,11 +474,25 @@ describe("akm-opencode-v2 plugin", () => {
       await host.runPrompt("ses_l2", message)
       await settle(400)
       expect(proposalCalls()).toHaveLength(1)
+    })
 
-      process.env.AKM_AUTO_LEARNING = "0"
-      await host.runPrompt("ses_l3", "Remember that the cache directory is wiped nightly by the janitor job")
+    it("skips the proposal quietly while akm reports learning off: not submitted, not failed", async () => {
+      process.env.AKM_FAKE_LEARNING = "off"
+      host = await startPlugin(project)
+      await host.runPrompt("ses_core_off", "Remember that the cache directory is wiped nightly by the janitor job")
+      await settle(600)
+      expect(fake.calls().some((a) => a[0] === "info")).toBe(true)
+      expect(proposalCalls()).toHaveLength(0)
+      expect(host.logs.some((line) => line.message.startsWith("AKM learning proposal"))).toBe(false)
+    })
+
+    it("never runs `akm setup --learning`: it only follows akm's switch", async () => {
+      process.env.AKM_FAKE_LEARNING = "on"
+      host = await startPlugin(project)
+      await host.subscribed
+      await host.emit({ type: "session.created", data: { sessionID: "ses_nosetup" }, location: { directory: project } })
       await settle(400)
-      expect(proposalCalls()).toHaveLength(1)
+      expect(fake.calls().some((a) => a[0] === "setup")).toBe(false)
     })
 
     it("reads the prompt `opencode run` hands over as a JSON string literal", async () => {
