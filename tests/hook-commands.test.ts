@@ -28,6 +28,7 @@ const tempDirs: string[] = []
 // The plugin reads akm's learning switch from config.json: the sandbox has it off, a case that needs learning passes the other.
 const LEARNING_OFF_CONFIG_DIR = makeConfigDir(LEARNING_OFF)
 const LEARNING_ON_CONFIG_DIR = makeConfigDir({})
+const THREE_SECOND_CONFIG_DIR = makeConfigDir({ ...LEARNING_OFF, plugins: { curateTimeoutSeconds: 3 } })
 
 function makeTempDir() {
   const dir = mkdtempSync(path.join(tmpdir(), "akm-hook-commands-"))
@@ -424,7 +425,7 @@ if (${hangsWhen}) {
     const pids = installHangingAkm(sandbox, 'args[0] === "curate"')
 
     const started = Date.now()
-    const result = runHandler(handlerFor("curate-prompt"), sandbox, payloadFor("curate-prompt", sandbox), { AKM_CURATE_TIMEOUT: "3" })
+    const result = runHandler(handlerFor("curate-prompt"), sandbox, payloadFor("curate-prompt", sandbox), { AKM_CONFIG_DIR: THREE_SECOND_CONFIG_DIR })
 
     expect(result.exitCode).toBe(0)
     // The hook gave up after its 3 s, not after akm's 90.
@@ -438,7 +439,7 @@ if (${hangsWhen}) {
     const pids = installHangingAkm(sandbox, 'args.includes("proposal")')
 
     const started = Date.now()
-    const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), { AKM_CURATE_TIMEOUT: "3" })
+    const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), { AKM_CONFIG_DIR: THREE_SECOND_CONFIG_DIR })
 
     expect(result.exitCode).toBe(0)
     expect(Date.now() - started).toBeLessThan(30_000)

@@ -2100,7 +2100,6 @@ exit 0
     const stdout = runHook(["session-end"], {
       input: JSON.stringify({ session_id: "sess-end-idx" }),
       env: {
-        AKM_INDEX_ON_SESSION_END: "1",
         HOME: tempDir,
         PATH: `${binDir}:/usr/bin:/bin`,
         XDG_STATE_HOME: stateDir,
@@ -2117,7 +2116,7 @@ exit 0
     expect(commands.some((line) => line.includes("remember"))).toBe(false)
   })
 
-  itPosix("session-end skips akm index when AKM_INDEX_ON_SESSION_END=0", () => {
+  itPosix("session-end skips akm index when plugins.indexOnSessionEnd is false", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
@@ -2138,7 +2137,7 @@ exit 0
     runHook(["session-end"], {
       input: JSON.stringify({ session_id: "sess-end-idx-off" }),
       env: {
-        AKM_INDEX_ON_SESSION_END: "0",
+        AKM_CONFIG_DIR: makeConfigDir({ plugins: { indexOnSessionEnd: false } }),
         HOME: tempDir,
         PATH: `${binDir}:/usr/bin:/bin`,
         XDG_STATE_HOME: stateDir,
@@ -2170,7 +2169,6 @@ exit 0
     runHook(["session-end"], {
       input: JSON.stringify({ session_id: "sess-end-idx-fail" }),
       env: {
-        AKM_INDEX_ON_SESSION_END: "1",
         HOME: tempDir,
         PATH: `${binDir}:/usr/bin:/bin`,
         XDG_STATE_HOME: stateDir,
@@ -2224,7 +2222,6 @@ exit 0
     const stdout = runHook(["session-end"], {
       input: JSON.stringify({ session_id: "sess-end-idx-detached" }),
       env: {
-        AKM_INDEX_ON_SESSION_END: "1",
         HOME: tempDir,
         PATH: `${binDir}:/usr/bin:/bin`,
         XDG_STATE_HOME: stateDir,
