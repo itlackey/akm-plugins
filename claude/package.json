@@ -14,6 +14,6 @@
     "README.md"
   ],
   "dependencies": {
-    "akm-cli": "0.10.261115-beta"
+    "akm-cli": "0.10.261022"
   }
 }
