@@ -37,6 +37,12 @@
       "description": "Submit positive `akm feedback` for concepts a successful tool call used, and credit concepts when you say something worked. A failed akm command is never recorded as feedback. Turn off to record feedback only via /akm-feedback. Equivalent to AKM_AUTO_FEEDBACK.",
       "default": true
     },
+    "auto_learning": {
+      "type": "boolean",
+      "title": "Propose durable learnings automatically",
+      "description": "Capture explicit memories, corrections, guardrails, and preferences from prompts and submit high-confidence AKM proposals for review. Repeated task intents across distinct sessions can also propose reusable skills. Turning it off stops all of AKM's automatic learning for this library, including the scheduled `improve` run: at session start the plugin runs `akm setup --learning off`, and turns it back on if the plugin was what turned it off.",
+      "default": true
+    },
     "curate_limit": {
       "type": "number",
       "title": "Curated results per prompt",

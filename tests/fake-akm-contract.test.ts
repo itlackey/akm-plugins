@@ -523,37 +523,6 @@ describe("fake-akm envelope contract", () => {
       cleanup(fake)
     }
   }, REAL_AKM_TIMEOUT_MS)
-
-  // The learning-off answers below were recorded from akm's feat/learning-cli build (PR 1516);
-  // a real akm without that switch cannot be asked, so they are pinned on the fake alone.
-  test("learning off: proposal new --if-learning is skipped and extract is a clean no-op", () => {
-    const fake = makeFakeEnv()
-    try {
-      const env = { ...process.env, AKM_FAKE_LEARNING: "off" }
-      const skipped = runRaw(fake.akmPath, ["proposal", "new", "memory", "x", "--if-learning", "--format", "json", "-q"], env)
-      expect(skipped.exitCode).toBe(0)
-      expect(JSON.parse(skipped.stdout)).toEqual({ schemaVersion: 2, ok: true, skipped: "learning-off" })
-      expect(skipped.stderr.trim()).toBe("")
-
-      const without = runRaw(fake.akmPath, ["proposal", "new", "memory", "x", "--format", "json", "-q"], env)
-      expect(JSON.parse(without.stdout).ok).toBe(true)
-      expect(JSON.parse(without.stdout).skipped).toBeUndefined()
-
-      const extract = runRaw(fake.akmPath, ["proposal", "extract", "--type", "claude", "--session-id", "s"], env)
-      expect(extract.exitCode).toBe(0)
-      expect(extract.stderr.trim()).toBe("")
-      const envelope = JSON.parse(extract.stdout) as Record<string, unknown>
-      expect(envelope.ok).toBe(true)
-      expect(envelope.sessionsProcessed).toBe(0)
-      expect(envelope.sessionsSkipped).toBe(0)
-      expect(Array.isArray(envelope.warnings) && envelope.warnings.length).toBe(1)
-
-      const on = runRaw(fake.akmPath, ["proposal", "new", "memory", "x", "--if-learning", "--format", "json", "-q"], process.env)
-      expect(JSON.parse(on.stdout).skipped).toBeUndefined()
-    } finally {
-      cleanup(fake)
-    }
-  })
 })
 
 type RealEnv = {

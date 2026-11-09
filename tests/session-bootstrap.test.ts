@@ -334,7 +334,7 @@ describe("session-start hook", () => {
     const result = runClaudeHandler(handler, {
       pluginRoot: pluginDir,
       cwd: world.acme,
-      env: hostEnv({ HOME: home, XDG_STATE_HOME: stateHome, PATH: sandboxPath(world.binDir), AKM_FAKE_LEARNING: "off", ...env }, (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name)),
+      env: hostEnv({ HOME: home, XDG_STATE_HOME: stateHome, PATH: sandboxPath(world.binDir), AKM_AUTO_LEARNING: "0", ...env }, (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name)),
       stdin: Bun.file(inputPath),
     })
     expect(result.exitCode).toBe(0)
@@ -424,7 +424,7 @@ describe("session-start hook", () => {
     const result = runClaudeHandler(promptHandler, {
       pluginRoot: pluginDir,
       cwd: world.acme,
-      env: hostEnv({ HOME: path.join(world.root, "home"), XDG_STATE_HOME: path.join(world.root, "xdg-state"), PATH: sandboxPath(world.binDir), AKM_FAKE_LEARNING: "off" }, (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name)),
+      env: hostEnv({ HOME: path.join(world.root, "home"), XDG_STATE_HOME: path.join(world.root, "xdg-state"), PATH: sandboxPath(world.binDir), AKM_AUTO_LEARNING: "0" }, (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name)),
       stdin: Bun.file(inputPath),
     })
     expect(result.exitCode).toBe(0)

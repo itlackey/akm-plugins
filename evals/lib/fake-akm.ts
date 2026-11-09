@@ -545,7 +545,31 @@ function xdgDir(akmVar, xdgVar, fallback) {
   return require("node:path").join(root, "akm")
 }
 
+// Learning, as akm 0.10's \`info\` reports it and \`setup --learning on|off\` flips it. A test-only
+// AKM_FAKE_LEARNING=on|off sets the starting state; unset, \`info\` carries no \`learning\` (an
+// older akm). AKM_FAKE_LEARNING_SETUP_FAILS=1 makes the flip fail.
+const learningStatePath = path.join(path.dirname(idx.callLog), "akm-learning.json")
+function learningOn() {
+  try {
+    return JSON.parse(readFileSync(learningStatePath, "utf8")).on
+  } catch {}
+  const initial = (process.env.AKM_FAKE_LEARNING || "").trim().toLowerCase()
+  return initial === "on" ? true : initial === "off" ? false : undefined
+}
+
+if (verb === "setup" && tail[0] === "--learning") {
+  if (process.env.AKM_FAKE_LEARNING_SETUP_FAILS) {
+    process.stderr.write(JSON.stringify({ ok: false, error: "setup failed" }))
+    process.exit(1)
+  }
+  const on = tail[1] === "on"
+  writeFileSync(learningStatePath, JSON.stringify({ on }))
+  process.stdout.write(JSON.stringify({ ok: true, learning: { on, agent: null, scheduled: false }, shape: "setup", schemaVersion: 1 }))
+  process.exit(0)
+}
+
 if (verb === "info") {
+  const learning = learningOn()
   const bundleDir = (process.env.AKM_BUNDLE_DIR || idx.bundleDir || "").trim()
   const byType = {}
   for (const a of idx.assets) byType[a.type] = (byType[a.type] || 0) + 1
@@ -589,6 +613,7 @@ if (verb === "info") {
         hasEmbeddings: false,
         vecAvailable: false,
       },
+      ...(learning === undefined ? {} : { learning: { on: learning, agent: null, scheduled: false } }),
       shape: "info",
     }),
   )
@@ -705,16 +730,7 @@ if (verb === "proposal" && tail[0] === "list") {
 // Learning capture is intentionally fire-and-forget in both plugins. The fake
 // does not run an authoring agent, but it returns the success fields the
 // plugin's completion bookkeeping consumes so evals exercise that boundary.
-// A fake-only switch standing in for akm's own learning setting: AKM_FAKE_LEARNING=off
-// makes \`--if-learning\` answer the real skipped envelope (pinned against PR 1516's akm)
-// and \`proposal extract\` the real no-op. Learning is on when unset.
-const learningOff = (process.env.AKM_FAKE_LEARNING || "").trim().toLowerCase() === "off"
-
 if (verb === "proposal" && tail[0] === "new") {
-  if (learningOff && argv.includes("--if-learning")) {
-    process.stdout.write(JSON.stringify({ schemaVersion: 2, ok: true, skipped: "learning-off" }))
-    process.exit(0)
-  }
   const type = tail[1] || "instruction"
   const name = tail[2] || "captured-learning"
   const ref = (type === "skill" ? "skills/" : type === "memory" ? "memories/" : "instructions/") + name
@@ -753,22 +769,6 @@ if (verb === "proposal" && tail[0] === "new") {
 // binary. Writing to stderr here is the documented fake-CLI exception to the
 // no-stderr-logging rule in AGENTS.md.
 if (verb === "proposal" && tail[0] === "extract") {
-  if (learningOff) {
-    process.stdout.write(
-      JSON.stringify({
-        ok: true,
-        schemaVersion: 1,
-        shape: "extract-result",
-        sessionsProcessed: 0,
-        sessionsSkipped: 0,
-        candidatesCreated: 0,
-        proposals: [],
-        sessions: [],
-        warnings: ["extract is disabled by improve.strategies.<strategy>.processes.extract.enabled: false in your config"],
-      }),
-    )
-    process.exit(0)
-  }
   process.stderr.write(
     JSON.stringify({
       ok: false,
