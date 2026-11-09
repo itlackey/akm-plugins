@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { IS_WINDOWS, LEARNING_OFF, hostEnv, itPosix, makeConfigDir } from "./host-runtime"
+import { IS_WINDOWS, LEARNING_OFF, PLUGIN_DIR, hostEnv, installScriptedAkm, itPosix, makeBinDir, makeConfigDir, sandboxPath } from "./host-runtime"
 
 const repoRoot = path.resolve(import.meta.dir, "..")
-const hookScript = path.join(repoRoot, "claude/hooks/akm-hook.ts")
+// The hook runs from a copy of the plugin whose bundled akm-cli hands its arguments to the akm on PATH (see PLUGIN_DIR).
+const hookScript = path.join(PLUGIN_DIR, "hooks/akm-hook.ts")
 const pluginJsonPath = path.join(repoRoot, "claude/.claude-plugin/plugin.json")
 const claudePackageJsonPath = path.join(repoRoot, "claude/package.json")
 const marketplaceJsonPath = path.join(repoRoot, ".claude-plugin/marketplace.json")
@@ -98,7 +99,7 @@ function permissionBits(filePath: string) {
   return statSync(filePath).mode & 0o777
 }
 
-function runHook(args: string[], options?: { input?: string; env?: Record<string, string>; cwd?: string }) {
+function runHook(args: string[], options?: { input?: string; env?: Record<string, string>; cwd?: string; script?: string }) {
   let stdin: "ignore" | Blob = "ignore"
 
   if (options?.input !== undefined) {
@@ -113,14 +114,14 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
   // off (`improve.enabled: false`) unless a case passes a config of its own, so a
   // test that inherits a real akm on PATH cannot enqueue a proposal in the
   // developer's actual bundle.
-  const result = Bun.spawnSync([process.execPath, hookScript, ...args], {
+  const result = Bun.spawnSync([process.execPath, options?.script ?? hookScript, ...args], {
     cwd: options?.cwd ?? repoRoot,
     env: hostEnv(
       {
         AKM_CONFIG_DIR: args.includes("extract-session") ? process.env.AKM_CONFIG_DIR : LEARNING_OFF_CONFIG_DIR,
         ...options?.env,
       },
-      (key) => key.startsWith("AKM_") || key.startsWith("XDG_") || key === "CLAUDE_PROJECT_DIR",
+      (key) => key.startsWith("AKM_") || key.startsWith("XDG_") || key === "CLAUDE_PROJECT_DIR" || key === "CLAUDE_PLUGIN_ROOT" || key === "PLUGIN_ROOT",
     ),
     stdio: [stdin, "pipe", "pipe"],
   })
@@ -141,7 +142,7 @@ function runShellShim(args: string[], options?: { input?: string; env?: Record<s
     stdin = Bun.file(inputPath)
   }
 
-  return Bun.spawnSync(["sh", path.join(repoRoot, "claude/hooks/akm-hook.sh"), ...args], {
+  return Bun.spawnSync(["sh", path.join(PLUGIN_DIR, "hooks/akm-hook.sh"), ...args], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -248,7 +249,8 @@ describe("Claude plugin metadata", () => {
       "akm-search.md",
       "akm-show.md",
     ])
-    // Every command body shells out to `akm`, so each declares exactly the akm
+    // Every command body shells out to the akm-cli the plugin carries
+    // (`bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" <verb> ...`), so each declares exactly the akm
     // invocations it runs. Without the grant the first thing a /akm-* turn does
     // is stop for a Bash permission prompt. The grant is per-command on
     // purpose: it lasts only the turn that invoked the command, so a command
@@ -262,7 +264,7 @@ describe("Claude plugin metadata", () => {
     // takes a space- or comma-separated list of tool patterns, and a Bash
     // pattern is the command prefix with a trailing `*`
     // (`Bash(git add *) Bash(git commit *)` in the skills reference).
-    const ALLOWED_TOOLS_ENTRY_RE = /^Bash\(akm ([a-z][a-z-]*) \*\)$/
+    const ALLOWED_TOOLS_ENTRY_RE = /^Bash\(bun \*akm-cli\/dist\/cli\.js\* ([a-z][a-z-]*) \*\)$/
     const expectedVerbs: Record<string, string[]> = {
       "akm-curate.md": ["curate"],
       "akm-feedback.md": ["feedback", "show"],
@@ -293,6 +295,19 @@ describe("Claude plugin metadata", () => {
       expect(verbs[0]).toBe(name.replace(/^akm-|\.md$/g, ""))
       expect(verbs).toEqual(expectedVerbs[name])
     }
+  })
+
+  it("points every command's code blocks, and the skill, at the akm-cli the plugin carries through CLAUDE_PLUGIN_ROOT", () => {
+    const cli = 'bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js"'
+    const commandsDir = path.join(repoRoot, "claude/commands")
+    for (const name of readdirSync(commandsDir).filter((file) => file.endsWith(".md"))) {
+      const text = readFileSync(path.join(commandsDir, name), "utf8")
+      expect(`${name} runs ${cli}: ${text.includes(cli)}`).toBe(`${name} runs ${cli}: true`)
+      // A code block that starts a bare `akm` would run the one on PATH, which the command's grant does not cover.
+      const blocks = [...text.matchAll(/```sh\n([\s\S]*?)```/g)].map((match) => match[1])
+      for (const block of blocks) expect(`${name}: ${block}`).not.toMatch(/^akm /m)
+    }
+    expect(readFileSync(akmSkillPath, "utf8")).toContain(`\`${cli} <args>\``)
   })
 
   it("documents direct AKM agent dispatch through Bash", () => {
@@ -382,7 +397,7 @@ describe("Claude plugin metadata", () => {
 })
 
 describe("Claude hook scripts", () => {
-  itPosix("reuses akm on PATH when its version meets the minimum", () => {
+  itPosix("runs the akm-cli the plugin carries and logs which one", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
     const stateDir = path.join(tempDir, "state")
@@ -392,10 +407,6 @@ describe("Claude hook scripts", () => {
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
-if [ "$1" = "--version" ]; then
-  echo "akm 0.10.26101002"
-  exit 0
-fi
 exit 0
 `,
     )
@@ -409,13 +420,53 @@ exit 0
       },
     })
 
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("akm_ready\tpath")
-    expect(getFirstLogEntry(stateDir, "session.log")).toContain("0.10.26101002")
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain(`akm_ready\tpath\t${path.join(PLUGIN_DIR, "node_modules/akm-cli/dist/cli.js")}`)
+  })
+
+  it("session-start says the plugin's dependencies are missing when it carries no akm-cli, whatever akm is on PATH", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    const pluginRoot = path.join(tempDir, "plugin")
+    cpSync(path.join(PLUGIN_DIR, "hooks"), path.join(pluginRoot, "hooks"), { recursive: true })
+    cpSync(path.join(PLUGIN_DIR, "shared"), path.join(pluginRoot, "shared"), { recursive: true })
+    // An akm on PATH that would answer every call: the hook must not look at it.
+    const binDir = makeBinDir(tempDir)
+    installScriptedAkm(binDir, `process.stdout.write("{}")`)
+
+    const output = runHook(["session-start"], {
+      script: path.join(pluginRoot, "hooks/akm-hook.ts"),
+      env: { HOME: tempDir, PATH: sandboxPath(binDir), XDG_STATE_HOME: stateDir },
+    })
+
+    const payload = JSON.parse(output)
+    expect(payload.hookSpecificOutput.additionalContext).toContain("# AKM is NOT available in this session")
+    expect(payload.hookSpecificOutput.additionalContext).toContain("update or reinstall the AKM plugin")
+    expect(payload.systemMessage).toContain("dependencies are not installed")
+    expect(payload.systemMessage).not.toContain("install -g")
+    // The hook logs the long path; a Windows temp dir can be an 8.3 short path.
+    expect(getFirstLogEntry(stateDir, "session.log")).toContain(`akm_missing\tpath\t${path.join(realpathSync.native(pluginRoot), "node_modules/akm-cli/dist/cli.js")}`)
+  })
+
+  it("takes the plugin root the host exports (CLAUDE_PLUGIN_ROOT, else PLUGIN_ROOT) over the directory the hook sits in", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    const binDir = makeBinDir(tempDir)
+    installScriptedAkm(binDir, `process.stdout.write("{}")`)
+    const exported = path.join(tempDir, "exported-root")
+    mkdirSync(exported, { recursive: true })
+    const cli = path.join(exported, "node_modules/akm-cli/dist/cli.js")
+
+    // Neither exported root carries an akm-cli, so the hook says so and names the one it looked for.
+    for (const env of [{ CLAUDE_PLUGIN_ROOT: exported }, { PLUGIN_ROOT: exported }]) {
+      rmSync(stateDir, { recursive: true, force: true })
+      runHook(["session-start"], { env: { HOME: tempDir, PATH: sandboxPath(binDir), XDG_STATE_HOME: stateDir, ...env } })
+      expect(getFirstLogEntry(stateDir, "session.log")).toContain(`akm_missing\tpath\t${cli}`)
+    }
   })
 
   it("extract-session dispatches cleanly and returns no output (fire-and-forget)", () => {
     const tempDir = makeTempDir()
-    // No `akm` on PATH → resolveAkmCommandSpec() is null → handler is a clean no-op.
+    // No `akm` on PATH: the bridged akm-cli exits 127, so every akm call fails and the handler is a clean no-op.
     const env = { HOME: tempDir, PATH: "/usr/bin:/bin", XDG_STATE_HOME: path.join(tempDir, "state") }
     // Normal termination: dispatch must succeed and emit nothing on stdout.
     expect(
@@ -2258,6 +2309,35 @@ exit 0
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemories/release-retro\takm remember --name release-retro")
   })
 
+  it("derives a memory ref from a bundled akm remember --name", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["post-tool", "success"], {
+      input: JSON.stringify({
+        tool: "Bash",
+        input: { command: 'bun "/p/node_modules/akm-cli/dist/cli.js" remember --name x --format json -q' },
+        output: "{\"ok\":true}",
+      }),
+      env: { HOME: tempDir, PATH: process.env.PATH ?? "/usr/bin:/bin", XDG_STATE_HOME: stateDir },
+    })
+
+    expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemories/x\takm remember --name x")
+  })
+
+  itPosix("session-start says what `akm` means in the session: the CLI the plugin carries, by path", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    mkdirSync(binDir, { recursive: true })
+    writeFileSync(path.join(binDir, "akm"), "#!/usr/bin/env sh\nexit 0\n")
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    const payload = JSON.parse(runHook(["session-start"], { env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: path.join(tempDir, "state") } }))
+
+    expect(payload.hookSpecificOutput.additionalContext).toContain(`\`akm\` means \`bun "${path.join(PLUGIN_DIR, "node_modules/akm-cli/dist/cli.js")}"\``)
+  })
+
   itPosix("auto-feedback records run scope locally without passing it to AKM", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
@@ -2680,6 +2760,11 @@ exit 0
         "akm search skills/code-review",
         "akm curate skills/code-review",
         "/akm-show skills/code-review",
+        // The commands run the CLI the plugin carries by path; the guard reads that as `akm show`.
+        'bun "/home/u/.claude/plugins/cache/akm-plugins/akm/0.10.1/node_modules/akm-cli/dist/cli.js" show skills/code-review --format json -q',
+        "bun /opt/plug/node_modules/akm-cli/dist/cli.js search skills/code-review",
+        'bun "C:\\Users\\Jane Doe\\plug\\node_modules\\akm-cli\\dist\\cli.js" show skills/code-review',
+        "cd /repo && bun '/p q/node_modules/akm-cli/dist/cli.js' curate skills/code-review",
       ]) {
         runHook(["auto-feedback", "success"], {
           input: JSON.stringify({

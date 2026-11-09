@@ -1,0 +1,14 @@
+{
+  "name": "akm-plugins",
+  "private": true,
+  "description": "Development tooling for the plugins in this repository; each plugin has its own package.json.",
+  "license": "MPL-2.0",
+  "scripts": {
+    "typecheck": "tsc -p claude/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^26.1.1",
+    "typescript": "^5.8.3"
+  }
+}

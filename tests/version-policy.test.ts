@@ -1,12 +1,11 @@
 // Versioning policy: the plugins keep MAJOR.MINOR in sync with the akm CLI
 // line they target, and let PATCH diverge freely inside that minor.
 //
-// The sync point is AKM_MIN_VERSION in claude/shared/akm-version.ts, a minimum
-// akm version. Its MAJOR.MINOR is the akm line the plugins target, so "plugins
-// are 0.10.x while akm is 0.10.x" is what that constant says; the hook itself
-// only refuses an akm BELOW the floor.
+// The sync point is the akm-cli the plugins exact-pin (opencode/package.json; claude/package.json and both OpenCode
+// packages carry the same one). Its MAJOR.MINOR is the akm line the plugins target, so "plugins are 0.10.x while
+// akm is 0.10.x" is what that pin says; the plugins run the akm-cli they carry and apply no floor of their own.
 // This file makes the invariant enforced rather than conventional: six version
-// fields, Claude's install ref, and OpenCode's exact package/lockfile pins all
+// fields and the exact package/lockfile pins of all three plugins
 // restate the same fact by hand, and nothing previously stopped them drifting.
 //
 // Patch divergence is deliberate. A plugin-only fix — the issue #86 startup
@@ -17,13 +16,15 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 
-import { AKM_MIN_VERSION, meetsAkmMinVersion } from "../claude/shared/akm-version"
-import { valid } from "../claude/shared/vendor-semver"
+import { valid } from "./semver"
 import { deriveRelease } from "../scripts/release-version"
 
 const REPO_ROOT = path.join(import.meta.dir, "..")
 const readText = (relative: string): string => readFileSync(path.join(REPO_ROOT, relative), "utf8")
 const readJson = (relative: string): Record<string, any> => JSON.parse(readText(relative))
+
+// The akm-cli every plugin exact-pins: the OpenCode package is where the workflows read it from.
+const AKM_PIN: string = readJson("opencode/package.json").dependencies["akm-cli"]
 
 /** `0.10.261001` -> `0.10`. Returns null for anything that is not plain semver. */
 function minorLine(version: string): string | null {
@@ -43,13 +44,6 @@ const VERSION_FIELDS: Array<{ file: string; read: () => string }> = [
 ]
 
 describe("version policy", () => {
-  test("the akm floor is one plain release version", () => {
-    // "MAJOR.MINOR in sync" needs a single answer: a stable x.y.z, no range operators and no prerelease tag
-    // (the check compares the release core, so a tag on the floor would be meaningless).
-    expect(AKM_MIN_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
-    expect(valid(AKM_MIN_VERSION)).toBe(AKM_MIN_VERSION)
-  })
-
   test("every stamped version is plain semver", () => {
     // Guards the format directly. A four-component version like
     // `0.9.14.20260904.1` reads as a reasonable way to encode a dated build, but
@@ -82,7 +76,7 @@ describe("version policy", () => {
   })
 
   test("the plugin minor line matches the akm line the plugins target", () => {
-    const expected = minorLine(AKM_MIN_VERSION)
+    const expected = minorLine(AKM_PIN)
     expect(expected).not.toBeNull()
     for (const { file, read } of VERSION_FIELDS) {
       expect(`${file}: ${minorLine(read())}`).toBe(`${file}: ${expected}`)
@@ -93,28 +87,11 @@ describe("version policy", () => {
     // Not a drift check — an executable statement of the policy, so that a
     // future change tightening patch back into lockstep fails here and has to
     // argue with the comment at the top of this file instead of sliding in.
-    const floorPatch = AKM_MIN_VERSION
     for (const candidate of ["0.10.0", "0.10.261001", "0.10.261002-rc"]) {
-      expect(minorLine(candidate)).toBe(minorLine(floorPatch))
+      expect(minorLine(candidate)).toBe(minorLine(AKM_PIN))
     }
-    expect(minorLine("0.9.30")).not.toBe(minorLine(floorPatch))
-    expect(minorLine("0.11.0")).not.toBe(minorLine(floorPatch))
-  })
-
-  test("the floor is a minimum: only a build below it is refused, and a prerelease is judged by its release core", () => {
-    // claude/shared/akm-version.ts drops a prerelease tag before comparing, so a
-    // newer build is never refused for being a prerelease, and there is no ceiling:
-    // the next minor line (0.11) and later majors pass until the floor is raised.
-    // The 0.10 patch is a 6-digit monthly release number (YYMMNN), so the floor is
-    // compared as a number, not as text. The retired 8-digit daily alphas compare
-    // numerically higher and so also pass; that is accepted (akm#1089,
-    // tests/release-version.test.ts).
-    for (const version of ["0.10.261111-beta", "0.10.261111", "0.10.261144", "0.10.26101002-alpha", "0.11.0", "0.11.0-beta.1", "1.0.0"]) {
-      expect(`${version}: ${meetsAkmMinVersion(version)}`).toBe(`${version}: true`)
-    }
-    for (const version of ["0.10.261000", "0.10.260901", "0.9.31-alpha.3", "0.9.99"]) {
-      expect(`${version}: ${meetsAkmMinVersion(version)}`).toBe(`${version}: false`)
-    }
+    expect(minorLine("0.9.30")).not.toBe(minorLine(AKM_PIN))
+    expect(minorLine("0.11.0")).not.toBe(minorLine(AKM_PIN))
   })
 
   test("the release workflow derives the version instead of accepting a typed one", () => {
@@ -152,7 +129,7 @@ describe("version policy", () => {
     const derive = (akm: string, stamp: string): string => deriveRelease(akm, at(stamp), () => []).version
     const patchOf = (version: string): number => Number(valid(version)!.split(".")[2])
 
-    expect(minorLine(derive("0.10.261001-beta", "202610100000"))).toBe(minorLine(AKM_MIN_VERSION))
+    expect(minorLine(derive("0.10.261001-beta", "202610100000"))).toBe(minorLine(AKM_PIN))
 
     // The two typo'd releases already on npm must be cleared by the scheme.
     const published = patchOf("0.9.202808220049")
@@ -178,8 +155,6 @@ describe("version policy", () => {
     const next = derive("0.9.31-alpha.4", "202610080512")
     expect(next).toBe("0.9.31-alpha.4.202610080512")
     expect(valid(next)).toBe(next)
-    // The 0.10 scheme (no timestamp suffix) is the one the floor accepts.
-    expect(meetsAkmMinVersion(deriveRelease("0.10.261111-beta", new Date(Date.UTC(2026, 10, 13)), () => ["0.10.261108-beta", "0.10.261109-beta", "0.10.261110-beta"]).version)).toBe(true)
 
     // Below the stable it precedes, above the akm prerelease it targets, and
     // above the previous next (including the stale 0.8.0-rc.8 on npm today).
@@ -196,16 +171,17 @@ describe("version policy", () => {
 
     // Validation; the monotonicity guard runs against the `next` tag.
     expect(workflow).toContain("`dist-tags.${channel}`")
-    expect(workflow).toContain("is below AKM_MIN_VERSION")
     expect(workflow).toContain("is not on npm. Publish that akm prerelease first")
 
-    // The pin and lockfile are build-only: staged and committed in the next
-    // branch, which never reaches `git push`; the stable branch is unchanged.
+    // The pins and lockfiles are build-only: staged and committed in the next branch, which never pushes main;
+    // the stable branch pushes the bump and nothing else to the default branch, after the tag exists.
     const commit = workflow.slice(workflow.indexOf("- name: Commit and tag"), workflow.indexOf("publish-opencode:"))
     const [nextBranch, stableBranch] = commit.split("elif ! git diff --cached --quiet; then")
-    expect(nextBranch).toContain("git add opencode/bun.lock")
-    expect(nextBranch).not.toContain("git push\n")
-    expect(stableBranch).toContain("git push\n")
+    expect(nextBranch).toContain("git add opencode/bun.lock opencode-v2/bun.lock claude/bun.lock")
+    expect(nextBranch).not.toContain("git push")
+    expect(stableBranch).toContain("git commit -m")
+    const mainPush = commit.indexOf('git push origin "$MAIN_SHA:')
+    expect(commit.slice(commit.lastIndexOf("if [", mainPush), mainPush)).toContain('!= "true"')
     expect(workflow).toContain('npm pkg set "dependencies.akm-cli=$AKM_VERSION"')
 
     // Published under `next`, and released as a prerelease.
@@ -221,8 +197,10 @@ describe("version policy", () => {
 
     const steps = [
       "- name: Pin akm-cli to the akm prerelease",
+      "- name: Install claude deps",
       "- name: Install opencode deps",
       "- name: Install opencode-v2 deps",
+      "- name: Typecheck claude plugin",
       "- name: Typecheck opencode plugin",
       "- name: Typecheck opencode-v2 plugin",
       "- name: Run integration tests",
@@ -236,52 +214,68 @@ describe("version policy", () => {
     expect(order.join(" < ")).toBe([...order].sort((a, b) => a - b).join(" < "))
   })
 
-  test("Claude's install ref is derived from the floor and both OpenCode packages exact-pin one akm-cli at or above it", () => {
-    // The Claude hook has no package manager behind it (git marketplace, no
-    // npm deps), so its ref is what a user is told to install. OpenCode imports
-    // private dist modules in process, so both its manifest and lockfile must
-    // resolve exactly one CLI version we tested rather than a future patch.
-    //
-    // The pin only has to be at or above the floor. A stable plugin release
-    // requires the pin to equal akm_version (itself at or above the floor); a `next` release
-    // (a prerelease akm_version) sets the pins in its tagged commit too. The pins
-    // on this branch are the build the plugins were last tested with, which meets the
-    // floor. Do not hand-edit the pins to a version that is not on npm yet.
-    // The two manifests and their lockfiles are the only place the version is written:
-    // tests.yml reads it from opencode/package.json (the next test).
-    //
-    // The ref is a range, not a pin: npm's `latest` for akm-cli can sit below the
-    // floor (0.9.x), so a bare `akm-cli` would install an akm the hook refuses.
-    // `-0` is the lowest prerelease, so it admits the floor's own 0.10.261111-beta.
-    const expectedRef = "akm-cli@>=${AKM_MIN_VERSION}-0"
-
-    const packageRef = /AKM_PACKAGE_REF\s*\?\?\s*`([^`]+)`/.exec(readText("claude/hooks/akm-hook.ts"))?.[1]
-    expect(`claude/hooks/akm-hook.ts: ${packageRef}`).toBe(`claude/hooks/akm-hook.ts: ${expectedRef}`)
-
-    const pin = readJson("opencode/package.json").dependencies["akm-cli"]
-    expect(`opencode/package.json akm-cli ${pin} >= ${AKM_MIN_VERSION}: ${meetsAkmMinVersion(pin)}`).toBe(
-      `opencode/package.json akm-cli ${pin} >= ${AKM_MIN_VERSION}: true`,
-    )
-    expect(valid(pin)).toBe(pin)
-
-    // The same pin in both OpenCode packages: they share one set of AKM databases,
-    // so they must never run different CLIs.
-    for (const dir of ["opencode", "opencode-v2"]) {
-      expect(`${dir}/package.json akm-cli: ${readJson(`${dir}/package.json`).dependencies["akm-cli"]}`).toBe(`${dir}/package.json akm-cli: ${pin}`)
+  test("the Claude/Codex plugin and both OpenCode packages exact-pin one akm-cli, in their manifests and lockfiles", () => {
+    // Every plugin runs the akm-cli it carries, in process or under Bun, against the user's shared AKM databases:
+    // one CLI version we tested, never a range and never two plugins disagreeing about which CLI owns those databases.
+    // A stable plugin release requires the pin to equal akm_version; a `next` release (a prerelease akm_version) sets
+    // the pins in its tagged commit, so the pins here are the build the plugins were last tested with. Do not
+    // hand-edit them to a version that is not on npm yet. Claude Code installs claude/'s dependencies only when
+    // claude/package.json and claude/bun.lock agree, so the release step that sets the pin regenerates the lock.
+    expect(valid(AKM_PIN)).toBe(AKM_PIN)
+    for (const dir of ["claude", "opencode", "opencode-v2"]) {
+      expect(`${dir}/package.json akm-cli: ${readJson(`${dir}/package.json`).dependencies["akm-cli"]}`).toBe(`${dir}/package.json akm-cli: ${AKM_PIN}`)
       const lock = readText(`${dir}/bun.lock`)
-      expect(lock).toContain(`"akm-cli": "${pin}"`)
-      expect(lock).toContain(`"akm-cli": ["akm-cli@${pin}",`)
+      expect(`${dir}/bun.lock pins ${AKM_PIN}: ${lock.includes(`"akm-cli": "${AKM_PIN}"`)}`).toBe(`${dir}/bun.lock pins ${AKM_PIN}: true`)
+      expect(`${dir}/bun.lock resolves ${AKM_PIN}: ${lock.includes(`"akm-cli": ["akm-cli@${AKM_PIN}",`)}`).toBe(`${dir}/bun.lock resolves ${AKM_PIN}: true`)
     }
   })
 
-  test("the akm-cli pin is written in the two OpenCode manifests and their lockfiles only: the workflows read it", () => {
-    // One home for the pin, so moving it is a two-file edit plus the lockfiles. tests.yml's Windows job installs the
-    // akm-cli the packages pin, read from opencode/package.json (the test above makes the two manifests equal), and
-    // release.yml sets the pin from akm_version for a `next` release, so neither workflow names a version.
-    expect(readText(".github/workflows/tests.yml")).toContain(`node -p "require('./opencode/package.json').dependencies['akm-cli']"`)
-    for (const file of [".github/workflows/tests.yml", ".github/workflows/release.yml"]) {
-      expect(`${file} names an akm-cli version: ${/akm-cli@\d/.test(readText(file))}`).toBe(`${file} names an akm-cli version: false`)
+  test("the Claude plugin installs only akm-cli: development tooling lives at the repository root", () => {
+    // Claude Code installs every dependency of claude/package.json (dev ones too) into each cached copy of the plugin.
+    const manifest = readJson("claude/package.json")
+    expect(Object.keys(manifest.dependencies)).toEqual(["akm-cli"])
+    expect(manifest.devDependencies).toBeUndefined()
+    expect(Object.keys(readJson("package.json").devDependencies).sort()).toEqual(["@types/bun", "@types/node", "typescript"])
+    // claude.ai and Cowork refuse a plugin that has a top-level bin/, so commands and skills reach the CLI another way.
+    expect(existsSync(path.join(REPO_ROOT, "claude/bin"))).toBe(false)
+  })
+
+  test("the plugin's one akm is the bundled akm-cli: no floor, PATH lookup, install hint or local-build variable remains", () => {
+    const retired = [
+      ["claude/hooks/akm-hook.ts", ["AKM_MIN_VERSION", "AKM_PACKAGE_REF", "AKM_INSTALL_COMMAND", "AKM_LOCAL_BUILD_CLI", "findCommandOnPath", "meetsAkmMinVersion"]],
+      [".github/workflows/release.yml", ["AKM_MIN_VERSION", "akm-version.ts"]],
+    ] as const
+    for (const [file, names] of retired) {
+      const text = readText(file)
+      for (const name of names) expect(`${file} mentions ${name}: ${text.includes(name)}`).toBe(`${file} mentions ${name}: false`)
     }
+    expect(existsSync(path.join(REPO_ROOT, "claude/shared/akm-version.ts"))).toBe(false)
+    expect(readText("claude/hooks/akm-hook.ts")).toContain('path.join(PLUGIN_ROOT, "node_modules", "akm-cli", "dist", "cli.js")')
+  })
+
+  test("the release stamps the Codex marketplace entry with its own tag and commits akm-cli's files on the tag's commit alone", () => {
+    // Codex follows the default branch for the marketplace and installs the plugin from the git ref the entry names, so
+    // that ref has to be the tag whose commit carries akm-cli's files. Those files are not on main (nor on the `next`
+    // history before the tag): the commit that holds them is made after the one main receives.
+    const workflow = readText(".github/workflows/release.yml")
+    expect(workflow).toContain("updateJsonFile('.agents/plugins/marketplace.json'")
+    expect(workflow).toContain("ref: `v${version}`")
+    const commit = workflow.slice(workflow.indexOf("- name: Commit and tag"), workflow.indexOf("publish-opencode:"))
+    const positions = [
+      'git add claude/package.json',
+      '.agents/plugins/marketplace.json\n',
+      'MAIN_SHA="$(git rev-parse HEAD)"',
+      "bun install --production --omit optional --frozen-lockfile",
+      "rm -rf claude/node_modules/.bin",
+      "git add -f claude/node_modules",
+      'git tag "v${{ steps.derive.outputs.version }}"',
+      'git push origin "$MAIN_SHA:',
+    ].map((text) => commit.indexOf(text))
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect(positions.join(" < ")).toBe([...positions].sort((a, b) => a - b).join(" < "))
+    // node_modules stays ignored on branches; the files are committed byte for byte.
+    expect(readText(".gitignore")).toMatch(/^node_modules$/m)
+    expect(readText(".gitattributes")).toContain("claude/node_modules/** -text")
   })
 
   test("neither OpenCode package depends on an OpenCode CLI or deep-imports akm-cli", () => {
@@ -318,8 +312,8 @@ describe("version policy", () => {
 
   test("the release workflow refuses version-contract drift before tagging", () => {
     const workflow = readText(".github/workflows/release.yml")
-    expect(workflow).toContain("is below AKM_MIN_VERSION")
     expect(workflow).toContain("must exact-pin akm-cli")
+    expect(workflow).toContain("claude/package.json must exact-pin akm-cli")
   })
 
   test("every CI install of the real Codex pins one version, which claude/README.md names", () => {

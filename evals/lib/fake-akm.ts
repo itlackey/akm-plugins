@@ -827,11 +827,8 @@ if (verb === "feedback" || verb === "index") {
 }
 
 if (verb === "--version" || verb === "-V") {
-  // Plugin gates feature paths on meetsAkmMinVersion(), which refuses a build
-  // below AKM_MIN_VERSION. Reporting an older fake version made the OpenCode plugin
-  // treat the shim as an incompatible CLI and silently short-circuit
-  // auto-feedback (queueFeedback bails before spawning). Keep this at or above
-  // the plugin's minimum so eval harnesses exercise the real path.
+  // Keep this a plausible 0.10 build: the OpenCode plugin reads it, and reporting an older fake version made it
+  // treat the shim as an incompatible CLI and silently short-circuit auto-feedback (queueFeedback bails before spawning).
   // Node 24 can drop an async stdout write when this short-lived fake calls
   // process.exit() immediately afterwards and stdout is a pipe (as it is for
   // OpenCode's execFileSync version probe). Write synchronously so callers

@@ -8,6 +8,7 @@ import { writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { mkdtempSync } from "node:fs"
 import { existsSync, readFileSync } from "node:fs"
+import { makeBridgedPluginRoot } from "../../lib/plugin-root"
 
 export type RunHookResult = {
   stdout: string
@@ -17,7 +18,9 @@ export type RunHookResult = {
 }
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..")
-const HOOK_SCRIPT = path.join(REPO_ROOT, "claude/hooks/akm-hook.ts")
+// The hook runs from a copy of the plugin whose bundled akm-cli hands its arguments to the akm on PATH (the
+// fake akm, or the real one with `realAkm`); see evals/lib/plugin-root.ts.
+const HOOK_SCRIPT = path.join(makeBridgedPluginRoot(), "hooks/akm-hook.ts")
 
 export function runClaudeHook(
   args: string[],

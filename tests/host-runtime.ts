@@ -18,11 +18,18 @@ import { it } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { makeBridgedPluginRoot } from "../evals/lib/plugin-root"
 
 export const IS_WINDOWS = process.platform === "win32"
 
 // tests/preload.ts points AKM_CONFIG_DIR at `<root>/empty`, and removes <root> when the run ends.
 const CONFIG_ROOT = process.env.AKM_CONFIG_DIR ? path.dirname(process.env.AKM_CONFIG_DIR) : tmpdir()
+
+/**
+ * The plugin the hook tests run: a copy of claude/ whose bundled akm-cli hands its arguments to the `akm` on the
+ * hook's PATH, which is where each test puts its fake (evals/lib/plugin-root.ts). Removed with CONFIG_ROOT.
+ */
+export const PLUGIN_DIR = makeBridgedPluginRoot(CONFIG_ROOT)
 
 /**
  * A new akm config directory (for AKM_CONFIG_DIR) holding `config` as config.json: the plugins read their

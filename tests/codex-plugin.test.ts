@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
 import {
   IS_WINDOWS,
   LEARNING_OFF,
+  PLUGIN_DIR,
   codexEffectiveCommand,
   codexShells,
   hostEnv,
@@ -162,7 +163,7 @@ describe("Codex plugin metadata", () => {
     expect(readFileSync(skill, "utf8")).toMatch(/^---\nname: akm\n/)
   })
 
-  it("lists akm in the repo marketplace from the Claude plugin directory", () => {
+  it("lists akm in the repo marketplace as a git-subdir source of the Claude plugin directory", () => {
     const marketplace = readJson(codexMarketplacePath)
     const claudeMarketplace = readJson(claudeMarketplacePath)
 
@@ -174,8 +175,11 @@ describe("Codex plugin metadata", () => {
     const [entry] = marketplace.plugins
     expect(entry.name).toBe("akm")
     expect(entry.name).toBe(readJson(codexManifestPath).name)
-    expect(entry.source).toEqual({ source: "local", path: "./claude" })
-    // source.path is relative to the marketplace root, which is the repo root.
+    // Codex installs the plugin from the git ref this entry names, not from the marketplace checkout (which follows
+    // the default branch): the release workflow points `ref` at the tag whose commit carries akm-cli's files. Until a
+    // release does, it is `main`. `path` is relative to the repository root.
+    expect(entry.source).toEqual({ source: "git-subdir", url: "https://github.com/itlackey/akm-plugins.git", path: "./claude", ref: entry.source.ref })
+    expect(entry.source.ref).toMatch(/^(main|v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$/)
     const pluginRoot = path.join(repoRoot, entry.source.path)
     expect(statSync(pluginRoot).isDirectory()).toBe(true)
     expect(pluginRoot).toBe(pluginDir)
@@ -340,6 +344,8 @@ describe("Codex hook runtime", () => {
     project: string
     binDir: string
     callLog: string
+    /** The plugin root the host exports: PLUGIN_DIR, or a copy with no akm-cli when `withBundle` is false. */
+    pluginRoot: string
   }
 
   /**
@@ -348,7 +354,7 @@ describe("Codex hook runtime", () => {
    * holding `bun` (the wrapper needs it) and, unless `withAkm` is false, the
    * repo's fake akm over the eval fixture stash.
    */
-  function makeSandbox(options: { withAkm?: boolean; withBun?: boolean } = {}): Sandbox {
+  function makeSandbox(options: { withAkm?: boolean; withBun?: boolean; withBundle?: boolean } = {}): Sandbox {
     const root = makeTempDir()
     const sandbox: Sandbox = {
       root,
@@ -358,6 +364,11 @@ describe("Codex hook runtime", () => {
       project: path.join(root, "project"),
       binDir: path.join(root, "bin"),
       callLog: path.join(root, "akm-calls.log"),
+      pluginRoot: PLUGIN_DIR,
+    }
+    if (options.withBundle === false) {
+      sandbox.pluginRoot = path.join(root, "plugin")
+      cpSync(PLUGIN_DIR, sandbox.pluginRoot, { recursive: true, filter: (source) => !source.includes("node_modules") })
     }
     for (const dir of [sandbox.home, sandbox.xdgState, sandbox.project]) mkdirSync(dir, { recursive: true })
     sandbox.binDir = makeBinDir(root, "bin", options.withBun !== false)
@@ -385,7 +396,7 @@ describe("Codex hook runtime", () => {
   ) {
     const inputPath = path.join(makeTempDir(), "stdin.json")
     writeFileSync(inputPath, JSON.stringify(payload))
-    const substituted = substituteCodexPlaceholders(command, { pluginRoot: pluginDir, pluginData: sandbox.dataDir })
+    const substituted = substituteCodexPlaceholders(command, { pluginRoot: sandbox.pluginRoot, pluginData: sandbox.dataDir })
     return shell.run(substituted, { cwd: sandbox.project, env: codexEnv(sandbox, env), stdin: Bun.file(inputPath) })
   }
 
@@ -396,9 +407,9 @@ describe("Codex hook runtime", () => {
         HOME: sandbox.home,
         XDG_STATE_HOME: sandbox.xdgState,
         PATH: sandboxPath(sandbox.binDir),
-        PLUGIN_ROOT: pluginDir,
+        PLUGIN_ROOT: sandbox.pluginRoot,
         PLUGIN_DATA: sandbox.dataDir,
-        CLAUDE_PLUGIN_ROOT: pluginDir,
+        CLAUDE_PLUGIN_ROOT: sandbox.pluginRoot,
         CLAUDE_PLUGIN_DATA: sandbox.dataDir,
         // akm's learning switch is off; a test that opts into proposal submission passes a config of its own.
         AKM_CONFIG_DIR: LEARNING_OFF_CONFIG_DIR,
@@ -551,8 +562,7 @@ describe("Codex hook runtime", () => {
     const payload = expectCodexOutput(stdout, "SessionStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("# AKM is available in this session")
     expect(payload.hookSpecificOutput.additionalContext).toContain("The public plugin surface is limited to search, show, curate, feedback, and remember.")
-    // The version check ran against the akm on PATH, in the session cwd.
-    expect(readCallLog(sandbox.callLog).some((call) => call.argv[0] === "--version")).toBe(true)
+    expect(payload.hookSpecificOutput.additionalContext).toContain(`\`akm\` means \`bun "${path.join(sandbox.pluginRoot, "node_modules/akm-cli/dist/cli.js")}"\``)
     expect(readCallLog(sandbox.callLog).find((call) => call.argv[0] === "curate")?.argv[1]).toContain("release-tooling")
 
     expect(readLines(path.join(sandbox.dataDir, "session.log"))[0]).toContain("akm_ready\tpath")
@@ -563,14 +573,17 @@ describe("Codex hook runtime", () => {
     expectNoClaudeState(sandbox)
   })
 
-  it("SessionStart tells the model and the user when akm is missing, in Codex's output shape", () => {
-    const sandbox = makeSandbox({ withAkm: false })
+  it("SessionStart tells the model and the user when the plugin carries no akm-cli, in Codex's output shape", () => {
+    // A Codex install that did not get the release's files, with an akm on PATH that must not be used instead.
+    const sandbox = makeSandbox({ withBundle: false })
 
     const payload = expectCodexOutput(runCodexHook("SessionStart", sandbox), "SessionStart")
 
     expect(payload.hookSpecificOutput.additionalContext).toContain("# AKM is NOT available in this session")
-    expect(payload.systemMessage).toContain("bun install -g \"akm-cli@>=0.10.261111-0\"")
-    expect(readLines(path.join(sandbox.dataDir, "session.log"))[0]).toContain("akm_missing")
+    expect(payload.systemMessage).toContain("the plugin's dependencies are not installed")
+    expect(payload.systemMessage).not.toContain("install -g")
+    expect(readLines(path.join(sandbox.dataDir, "session.log"))[0]).toContain(`akm_missing\tpath\t${path.join(sandbox.pluginRoot, "node_modules/akm-cli/dist/cli.js")}`)
+    expect(readCallLog(sandbox.callLog)).toEqual([])
     expectNoClaudeState(sandbox)
   })
 
@@ -616,7 +629,7 @@ console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: {
 
     // Claude's own manifest handler, run as Claude Code runs it, in an environment that also carries the Codex
     // plugin variables: no --harness, so PLUGIN_DATA must not become its state directory.
-    const result = runClaudeHandler(handler, { pluginRoot: pluginDir, cwd: sandbox.project, env: codexEnv(sandbox), stdin: Bun.file(inputPath) })
+    const result = runClaudeHandler(handler, { pluginRoot: sandbox.pluginRoot, cwd: sandbox.project, env: codexEnv(sandbox), stdin: Bun.file(inputPath) })
 
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout).hookSpecificOutput.hookEventName).toBe("UserPromptSubmit")

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
 import { runPlan, spawnPlan } from "../claude/shared/spawn-plan"
-import { IS_WINDOWS, LEARNING_OFF, hostEnv, installScriptedAkm, makeBinDir, makeConfigDir, runClaudeHandler, sandboxPath, whichOn, type ClaudeHandler } from "./host-runtime"
+import { IS_WINDOWS, LEARNING_OFF, PLUGIN_DIR, hostEnv, installScriptedAkm, makeBinDir, makeConfigDir, runClaudeHandler, sandboxPath, whichOn, type ClaudeHandler } from "./host-runtime"
 import { captureLearningSignal, createLearningProposalJob, reserveLearningProposal } from "../claude/shared/learning-signals"
 
 // The Claude Code hooks, run the way Claude Code runs them: every handler in
@@ -113,7 +113,7 @@ function handlerFor(mode: string, extra?: string) {
 function runHandler(handler: ClaudeHandler, sandbox: Sandbox, payload: unknown, env: Record<string, string | undefined> = {}) {
   const inputPath = path.join(makeTempDir(), "stdin.json")
   writeFileSync(inputPath, JSON.stringify(payload))
-  return runClaudeHandler(handler, { pluginRoot: pluginDir, cwd: sandbox.project, env: sandboxEnv(sandbox, env), stdin: Bun.file(inputPath) })
+  return runClaudeHandler(handler, { pluginRoot: PLUGIN_DIR, cwd: sandbox.project, env: sandboxEnv(sandbox, env), stdin: Bun.file(inputPath) })
 }
 
 function readLines(filePath: string) {
@@ -195,7 +195,7 @@ describe("Claude plugin manifest hook commands", () => {
 })
 
 describe("Claude hooks through the manifest commands", () => {
-  it("session-start finds akm, prints the primer, and keeps state under XDG_STATE_HOME", async () => {
+  it("session-start runs the bundled akm, prints the primer, and keeps state under XDG_STATE_HOME", async () => {
     const sandbox = makeSandbox()
     writeFileSync(path.join(sandbox.project, "package.json"), JSON.stringify({ name: "release-tooling", description: "Release tooling" }))
     const env = sandboxEnv(sandbox)
@@ -209,7 +209,6 @@ describe("Claude hooks through the manifest commands", () => {
     expect(payload.hookSpecificOutput.hookEventName).toBe("SessionStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("# AKM is available in this session")
     const calls = readCallLog(sandbox.callLog)
-    expect(calls.some((call) => call.argv[0] === "--version")).toBe(true)
     expect(calls.find((call) => call.argv[0] === "curate")?.argv[1]).toContain("release-tooling")
     expect(readLines(path.join(sandbox.stateDir, "session.log"))[0]).toContain("akm_ready\tpath")
     expect(readLines(path.join(sandbox.stateDir, "events.jsonl")).map((line) => JSON.parse(line).harness)).toEqual(["claude-code"])
@@ -272,6 +271,17 @@ describe("Claude hooks through the manifest commands", () => {
     expect(feedback?.argv[feedback.argv.indexOf("--reason") + 1]).toContain("source=tool_success; confidence=")
   })
 
+  it("auto-feedback reads the command the plugin's commands run, the bundled akm-cli by path, as akm", () => {
+    const sandbox = makeSandbox()
+    const payload = payloadFor("auto-feedback", sandbox) as { input: { command: string } }
+    payload.input.command = `bun "${path.join(PLUGIN_DIR, "node_modules/akm-cli/dist/cli.js")}" workflow run workflows/release`
+
+    const result = runHandler(handlerFor("auto-feedback", "success"), sandbox, payload, { AKM_BUNDLE_DIR: fixtureStash })
+
+    expect(result.exitCode).toBe(0)
+    expect(readCallLog(sandbox.callLog).find((call) => call.argv[0] === "feedback")?.argv.slice(0, 3)).toEqual(["feedback", "workflows/release", "--positive"])
+  })
+
   it("session-end starts akm index detached, and extract-session keeps akm's output in extract.log", async () => {
     const sandbox = makeSandbox()
 
@@ -322,36 +332,6 @@ if (args[0] === "index") {
     expect(result.exitCode).toBe(0)
     expect(existsSync(path.join(sandbox.home, ".local/state/akm-claude/feedback.log"))).toBe(true)
     expect(existsSync(path.join(sandbox.project, ".local"))).toBe(false)
-  })
-})
-
-describe.skipIf(!IS_WINDOWS)("Claude hooks on Windows, with akm as npm installs it", () => {
-  it("takes akm.cmd, never the extensionless sh script beside it", async () => {
-    const sandbox = makeSandbox()
-    // npm's shim set: an extensionless sh script, akm.cmd and akm.ps1. The script is not a program on Windows.
-    expect(existsSync(path.join(sandbox.binDir, "akm"))).toBe(true)
-    expect(existsSync(path.join(sandbox.binDir, "akm.cmd"))).toBe(true)
-    writeFileSync(path.join(sandbox.binDir, "akm.ps1"), "throw 'the PowerShell shim is not a program either'\r\n")
-
-    const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox))
-
-    expect(result.exitCode).toBe(0)
-    // PATHEXT spells the extension in capitals; the file system does not care.
-    expect(readLines(path.join(sandbox.stateDir, "session.log"))[0].toLowerCase()).toContain(`akm_ready\tpath\t${path.join(sandbox.binDir, "akm.cmd")}`.toLowerCase())
-    await settle(sandbox, { index: 1 })
-  })
-
-  it("prefers akm.exe to akm.cmd, in PATHEXT order", () => {
-    const sandbox = makeSandbox()
-    // Not a program that runs: only which file the hook chose is under test, and it names its choice when
-    // the version probe cannot run it. A bun-installed akm is an akm.exe.
-    writeFileSync(path.join(sandbox.binDir, "akm.exe"), "")
-
-    runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox))
-
-    expect(readLines(path.join(sandbox.stateDir, "session.log"))[0].toLowerCase()).toContain(
-      `akm_version_mismatch\tpath\t${path.join(sandbox.binDir, "akm.exe")}\t`.toLowerCase(),
-    )
   })
 })
 
@@ -596,29 +576,5 @@ describe("runPlan: how the hook runs akm and gives up on it", () => {
 
     expect(plan.args.slice(1)).toEqual(["0", "C:\\bun\\akm.exe", "index"])
     expect(plan.timeoutMs).toBe(0)
-  })
-})
-
-// The CI job puts npm's bin directory (akm.cmd beside the extensionless sh script) on PATH.
-const REAL_NPM_AKM_CMD = IS_WINDOWS ? Bun.which("akm.cmd") : null
-describe.skipIf(!REAL_NPM_AKM_CMD)("Claude hooks against akm-cli as npm installed it", () => {
-  it("session-start takes the real akm.cmd, not the sh script beside it, and accepts the version it prints", async () => {
-    const realBin = path.dirname(REAL_NPM_AKM_CMD as string)
-    expect(existsSync(path.join(realBin, "akm"))).toBe(true)
-    expect(existsSync(path.join(realBin, "akm.cmd"))).toBe(true)
-    const sandbox = makeSandbox({ withAkm: false })
-    // akm.cmd starts node, which starts bun: both have to be reachable, as they are on a machine that has akm installed.
-    const node = Bun.which("node")
-    expect(node).toBeTruthy()
-
-    const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), {
-      PATH: [realBin, sandboxPath(sandbox.binDir), path.dirname(node as string)].join(";"),
-    })
-
-    expect(result.exitCode).toBe(0)
-    expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toContain("# AKM is available in this session")
-    // The version the workflow installed (tests.yml reads it from opencode/package.json), read from npm's own copy rather than repeated here.
-    const installed = JSON.parse(readFileSync(path.join(realBin, "..", "akm-cli", "package.json"), "utf8")).version as string
-    expect(readLines(path.join(sandbox.stateDir, "session.log"))[0].toLowerCase()).toContain(`akm_ready\tpath\t${path.join(realBin, "akm.cmd")}\t${installed}`.toLowerCase())
   })
 })

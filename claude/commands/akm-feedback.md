@@ -1,8 +1,10 @@
 ---
 description: Record feedback on an AKM bundle asset; negative feedback is only for wrong or stale content, lowers its ranking, and can carry an exact fix.
 argument-hint: <ref> <+|-> [note]
-allowed-tools: Bash(akm feedback *) Bash(akm show *)
+allowed-tools: Bash(bun *akm-cli/dist/cli.js* feedback *) Bash(bun *akm-cli/dist/cli.js* show *)
 ---
+
+`${CLAUDE_PLUGIN_ROOT}` is this plugin's directory, which carries the AKM CLI; Codex leaves it unfilled, so use the directory this plugin is installed in. Run every AKM command through it, as written below.
 
 Parse the text the user gave with this command (in Claude Code it follows below as `ARGUMENTS:`; in Codex it is the user's request) as three parts: an asset concept-ID `ref` (e.g. `skills/code-review`), a sentiment token (`+`, `-`, `positive`, `negative`), and an optional free-form note describing what worked or what is wrong. A negative signal requires a note.
 
@@ -15,13 +17,13 @@ An asset that simply didn't fit the task is not negative feedback: record nothin
 Run:
 
 ```sh
-akm feedback <ref> --positive|--negative --reason "<note>" --format json -q
+bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" feedback <ref> --positive|--negative --reason "<note>" --format json -q
 ```
 
 With a verified fix:
 
 ```sh
-akm feedback <ref> --negative --reason "<what is wrong>" --replace "<exact current text>" --with "<corrected text>" --source "<URL, command or file that shows it>" --format json -q
+bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" feedback <ref> --negative --reason "<what is wrong>" --replace "<exact current text>" --with "<corrected text>" --source "<URL, command or file that shows it>" --format json -q
 ```
 
-If the ref looks ambiguous, first confirm it with `akm show <ref> --format json` and abort if the ref does not resolve. After recording, confirm the outcome to the user and, when negative, suggest finding a replacement via `/akm-curate`.
+If the ref looks ambiguous, first confirm it with `bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" show <ref> --format json` and abort if the ref does not resolve. After recording, confirm the outcome to the user and, when negative, suggest finding a replacement via `/akm-curate`.

@@ -5,7 +5,7 @@ description: Search, show, and curate AKM concepts, record feedback, and remembe
 
 # AKM
 
-AKM 0.10.261111 or newer exposes exactly five public plugin surfaces. The `/akm-*` slash
+This plugin carries the AKM CLI and exposes exactly five public plugin surfaces. The `/akm-*` slash
 commands exist only in Claude Code; in any other host, such as Codex, run the
 `akm` CLI forms:
 
@@ -14,6 +14,12 @@ commands exist only in Claude Code; in any other host, such as Codex, run the
 - `/akm-curate` or `akm curate` ranks concepts for a task.
 - `/akm-feedback` or `akm feedback` records whether a concept helped; negative feedback is only for wrong or stale content, lowers its ranking, and can carry an exact fix.
 - `/akm-remember` or `akm remember` stores durable knowledge.
+
+Every `akm` command in this skill stands for the CLI this plugin carries:
+`bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" <args>`. `${CLAUDE_PLUGIN_ROOT}`
+is this plugin's directory: Claude Code fills it in, and in Codex it is the directory
+two levels above this file. Run that form rather than an `akm` found on PATH, so the plugin
+and its CLI stay the one pair that was tested together.
 
 Claude can also dispatch a configured AKM agent through the existing Bash tool.
 This is the direct dispatch path: do not use MCP, create generated Claude

@@ -7,8 +7,10 @@
     {
       "name": "akm",
       "source": {
-        "source": "local",
-        "path": "./claude"
+        "source": "git-subdir",
+        "url": "https://github.com/itlackey/akm-plugins.git",
+        "path": "./claude",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",

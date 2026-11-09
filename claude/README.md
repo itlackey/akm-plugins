@@ -1,6 +1,6 @@
 # akm-claude
 
-Claude Code plugin for [AKM](https://github.com/itlackey/akm) 0.10.261111 or newer. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
+Claude Code plugin for [AKM](https://github.com/itlackey/akm). It carries the `akm-cli` it was tested with. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
 The AKM skill also supports delegating work to an AKM agent through Claude's
 existing Bash tool. It invokes `akm agent` directly; it does not use MCP,
@@ -23,7 +23,7 @@ claude plugin install akm@akm-plugins
 
 For the prerelease channel add the marketplace from the `next` branch instead: `claude plugin marketplace add itlackey/akm-plugins@next` (or `"ref": "next"` and `"autoUpdate": true` in the `akm-plugins` entry of `extraKnownMarketplaces`; see the [repo README](../README.md#updating)). The default branch is stable. Run `/reload-plugins` in a running session after an update.
 
-The hooks require Bun 1.0 or newer on `PATH`. AKM must also be installed, available on `PATH`, and be `0.10.261111` or newer (the plugins pass `--project` and run akm in the session's directory, which older builds do not support). Only an akm below that minimum is refused; any later release, including a later minor such as 0.11, passes, and the check compares `major.minor.patch` only, so `0.10.261111-beta` and `0.10.261102-rc` pass. The session-start hook reports a degraded status when either dependency is unavailable (for a too-old akm it names the installed version, the minimum and the upgrade command, turns the hook-driven features off, and does not forbid running `akm` yourself) and does not install software automatically. Claude Code must be 2.1.139 or newer, the first release that can start a hook without a shell (see [Windows](#windows) for why that matters). On Windows, neither Git for Windows nor WSL is needed.
+The hooks require Bun 1.0 or newer on `PATH`. The plugin carries its own AKM: `package.json` declares `akm-cli` at an exact version and `bun.lock` records it, and Claude Code installs it into the plugin's directory when the plugin is installed or updated (it needs the npm registry and Bun on `PATH` for that, once; afterwards the plugin works offline). The hooks run `${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js` under Bun, and the commands and the skill name the same path; an `akm` on `PATH` is never used, so the plugin always runs the version it was tested with, and no version is compared at runtime. If the install fails, `/plugin` shows a note and the session-start message says the plugin's dependencies are missing: update or reinstall the plugin. Nothing is installed automatically. A marketplace added from a local checkout gets no dependency install: run `bun install` in `claude/` first. Claude Code must be 2.1.139 or newer, the first release that can start a hook without a shell (see [Windows](#windows) for why that matters). On Windows, neither Git for Windows nor WSL is needed.
 
 ## Slash Commands
 
@@ -94,13 +94,13 @@ codex plugin add akm@akm-plugins
 
 For the prerelease channel, add the marketplace with `--ref next`: `codex plugin marketplace add itlackey/akm-plugins --ref next`.
 
-Bun 1.0 or newer and AKM 0.10.261111 or newer must be on `PATH`, as [above](#installation); nothing installs them for you. Codex skips plugin hooks until you review and trust them: run `/hooks` in the Codex CLI and trust the two AKM hooks. Codex asks again when a plugin update changes a hook.
+Bun 1.0 or newer must be on `PATH`, as [above](#installation); nothing installs it for you. The plugin's `akm-cli` is not installed by Codex: it is committed as files on each release tag's commit, which the Codex marketplace entry names (see the [repo README](../README.md#codex)). Codex skips plugin hooks until you review and trust them: run `/hooks` in the Codex CLI and trust the two AKM hooks. Codex asks again when a plugin update changes a hook.
 
 Codex gets:
 
-- the AKM skill, which drives the `akm` CLI;
+- the AKM skill, which drives the bundled `akm` CLI;
 - the five commands, as skills. Codex converts a plugin's `commands/*.md` into skills when it installs the plugin; they are listed as `akm:source-command-akm-search` and so on (type `$` or run `/skills` to pick one). It skips a command that has a `$ARGUMENTS` or `$1` placeholder, so the commands take their input as the text the user gave with them: in Codex that is the request, in Claude Code an `ARGUMENTS:` line it appends to the command;
-- the `SessionStart` hook (`session-start`): checks Bun and AKM, warms AKM data, and injects the AKM primer with pending proposals, active workflows, the project's rules and most-used assets and curated context when available. It tells you and the model when AKM or its bundle is missing;
+- the `SessionStart` hook (`session-start`): starts the bundled AKM, warms AKM data, and injects the AKM primer with pending proposals, active workflows, the project's rules and most-used assets and curated context when available. It tells you and the model when the plugin's AKM or the bundle is missing;
 - the `UserPromptSubmit` hook (`curate-prompt`): curates substantive prompts and adds the result as context. It also captures explicit memories, corrections, guardrails and preferences, which become reviewable proposals ([Automatic learning proposals](#automatic-learning-proposals)).
 
 On macOS and Linux the hooks go through `hooks/akm-hook.sh`; on Windows each hook's `commandWindows` runs `hooks/akm-hook.ts` directly (see [Windows](#windows)).
@@ -146,16 +146,16 @@ The hooks run on native Windows for both hosts, with or without Git for Windows.
 What differs from macOS and Linux:
 
 - `bun` has to be a real `bun.exe` (the Bun installer, winget or scoop). Claude Code cannot start the `bun.cmd` shim that installing Bun with npm leaves behind, because it spawns the program without a shell.
-- akm may be npm's `akm.cmd` or Bun's `akm.exe`. The hook searches `PATH` for `.com`, `.exe`, `.bat` and `.cmd` in `PATHEXT` order, and never takes the extensionless `akm` shell script npm leaves beside `akm.cmd`. A `.cmd` is run through `cmd.exe`, which re-parses its command line, so `"`, `%`, `&`, `|`, `<`, `>`, `^` and line breaks in what the hook passes akm (the curate query is your prompt) become spaces first.
+- akm is the `akm-cli` the plugin carries, started as `bun <plugin root>\node_modules\akm-cli\dist\cli.js`: no `akm.cmd` or `akm.exe` is looked up on `PATH`.
 - There is no friendly "Bun is not installed" message. `hooks/akm-hook.sh` used to answer once at session start when `bun` was missing; now only Codex's macOS and Linux command goes through it (it names Codex when it answers). Claude Code's hooks are exec form on every platform, so there is no wrapper to degrade through, and without `bun` the host reports a failed hook on each event until Bun is installed (for Codex on Windows, PowerShell's "bun is not recognized").
-- Every akm call goes through a small `bun` runner (`hooks/akm-run.ts`) rather than being started by the hook itself. `akm.cmd` is `cmd.exe` starting `node` starting `bun`, and a spawn's own timeout would end only the `cmd.exe` and leave the rest running, so the runner owns the timeout and, when it expires, ends akm's whole process tree with `taskkill /T /F`. `akm index` and the session-end extraction run the runner detached, with the log files as its output, because a Windows child that is not detached is killed when the process that started it exits and a detached `cmd.exe` loses its redirected output.
+- Every akm call goes through a small `bun` runner (`hooks/akm-run.ts`) rather than being started by the hook itself. a spawn's own timeout ends only the process it started and can leave akm's own children running, so the runner owns the timeout and, when it expires, ends akm's whole process tree with `taskkill /T /F`. `akm index` and the session-end extraction run the runner detached, with the log files as its output, because a Windows child that is not detached is killed when the process that started it exits and a detached `cmd.exe` loses its redirected output.
 - The state directory's mode is not restricted: Windows has no POSIX modes, and the files inherit the permissions of your profile directory.
 
 ### What was tested on Windows
 
 `.github/workflows/tests.yml` runs a `windows` job on `windows-latest` for every pull request and every push to `main`. It runs:
 
-- the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`, and once against the `akm-cli` the OpenCode packages pin, as npm itself installs it;
+- the hook tests, with Git for Windows off `PATH`. Claude's exec-form handlers run the way Claude Code runs them; Codex's `commandWindows` runs through `pwsh`, Windows PowerShell 5.1 and `cmd.exe /C`, and with a PowerShell console code page of 932; each against a fake akm that is `akm.cmd`;
 - the real Claude Code (2.1.286) and the real Codex (0.160.0), installed from npm and started with no credential. `claude -p` registers the manifest's 23 handlers and runs SessionStart, UserPromptSubmit and SessionEnd through exec form before it stops at "Not logged in". `codex exec` runs the two hooks, with the plugin installed from the checkout and trusted the way `/hooks` does, before its model provider, a dead local port, refuses the request.
 
 Tests that write their fake akm as a POSIX `sh` script, assert POSIX mode bits or run `akm-hook.sh` are skipped there by name (`[skipped on Windows: ...]`): `tests/host-runtime.ts` explains why, and `tests/hook-commands.test.ts` and `tests/codex-plugin.test.ts` run the same hook modes against the Windows-capable fake.
@@ -208,8 +208,6 @@ The other variables the plugin reads are not settings:
 | --- | --- |
 | `AKM_CONFIG_DIR` | Where akm's `config.json` is (akm's own location variable). |
 | `AKM_BUNDLE_DIR` | The AKM bundle root (akm's own variable). Set it when you can: without it the hooks discover the bundle by spawning `akm info`, which adds a subprocess to every file-tool hook that sees a concept-like token. |
-| `AKM_LOCAL_BUILD_CLI` | Absolute path to a locally built AKM CLI entry point. |
-| `AKM_PACKAGE_REF` | Package specification shown when AKM is unavailable (`akm-cli@>=0.10.261111-0`). It is never installed automatically. |
 
 The retired setting variables (`AKM_AUTO_FEEDBACK`, `AKM_INDEX_ON_SESSION_END`, `AKM_CURATE_LIMIT`, `AKM_CURATE_TIMEOUT`, `AKM_PENDING_PROPOSAL_TIMEOUT`, `AKM_AUTO_LEARNING`, `AKM_AUTO_MEMORY`) are ignored, and a warning names the key that replaces each. Everything else that used to be a variable is a constant now: prompt curation is always on; the curate score floor and `--type` filter are gone; the context budget is 4000 characters; state files are capped at 1 MiB; the cached quality classification lives 24 hours; automatic feedback needs a classifier confidence of 0.6, a learning proposal 0.75 and a skill proposal three distinct sessions; the proposal worker is capped at 10 minutes; the retrospective vocabulary is fixed.
 
