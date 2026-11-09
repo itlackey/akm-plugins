@@ -562,6 +562,7 @@ describe("Codex hook runtime", () => {
     const payload = expectCodexOutput(stdout, "SessionStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("# AKM is available in this session")
     expect(payload.hookSpecificOutput.additionalContext).toContain("The public plugin surface is limited to search, show, curate, feedback, and remember.")
+    expect(payload.hookSpecificOutput.additionalContext).toContain(`\`akm\` means \`bun "${path.join(sandbox.pluginRoot, "node_modules/akm-cli/dist/cli.js")}"\``)
     expect(readCallLog(sandbox.callLog).find((call) => call.argv[0] === "curate")?.argv[1]).toContain("release-tooling")
 
     expect(readLines(path.join(sandbox.dataDir, "session.log"))[0]).toContain("akm_ready\tpath")

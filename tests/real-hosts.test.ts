@@ -151,6 +151,8 @@ describe.skipIf(!claudeBin)("the real Claude Code", () => {
       // SessionStart, through `bun <plugin root>/hooks/akm-hook.ts session-start` with no shell: the hook found the
       // akm-cli the plugin carries, and Claude Code accepted what the hook printed.
       expect(debug).toMatch(/Hook SessionStart:startup \(SessionStart\) success/)
+      // ...and its context says that `akm` in the session means the CLI the plugin carries, by path.
+      expect(debug).toContain("In this session `akm` means `bun")
       const stateDir = path.join(sandbox.xdgState, "akm-claude")
       expect(lines(path.join(stateDir, "session.log"))[0]).toContain("akm_ready\tpath")
       // UserPromptSubmit: the prompt was recorded and handed to akm to curate.

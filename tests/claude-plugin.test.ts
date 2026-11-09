@@ -2308,6 +2308,35 @@ exit 0
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemories/release-retro\takm remember --name release-retro")
   })
 
+  it("derives a memory ref from a bundled akm remember --name", () => {
+    const tempDir = makeTempDir()
+    const stateDir = path.join(tempDir, "state")
+    mkdirSync(stateDir, { recursive: true })
+
+    runHook(["post-tool", "success"], {
+      input: JSON.stringify({
+        tool: "Bash",
+        input: { command: 'bun "/p/node_modules/akm-cli/dist/cli.js" remember --name x --format json -q' },
+        output: "{\"ok\":true}",
+      }),
+      env: { HOME: tempDir, PATH: process.env.PATH ?? "/usr/bin:/bin", XDG_STATE_HOME: stateDir },
+    })
+
+    expect(getFirstLogEntry(stateDir, "memory.log")).toContain("system\tBash\tmemories/x\takm remember --name x")
+  })
+
+  itPosix("session-start says what `akm` means in the session: the CLI the plugin carries, by path", () => {
+    const tempDir = makeTempDir()
+    const binDir = path.join(tempDir, "bin")
+    mkdirSync(binDir, { recursive: true })
+    writeFileSync(path.join(binDir, "akm"), "#!/usr/bin/env sh\nexit 0\n")
+    chmodSync(path.join(binDir, "akm"), 0o755)
+
+    const payload = JSON.parse(runHook(["session-start"], { env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: path.join(tempDir, "state") } }))
+
+    expect(payload.hookSpecificOutput.additionalContext).toContain(`\`akm\` means \`bun "${path.join(PLUGIN_DIR, "node_modules/akm-cli/dist/cli.js")}"\``)
+  })
+
   itPosix("auto-feedback records run scope locally without passing it to AKM", () => {
     const tempDir = makeTempDir()
     const binDir = path.join(tempDir, "bin")
@@ -2730,6 +2759,11 @@ exit 0
         "akm search skills/code-review",
         "akm curate skills/code-review",
         "/akm-show skills/code-review",
+        // The commands run the CLI the plugin carries by path; the guard reads that as `akm show`.
+        'bun "/home/u/.claude/plugins/cache/akm-plugins/akm/0.10.1/node_modules/akm-cli/dist/cli.js" show skills/code-review --format json -q',
+        "bun /opt/plug/node_modules/akm-cli/dist/cli.js search skills/code-review",
+        'bun "C:\\Users\\Jane Doe\\plug\\node_modules\\akm-cli\\dist\\cli.js" show skills/code-review',
+        "cd /repo && bun '/p q/node_modules/akm-cli/dist/cli.js' curate skills/code-review",
       ]) {
         runHook(["auto-feedback", "success"], {
           input: JSON.stringify({

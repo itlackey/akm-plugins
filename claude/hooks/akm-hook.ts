@@ -698,6 +698,14 @@ function extractUserText(raw: string): string {
   return ""
 }
 
+// The commands run the CLI the plugin carries by path (`bun ".../node_modules/akm-cli/dist/cli.js" show <ref>`), not
+// as `akm`. Every check below reads a command as `akm <verb> ...`, so the path form is rewritten to `akm` where the
+// command text is read: any runner path, either slash, quoted or not.
+const BUNDLED_AKM_INVOCATION = /(?:[^\s"';&|()]*[\\/])?(?:bun|node)(?:\.exe)?\s+(?:"[^"\n]*|'[^'\n]*|[^\s"']*)akm-cli[\\/]dist[\\/]cli\.js["']?/gi
+function bareAkm(commandText: string): string {
+  return commandText.replace(BUNDLED_AKM_INVOCATION, "akm")
+}
+
 function extractPostToolFields(raw: string, mode: string): { toolName: string; commandText: string; outputText: string; statusText: string; refs: string[]; commandRefs: string[]; outputRefs: string[]; sid: string } {
   const parsed = safeJsonParse<Record<string, unknown>>(raw)
   if (!parsed) return { toolName: "", commandText: sanitize(raw), outputText: "", statusText: mode || "success", refs: [], commandRefs: [], outputRefs: [], sid: "" }
@@ -711,7 +719,7 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
   // Capture the *raw* (pre-sanitize) command/output text so we can collect
   // ref candidates from any sub-string position (heredocs, fenced code,
   // JSON values, prose). (sanitize() is still used for log-line readability.)
-  const rawCommandText = getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || ""
+  const rawCommandText = bareAkm(getText(parsed.input) || getText(parsed.tool_input) || getText(parsed.command) || "")
   const rawOutputText = getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || ""
   const commandText = sanitize(rawCommandText)
   const outputText = sanitize(rawOutputText)
@@ -1312,7 +1320,7 @@ function autoFeedback() {
   if (!AUTO_FEEDBACK || !akmAvailable()) return
   const rawInput = readStdin()
   const parsedInput = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
-  const rawCommand = getText(parsedInput.input) || getText(parsedInput.tool_input) || getText(parsedInput.command) || ""
+  const rawCommand = bareAkm(getText(parsedInput.input) || getText(parsedInput.tool_input) || getText(parsedInput.command) || "")
   if (!/(?:^|[\s;&|])(?:akm|\/akm(?:-[A-Za-z0-9-]+)?)(?=\s|$)/.test(rawCommand)) return
   const { commandText, statusText, refs, commandRefs, sid } = extractPostToolFields(rawInput, MODE)
   if (/akm\s+feedback|\/akm\s+feedback/.test(commandText)) return
@@ -1716,7 +1724,8 @@ async function sessionStart(): Promise<string> {
     refs: validateRefCandidates(akmOutputRefs(curatedTrimmed), bundleRoots),
     outcome: { status: "ok" },
   })
-  let body = SESSION_START_HEADER
+  // Every `akm ...` this context (and akm's own output) tells the model to run means the CLI the plugin carries.
+  let body = `${SESSION_START_HEADER}\n\nIn this session \`akm\` means \`bun "${BUNDLED_AKM_CLI}"\`: run every akm command above, and any akm hint in tool output, that way. There is no \`akm\` on PATH.`
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (workflowSummary) body = `${body}\n\n${workflowSummary}`

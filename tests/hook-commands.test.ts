@@ -271,6 +271,17 @@ describe("Claude hooks through the manifest commands", () => {
     expect(feedback?.argv[feedback.argv.indexOf("--reason") + 1]).toContain("source=tool_success; confidence=")
   })
 
+  it("auto-feedback reads the command the plugin's commands run, the bundled akm-cli by path, as akm", () => {
+    const sandbox = makeSandbox()
+    const payload = payloadFor("auto-feedback", sandbox) as { input: { command: string } }
+    payload.input.command = `bun "${path.join(PLUGIN_DIR, "node_modules/akm-cli/dist/cli.js")}" workflow run workflows/release`
+
+    const result = runHandler(handlerFor("auto-feedback", "success"), sandbox, payload, { AKM_BUNDLE_DIR: fixtureStash })
+
+    expect(result.exitCode).toBe(0)
+    expect(readCallLog(sandbox.callLog).find((call) => call.argv[0] === "feedback")?.argv.slice(0, 3)).toEqual(["feedback", "workflows/release", "--positive"])
+  })
+
   it("session-end starts akm index detached, and extract-session keeps akm's output in extract.log", async () => {
     const sandbox = makeSandbox()
 
