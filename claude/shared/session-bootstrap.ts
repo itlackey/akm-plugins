@@ -12,6 +12,8 @@
  * Zero third-party imports: the Claude hook runs as a bare Bun script.
  */
 
+import { akmResultList } from "./result-list"
+
 /** Rules the listing may return; exactly this many means the list was cut. */
 export const RULES_LIST_LIMIT = 200
 /** How many most-used assets the list names. */
@@ -50,9 +52,9 @@ type Listing = { ok: boolean; hits: Hit[]; project: boolean }
 
 function parseListing(raw: string): Listing {
   try {
-    const parsed = JSON.parse(raw) as { hits?: unknown; project?: unknown }
+    const parsed = JSON.parse(raw) as { project?: unknown }
     const hits: Hit[] = []
-    for (const hit of Array.isArray(parsed.hits) ? parsed.hits : []) {
+    for (const hit of akmResultList(parsed)) {
       const record = hit as { ref?: unknown; description?: unknown } | null
       if (typeof record?.ref !== "string" || !record.ref) continue
       hits.push({ ref: record.ref, description: typeof record.description === "string" ? record.description : "" })

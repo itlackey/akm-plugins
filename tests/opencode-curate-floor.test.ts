@@ -25,7 +25,7 @@ const repoRoot = path.resolve(import.meta.dir, "..")
 
 /** Curate response shaped like `akm curate --format json`: mixed scores and types. */
 const CURATE_JSON = JSON.stringify({
-  items: [
+  results: [
     { ref: "lessons/a-lesson", type: "lesson", name: "a-lesson", score: 9 },
     { ref: "knowledge/wikis/articles/raw/youtube-abc", type: "website", name: "yt", score: 8 },
     { ref: "memories/a-memory", type: "memory", name: "a-memory", score: 3 },

@@ -260,12 +260,11 @@ skills/bun-review handled it.
 
 describe("extractRefsFromAkmOutput", () => {
   it("keeps every ref akm emits, whatever its first folder", () => {
-    const output = JSON.stringify({
-      hits: [{ ref: "WORK/plan" }, { ref: "skills/x/scripts/run.py" }, { ref: "reports/data.js" }],
-      items: [{ ref: "release" }, { ref: "team//wikis/page#intro" }, { ref: "not a ref" }],
-    })
+    const list = [{ ref: "WORK/plan" }, { ref: "skills/x/scripts/run.py" }, { ref: "reports/data.js" }, { ref: "release" }, { ref: "team//wikis/page#intro" }, { ref: "not a ref" }]
+    const refs = ["WORK/plan", "skills/x/scripts/run.py", "reports/data.js", "release", "team//wikis/page#intro"]
 
-    expect(extractRefsFromAkmOutput(output)).toEqual(["WORK/plan", "skills/x/scripts/run.py", "reports/data.js", "release", "team//wikis/page#intro"])
+    // The list is `results`; older akm named it `hits` (search) or `items` (curate).
+    for (const key of ["results", "hits", "items"]) expect(extractRefsFromAkmOutput(JSON.stringify({ [key]: list }))).toEqual(refs)
     expect(extractRefsFromAkmOutput(JSON.stringify({ ref: "WORK/plan", content: "see src/app.ts and skills/a" }))).toEqual(["WORK/plan", "skills/a"])
     expect(extractRefsFromAkmOutput("plain text: skills/a src/app.ts")).toEqual(["skills/a"])
   })

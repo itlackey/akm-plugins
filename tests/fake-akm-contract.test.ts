@@ -4,6 +4,7 @@ import { availableParallelism, tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, type FakeAkmAsset } from "../evals/lib/fake-akm"
 import { validateRefCandidates } from "../claude/shared/ref-extraction"
+import { akmResultList } from "../claude/shared/result-list"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
 // actually invoke (search, curate, info, workflow list --active, proposal
@@ -64,9 +65,12 @@ function akmAtLeast(minPatch: number): boolean {
  * bare JSON scalar for leaf `config get` calls — there are no keys to
  * compare, so the fingerprint falls back to the JS type).
  */
+// The keys of the response envelope, without its result list: akm older than the `results` key
+// names the list `hits` (search) or `items` (curate), and 0.10.261111 emits both beside
+// `results`; the fake emits `results` only. The plugins read the list through akmResultList.
 function envelopeShape(value: unknown): string[] {
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    return Object.keys(value as Record<string, unknown>).sort()
+    return Object.keys(value as Record<string, unknown>).filter((key) => !["results", "hits", "items"].includes(key)).sort()
   }
   return [`<${value === null ? "null" : typeof value}>`]
 }
@@ -151,7 +155,7 @@ describe("fake-akm envelope contract", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
-      const args = ["--format", "json", "--detail", "agent", "-q", "search", "contract-no-match", "--from", "local"]
+      const args = ["--format", "json", "--detail", "normal", "-q", "search", "contract-no-match", "--from", "local"]
       const realEnvelope = runReal(real, args) as Record<string, unknown>
       const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
@@ -165,7 +169,7 @@ describe("fake-akm envelope contract", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
-      const args = ["--format", "json", "--detail", "agent", "-q", "curate", "contract-no-match", "--from", "local", "--limit", "5"]
+      const args = ["--format", "json", "--detail", "normal", "-q", "curate", "contract-no-match", "--from", "local", "--limit", "5"]
       const realEnvelope = runReal(real, args) as Record<string, unknown>
       const fakeEnvelope = runFake(fake.akmPath, args) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
@@ -574,7 +578,7 @@ function cleanup(env: { root: string }) {
 // #159: the format-guidance gate's search, as the plugins build it (no `--from`), against a real akm.
 // Unscoped guidance sits in an excluded bundle, the current space, a global bundle and the default bundle.
 describe("format-guidance gate search selects by the project's sources", () => {
-  const gateArgv = (project?: string) => ["search", "formatproof", "--limit", "5", ...(project ? ["--project", project] : []), "--detail", "agent", "--format", "json", "-q"]
+  const gateArgv = (project?: string) => ["search", "formatproof", "--limit", "5", ...(project ? ["--project", project] : []), "--detail", "normal", "--format", "json", "-q"]
 
   test.skipIf(!akmAvailable)("honours the project's `from` by directory and by name, and falls back to all local without a project", () => {
     const real = makeRealEnv()
@@ -586,7 +590,7 @@ describe("format-guidance gate search selects by the project's sources", () => {
         return result.stdout.toString()
       }
       const refs = (cwd: string, args: string[]) =>
-        ((JSON.parse(run(cwd, args)) as { hits?: Array<{ ref: string }> }).hits ?? []).map((hit) => hit.ref).sort()
+        (akmResultList(JSON.parse(run(cwd, args))) as Array<{ ref: string }>).map((hit) => hit.ref).sort()
 
       const defaultName = (JSON.parse(run(real.root, ["bundle", "list", "--format", "json", "-q"])) as { defaultBundle: string }).defaultBundle
       mkdirSync(path.join(real.AKM_BUNDLE_DIR, "knowledge"), { recursive: true })
@@ -668,13 +672,15 @@ describe("session bootstrap calls match the project-rules contract", () => {
 
       for (const [cwd, extra] of [[projectDir, []], [elsewhere, noProject]] as Array<[string, string[]]>) {
         for (const args of [rules, usage]) {
-          const realOut = JSON.parse(run(cwd, [...args, ...extra])) as { hits: Array<Record<string, unknown>>; project?: unknown }
-          const fakeOut = JSON.parse(fakeRun(cwd, [...args, ...extra])) as { hits: Array<Record<string, unknown>>; project?: unknown }
+          const realOut = JSON.parse(run(cwd, [...args, ...extra])) as Record<string, unknown>
+          const fakeOut = JSON.parse(fakeRun(cwd, [...args, ...extra])) as Record<string, unknown>
           expect(envelopeShape(fakeOut)).toEqual(envelopeShape(realOut))
-          expect(fakeOut.hits.map((hit) => hit.ref)).toEqual(realOut.hits.map((hit) => hit.ref))
+          const realHits = akmResultList(realOut) as Array<Record<string, unknown>>
+          const fakeHits = akmResultList(fakeOut) as Array<Record<string, unknown>>
+          expect(fakeHits.map((hit) => hit.ref)).toEqual(realHits.map((hit) => hit.ref))
           // The fields the bootstrap reads.
-          for (const hit of [...realOut.hits, ...fakeOut.hits]) expect(typeof hit.ref).toBe("string")
-          for (const hit of [...realOut.hits, ...fakeOut.hits]) expect(typeof hit.description).toBe("string")
+          for (const hit of [...realHits, ...fakeHits]) expect(typeof hit.ref).toBe("string")
+          for (const hit of [...realHits, ...fakeHits]) expect(typeof hit.description).toBe("string")
         }
       }
       // A rule read answers its full file as `content`.

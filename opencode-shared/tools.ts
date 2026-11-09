@@ -4,6 +4,8 @@
 // V1 turns a spec into `tool.schema` arguments; V2 turns it into JSON Schema.
 // The read verbs' argv lives in akm-cli.ts (buildReadArgs).
 
+import { akmResultList } from "../claude/shared/result-list"
+
 // The AKM 0.9 asset-type vocabulary, in the singular form `--type` accepts.
 // This is exactly `akm info --format json` -> .assetTypes, sorted; keep the two
 // in step when akm adds a type. There is no `wiki` type in 0.9. `any` is a
@@ -164,14 +166,14 @@ const PROPOSED_QUALITY_WARNING = "Do not treat proposed assets as curated until 
 
 /** Adds the proposed-quality warning to a search response that carries proposed hits. */
 export function withProposedWarnings(raw: string): string {
-  let parsed: { hits?: Array<{ quality?: string }>; warnings?: string[] } | undefined
+  let parsed: { warnings?: string[] } | undefined
   try {
     parsed = JSON.parse(raw)
   } catch {
     return raw
   }
   if (!parsed || typeof parsed !== "object") return raw
-  if (!(parsed.hits?.some((hit) => hit?.quality === "proposed") ?? false)) return raw
+  if (!akmResultList(parsed).some((hit) => (hit as { quality?: string } | null)?.quality === "proposed")) return raw
   const warnings = parsed.warnings ?? []
   return JSON.stringify({
     ...parsed,

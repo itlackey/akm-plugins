@@ -64,6 +64,7 @@ import { TOOL_SPECS, type ToolSpec, buildFeedbackArgs, buildRememberArgs, withPr
 import { shouldRecall } from "../claude/shared/recall-policy"
 import { redactObject } from "../claude/shared/redaction"
 import { extractRefsFromAkmOutput, validateRefCandidates } from "../claude/shared/ref-extraction"
+import { akmResultList } from "../claude/shared/result-list"
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
@@ -890,7 +891,6 @@ function extractMemoryRefs(toolName: string, args: Record<string, unknown>, valu
     type?: unknown
     ref?: unknown
     name?: unknown
-    hits?: unknown
   } : undefined
 
   if (toolName === "akm_remember" && typeof parsed?.ref === "string" && parsed.ref) {
@@ -903,13 +903,11 @@ function extractMemoryRefs(toolName: string, args: Record<string, unknown>, valu
     if (refs.size === 0 && typeof parsed.name === "string" && parsed.name) refs.add(`memories/${parsed.name}`)
   }
 
-  if (Array.isArray(parsed?.hits)) {
-    for (const hit of parsed.hits) {
-      if (!hit || typeof hit !== "object") continue
-      if ((hit as { type?: unknown }).type !== "memory") continue
-      const ref = (hit as { ref?: unknown }).ref
-      if (typeof ref === "string" && ref) refs.add(ref)
-    }
+  for (const hit of akmResultList(parsed)) {
+    if (!hit || typeof hit !== "object") continue
+    if ((hit as { type?: unknown }).type !== "memory") continue
+    const ref = (hit as { ref?: unknown }).ref
+    if (typeof ref === "string" && ref) refs.add(ref)
   }
 
   return [...refs]
@@ -949,7 +947,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
       if (isCliError(command)) throw new Error(command.error)
       // This search is the PLUGIN's, not the model's: attribute it to a non-user event
       // source so akm's utility scores and feedback ranking do not count it as demand.
-      const result = await runAkm(command, ["search", token, "--limit", "5", "--detail", "agent", "--format", "json"], {
+      const result = await runAkm(command, ["search", token, "--limit", "5", "--detail", "normal", "--format", "json"], {
         cwd: directory,
         timeoutMs: 8_000,
         env: { AKM_EVENT_SOURCE: "audit" },
@@ -1314,7 +1312,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     //   - `read` returns `<path>…</path>\n<type>file</type>\n<content>\n` with
     //     every line prefixed `N: `.
     //   - The CLI's default `search` shape drops `description` and `tags`;
-    //     `--detail full` and `--detail agent` keep them, so the gate uses the latter.
+    //     `--detail normal` keeps `description`, which the gate quotes; it reads `name`, `ref` and `description` only.
     //
     // The throw sits OUTSIDE the try/catch on purpose. Every other hook body in
     // this file wraps itself in `try { … } catch { logHookFailure }` by

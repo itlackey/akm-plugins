@@ -9,6 +9,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { akmResultList } from "./result-list";
 
 // Passive extraction is intentionally narrower than AKM's explicit ref parser:
 // only standard concept roots are observed. This prevents ordinary paths such
@@ -78,13 +79,13 @@ export function akmRefFromValue(value: unknown): string | undefined {
 }
 
 /**
- * The `ref` of a parsed akm result and of its `hits[]` / `items[]` (search,
+ * The `ref` of a parsed akm result and of its result list (`results`, `hits` or `items`: search,
  * curate, show), whatever their first folder.
  */
 export function refsOfAkmResult(result: unknown): string[] {
   if (!result || typeof result !== "object") return [];
   const r = result as Record<string, unknown>;
-  const entries = [r, ...(Array.isArray(r.hits) ? r.hits : []), ...(Array.isArray(r.items) ? r.items : [])];
+  const entries = [r, ...akmResultList(r)];
   const refs = entries.map((e) => (e && typeof e === "object" ? akmRefFromValue((e as Record<string, unknown>).ref) : undefined));
   return [...new Set(refs.filter((ref): ref is string => !!ref))];
 }

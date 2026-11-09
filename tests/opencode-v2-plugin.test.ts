@@ -110,11 +110,11 @@ describe("akm-opencode-v2 plugin", () => {
     host = await startPlugin(project)
     const search = await host.callTool("akm_search", { query: "nginx", type: "any", limit: 3, include_proposed: true })
     expect(search.metadata?.ok).toBe(true)
-    expect(JSON.parse(search.content).hits[0].ref).toBe("skills/nginx-proxy")
+    expect(JSON.parse(search.content).results[0].ref).toBe("skills/nginx-proxy")
     const show = await host.callTool("akm_show", { ref: "skills/nginx-proxy", detail: "full" })
     expect(JSON.parse(show.content).ref).toBe("skills/nginx-proxy")
     const curate = await host.callTool("akm_curate", { query: "configure nginx proxy", limit: 2 })
-    expect(JSON.parse(curate.content).items[0].ref).toBe("skills/nginx-proxy")
+    expect(JSON.parse(curate.content).results[0].ref).toBe("skills/nginx-proxy")
 
     const argv = fake.calls()
     const searchArgv = argv.find((a) => a[0] === "search")!
@@ -786,7 +786,7 @@ describe("akm-opencode-v2 plugin", () => {
         result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
       })
       await settle(1200)
-      const gate = argvOf("search").slice(before).find((a) => a.includes("--detail") && a.includes("agent"))
+      const gate = argvOf("search").slice(before).find((a) => a.includes("--detail") && a.includes("normal"))
       expect(gate).toContain("--project")
       // #159: no plugin-owned source override; the project's `from` decides.
       expect(gate).not.toContain("--from")
@@ -807,8 +807,8 @@ describe("akm-opencode-v2 plugin", () => {
         result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
       })
       await settle(1200)
-      const gate = argvOf("search").slice(before).find((a) => a.includes("agent") && a.includes("inkwell/v2"))
-      expect(gate).toEqual(["search", "inkwell/v2", "--limit", "5", "--detail", "agent", "--format", "json"])
+      const gate = argvOf("search").slice(before).find((a) => a.includes("normal") && a.includes("inkwell/v2"))
+      expect(gate).toEqual(["search", "inkwell/v2", "--limit", "5", "--detail", "normal", "--format", "json"])
     })
 
     describe("gate cache", () => {
@@ -821,7 +821,7 @@ describe("akm-opencode-v2 plugin", () => {
           status: "completed",
           result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
         })
-      const gateSearches = () => argvOf("search").filter((a) => a.includes("agent") && a.includes("inkwell/v2"))
+      const gateSearches = () => argvOf("search").filter((a) => a.includes("normal") && a.includes("inkwell/v2"))
 
       it("looks the same token up again for a session with another project, and once for the same one", async () => {
         process.env.AKM_WRITE_GATE = "observe"

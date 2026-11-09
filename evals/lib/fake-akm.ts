@@ -387,7 +387,7 @@ function emitText(hits) {
 }
 
 function emitSearchJson(hits, project) {
-  process.stdout.write(JSON.stringify({ hits, searchMode: "keyword", ...(project ? { project } : {}) }))
+  process.stdout.write(JSON.stringify({ results: hits, searchMode: "keyword", ...(project ? { project } : {}) }))
 }
 
 function emitCurateJson(query, hits, project) {
@@ -404,7 +404,7 @@ function emitCurateJson(query, hits, project) {
       summary:
         "Selected " + items.length + " curated result" + (items.length === 1 ? "" : "s") +
         (items.length > 0 ? ": " + items.map((item) => item.ref).join(", ") + "." : "."),
-      items,
+      results: items,
       searchMode: "keyword",
       ...(project ? { project } : {}),
     }),
@@ -507,7 +507,7 @@ if (verb === "search" && (argv.includes("--by-usage") || flagValue("--type") ===
   const project = resolveProject()
   const limit = getLimit()
   const hits = argv.includes("--by-usage") ? usageList(project, limit) : applicableRules(project).slice(0, limit).map(toHit)
-  process.stdout.write(JSON.stringify({ hits, searchMode: "keyword", ...(project ? { project } : {}) }))
+  process.stdout.write(JSON.stringify({ results: hits, searchMode: "keyword", ...(project ? { project } : {}) }))
   process.exit(0)
 }
 
