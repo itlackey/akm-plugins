@@ -22,9 +22,9 @@
 //   - `session.prompt` also feeds auto-feedback and learning proposals.
 //   - `shell.create.before`   -> shellEnv(): AKM_* variables for shells.
 import { shouldRecall } from "../claude/shared/recall-policy"
-import { redactObject } from "../claude/shared/redaction"
 import { extractRefsFromAkmOutput } from "../claude/shared/ref-extraction"
-import { noteRetiredLearningEnv } from "../claude/shared/learning-switch"
+import { configureRedaction, redactObject } from "../claude/shared/redaction"
+import { loadSettings, type PluginSettings } from "../claude/shared/settings"
 import { loadSessionBootstrap } from "../claude/shared/session-bootstrap"
 import { createBundleDirResolver } from "../opencode-shared/bundle"
 import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
@@ -40,8 +40,7 @@ import {
   type GateHost,
   type GateSearchResponse,
   clearGateSession,
-  formatGateMessage,
-  gateDecision,
+    gateDecision,
   noteShownRefs,
   observeFileIdentity,
   warnIfWriteGateInert,
@@ -64,7 +63,7 @@ import {
   applyContextBudget,
   bootstrapBudgetChars,
   curatedTextChars,
-  extractMinIntervalMs,
+  EXTRACT_MIN_INTERVAL_MS,
   formatWorkflowContext,
   gatherCwdContext,
   recallCurate,
@@ -101,8 +100,12 @@ export type CoreOptions = {
   pluginVersion?: string
   /** Test seam: where structured memory events go. Defaults to the shared `opencode` ledger. */
   writeEvent?: EventWriter
-  /** How long a prompt hook may wait for curation before the request proceeds without it. */
+  /** The plugin's settings (see claude/shared/settings.ts). Defaults to reading akm's config.json, and its warnings are logged. */
+  settings?: PluginSettings
+  /** How long a prompt hook may wait for curation before the request proceeds without it. Test seam. */
   recallWaitMs?: number
+  /** The least time between two session extracts. Test seam. */
+  extractMinIntervalMs?: number
   /** Test seam: replaces command resolution. */
   resolveCommand?: () => ResolvedAkmCommand | CliError
   /** Test seam: replaces the extraction spawn. */
@@ -128,12 +131,9 @@ type SessionState = {
   controllers: Set<AbortController>
 }
 
-const AUTO_CURATE = () => (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
-const CURATE_MIN_CHARS = () => Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
-const CURATE_TIMEOUT_MS = () => Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
-const READ_TOOL_TIMEOUT_MS = () => Math.max(1_000, (Number(process.env.AKM_READ_TOOL_TIMEOUT ?? "60") || 60) * 1_000)
-const PENDING_PROPOSAL_TIMEOUT_MS = () => Math.max(500, (Number(process.env.AKM_PENDING_PROPOSAL_TIMEOUT ?? "2") || 2) * 1_000)
-const SESSION_BUFFER_MAX_ENTRIES = () => Math.max(1, Number(process.env.AKM_SESSION_BUFFER_MAX_ENTRIES ?? "200") || 200)
+const RECALL_WAIT_MS = 3000
+const CURATE_MIN_CHARS = 16
+const READ_TOOL_TIMEOUT_MS = 60_000
 // The write gate watches the OpenCode 2 write-path tools: `edit` {path, oldString, newString},
 // `write` {path, content}, and `patch` {patchText} on gpt-* models, where it replaces both
 // (the gate cannot resolve a file from a patch envelope and records that, as V1 does).
@@ -154,7 +154,13 @@ function failureMessage(text: string): string {
 
 export function createCore(options: CoreOptions) {
   const now = options.now ?? Date.now
-  const recallWaitMs = options.recallWaitMs ?? Math.max(0, Number(process.env.AKM_RECALL_WAIT_MS ?? "3000") || 0)
+  const loaded = options.settings ? { settings: options.settings, warnings: [] as string[] } : loadSettings()
+  const settings = loaded.settings
+  configureRedaction(settings.redact)
+  const curateTimeoutMs = Math.max(1_000, settings.curateTimeoutSeconds * 1_000)
+  const pendingProposalTimeoutMs = Math.max(500, settings.pendingProposalTimeoutSeconds * 1_000)
+  const recallWaitMs = options.recallWaitMs ?? RECALL_WAIT_MS
+  const extractMinIntervalMs = options.extractMinIntervalMs ?? EXTRACT_MIN_INTERVAL_MS
   const sessions = new Map<string, SessionState>()
   // A subagent's child session: its prompt is model-written and its work is part of the parent session,
   // so it gets no recall, no learning signals and no extraction of its own.
@@ -163,7 +169,7 @@ export function createCore(options: CoreOptions) {
   const extractSession = options.extract ?? spawnSessionExtract
   let disposed = false
   const writeEvent = options.writeEvent ?? writeOpencodeEvent
-  const tracker = createFeedbackTracker({ maxBufferEntries: SESSION_BUFFER_MAX_ENTRIES() })
+  const tracker = createFeedbackTracker({ autoFeedback: () => settings.autoFeedback })
   const bundleDir = createBundleDirResolver()
 
   // Logging is a boundary: redact, then hand to the sink, and never let a sink
@@ -176,30 +182,33 @@ export function createCore(options: CoreOptions) {
     }
   }
 
+  // A wrong or retired setting is said once, here, through the host's log.
+  for (const warning of loaded.warnings) log("warn", `AKM plugin settings: ${warning}`, { subsystem: "settings" })
+
   const formatError = (error: unknown) => formatCliError(error, PACKAGE_NAME)
   const pendingProposals = createPendingProposals({
     list: async (args) => {
       const command = resolveCommand()
       if (isCliError(command)) throw new Error(command.error)
-      const result = await runAkm(command, args, { timeoutMs: PENDING_PROPOSAL_TIMEOUT_MS(), cwd: options.directory, packageName: PACKAGE_NAME })
+      const result = await runAkm(command, args, { timeoutMs: pendingProposalTimeoutMs, cwd: options.directory, packageName: PACKAGE_NAME })
       if (!result.ok) throw new Error(result.error)
       return result.stdout
     },
     formatError,
   })
   // The project's rules and most-used assets: loaded when a session starts and when a compaction
-  // ends, held per session, and sent with every request. Independent of AKM_AUTO_CURATE.
+  // ends, held per session, and sent with every request.
   const bootstrap = createSessionBootstrap(async (sessionID) => {
     const command = resolveCommand()
     if (isCliError(command)) return ""
     return loadSessionBootstrap(
       async (args, env) => {
-        const result = await runAkm(command, args, { timeoutMs: CURATE_TIMEOUT_MS(), cwd: options.directory, env, packageName: PACKAGE_NAME })
+        const result = await runAkm(command, args, { timeoutMs: curateTimeoutMs, cwd: options.directory, env, packageName: PACKAGE_NAME })
         if (result.ok) return result.stdout
         log("warn", "AKM session bootstrap lookup failed", { operation: "session-bootstrap", sessionID, args, error: result.error })
         return ""
       },
-      { project: await projectFor(sessionID), budgetChars: bootstrapBudgetChars(curatedTextChars()) },
+      { project: await projectFor(sessionID), budgetChars: bootstrapBudgetChars(curatedTextChars(settings.curateLimit)) },
     )
   })
   const gateHost: GateHost = {
@@ -228,6 +237,7 @@ export function createCore(options: CoreOptions) {
     log,
     writeEvent,
     resolveCommand,
+    learningOn: () => settings.learning,
     formatError,
     addBufferEntry: tracker.addBufferEntry,
     projectFor,
@@ -293,7 +303,7 @@ export function createCore(options: CoreOptions) {
     owner?.controllers.add(controller)
     try {
       const result = await runAkm(command, args, {
-        timeoutMs: CURATE_TIMEOUT_MS(),
+        timeoutMs: curateTimeoutMs,
         cwd: options.directory,
         signal: controller.signal,
         packageName: PACKAGE_NAME,
@@ -317,7 +327,8 @@ export function createCore(options: CoreOptions) {
     owner?.controllers.add(controller)
     try {
       const outcome = await recallCurate(query, {
-        timeoutMs: CURATE_TIMEOUT_MS(),
+        timeoutMs: curateTimeoutMs,
+        limit: settings.curateLimit,
         signal: controller.signal,
         cwd: options.directory,
         project: await projectFor(sessionID),
@@ -376,7 +387,7 @@ export function createCore(options: CoreOptions) {
         log("warn", "AKM auto-feedback skipped", { subsystem: "feedback", toolName: "session.prompt", sessionID, ref: negative.ref, error: command.error })
         return
       }
-      const result = await submitNegativeFeedback(command, negative, { timeoutMs: READ_TOOL_TIMEOUT_MS(), cwd: options.directory, packageName: PACKAGE_NAME })
+      const result = await submitNegativeFeedback(command, negative, { timeoutMs: READ_TOOL_TIMEOUT_MS, cwd: options.directory, packageName: PACKAGE_NAME })
       log(result.ok ? "info" : "warn", result.ok ? "AKM auto-feedback recorded" : "AKM auto-feedback failed", {
         subsystem: "feedback",
         sessionID,
@@ -398,7 +409,6 @@ export function createCore(options: CoreOptions) {
       // Read before the feedback plan updates the window, as the V1 hook does.
       const recentAssetFailure = tracker.hasRecentNegativeSignal(sessionID)
       observeUserMessage(sessionID, text)
-      if (!AUTO_CURATE()) return
       const st = state(sessionID)
       const decision = shouldRecall(text, { activeWorkflow: !!st.workflow, recentAssetFailure })
       if (!decision.shouldRecall) {
@@ -407,7 +417,7 @@ export function createCore(options: CoreOptions) {
         }
         return
       }
-      if (decision.query.length < CURATE_MIN_CHARS()) return
+      if (decision.query.length < CURATE_MIN_CHARS) return
       // Dedupe: the same recall query within a session is not run twice (a retry
       // or a re-sent prompt must not respawn akm or stack identical blocks).
       if (st.lastQuery === decision.query) return
@@ -467,12 +477,11 @@ export function createCore(options: CoreOptions) {
   }
 
   async function onSessionCreated(sessionID: string): Promise<void> {
-    noteRetiredLearningEnv((message) => log("warn", message, { subsystem: "learning", sessionID }))
     const st = state(sessionID)
     void bootstrap.ensure(sessionID)
     const cwdContext = gatherCwdContext(options.directory)
     const [curated, workflowRaw] = await Promise.all([
-      AUTO_CURATE() && cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
+      cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
       runBestEffort(sessionID, ["--format", "json", "-q", "workflow", "list", "--active"], { operation: "active-workflow-summary" }),
     ])
     if (disposed || sessions.get(sessionID) !== st) return
@@ -485,7 +494,7 @@ export function createCore(options: CoreOptions) {
     if (disposed || childSessions.has(sessionID)) return
     const st = state(sessionID)
     const at = now()
-    if (at - st.lastExtractAt < extractMinIntervalMs()) return
+    if (at - st.lastExtractAt < extractMinIntervalMs) return
     const command = resolveCommand()
     if (isCliError(command)) return // akm unavailable: the periodic `akm improve` extract pass is the backstop
     st.lastExtractAt = at
@@ -513,24 +522,21 @@ export function createCore(options: CoreOptions) {
   }
 
   /**
-   * `tool.execute.before` body: the format-declaration write gate. Returns the message the
-   * host should fail the tool call with, or undefined to let it proceed (the shipped default
-   * mode, `observe`, only records what it would have blocked). A plugin-internal fault never
-   * blocks the user's write. Never throws.
+   * `tool.execute.before` body: the format-declaration write gate. It only records what it
+   * would have blocked and never blocks the call; a plugin-internal fault never disturbs the
+   * user's write. Never throws.
    */
-  async function onToolBefore(call: { tool: string; sessionID: string; callID: string; input: unknown }): Promise<string | undefined> {
+  async function onToolBefore(call: { tool: string; sessionID: string; callID: string; input: unknown }): Promise<void> {
     try {
-      if (disposed || !WATCHED_WRITE_TOOLS.has(call.tool)) return undefined
+      if (disposed || !WATCHED_WRITE_TOOLS.has(call.tool)) return
       const args = call.input && typeof call.input === "object" ? call.input : {}
-      const decision = await gateDecision(
+      await gateDecision(
         gateHost,
         { tool: call.tool, sessionID: call.sessionID, callID: call.callID, directory: options.directory } as { tool: string; sessionID: string; callID: string },
         { args },
       )
-      return decision ? formatGateMessage(decision.filePath, decision.token, decision.ref, decision.description) : undefined
     } catch (error: unknown) {
       log("error", "AKM tool.execute.before hook failed", { hook: "tool.execute.before", toolName: call.tool, sessionID: call.sessionID, error: formatError(error) })
-      return undefined
     }
   }
 
@@ -642,7 +648,7 @@ export function createCore(options: CoreOptions) {
     try {
       if (disposed) return fail("The AKM plugin has been unloaded.")
       const command = resolveCommand()
-      const callOptions = { timeoutMs: READ_TOOL_TIMEOUT_MS(), cwd: options.directory, signal: context.signal, packageName: PACKAGE_NAME }
+      const callOptions = { timeoutMs: READ_TOOL_TIMEOUT_MS, cwd: options.directory, signal: context.signal, packageName: PACKAGE_NAME }
       let outcome: ToolOutcome
       if (spec === "akm_search" || spec === "akm_show" || spec === "akm_curate") {
         const operation: ReadOperation = spec === "akm_search" ? "search" : spec === "akm_show" ? "show" : "curate"

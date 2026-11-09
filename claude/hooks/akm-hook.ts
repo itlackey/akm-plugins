@@ -10,13 +10,11 @@ import { runAge } from "../shared/run-age"
 import { valid } from "../shared/vendor-semver"
 import {
   classifyFeedbackSignal,
-  createExplicitCorrectionRegex,
-  createRetrospectiveFeedbackRegex,
-  createRetrospectiveNegativeRegex,
+  EXPLICIT_CORRECTION_RE,
+  RETROSPECTIVE_FEEDBACK_RE,
+  RETROSPECTIVE_NEGATIVE_RE,
   shouldSubmitAutomaticFeedback,
 } from "../shared/feedback-signals"
-import { filterAndRankCuratedItems, renderCuratedItems } from "../shared/curate-render"
-import { akmResultList } from "../shared/result-list"
 import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import {
   appendCapturedLearningSignal,
@@ -28,21 +26,28 @@ import {
   reserveLearningProposal,
   type ProposalCandidate,
 } from "../shared/learning-signals"
-import { learningOptedOut, noteRetiredLearningEnv, syncLearningSwitch } from "../shared/learning-switch"
 import { isNonTaskPrompt, shouldRecall, stripLeadingEnvelopes } from "../shared/recall-policy"
 import { DUPLICATE_WINDOW_MS, loadSessionBootstrap } from "../shared/session-bootstrap"
-import { redactSecrets } from "../shared/redaction"
+import { configureRedaction, redactSecrets } from "../shared/redaction"
+import { loadSettings } from "../shared/settings"
 import { extractAllRefs, extractRefsFromAkmOutput, validateRefCandidates } from "../shared/ref-extraction"
 import { RUN_TIMED_OUT, runPlan } from "../shared/spawn-plan"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
-// `<command> [mode]`, plus one optional flag: `--harness=codex`, which a host
-// puts in its hook command instead of setting AKM_PLUGIN_HARNESS (see HARNESS).
-// Flags are skipped when picking the positional arguments, so it may sit anywhere.
+// `<command> [mode]`, plus one optional flag: `--harness=codex`, which the Codex
+// manifest puts in its hook commands (see HARNESS). Flags are skipped when
+// picking the positional arguments, so it may sit anywhere.
 const POSITIONAL = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
 const COMMAND = POSITIONAL[0] ?? ""
 const MODE = POSITIONAL[1] ?? ""
 const HARNESS_ARG = process.argv.find((arg) => arg.startsWith("--harness="))?.slice("--harness=".length)
+
+// The plugin's settings: the `plugins` section of akm's config.json, and akm's
+// `improve.enabled` for learning (see ../shared/settings). Read once per hook
+// process; the warnings it collects are shown at SessionStart.
+const LOADED_SETTINGS = loadSettings()
+const SETTINGS = LOADED_SETTINGS.settings
+configureRedaction(SETTINGS.redact)
 
 // AKM_MIN_VERSION is the single shared version floor imported from
 // ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
@@ -52,22 +57,17 @@ const HARNESS_ARG = process.argv.find((arg) => arg.startsWith("--harness="))?.sl
 const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@>=${AKM_MIN_VERSION}-0`
 // The ref contains `>`, so it is double-quoted (works in sh, cmd and PowerShell) wherever it is shown as a command.
 const AKM_INSTALL_COMMAND = (manager: "bun" | "npm") => `${manager} install -g "${AKM_PACKAGE_REF}"`
-// Claude Code unless a host says otherwise. The Codex manifest's hook commands
-// (.codex-plugin/plugin.json) run this same hook as Codex: on POSIX with
-// AKM_PLUGIN_HARNESS=codex and AKM_PLUGIN_STATE_DIR set in front of the command,
-// on Windows with `--harness=codex`. Codex runs a Windows hook through
-// PowerShell (or cmd.exe), where a `NAME=value command` prefix is not syntax at
-// all. Either way a Codex run keeps its state in PLUGIN_DATA, the plugin data
+// Claude Code unless the command says `--harness=codex`. The Codex manifest's
+// hook commands (.codex-plugin/plugin.json) run this same hook that way, on
+// every platform. A Codex run keeps its state in PLUGIN_DATA, the plugin data
 // directory Codex exports to its hooks, so what it records is labelled Codex and
 // never lands in Claude's state. The auto-feedback paths below keep the literal
 // "claude-code": they never run under Codex (see AUTO_FEEDBACK).
-const HARNESS = (HARNESS_ARG ?? process.env.AKM_PLUGIN_HARNESS) === "codex" ? "codex" : "claude-code"
+const HARNESS = HARNESS_ARG === "codex" ? "codex" : "claude-code"
 const CODEX_DATA_DIR = HARNESS === "codex" ? process.env.PLUGIN_DATA?.trim() : undefined
 // os.homedir() rather than $HOME: Windows sets no HOME (USERPROFILE instead), and
 // falling back to "." would put the state directory in the project's cwd.
-const STATE_DIR =
-  process.env.AKM_PLUGIN_STATE_DIR ??
-  (CODEX_DATA_DIR || path.join(process.env.XDG_STATE_HOME ?? path.join(homedir(), ".local", "state"), "akm-claude"))
+const STATE_DIR = CODEX_DATA_DIR || path.join(process.env.XDG_STATE_HOME ?? path.join(homedir(), ".local", "state"), "akm-claude")
 const SESSIONS_DIR = path.join(STATE_DIR, "sessions")
 const SESSION_LOG = path.join(STATE_DIR, "session.log")
 const FEEDBACK_LOG = path.join(STATE_DIR, "feedback.log")
@@ -83,34 +83,13 @@ const LEARNING_PROPOSAL_LOG = path.join(STATE_DIR, "learning-proposals.log")
 // SessionEnd's `akm index` is detached for the same reason and lands here for
 // the same reason — see runIndexOnSessionEnd().
 const INDEX_LOG = path.join(STATE_DIR, "index.log")
-// getEventLogPath() is keyed on XDG_STATE_HOME, not AKM_PLUGIN_STATE_DIR, so a
+// getEventLogPath() is keyed on XDG_STATE_HOME, not the plugin data directory, so a
 // Codex run would still write events.jsonl into akm-claude/.
 const EVENT_LOG = HARNESS === "codex" ? path.join(STATE_DIR, "events.jsonl") : getEventLogPath("claude-code")
 const QUALITY_CACHE = path.join(STATE_DIR, "quality-cache.tsv")
-// `?? pluginOption(...)` here and below reads the matching plugin.json
-// userConfig option — see pluginOption() for the resolution order.
-const CURATE_LIMIT = Number(process.env.AKM_CURATE_LIMIT ?? pluginOption("CURATE_LIMIT") ?? "5") || 5
-// Seconds. It was a string only because it used to be spliced into a
-// `timeout --preserve-status <n> …` argv; the caps are applied by spawnSync /
-// Bun.spawn directly now, so it is the number it always meant to be.
-const CURATE_TIMEOUT = Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8
-// #110 — unset by default (0 disables the check entirely, matching every
-// other CURATE_* tunable's "0 means off" convention). akm curate has always
-// returned CURATE_LIMIT results whether or not any of them scored well, and
-// `--format text` (the default curate call) never printed a score, so there
-// was no signal to filter on. When this is a positive number, both curate
-// call sites switch from `--format text` to `--format json`, drop items
-// scoring below it, and — since that response already carries per-item
-// `type` too — rank authored assets (lesson/memory/knowledge/skill/...)
-// ahead of imported website/wiki snapshots. If nothing survives the floor,
-// no curated block is written at all, same as a query with no signal.
-const CURATE_MIN_SCORE = Number(process.env.AKM_CURATE_MIN_SCORE ?? "0") || 0
-// #110 — passthrough for `akm curate --type`, unset by default. Lets a user
-// narrow curation to their own authored types (e.g. `lesson,memory` is not
-// supported server-side today — this is a single exact-match filter, same as
-// the CLI flag it forwards) instead of competing against every adapter-
-// defined type (website, wiki, ...) for the same CURATE_LIMIT slots.
-const CURATE_TYPE = (process.env.AKM_CURATE_TYPE ?? pluginOption("CURATE_TYPE") ?? "").trim()
+const CURATE_LIMIT = SETTINGS.curateLimit
+// Seconds. The caps are applied by spawnSync / Bun.spawn directly.
+const CURATE_TIMEOUT = SETTINGS.curateTimeoutSeconds
 // `akm --version` is a local print with no stash, embedding or LLM work behind
 // it, and it is the FIRST thing SessionStart runs. It gets its own much tighter
 // cap so a wedged binary cannot spend the whole CURATE_TIMEOUT budget before a
@@ -118,72 +97,24 @@ const CURATE_TYPE = (process.env.AKM_CURATE_TYPE ?? pluginOption("CURATE_TYPE") 
 // starting node starting bun: the first call after boot took 2.9 s on a CI runner
 // (0.4 s after that), too close to 3 s to tell a cold start from a wedged binary.
 const VERSION_TIMEOUT_MS = process.platform === "win32" ? 10_000 : 3000
-const CONTEXT_BUDGET_CHARS = Number(process.env.AKM_CONTEXT_BUDGET_CHARS ?? "4000") || 4000
-/**
- * Every AKM kill switch is opt-OUT and reads the same way: only the literal
- * "0" disables it. AKM_AUTO_FEEDBACK used to be parsed here as `=== "1"` while
- * the OpenCode plugin parsed it as `!== "0"`, so `AKM_AUTO_FEEDBACK=true`
- * silently DISABLED auto-feedback on Claude and enabled it on OpenCode. One
- * helper so the two harnesses cannot drift again.
- */
-function envFlag(name: string, defaultOn: boolean): boolean {
-  return (process.env[name] ?? (defaultOn ? "1" : "0")) !== "0"
-}
-
-/**
- * .claude-plugin/plugin.json declares `userConfig` options, and Claude
- * Code exports every declared option to hook processes as
- * CLAUDE_PLUGIN_OPTION_<KEY uppercased>. Shell-form hook commands (which all of
- * ours are) cannot use ${user_config.*} substitution, so the env var is the
- * only delivery route — without these reads the settings dialog would render
- * controls wired to nothing.
- *
- * Each option is an alias for an AKM_* variable that already existed, so the
- * resolution order is explicit env var -> plugin option -> built-in default.
- * An operator who exports AKM_BUNDLE_DIR in their shell keeps overriding the
- * settings UI, and a host that sets none of these behaves exactly as before.
- */
-function pluginOption(key: string): string | undefined {
-  const raw = process.env[`CLAUDE_PLUGIN_OPTION_${key}`]?.trim()
-  return raw ? raw : undefined
-}
-
-/**
- * Boolean options get their own parse rather than going through envFlag().
- * Claude Code does not document how a boolean userConfig value is stringified
- * into its env var, so an OFF setting may well arrive as "false"; envFlag()'s
- * "only the literal 0 disables" rule would read that as ON — precisely the
- * class of bug envFlag exists to prevent. Env vars keep the documented "0"
- * rule, which is what claude/README.md promises.
- */
-const OPTION_OFF_VALUES = new Set(["0", "false", "off", "no"])
-
-function flagSetting(envName: string, optionKey: string, defaultOn: boolean): boolean {
-  if (process.env[envName] !== undefined) return envFlag(envName, defaultOn)
-  const option = pluginOption(optionKey)
-  if (option !== undefined) return !OPTION_OFF_VALUES.has(option.toLowerCase())
-  return defaultOn
-}
-
-// Never under Codex, whatever AKM_AUTO_FEEDBACK says: its PostToolUse gives a
+const CONTEXT_BUDGET_CHARS = 4000
+// Never under Codex, whatever `plugins.autoFeedback` says: its PostToolUse gives a
 // Bash command's output but no exit status (and it has no failure event), so a
 // failed akm command cannot be told from a successful one. The Codex manifest
 // registers no PostToolUse hook; this keeps the hook itself from submitting
 // feedback, for a tool event or for the session's log under a "that worked".
-const AUTO_FEEDBACK = HARNESS !== "codex" && flagSetting("AKM_AUTO_FEEDBACK", "AUTO_FEEDBACK", true)
-// The `auto_learning` option gates both prompt-time proposals and the SessionEnd
-// `akm proposal extract` spawn (see extractSession()).
-const AUTO_LEARNING = !learningOptedOut()
-const AUTO_SKILL_PROPOSALS = envFlag("AKM_AUTO_SKILL_PROPOSALS", true)
-const AUTO_CURATE = envFlag("AKM_AUTO_CURATE", true)
+const AUTO_FEEDBACK = HARNESS !== "codex" && SETTINGS.autoFeedback
+// Learning is akm's own switch, `improve.enabled` (`akm setup --learning on|off`). It gates
+// both prompt-time proposals and the SessionEnd `akm proposal extract` spawn (see extractSession()).
+const AUTO_LEARNING = SETTINGS.learning
 // SessionEnd `akm index` is opt-OUT (default enabled) because this is the only
 // index refresh either plugin makes at the end of a session — OpenCode's runs
 // once too, on session.deleted (never on session.idle, which fires after every
 // turn), so the two harnesses end a session with the same stash freshness. Skip
 // it and the stash stays stale until the next hourly `akm improve`. Users who
 // want that (e.g. CI runners, low-power dev machines) set
-// AKM_INDEX_ON_SESSION_END=0.
-const INDEX_ON_SESSION_END = flagSetting("AKM_INDEX_ON_SESSION_END", "INDEX_ON_SESSION_END", true)
+// `plugins.indexOnSessionEnd` to false.
+const INDEX_ON_SESSION_END = SETTINGS.indexOnSessionEnd
 const CURATED_PROMPT_HEADER = "# AKM bundle - assets relevant to this prompt"
 const CURATED_SESSION_HEADER = "# AKM bundle - assets relevant to this session"
 const CURATED_CONTEXT_TAIL = "Tip: call `akm show <ref>` to fetch full content. Only if an asset is wrong or stale, run `akm feedback <ref> --negative --reason \"<what is wrong and what it should say>\"`: that lowers its ranking. To correct a fact you have verified, also pass `--replace \"<exact current text>\" --with \"<corrected text>\" --source \"<URL, command or file>\"`. Use `--positive` when it helped. An asset that simply didn't fit your task is not negative feedback: record nothing."
@@ -297,7 +228,7 @@ function sanitize(value: string): string {
 // lifetime of the machine. rotateIfOversized() from ../shared/state-files is
 // now the single implementation used by both call sites (this file and
 // memory-events.ts): before an append, if the file already exceeds
-// AKM_PLUGIN_MAX_LOG_BYTES (default 1 MiB),
+// the 1 MiB cap in state-files.ts,
 // rewrite it down to its newest half (by line count) via
 // write-temp-then-rename — chmod 0o600 on the replacement — so a concurrent
 // reader/writer never observes a truncated/partial file and the rewritten file
@@ -316,8 +247,6 @@ function appendLog(filePath: string, ...fields: string[]) {
 function buildScope(sessionID: string) {
   return {
     run: sessionID || undefined,
-    repo: process.env.AKM_REPO,
-    branch: process.env.AKM_BRANCH,
   }
 }
 
@@ -339,10 +268,7 @@ function writeSessionBuffer(sid: string, sectionTitle: string, body: string) {
   appendFileSync(bufferPath, `## ${timestamp()} - ${sectionTitle}\n${redacted}\n\n`)
 }
 
-function learningProposalMinConfidence(): number {
-  const raw = Number(process.env.AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE ?? "0.75")
-  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.75
-}
+const LEARNING_PROPOSAL_MIN_CONFIDENCE = 0.75
 
 // The session's directory for a hook payload: CLAUDE_PROJECT_DIR (stable for the
 // session; the payload's `cwd` follows the model's `cd`), else the payload's own
@@ -365,7 +291,7 @@ function promptProject(rawInput: string): string {
  * `akm proposal new` call, result parsing, durable status, and cleanup.
  */
 function submitLearningProposal(candidate: ProposalCandidate): void {
-  if (!AUTO_LEARNING || candidate.confidence < learningProposalMinConfidence()) return
+  if (!AUTO_LEARNING || candidate.confidence < LEARNING_PROPOSAL_MIN_CONFIDENCE) return
   const akm = resolveAkmCommandSpec()
   if (!akm) {
     appendLog(LEARNING_PROPOSAL_LOG, "skipped", candidate.kind, "akm unavailable")
@@ -454,7 +380,6 @@ function capturePromptLearning(rawInput: string, text: string, sid: string): voi
     if (signal.proposalType) submitLearningProposal(signal)
   }
 
-  if (!AUTO_SKILL_PROPOSALS) return
   try {
     const workflow = observeRecurringWorkflow({
       stateDir: STATE_DIR,
@@ -471,15 +396,15 @@ function capturePromptLearning(rawInput: string, text: string, sid: string): voi
 }
 
 /**
- * Resolve the bundle root used for ref validation. Prefer AKM_BUNDLE_DIR (or
- * the equivalent `bundle_dir` plugin option) so tests and sandboxed harnesses
- * do not need to spawn AKM, then fall back to `akm info`.
+ * Resolve the bundle root used for ref validation. Prefer AKM_BUNDLE_DIR (akm's
+ * own location variable) so tests and sandboxed harnesses do not need to spawn
+ * AKM, then fall back to `akm info`.
  *
  * Returns an array because future work may surface multiple roots; today
  * the array has at most one entry.
  */
 function resolveStashRoots(): string[] {
-  const envOverride = process.env.AKM_BUNDLE_DIR?.trim() || pluginOption("BUNDLE_DIR")
+  const envOverride = process.env.AKM_BUNDLE_DIR?.trim()
   if (envOverride) return [envOverride]
   if (akmAvailable()) {
     const raw = akmRun(["info", "--format", "json", "-q"]).trim()
@@ -621,7 +546,7 @@ function akmVersionSatisfies(commandSpec: AkmCommandSpec): { ok: boolean; versio
 // Every subprocess this file spawns is capped here, by spawnSync itself. The
 // cap used to be delegated to the `timeout(1)` binary and applied only when
 // findCommandOnPath("timeout") resolved — true on Linux, false on stock macOS,
-// where AKM_CURATE_TIMEOUT therefore degraded to no limit at all and a wedged
+// where the curate timeout therefore degraded to no limit at all and a wedged
 // akm could burn the entire hook budget. spawnSync's own `timeout` needs no
 // external binary, so the cap is real on every platform.
 //
@@ -1126,10 +1051,7 @@ function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; pa
 // to `curated` stayed misclassified indefinitely. Entries older than this
 // TTL are treated as cache misses at lookup so the `akm show` probe re-runs
 // and appends a fresh (newest-wins) classification.
-const QUALITY_TTL_MS = (() => {
-  const raw = Number(process.env.AKM_PLUGIN_QUALITY_TTL_MS)
-  return Number.isFinite(raw) && raw > 0 ? raw : 24 * 60 * 60 * 1000
-})()
+const QUALITY_TTL_MS = 24 * 60 * 60 * 1000
 
 function refQuality(ref: string): string {
   if (!ref) return "unknown"
@@ -1550,9 +1472,6 @@ const RETROSPECTIVE_MAX_REFS = 3
 // akm feedback spawns. Sized to leave the UserPromptSubmit curate call its full
 // CURATE_TIMEOUT inside the hook's declared 15 s budget.
 const RETROSPECTIVE_BUDGET_MS = 3000
-const RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
-const RETROSPECTIVE_NEGATIVE_RE = createRetrospectiveNegativeRegex()
-const EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
 
 /**
  * Retrospective user feedback ("that worked"): the highest-confidence signal
@@ -1647,32 +1566,10 @@ function captureRetrospectiveFeedback(text: string, sid: string) {
   }
 }
 
-// #110 — shared argv-building for both curate call sites (curatePrompt,
-// sessionStart): appends `--type` when AKM_CURATE_TYPE is set, and requests
-// `--format json` instead of the long-standing `--format text` only when the
-// AKM_CURATE_MIN_SCORE floor is enabled for this call, since that is the
-// only situation the per-item `score`/`type` fields (renderCuratedJson
-// below) are needed for. With the floor disabled this produces the exact
-// argv curatePrompt() has always sent, so that (default, tested) path is
-// unchanged.
+// Shared argv-building for both curate call sites (curatePrompt, sessionStart).
 function buildCurateArgs(query: string, limit: number): string[] {
   // `agent`, not `normal`: released akm's curate `normal` adds preview and why lines (about 55% more text); a newer akm treats `agent` as its `normal`, today's agent set.
-  const args = ["curate", query, "--limit", String(limit), "--detail", "agent", "-q"]
-  if (CURATE_TYPE) args.push("--type", CURATE_TYPE)
-  args.push("--format", CURATE_MIN_SCORE > 0 ? "json" : "text")
-  return args
-}
-
-// #110 — the AKM_CURATE_MIN_SCORE-enabled path: decode a `--format json`
-// curate response, apply the relevance floor + authored-type-first ranking
-// (claude/shared/curate-render.ts), and render what survives back into the
-// same kind of plain text `--format text` would have produced. Returns ""
-// both when nothing survives the floor (by design — no curated block at all)
-// and when the response fails to parse (fails closed, same as every other
-// akm response this hook reads).
-function renderCuratedJson(raw: string, query: string): string {
-  const items = filterAndRankCuratedItems(akmResultList(safeJsonParse<unknown>(raw.trim())), CURATE_MIN_SCORE)
-  return items.length > 0 ? renderCuratedItems(query, items) : ""
+  return ["curate", query, "--limit", String(limit), "--detail", "agent", "-q", "--format", "text"]
 }
 
 function curatePrompt(): string {
@@ -1705,13 +1602,9 @@ function curatePrompt(): string {
   }
   if (!text) return ""
   // Before the curate gate on purpose: "that worked" is a short prompt that
-  // shouldRecall() rejects and AKM_AUTO_CURATE=0 skips entirely, and neither
-  // has anything to do with whether the user just handed us a feedback signal.
+  // shouldRecall() rejects, and that has nothing to do with whether the user
+  // just handed us a feedback signal.
   if (typed) captureRetrospectiveFeedback(text, sid)
-  // AKM_AUTO_CURATE=0 disables prompt curation only. It deliberately sits below
-  // the feedback/memory-intent logging above: an early return at the top of the
-  // function would silently drop those writes too.
-  if (!AUTO_CURATE) return ""
   const decision = shouldRecall(text)
   if (!decision.shouldRecall || !akmAvailable()) {
     writeMemoryEvent({
@@ -1723,8 +1616,7 @@ function curatePrompt(): string {
     })
     return ""
   }
-  const curatedRaw = akmRun(buildCurateArgs(text, CURATE_LIMIT))
-  const curated = CURATE_MIN_SCORE > 0 ? renderCuratedJson(curatedRaw, text) : curatedRaw
+  const curated = akmRun(buildCurateArgs(text, CURATE_LIMIT))
   writeMemoryEvent({
     event: "prompt_recall",
     sessionId: sid || undefined,
@@ -1740,7 +1632,7 @@ function curatePrompt(): string {
   })
   if (!curated.trim()) return ""
     // The curated results go into the model's context DIRECTLY, trimmed to
-    // AKM_CONTEXT_BUDGET_CHARS by emitHookContext.
+    // CONTEXT_BUDGET_CHARS by emitHookContext.
     //
     // This used to inject a one-line pointer at the file below instead, to
     // keep the per-turn budget spend near zero. That trade does not pay:
@@ -1821,6 +1713,10 @@ async function sessionStart(): Promise<string> {
   const rawInput = readStdin()
   const sid = extractSessionId(rawInput)
   const startSource = safeJsonParse<{ source?: unknown }>(rawInput)?.source
+  // A wrong or retired setting is said once per session: in session.log, and in the SessionStart message the person sees.
+  const settingsNotes = LOADED_SETTINGS.warnings.map((warning) => `AKM plugin settings: ${warning}`)
+  for (const note of settingsNotes) appendLog(SESSION_LOG, "settings", note)
+  const withSettingsNotes = (message: string) => [message, ...settingsNotes].join("\n")
   const versionCheck = checkAkmVersion()
   if (!versionCheck.ok) {
     // checkAkmVersion() already logged the mismatch to the plugin state dir
@@ -1848,7 +1744,7 @@ async function sessionStart(): Promise<string> {
           "You may still run `akm` commands yourself, but flags and output the plugin documents may not work on this version. Ask the user to upgrade akm-cli:",
           ...install,
         ].join("\n"),
-        `AKM ${versionCheck.version ?? "unknown"} is older than the required ${AKM_MIN_VERSION}, so the AKM plugin is off this session. Upgrade with: ${AKM_INSTALL_COMMAND("bun")}`,
+        withSettingsNotes(`AKM ${versionCheck.version ?? "unknown"} is older than the required ${AKM_MIN_VERSION}, so the AKM plugin is off this session. Upgrade with: ${AKM_INSTALL_COMMAND("bun")}`),
       )
     }
     return emitHookContext(
@@ -1863,17 +1759,10 @@ async function sessionStart(): Promise<string> {
       // The model cannot install anything; the user can. Give the human the
       // one command they need instead of leaving the whole failure inside the
       // model's context window.
-      `AKM is unavailable this session (${reason}). Install it with: ${AKM_INSTALL_COMMAND("bun")}`,
+      withSettingsNotes(`AKM is unavailable this session (${reason}). Install it with: ${AKM_INSTALL_COMMAND("bun")}`),
     )
   }
   if (!akmAvailable()) return ""
-
-  noteRetiredLearningEnv((message) => appendLog(SESSION_LOG, "learning_switch", message))
-  await syncLearningSwitch({
-    run: (args) => akmRunAsync(args),
-    stateDir: STATE_DIR,
-    log: (message) => appendLog(SESSION_LOG, "learning_switch", message),
-  })
 
   const akm = resolveAkmCommandSpec()
   if (akm) {
@@ -1892,6 +1781,7 @@ async function sessionStart(): Promise<string> {
   const sessionWarnings = gatherSessionStartWarnings(bundleRoots)
   const extractWarning = lastExtractFailureWarning()
   if (extractWarning) sessionWarnings.push(extractWarning)
+  sessionWarnings.push(...settingsNotes)
 
   // #71 perceived-latency fix: curate, proposals and the active-workflow
   // list have no inter-dependency — issue them concurrently via Promise.all
@@ -1899,24 +1789,19 @@ async function sessionStart(): Promise<string> {
   // ~1×CURATE_TIMEOUT however many of them hit the same embedding bottleneck,
   // which is why the third call costs nothing.
   //
-  // A disabled leg resolves to "" without spawning at all: AKM_AUTO_CURATE=0
-  // has to mean "no subprocess", not "spawn it and throw the
-  // result away".
-  //
   // #89: gatherCwdContext() is empty when the cwd has none of its indicator
   // files (a monorepo root keeping package.json in subdirectories, a bare
   // scratch dir). `akm curate ""` exits 2 with MISSING_REQUIRED_ARGUMENT, so an
-  // empty context is a leg that cannot succeed — skip it for the same reason a
-  // disabled leg is skipped, rather than logging an akm_failed per session.
+  // empty context is a leg that cannot succeed — skip it rather than logging an
+  // akm_failed per session.
   const cwdContext = gatherCwdContext()
-  // The rules and most-used list load on their own, whatever AKM_AUTO_CURATE says.
   const bootstrapWanted = bootstrapDue(sid, typeof startSource === "string" ? startSource : "")
   const [curatedRaw, pendingRaw, activeWorkflowRaw] = await Promise.all([
-    AUTO_CURATE && cwdContext ? akmRunAsync(buildCurateArgs(cwdContext, CURATE_LIMIT)) : Promise.resolve(""),
+    cwdContext ? akmRunAsync(buildCurateArgs(cwdContext, CURATE_LIMIT)) : Promise.resolve(""),
     akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
     akmRunAsync(["--format", "json", "-q", "workflow", "list", "--active"]),
   ])
-  const curatedTrimmed = (CURATE_MIN_SCORE > 0 ? renderCuratedJson(curatedRaw, cwdContext) : curatedRaw).trim()
+  const curatedTrimmed = curatedRaw.trim()
   let curatedFile = ""
   if (curatedTrimmed) {
     curatedFile = path.join(CURATED_DIR, `session-${sid || "unknown"}.md`)

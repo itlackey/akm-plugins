@@ -1,5 +1,8 @@
 import { describe, expect, test, afterEach, beforeEach } from "bun:test"
-import { redactSecrets, redactObject } from "../claude/shared/redaction"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { configureRedaction, redactSecrets, redactObject } from "../claude/shared/redaction"
 
 // ── redactSecrets ────────────────────────────────────────────────────────────
 
@@ -372,35 +375,32 @@ describe("redactSecrets — JSON-like key:value pairs", () => {
 
 // ── high-entropy opt-in ──────────────────────────────────────────────────────
 
-describe("redactSecrets — high-entropy strings (opt-in, WS-7b)", () => {
-  const origEnv = process.env.AKM_REDACT_HIGH_ENTROPY
+describe("redactSecrets — high-entropy strings (plugins.redact.highEntropy)", () => {
+  const LONG = "AAABBBCCCDDDEEEFFFGGGHHHIIIJJJKK" // 32 chars
+  const SHORT = "AAABBBCCCDDDEEEFFFGGGHHH1234567" // 31 chars
 
-  afterEach(() => {
-    // The module-level constant is evaluated at import time so we cannot toggle it
-    // in a single process; these tests validate behavior when the feature IS active
-    // by checking the module exports are correct shapes.
-    if (origEnv === undefined) delete process.env.AKM_REDACT_HIGH_ENTROPY
-    else process.env.AKM_REDACT_HIGH_ENTROPY = origEnv
+  afterEach(() => configureRedaction({ pii: false, highEntropy: false }))
+
+  test("off: a 32-char token is left alone", () => {
+    configureRedaction({ pii: false, highEntropy: false })
+    const result = redactSecrets(`token ${LONG} end`)
+    expect(result.categories).not.toContain("high_entropy")
+    expect(result.text).toContain(LONG)
   })
 
-  test("redactSecrets returns a valid RedactionResult shape", () => {
-    const result = redactSecrets("hello world")
-    expect(result).toHaveProperty("text")
-    expect(result).toHaveProperty("redacted")
-    expect(result).toHaveProperty("categories")
-    expect(typeof result.text).toBe("string")
-    expect(typeof result.redacted).toBe("boolean")
-    expect(Array.isArray(result.categories)).toBe(true)
+  test("on: a token of 32 or more characters is redacted, a 31-char one is not", () => {
+    configureRedaction({ pii: false, highEntropy: true })
+    const long = redactSecrets(`token ${LONG} end`)
+    expect(long.categories).toContain("high_entropy")
+    expect(long.text).toContain("[REDACTED:HIGH_ENTROPY]")
+    expect(long.text).not.toContain(LONG)
+    const short = redactSecrets(`token ${SHORT} end`)
+    expect(short.text).toContain(SHORT)
   })
 
-  test("short high-entropy-looking strings are NOT redacted by default", () => {
-    // 31 chars — below the 32-char threshold even if enabled
-    const input = "AAABBBCCCDDDEEEFFFGGGHHH1234567"
-    const { redacted } = redactSecrets(input)
-    // Default is opt-out; only redacted if AKM_REDACT_HIGH_ENTROPY=1 at module load time
-    // In the default test environment the env var is not set so this should be false
-    // (unless the parent process set it, in which case it should be true for >=32 chars)
-    expect(typeof redacted).toBe("boolean") // always a boolean, never undefined
+  test("on, repeatedly: the global pattern keeps no state between calls", () => {
+    configureRedaction({ pii: false, highEntropy: true })
+    for (let i = 0; i < 3; i++) expect(redactSecrets(`a ${LONG} b`).text).toBe("a [REDACTED:HIGH_ENTROPY] b")
   })
 })
 
@@ -435,56 +435,50 @@ describe("redactSecrets — CLI argv pair shapes", () => {
 
 // ── PII opt-in ───────────────────────────────────────────────────────────────
 
-describe("redactSecrets — PII patterns (opt-in, AKM_REDACT_PII=1)", () => {
-  const origEnv = process.env.AKM_REDACT_PII
+describe("redactSecrets — PII patterns (plugins.redact.pii)", () => {
+  afterEach(() => configureRedaction({ pii: false, highEntropy: false }))
 
-  afterEach(() => {
-    // Same constraint as high-entropy: PII_PATTERNS is evaluated at module
-    // import time, so a single in-process test can only check default
-    // behavior (off) and contract shape — exhaustive opt-in coverage runs
-    // in CI with AKM_REDACT_PII=1 set before this module loads.
-    if (origEnv === undefined) delete process.env.AKM_REDACT_PII
-    else process.env.AKM_REDACT_PII = origEnv
-  })
-
-  test("credit-card-shaped digits are NOT redacted by default", () => {
-    const { text, categories } = redactSecrets("card 4111 1111 1111 1111 on file")
-    if (process.env.AKM_REDACT_PII === "1") {
-      expect(categories).toContain("credit_card")
-      expect(text).not.toContain("4111 1111 1111 1111")
-    } else {
-      expect(categories).not.toContain("credit_card")
-      expect(text).toContain("4111 1111 1111 1111")
-    }
-  })
-
-  test("SSN-shaped strings are NOT redacted by default", () => {
-    const { text, categories } = redactSecrets("user ssn 123-45-6789")
-    if (process.env.AKM_REDACT_PII === "1") {
-      expect(categories).toContain("ssn")
-      expect(text).not.toContain("123-45-6789")
-    } else {
-      expect(categories).not.toContain("ssn")
-      expect(text).toContain("123-45-6789")
-    }
-  })
-
-  test("US phone numbers are NOT redacted by default", () => {
-    const { text, categories } = redactSecrets("call (555) 123-4567 today")
-    if (process.env.AKM_REDACT_PII === "1") {
-      expect(categories).toContain("phone")
-      expect(text).not.toContain("(555) 123-4567")
-    } else {
-      expect(categories).not.toContain("phone")
-      expect(text).toContain("(555) 123-4567")
-    }
+  test.each([
+    ["credit_card", "card 4111 1111 1111 1111 on file", "4111 1111 1111 1111"],
+    ["ssn", "user ssn 123-45-6789", "123-45-6789"],
+    ["phone", "call +1 555 123 4567 today", "555 123 4567"],
+  ])("%s-shaped text is left alone when off and redacted when on", (category, input, sensitive) => {
+    configureRedaction({ pii: false, highEntropy: false })
+    const off = redactSecrets(input)
+    expect(off.categories).not.toContain(category)
+    expect(off.text).toContain(sensitive)
+    configureRedaction({ pii: true, highEntropy: false })
+    const on = redactSecrets(input)
+    expect(on.categories).toContain(category)
+    expect(on.text).not.toContain(sensitive)
   })
 
   test("PII patterns coexist with other categories", () => {
+    configureRedaction({ pii: true, highEntropy: false })
     const { categories } = redactSecrets("Bearer eyJhbGc.x.y card 4111111111111111")
-    // Bearer should always be redacted; credit_card depends on opt-in.
     expect(categories).toContain("bearer_token")
+    expect(categories).toContain("credit_card")
   })
+})
+
+describe("redaction reads akm's config.json when nothing configured it", () => {
+  function run(config: string | null, env: Record<string, string> = {}): string {
+    const dir = mkdtempSync(path.join(tmpdir(), "akm-redact-"))
+    try {
+      if (config !== null) writeFileSync(path.join(dir, "config.json"), config)
+      const script = `import { redactSecrets } from ${JSON.stringify(path.resolve(import.meta.dir, "../claude/shared/redaction"))}; process.stdout.write(redactSecrets("ssn 123-45-6789").text)`
+      const child = Bun.spawnSync([process.execPath, "-e", script], { env: { PATH: process.env.PATH ?? "", HOME: dir, AKM_CONFIG_DIR: dir, ...env }, stdout: "pipe", stderr: "pipe" })
+      return child.stdout.toString("utf8")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test("no file: off, as before", () => expect(run(null)).toBe("ssn 123-45-6789"))
+  test("plugins.redact.pii true: on", () => expect(run(JSON.stringify({ plugins: { redact: { pii: true } } }))).toBe("ssn [REDACTED:SSN]"))
+  test("plugins.redact.pii false: off", () => expect(run(JSON.stringify({ plugins: { redact: { pii: false } } }))).toBe("ssn 123-45-6789"))
+  test("a retired AKM_REDACT_PII variable with no config key: on", () => expect(run("{}", { AKM_REDACT_PII: "1" })).toBe("ssn [REDACTED:SSN]"))
+  test("a config file that does not parse: on", () => expect(run("{ nope")).toBe("ssn [REDACTED:SSN]"))
 })
 
 // ── redactObject ─────────────────────────────────────────────────────────────

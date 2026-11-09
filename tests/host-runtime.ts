@@ -15,10 +15,27 @@
 //   core/src/session/mod.rs (build_hooks_config)
 
 import { it } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import path from "node:path"
 
 export const IS_WINDOWS = process.platform === "win32"
+
+// tests/preload.ts points AKM_CONFIG_DIR at `<root>/empty`, and removes <root> when the run ends.
+const CONFIG_ROOT = process.env.AKM_CONFIG_DIR ? path.dirname(process.env.AKM_CONFIG_DIR) : tmpdir()
+
+/**
+ * A new akm config directory (for AKM_CONFIG_DIR) holding `config` as config.json: the plugins read their
+ * settings from there. A string is written as it is, so a test can leave a file that does not parse.
+ */
+export function makeConfigDir(config: Record<string, unknown> | string = {}): string {
+  const dir = mkdtempSync(path.join(CONFIG_ROOT, "config-"))
+  writeFileSync(path.join(dir, "config.json"), typeof config === "string" ? config : JSON.stringify(config))
+  return dir
+}
+
+/** What the unit tests run with unless a case exercises learning: akm's learning switch is off. */
+export const LEARNING_OFF = { improve: { enabled: false } }
 const SYSTEM_ROOT = process.env.SystemRoot ?? "C:\\Windows"
 
 /**

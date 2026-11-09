@@ -25,39 +25,6 @@
   "skills": [
     "./skills/akm"
   ],
-  "userConfig": {
-    "bundle_dir": {
-      "type": "directory",
-      "title": "AKM bundle directory",
-      "description": "Absolute path to the AKM bundle root. Leave empty to let the hooks discover it by running `akm info`. Setting it removes that subprocess from every file-tool hook, which is the single biggest hook-latency win available. Equivalent to the AKM_BUNDLE_DIR environment variable."
-    },
-    "auto_feedback": {
-      "type": "boolean",
-      "title": "Record feedback automatically",
-      "description": "Submit positive `akm feedback` for concepts a successful tool call used, and credit concepts when you say something worked. A failed akm command is never recorded as feedback. Turn off to record feedback only via /akm-feedback. Equivalent to AKM_AUTO_FEEDBACK.",
-      "default": true
-    },
-    "auto_learning": {
-      "type": "boolean",
-      "title": "Automatic learning",
-      "description": "Capture explicit memories, corrections, guardrails, and preferences from prompts and submit high-confidence AKM proposals for review. Repeated task intents across distinct sessions can also propose reusable skills. Turning it off stops all of AKM's automatic learning on this host, for all bundles, including the scheduled `improve` run: at session start the plugin runs `akm setup --learning off`, and turns it back on if the plugin was what turned it off.",
-      "default": true
-    },
-    "curate_limit": {
-      "type": "number",
-      "title": "Curated results per prompt",
-      "description": "How many ranked concepts the curation hooks retrieve for a prompt or session. Higher values surface more but cost more time per turn. Equivalent to AKM_CURATE_LIMIT.",
-      "default": 5,
-      "min": 1,
-      "max": 25
-    },
-    "index_on_session_end": {
-      "type": "boolean",
-      "title": "Refresh the AKM index when a session ends",
-      "description": "Run `akm index` at SessionEnd so the local bundle stays current. Turn off on CI runners or low-power machines; the periodic `akm improve` pass remains the backstop. Equivalent to AKM_INDEX_ON_SESSION_END.",
-      "default": true
-    }
-  },
   "hooks": {
     "SessionStart": [
       {

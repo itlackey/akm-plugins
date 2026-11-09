@@ -18,8 +18,6 @@ export function buildEventScope(sessionID?: string, directory?: string, agent?: 
     agent,
     run: sessionID,
     project: directory,
-    repo: process.env.AKM_REPO,
-    branch: process.env.AKM_BRANCH,
   }
 }
 

@@ -42,10 +42,7 @@ describe("OpenCode eval harness", () => {
 
       const sandbox = createSandbox({ sourceStash: ${JSON.stringify(fixtureStashDir)} })
       try {
-        // Per-prompt curation is off: chat.message below only delivers the
-        // retrospective confirmation, and a fire-and-forget \`akm curate\` would
-        // be unrelated noise in the same call log.
-        const harness = await createOpenCodeHarness({ ...sandbox.env, AKM_AUTO_CURATE: "0" })
+        const harness = await createOpenCodeHarness(sandbox.env)
         // A failed akm call is not feedback on the asset (akm#999): this session
         // observes a failing lookup and must emit nothing.
         await harness.toolAfter({

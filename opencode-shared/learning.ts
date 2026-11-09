@@ -21,21 +21,15 @@ import {
   removeLearningProposalJob,
   reserveLearningProposal,
 } from "../claude/shared/learning-signals"
-import { parseLearningOn } from "../claude/shared/learning-switch"
-import { type CliError, type ResolvedAkmCommand, isCliError, runAkm } from "./akm-cli"
+import { type CliError, type ResolvedAkmCommand, isCliError } from "./akm-cli"
 import { type EventWriter, buildEventScope, opencodeEventLog, opencodeStateDir } from "./events"
 import { parseToolOutput, type SessionBufferEntry } from "./feedback"
 import { AKM_EXTRACT_OUTPUT_MAX_CHARS, truncateLogText, unrefChildStream } from "./recall"
 
 export type LearningLog = (level: "debug" | "info" | "warn" | "error", message: string, extra: Record<string, unknown>) => void
 
-const autoSkillProposalsEnabled = (): boolean => (process.env.AKM_AUTO_SKILL_PROPOSALS ?? "1") !== "0"
-const proposalTimeoutMs = (): number => Math.max(1_000, Number(process.env.AKM_LEARNING_PROPOSAL_TIMEOUT_MS ?? "600000") || 600_000)
-
-function learningProposalMinConfidence(): number {
-  const raw = Number(process.env.AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE ?? "0.75")
-  return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 0.75
-}
+const PROPOSAL_TIMEOUT_MS = 600_000
+const LEARNING_PROPOSAL_MIN_CONFIDENCE = 0.75
 
 function parseLearningProposalEnvelope(raw: string): {
   ok?: boolean
@@ -66,6 +60,8 @@ export type LearningHost = {
   log: LearningLog
   writeEvent: EventWriter
   resolveCommand: () => ResolvedAkmCommand | CliError
+  /** False when akm's learning switch (`improve.enabled`) is off. */
+  learningOn: () => boolean
   formatError: (error: unknown) => string
   /** Records the captured signal in the session buffer (same buffer the feedback tracker keeps). */
   addBufferEntry: (sessionID: string | undefined, entry: Omit<SessionBufferEntry, "timestamp">) => void
@@ -78,7 +74,7 @@ export type LearningHost = {
 export function createLearning(host: LearningHost) {
   /** Fire-and-forget semantic authoring; AKM owns the proposal and its review. */
   async function submitLearningProposal(candidate: ProposalCandidate, directory: string | undefined): Promise<void> {
-    if (candidate.confidence < learningProposalMinConfidence()) return
+    if (candidate.confidence < LEARNING_PROPOSAL_MIN_CONFIDENCE) return
     const command = host.resolveCommand()
     if (isCliError(command)) {
       host.log("warn", "AKM learning proposal skipped", {
@@ -91,8 +87,7 @@ export function createLearning(host: LearningHost) {
       return
     }
     // Quiet skip while akm's learning switch is off: not a failure, nothing reserved or submitted.
-    const info = await runAkm(command, ["info", "--format", "json", "-q"], { cwd: directory, timeoutMs: 15_000 })
-    if (info.ok && parseLearningOn(info.stdout) === false) return
+    if (!host.learningOn()) return
     const stateDir = opencodeStateDir()
     const reservation = reserveLearningProposal(stateDir, candidate)
     if (!reservation) return
@@ -157,7 +152,7 @@ export function createLearning(host: LearningHost) {
       })
       jobFile = created.jobFile
       taskFile = created.job.taskFile
-      const timeoutMs = proposalTimeoutMs()
+      const timeoutMs = PROPOSAL_TIMEOUT_MS
       const project = await host.projectFor?.(candidate.sessionId)
       const child = spawn(
         command.command,
@@ -271,7 +266,6 @@ export function createLearning(host: LearningHost) {
       if (signal.proposalType) void submitLearningProposal(signal, directory)
     }
 
-    if (!autoSkillProposalsEnabled()) return
     try {
       const workflow = observeRecurringWorkflow({
         stateDir,

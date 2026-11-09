@@ -1,7 +1,17 @@
 #!/usr/bin/env sh
 
 ROOT_DIR="$(dirname "$0")"
-STATE_DIR="${AKM_PLUGIN_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-.}/.local/state}/akm-claude}"
+# Claude Code unless the hook command says --harness=codex, as the Codex manifest's does. A Codex
+# run keeps its state in PLUGIN_DATA, the plugin data directory Codex exports to its hooks.
+host=Claude
+for arg in "$@"; do
+  [ "$arg" = "--harness=codex" ] && host=Codex
+done
+if [ "$host" = "Codex" ] && [ -n "${PLUGIN_DATA:-}" ]; then
+  STATE_DIR="$PLUGIN_DATA"
+else
+  STATE_DIR="${XDG_STATE_HOME:-${HOME:-.}/.local/state}/akm-claude"
+fi
 SESSION_LOG="$STATE_DIR/session.log"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
@@ -20,11 +30,8 @@ append_log() {
 }
 
 if ! command -v bun >/dev/null 2>&1; then
-  # The Codex manifest runs this wrapper with AKM_PLUGIN_HARNESS=codex. Name the
-  # host that is actually running it: "Claude hooks are disabled" is wrong advice
-  # in a Codex session.
-  host=Claude
-  [ "${AKM_PLUGIN_HARNESS:-}" = "codex" ] && host=Codex
+  # Name the host that is actually running the wrapper: "Claude hooks are
+  # disabled" is wrong advice in a Codex session.
   append_log "$SESSION_LOG" "runtime_disabled" "bun_unavailable" "$host AKM hooks are disabled until Bun is installed and on PATH."
   case "$1" in
     session-start)

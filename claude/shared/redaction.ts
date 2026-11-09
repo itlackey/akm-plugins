@@ -1,4 +1,5 @@
 import { inspect } from "node:util"
+import { loadSettings, type RedactSettings } from "./settings"
 
 export type RedactionResult = {
   text: string
@@ -108,29 +109,37 @@ const SIMPLE_REPLACEMENTS: Array<{ category: string; pattern: RegExp; replacemen
 ]
 
 /**
+ * Which opt-in redactions are on: `plugins.redact.pii` and
+ * `plugins.redact.highEntropy` in akm's config.json (see ./settings, which
+ * fails closed: a wrong value or an unreadable file leaves them on). A host
+ * that has already read its settings calls configureRedaction() with them;
+ * otherwise the first redaction reads the file.
+ */
+let activeRedaction: RedactSettings | undefined
+
+export function configureRedaction(redact: RedactSettings | undefined): void {
+  activeRedaction = redact
+}
+
+function redaction(): RedactSettings {
+  activeRedaction ??= loadSettings().settings.redact
+  return activeRedaction
+}
+
+/**
  * High-entropy string redaction (WS-7b).
  *
  * Generic strings >= 32 chars matching [A-Za-z0-9+/=_-]+ that look like
- * base64/hex secrets. Disabled by default to avoid false positives (e.g.
- * long identifiers, file paths, etc.). Opt in by setting the env var:
- *
- *   AKM_REDACT_HIGH_ENTROPY=1
- *
- * The threshold is 32 chars, configurable via AKM_REDACT_ENTROPY_MIN_LEN.
+ * base64/hex secrets. Off unless `plugins.redact.highEntropy` is true, to
+ * avoid false positives (e.g. long identifiers, file paths, etc.).
  */
-const HIGH_ENTROPY_ENABLED = process.env.AKM_REDACT_HIGH_ENTROPY === "1"
-const HIGH_ENTROPY_MIN_LEN = Number.parseInt(process.env.AKM_REDACT_ENTROPY_MIN_LEN ?? "32", 10)
-const HIGH_ENTROPY_RE = HIGH_ENTROPY_ENABLED
-  ? new RegExp(`\\b[A-Za-z0-9+/=_-]{${Math.max(32, HIGH_ENTROPY_MIN_LEN)},}\\b`, "g")
-  : null
+const HIGH_ENTROPY_RE = /\b[A-Za-z0-9+/=_-]{32,}\b/g
 
 /**
- * Opt-in PII redaction patterns. Off by default because financial / phone
- * shapes appear in legitimate logs (timestamps, counters, identifiers) and
- * over-redaction makes session logs unreadable. Enable for hosts that
- * legitimately process PII through the agent loop:
- *
- *   AKM_REDACT_PII=1
+ * Opt-in PII redaction patterns. Off unless `plugins.redact.pii` is true,
+ * because financial / phone shapes appear in legitimate logs (timestamps,
+ * counters, identifiers) and over-redaction makes session logs unreadable.
+ * Enable for hosts that legitimately process PII through the agent loop.
  *
  * Patterns covered:
  *   - Credit-card-shaped 13–19 digit sequences with optional `[- ]` delimiters
@@ -139,26 +148,23 @@ const HIGH_ENTROPY_RE = HIGH_ENTROPY_ENABLED
  *     bare 9-digit numbers are too noisy)
  *   - US/international phone numbers in `[\+]?\d{1,3}[- .]?\d{3}[- .]?\d{3}[- .]?\d{4}` form
  */
-const PII_REDACTION_ENABLED = process.env.AKM_REDACT_PII === "1"
-const PII_PATTERNS: Array<{ category: string; pattern: RegExp; replacement: string }> = PII_REDACTION_ENABLED
-  ? [
-      {
-        category: "credit_card",
-        pattern: /\b(?:\d[ -]?){12,18}\d\b/g,
-        replacement: "[REDACTED:CREDIT_CARD]",
-      },
-      {
-        category: "ssn",
-        pattern: /\b\d{3}-\d{2}-\d{4}\b/g,
-        replacement: "[REDACTED:SSN]",
-      },
-      {
-        category: "phone",
-        pattern: /(?<![\w./-])\+?\d{1,3}[- .]?\(?\d{3}\)?[- .]?\d{3}[- .]?\d{4}(?![\w./-])/g,
-        replacement: "[REDACTED:PHONE]",
-      },
-    ]
-  : []
+const PII_PATTERNS: Array<{ category: string; pattern: RegExp; replacement: string }> = [
+  {
+    category: "credit_card",
+    pattern: /\b(?:\d[ -]?){12,18}\d\b/g,
+    replacement: "[REDACTED:CREDIT_CARD]",
+  },
+  {
+    category: "ssn",
+    pattern: /\b\d{3}-\d{2}-\d{4}\b/g,
+    replacement: "[REDACTED:SSN]",
+  },
+  {
+    category: "phone",
+    pattern: /(?<![\w./-])\+?\d{1,3}[- .]?\(?\d{3}\)?[- .]?\d{3}[- .]?\d{4}(?![\w./-])/g,
+    replacement: "[REDACTED:PHONE]",
+  },
+]
 
 function uniq(values: string[]): string[] {
   return [...new Set(values)]
@@ -226,15 +232,17 @@ export function redactSecrets(input: string): RedactionResult {
   text = redactJsonLikePairs(text, categories)
   text = redactCliArgPairs(text, categories)
 
-  // WS-7b: Optional high-entropy string redaction (opt-in via AKM_REDACT_HIGH_ENTROPY=1).
-  if (HIGH_ENTROPY_RE && HIGH_ENTROPY_RE.test(text)) {
+  const { pii, highEntropy } = redaction()
+
+  // WS-7b: optional high-entropy string redaction (`plugins.redact.highEntropy`).
+  if (highEntropy && HIGH_ENTROPY_RE.test(text)) {
     categories.push("high_entropy")
     HIGH_ENTROPY_RE.lastIndex = 0 // reset after .test()
     text = text.replace(HIGH_ENTROPY_RE, "[REDACTED:HIGH_ENTROPY]")
   }
 
-  // Opt-in PII redaction (AKM_REDACT_PII=1).
-  for (const entry of PII_PATTERNS) {
+  // Optional PII redaction (`plugins.redact.pii`).
+  for (const entry of pii ? PII_PATTERNS : []) {
     if (!entry.pattern.test(text)) continue
     categories.push(entry.category)
     entry.pattern.lastIndex = 0

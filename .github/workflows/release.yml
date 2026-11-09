@@ -311,7 +311,7 @@ jobs:
           npm install @openai/codex@0.160.0 --prefix "$prefix" --no-audit --no-fund
           codex="$(find "$prefix/node_modules" -type f -name codex -path '*/vendor/*' | head -n 1)"
           "$codex" --version
-          echo "AKM_REAL_CODEX_BIN=$codex" >> "$GITHUB_ENV"
+          dirname "$codex" >> "$GITHUB_PATH"
 
       - name: Run the real Codex
         run: bun test --timeout 300000 tests/real-hosts.test.ts

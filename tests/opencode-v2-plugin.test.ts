@@ -6,6 +6,7 @@ import { type FakeAkmConfig, installFakeAkm, readCallLog } from "../evals/lib/fa
 import { makeBinDir, installScriptedAkm } from "./host-runtime"
 import { type CurateFn, setCurateForTests } from "../opencode-shared/akm-api"
 import { resetWriteGateForTests } from "../opencode-shared/write-gate"
+import { LEARNING_OFF, makeConfigDir } from "./host-runtime"
 import { startPlugin, type HostFake } from "../opencode-v2/testing"
 
 // Drives the real `akm-opencode-v2` entrypoint (`Plugin.define`, effect API of
@@ -48,7 +49,7 @@ const defaultCurate: CurateFn = async (query) => {
 let curateImpl: CurateFn = defaultCurate
 let host: HostFake | undefined
 let fake: ReturnType<typeof freshFakeAkm>
-const ENV_KEYS = ["AKM_OPENCODE_CLI", "AKM_EXTRACT_MIN_INTERVAL_MS", "AKM_AUTO_CURATE", "AKM_RECALL_WAIT_MS", "AKM_CURATE_TIMEOUT", "AKM_AUTO_FEEDBACK", "AKM_FAKE_LEARNING", "AKM_AUTO_SKILL_PROPOSALS", "AKM_BUNDLE_DIR", "AKM_WRITE_GATE", "XDG_STATE_HOME"]
+const ENV_KEYS = ["AKM_OPENCODE_CLI", "AKM_CONFIG_DIR", "AKM_BUNDLE_DIR", "XDG_STATE_HOME"]
 const saved: Record<string, string | undefined> = {}
 
 beforeEach(() => {
@@ -60,14 +61,15 @@ beforeEach(() => {
   })
   for (const key of ENV_KEYS) saved[key] = process.env[key]
   process.env.XDG_STATE_HOME = path.join(root, `state-${++counter}`)
-  delete process.env.AKM_WRITE_GATE
   resetWriteGateForTests()
   fake = freshFakeAkm()
   process.env.AKM_OPENCODE_CLI = fake.akmPath
-  process.env.AKM_EXTRACT_MIN_INTERVAL_MS = "600000"
-  delete process.env.AKM_FAKE_LEARNING
-  delete process.env.AKM_AUTO_CURATE
 })
+
+/** Make `config` the akm config.json the plugin reads when it starts (restored after the test). */
+function useConfig(config: Record<string, unknown>) {
+  process.env.AKM_CONFIG_DIR = makeConfigDir(config)
+}
 
 afterEach(async () => {
   setCurateForTests(undefined)
@@ -164,11 +166,33 @@ describe("akm-opencode-v2 plugin", () => {
     expect(other[0].text).not.toContain("AKM PROVENANCE") // nothing recalled for ses_c: rules only
   })
 
-  it("does not curate when automatic recall is switched off or the prompt is not a task", async () => {
-    process.env.AKM_AUTO_CURATE = "0"
+  it("does not curate a prompt that is not a task", async () => {
     host = await startPlugin(project)
-    await host.runPrompt("ses_off", PROMPT)
+    await host.runPrompt("ses_off", "thanks")
     expect(curateCalls).toHaveLength(0)
+  })
+
+  it("asks curate for plugins.curateLimit results", async () => {
+    useConfig({ plugins: { curateLimit: 9 } })
+    host = await startPlugin(project)
+    await host.runPrompt("ses_limit", PROMPT)
+    expect(curateCalls[0].options).toEqual({ limit: 9, format: "text", cwd: project })
+  })
+
+  it("a wrong plugins value keeps its default and a retired AKM_* variable is ignored, each said once in the host's log", async () => {
+    useConfig({ plugins: { curateLimit: 99 } })
+    process.env.AKM_CURATE_TIMEOUT = "30"
+    try {
+      host = await startPlugin(project)
+      await settle(100)
+      const warnings = host.logs.filter((line) => line.message.startsWith("AKM plugin settings:")).map((line) => line.message)
+      expect(warnings.filter((m) => m.includes("plugins.curateLimit must be a whole number from 1 to 25"))).toHaveLength(1)
+      expect(warnings.filter((m) => m.includes("AKM_CURATE_TIMEOUT is retired"))).toHaveLength(1)
+      await host.runPrompt("ses_default_limit", PROMPT)
+      expect(curateCalls[0].options).toEqual({ limit: 5, format: "text", cwd: project })
+    } finally {
+      delete process.env.AKM_CURATE_TIMEOUT
+    }
   })
 
   it("session start curates for the project, lists active workflows, never runs hints, and cleans up on delete", async () => {
@@ -300,14 +324,13 @@ describe("akm-opencode-v2 plugin", () => {
     })
 
     it("stops waiting at the timeout, logs it, and drops the late result", async () => {
-      process.env.AKM_CURATE_TIMEOUT = "1"
-      process.env.AKM_RECALL_WAIT_MS = "50"
+      useConfig({ plugins: { curateTimeoutSeconds: 1 } })
       let finish!: (text: string) => void
       curateImpl = () => new Promise<string>((resolve) => (finish = resolve))
       host = await startPlugin(project)
       const started = Date.now()
       await host.runPrompt("ses_slow", PROMPT)
-      expect(Date.now() - started).toBeLessThan(900) // the prompt hook did not wait for the slow curate
+      expect(Date.now() - started).toBeLessThan(2500) // the prompt hook gave up on the slow curate at plugins.curateTimeoutSeconds
       await settle(1300)
       const failure = host.logs.find((line) => line.message === "AKM recall failed")
       expect(failure?.level).toBe("Warn")
@@ -320,12 +343,11 @@ describe("akm-opencode-v2 plugin", () => {
     })
 
     it("abandons an in-flight recall when the session is deleted, without a failure log", async () => {
-      process.env.AKM_RECALL_WAIT_MS = "50"
       let finish!: (text: string) => void
       curateImpl = () => new Promise<string>((resolve) => (finish = resolve))
       host = await startPlugin(project)
       await host.subscribed
-      await host.runPrompt("ses_gone", PROMPT)
+      await host.runPrompt("ses_gone", PROMPT) // waits out the 3 s recall wait, then the curate is still in flight
       await host.emit({ type: "session.deleted", data: { sessionID: "ses_gone" }, location: { directory: project } })
       await settle(100)
       finish("# AKM curated\n- skills/after-delete")
@@ -385,7 +407,7 @@ describe("akm-opencode-v2 plugin", () => {
       expect(feedbackCalls()).toHaveLength(0)
     })
 
-    it("does not credit on a mixed signal, a failed lookup, a no-feedback root, or when switched off", async () => {
+    it("does not credit on a mixed signal, a failed lookup, or a no-feedback root", async () => {
       host = await startPlugin(project)
       await host.runToolHook("execute.after", showResult("skills/nginx-proxy"))
       await host.runPrompt("ses_fb", "thanks, but it didn't work")
@@ -393,11 +415,25 @@ describe("akm-opencode-v2 plugin", () => {
       await host.runPrompt("ses_fail", "thanks, that worked")
       await host.runToolHook("execute.after", { ...showResult("lessons/some-lesson", { type: "lesson", ref: "lessons/some-lesson" }), sessionID: "ses_less" })
       await host.runPrompt("ses_less", "thanks, that worked")
-      process.env.AKM_AUTO_FEEDBACK = "0"
+      await settle(400)
+      expect(feedbackCalls().filter((a) => a.includes("--positive"))).toHaveLength(0)
+    })
+
+    it("credits nothing when plugins.autoFeedback is false, and a wrong value keeps the default", async () => {
+      useConfig({ plugins: { autoFeedback: false } })
+      host = await startPlugin(project)
       await host.runToolHook("execute.after", { ...showResult("skills/nginx-proxy"), sessionID: "ses_off" })
       await host.runPrompt("ses_off", "thanks, that worked")
       await settle(400)
       expect(feedbackCalls().filter((a) => a.includes("--positive"))).toHaveLength(0)
+      await host.unload()
+
+      useConfig({ plugins: { autoFeedback: "off" } })
+      host = await startPlugin(project)
+      await host.runToolHook("execute.after", { ...showResult("skills/nginx-proxy"), sessionID: "ses_bad" })
+      await host.runPrompt("ses_bad", "thanks, that worked")
+      await settle(400)
+      expect(feedbackCalls().filter((a) => a.includes("--positive"))).toHaveLength(1)
     })
 
     it("blames the last touched ref on an explicit correction, and waits for a second soft signal", async () => {
@@ -476,18 +512,16 @@ describe("akm-opencode-v2 plugin", () => {
       expect(proposalCalls()).toHaveLength(1)
     })
 
-    it("skips the proposal quietly while akm reports learning off: not submitted, not failed", async () => {
-      process.env.AKM_FAKE_LEARNING = "off"
+    it("skips the proposal quietly while akm's learning switch (improve.enabled) is off: not submitted, not failed", async () => {
+      useConfig(LEARNING_OFF)
       host = await startPlugin(project)
       await host.runPrompt("ses_core_off", "Remember that the cache directory is wiped nightly by the janitor job")
       await settle(600)
-      expect(fake.calls().some((a) => a[0] === "info")).toBe(true)
       expect(proposalCalls()).toHaveLength(0)
       expect(host.logs.some((line) => line.message.startsWith("AKM learning proposal"))).toBe(false)
     })
 
     it("never runs `akm setup --learning`: it only follows akm's switch", async () => {
-      process.env.AKM_FAKE_LEARNING = "on"
       host = await startPlugin(project)
       await host.subscribed
       await host.emit({ type: "session.created", data: { sessionID: "ses_nosetup" }, location: { directory: project } })
@@ -591,44 +625,27 @@ describe("akm-opencode-v2 plugin", () => {
       writeFileSync(manifest, "apiVersion: inkwell/v2\nkind: Service\n")
     })
 
-    function enforce() {
-      process.env.AKM_WRITE_GATE = "enforce"
-      resetWriteGateForTests()
-    }
-
-    it("blocks the first edit to a file whose declared format the bundle documents, once", async () => {
-      enforce()
+    it("records the first edit to a file whose declared format the bundle documents, once, and blocks nothing", async () => {
       host = await startPlugin(project)
       await readManifest(g)
       await settle(1200) // the identity search runs in the background after the read
-      await expect(edit(g)).rejects.toThrow(/declares `inkwell\/v2`|declares `inkwell`/)
-      await expect(edit(g)).resolves.toBeUndefined() // repeating it proceeds
-      expect(reasons()).toEqual(["fired", "latched"])
+      await expect(edit(g)).resolves.toBeUndefined()
+      await expect(edit(g)).resolves.toBeUndefined()
+      expect(reasons()).toEqual(["observe", "latched"])
       expect(ledger()[0].refs).toEqual(["knowledge/inkwell"])
       expect(ledger()[0].outcome.status).toBe("ok")
     })
 
-    it("fails with the gate message as the tool error, tagged the way the host reads", async () => {
-      enforce()
-      host = await startPlugin(project)
-      await readManifest(g)
-      await settle(1200)
-      const error = await edit(g).then(() => undefined, (e: unknown) => e as { _tag?: string; message: string })
-      expect(error?._tag).toBe("Tool.Error")
-      expect(error?.message).toContain('Call akm_show with ref "knowledge/inkwell"')
-      expect(error?.message).toContain("The inkwell service manifest format")
-    })
-
-    it("only records what it would have blocked in the default observe mode", async () => {
+    it("records the mode it ran in on the ledger", async () => {
       host = await startPlugin(project)
       await readManifest(g)
       await settle(1200)
       await expect(edit(g)).resolves.toBeUndefined()
       expect(reasons()).toEqual(["observe"])
+      expect(ledger()[0].input.mode).toBe("observe")
     })
 
     it("does not block a model that already opened the asset, or that creates the file", async () => {
-      enforce()
       host = await startPlugin(project)
       await readManifest("ses_shown")
       await settle(1200)
@@ -643,7 +660,6 @@ describe("akm-opencode-v2 plugin", () => {
     })
 
     it("is blind to a patch envelope, says so once, and types every skip", async () => {
-      enforce()
       host = await startPlugin(project)
       await edit("ses_p", { patchText: "*** Begin Patch\n*** End Patch" }, "patch")
       await edit("ses_p", { patchText: "*** Begin Patch\n*** End Patch" }, "patch")
@@ -652,28 +668,13 @@ describe("akm-opencode-v2 plugin", () => {
       expect(host.logs.filter((line) => line.message === "AKM write gate inert for patch")).toHaveLength(1)
     })
 
-    it("ignores tools it does not watch, honours AKM_WRITE_GATE=off, and refuses a misspelled mode loudly", async () => {
-      enforce()
+    it("ignores tools it does not watch", async () => {
       host = await startPlugin(project)
       await host.runToolHook("execute.before", { tool: "shell", sessionID: "s", id: "c", input: { command: "ls" } })
       expect(ledger()).toHaveLength(0)
-
-      process.env.AKM_WRITE_GATE = "off"
-      resetWriteGateForTests()
-      await edit("ses_off")
-      expect(reasons()).toEqual(["disabled"])
-
-      process.env.AKM_WRITE_GATE = "enfroce"
-      resetWriteGateForTests()
-      await readManifest("ses_bad")
-      await settle(300)
-      await expect(edit("ses_bad")).resolves.toBeUndefined()
-      expect(reasons().at(-1)).toBe("invalid-mode")
-      expect(host.logs.some((line) => line.level === "Error" && line.message.includes("unrecognized AKM_WRITE_GATE"))).toBe(true)
     })
 
     it("fails open and logs when akm cannot answer the identity search", async () => {
-      enforce()
       process.env.AKM_OPENCODE_CLI = path.join(root, "does-not-exist")
       host = await startPlugin(project)
       await readManifest(g)
@@ -684,7 +685,6 @@ describe("akm-opencode-v2 plugin", () => {
     })
 
     it("forgets a session's files when it is deleted", async () => {
-      enforce()
       host = await startPlugin(project)
       await host.subscribed
       await readManifest("ses_d")
@@ -758,8 +758,6 @@ describe("akm-opencode-v2 plugin", () => {
     })
 
     it("passes metadata.akm.project to search, curate, remember, recall and the format gate, and not to show or feedback", async () => {
-      process.env.AKM_WRITE_GATE = "observe"
-      resetWriteGateForTests()
       host = await startPlugin(project)
       setProject("ses_p", "acme")
       await host.callTool("akm_search", { query: "nginx" }, "ses_p")
@@ -794,8 +792,6 @@ describe("akm-opencode-v2 plugin", () => {
     })
 
     it("sends the exact gate argv, with no --from, when the session has no project", async () => {
-      process.env.AKM_WRITE_GATE = "observe"
-      resetWriteGateForTests()
       host = await startPlugin(project)
       const before = argvOf("search").length
       await host.runToolHook("execute.after", {
@@ -824,8 +820,6 @@ describe("akm-opencode-v2 plugin", () => {
       const gateSearches = () => argvOf("search").filter((a) => a.includes("normal") && a.includes("inkwell/v2"))
 
       it("looks the same token up again for a session with another project, and once for the same one", async () => {
-        process.env.AKM_WRITE_GATE = "observe"
-        resetWriteGateForTests()
         host = await startPlugin(project)
         setProject("ses_a1", "acme")
         setProject("ses_a2", "acme")
@@ -844,8 +838,6 @@ describe("akm-opencode-v2 plugin", () => {
       })
 
       it("looks the same token up again for a plugin loaded in another directory", async () => {
-        process.env.AKM_WRITE_GATE = "observe"
-        resetWriteGateForTests()
         host = await startPlugin(project)
         await readFor(host, "ses_d1")
         await settle(800)
@@ -955,14 +947,15 @@ describe("akm-opencode-v2 plugin", () => {
       expect(text.indexOf("# AKM assets used most here")).toBeLessThan(text.indexOf("AKM is available in this session"))
     })
 
-    it("does not depend on automatic curation", async () => {
-      process.env.AKM_AUTO_CURATE = "0"
+    it("does not depend on automatic curation: the rules go out when curation fails", async () => {
+      curateImpl = async () => {
+        throw new Error("curate is down")
+      }
       withBootstrap()
       host = await startPlugin(project)
       await host.emit({ type: "session.created", data: { sessionID: "ses_b" }, location: { directory: project } })
       await settle(200)
       expect(await request("ses_b")).toContain("## rules/acme")
-      expect(curateCalls).toHaveLength(0)
     })
 
     it("loads once per start, however many requests and prompts follow, and reads count as no demand", async () => {
