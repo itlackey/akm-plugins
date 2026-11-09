@@ -2,8 +2,8 @@
  * The plugins' settings: the `plugins` section of akm's own `config.json` (and
  * `improve.enabled` for background learning). One home, read by all four builds
  * (Claude, Codex, OpenCode 1 and 2) as a plain JSON file: no `akm` process, no
- * environment layer. A plugin finds the file the way akm does (`AKM_CONFIG_DIR`,
- * else `XDG_CONFIG_HOME/akm`, else `~/.config/akm`; Windows `APPDATA\akm`).
+ * environment layer. A plugin finds the file the way akm does (`AKM_CONFIG_FILE`,
+ * else `AKM_CONFIG_DIR`, else `XDG_CONFIG_HOME/akm`, else `~/.config/akm`; Windows `APPDATA\akm`).
  *
  * A wrong value is ignored with a warning and the default is used, except for
  * redaction, which fails closed: a wrong `plugins.redact.*` value, a config file
@@ -60,6 +60,8 @@ const RETIRED_REDACT_ENV = { pii: "AKM_REDACT_PII", highEntropy: "AKM_REDACT_HIG
 
 /** `config.json` the way akm finds it (core/paths.ts), without the `/tmp` bundle isolation rule. */
 export function akmConfigPath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  const file = env.AKM_CONFIG_FILE?.trim()
+  if (file) return path.resolve(file)
   const override = env.AKM_CONFIG_DIR?.trim()
   if (override) return path.join(override, "config.json")
   if (platform === "win32") {

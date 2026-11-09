@@ -2,9 +2,8 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-// Where the active AKM bundle lives: `AKM_BUNDLE_DIR`, else `akm info`'s
-// `bundleDir`. Used to validate refs seen in arbitrary tool calls and to export
-// the bundle location into shell environments. The answer, including "unknown",
+// Where the active AKM bundle lives: `akm info`'s `bundleDir`. Used to validate
+// refs seen in arbitrary tool calls. The answer, including "unknown",
 // is cached for the life of the plugin process.
 export type BundleDirResolver = ReturnType<typeof createBundleDirResolver>
 
@@ -13,8 +12,6 @@ export function createBundleDirResolver() {
   return {
     /** `runInfo` returns `akm info --format json -q` stdout, or null when it failed. */
     async get(runInfo: () => Promise<string | null>): Promise<string | undefined> {
-      const override = process.env.AKM_BUNDLE_DIR?.trim()
-      if (override) return override
       if (cached !== undefined) return cached || undefined
       const raw = await runInfo()
       let value = ""

@@ -527,8 +527,8 @@ if (verb === "curate" || verb === "search") {
 
 // --- info -------------------------------------------------------------------
 // The verb that gates ALL ref validation. Both plugins resolve their bundle
-// root as: $AKM_BUNDLE_DIR, else \`akm info --format json -q\` → .bundleDir
-// (claude/hooks/akm-hook.ts resolveStashRoots(), opencode/index.ts
+// root as \`akm info --format json -q\` → .bundleDir (the fake, like akm 0.10,
+// answers from $AKM_BUNDLE_DIR first; newer akm no longer reads it) (claude/hooks/akm-hook.ts resolveStashRoots(), opencode/index.ts
 // getAkmBundleDir()). With no bundle root, validateRefCandidates() returns []
 // and auto-feedback never fires — so an unmodelled \`info\` is indistinguishable
 // from a plugin that lost ref extraction entirely.
@@ -575,6 +575,7 @@ if (verb === "info") {
         "task",
         "session",
         "fact",
+        "rule",
       ],
       searchModes: ["fts"],
       semanticSearch: { mode: "off", status: "disabled" },
@@ -588,6 +589,7 @@ if (verb === "info") {
         hasEmbeddings: false,
         vecAvailable: false,
       },
+      learning: { on: true, harness: null, scheduled: false },
       shape: "info",
     }),
   )

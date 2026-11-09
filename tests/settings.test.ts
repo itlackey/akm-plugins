@@ -8,7 +8,12 @@ const ok = (root: unknown): ConfigRead => ({ kind: "ok", root })
 const plugins = (value: unknown): ConfigRead => ok({ plugins: value })
 
 describe("akmConfigPath: the file akm reads", () => {
-  test("AKM_CONFIG_DIR wins", () => {
+  test("AKM_CONFIG_FILE wins, trimmed and resolved", () => {
+    expect(akmConfigPath({ AKM_CONFIG_FILE: " /etc/akm/other.json ", AKM_CONFIG_DIR: "/d", XDG_CONFIG_HOME: "/x", HOME: "/h" }, "linux")).toBe("/etc/akm/other.json")
+    expect(akmConfigPath({ AKM_CONFIG_FILE: "rel/cfg.json", HOME: "/h" }, "linux")).toBe(path.resolve("rel/cfg.json"))
+    expect(akmConfigPath({ AKM_CONFIG_FILE: "  ", AKM_CONFIG_DIR: "/d" }, "linux")).toBe(path.join("/d", "config.json"))
+  })
+  test("then AKM_CONFIG_DIR", () => {
     expect(akmConfigPath({ AKM_CONFIG_DIR: "/etc/akm", XDG_CONFIG_HOME: "/x", HOME: "/h" }, "linux")).toBe(path.join("/etc/akm", "config.json"))
   })
   test("then XDG_CONFIG_HOME/akm, then ~/.config/akm", () => {

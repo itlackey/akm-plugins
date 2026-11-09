@@ -568,28 +568,21 @@ describe("akm-opencode-v2 plugin", () => {
   })
 
   describe("shell environment", () => {
-    it("exports the plugin version and the bundle to every shell it starts, and no project", async () => {
+    it("exports the plugin version to every shell it starts, and no project or bundle variable", async () => {
       process.env.AKM_BUNDLE_DIR = "/srv/bundle"
       host = await startPlugin(project)
       const env = await host.runShellCreate({ PATH: "/usr/bin" })
       expect(env).not.toHaveProperty("AKM_PROJECT")
-      expect(env.AKM_BUNDLE_DIR).toBe("/srv/bundle")
+      expect(env).not.toHaveProperty("AKM_BUNDLE_DIR")
       expect(env.AKM_PLUGIN_VERSION).toMatch(/^\d+\.\d+\.\d+/)
       expect(env.PATH).toBe("/usr/bin")
     })
 
-    it("asks akm for the bundle once when AKM_BUNDLE_DIR is unset, and never throws when it cannot", async () => {
+    it("never asks akm for the bundle to build a shell environment", async () => {
       delete process.env.AKM_BUNDLE_DIR
       host = await startPlugin(project)
       await host.runShellCreate()
-      await host.runShellCreate()
-      expect(fake.calls().filter((a) => a.includes("info"))).toHaveLength(1)
-
-      process.env.AKM_OPENCODE_CLI = path.join(root, "does-not-exist")
-      await host.unload()
-      host = await startPlugin(project)
-      const env = await host.runShellCreate()
-      expect(env.AKM_BUNDLE_DIR).toBeUndefined()
+      expect(fake.calls().filter((a) => a.includes("info"))).toHaveLength(0)
     })
   })
 

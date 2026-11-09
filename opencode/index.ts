@@ -417,9 +417,9 @@ async function getAkmBundleDir(client?: LogCapableClient): Promise<string | unde
 // channel of its own.
 async function getAkmBundleWarning(client: LogCapableClient): Promise<string> {
   const bundleDir = await getAkmBundleDir(client)
-  if (!bundleDir) return "No AKM default bundle is configured. Run `akm setup` or set `AKM_BUNDLE_DIR`."
+  if (!bundleDir) return "No AKM default bundle is configured. Run `akm setup`."
   if (!existsSync(bundleDir)) {
-    return `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\` or set \`AKM_BUNDLE_DIR\` to an existing bundle.`
+    return `AKM bundle directory \`${bundleDir}\` does not exist. Run \`akm setup\`.`
   }
   return ""
 }
@@ -1170,8 +1170,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     "shell.env": async (_input, output) => {
       try {
         output.env.AKM_PLUGIN_VERSION = PLUGIN_VERSION
-        const bundleDir = await getAkmBundleDir(logClient)
-        if (bundleDir) output.env.AKM_BUNDLE_DIR = bundleDir
       } catch (error: unknown) {
         await logHookFailure(logClient, "shell.env", error)
       }
