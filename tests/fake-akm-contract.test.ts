@@ -602,9 +602,12 @@ function cleanup(env: { root: string }) {
 // #159: the format-guidance gate's search, as the plugins build it (no `--from`), against a real akm.
 // Unscoped guidance sits in an excluded bundle, the current space, a global bundle and the default bundle.
 describe("format-guidance gate search selects by the project's sources", () => {
+  // akm's projects (`--project`, the `projects` config) arrived after 0.10.261022: skipped on a real akm without them.
+  const supportsProjects =
+    akmAvailable && spawnSync(process.execPath, [REAL_AKM, "search", "--help"]).stdout.includes("--project")
   const gateArgv = (project?: string) => ["search", "formatproof", "--limit", "5", ...(project ? ["--project", project] : []), "--detail", "normal", "--format", "json", "-q"]
 
-  test.skipIf(!akmAvailable)("honours the project's `from` by directory and by name, and falls back to all local without a project", () => {
+  test.skipIf(!supportsProjects)("honours the project's `from` by directory and by name, and falls back to all local without a project", () => {
     const real = makeRealEnv()
     try {
       const env = realAkmEnv(real)

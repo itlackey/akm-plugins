@@ -575,7 +575,6 @@ if (verb === "info") {
         "task",
         "session",
         "fact",
-        "rule",
       ],
       searchModes: ["fts"],
       semanticSearch: { mode: "off", status: "disabled" },
@@ -589,7 +588,6 @@ if (verb === "info") {
         hasEmbeddings: false,
         vecAvailable: false,
       },
-      learning: { on: true, harness: null, scheduled: false },
       shape: "info",
     }),
   )
