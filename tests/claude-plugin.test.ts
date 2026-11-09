@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { IS_WINDOWS, LEARNING_OFF, PLUGIN_DIR, hostEnv, installScriptedAkm, itPosix, makeBinDir, makeConfigDir, sandboxPath } from "./host-runtime"
@@ -106,12 +106,20 @@ function answerInfoFromBundleEnv(env: Record<string, string> | undefined) {
   if (!env?.AKM_BUNDLE_DIR || !env.PATH) return
   const stub = path.join(env.PATH.split(path.delimiter)[0], "akm")
   // Only a stub the test wrote under its own temp dir; never a real akm found through PATH.
-  if (!existsSync(stub) || !realpathSync(stub).startsWith(realpathSync(tmpdir()) + path.sep)) return
+  if (!existsSync(stub) || lstatSync(stub).isSymbolicLink() || !realpathSync(stub).startsWith(realpathSync(tmpdir()) + path.sep)) return
   const text = readFileSync(stub, "utf8")
   if (!text.startsWith("#!") || text.includes(INFO_MARKER)) return
   const [shebang, ...rest] = text.split("\n")
   const handler = `${INFO_MARKER}\nif [ "$1" = "info" ]; then printf '{"bundleDir":"%s"}\\n' "$AKM_BUNDLE_DIR"; exit 0; fi`
   writeFileSync(stub, [shebang, handler, ...rest].join("\n"))
+}
+
+// An akm that answers `info` from AKM_BUNDLE_DIR and nothing else, on every platform (akm.cmd on Windows), for a test that
+// runs the hook with no other akm. Returns the PATH to run with.
+function bundleAnsweringAkmPath(tempDir: string) {
+  const binDir = makeBinDir(tempDir)
+  installScriptedAkm(binDir, `if (args[0] === "info") console.log(JSON.stringify({ bundleDir: process.env.AKM_BUNDLE_DIR }))\n`)
+  return sandboxPath(binDir)
 }
 
 function runHook(args: string[], options?: { input?: string; env?: Record<string, string>; cwd?: string; script?: string }) {
@@ -723,7 +731,7 @@ exit 0
       }),
       env: {
         HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        PATH: bundleAnsweringAkmPath(tempDir),
         XDG_STATE_HOME: stateDir,
         AKM_BUNDLE_DIR: bundleDir,
       },
@@ -745,7 +753,7 @@ exit 0
         input: { command: "akm show WORK/plan --format json" },
         output: "{\"type\":\"knowledge\",\"ref\":\"WORK/plan\",\"content\":\"Step one.\"}",
       }),
-      env: { HOME: tempDir, PATH: process.env.PATH ?? "/usr/bin:/bin", XDG_STATE_HOME: stateDir, AKM_BUNDLE_DIR: bundleDir },
+      env: { HOME: tempDir, PATH: bundleAnsweringAkmPath(tempDir), XDG_STATE_HOME: stateDir, AKM_BUNDLE_DIR: bundleDir },
     })
 
     expect(getFirstLogEntry(stateDir, "memory.log")).toContain("WORK/plan")
@@ -1990,7 +1998,7 @@ exit 0
       }),
       env: {
         HOME: tempDir,
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        PATH: bundleAnsweringAkmPath(tempDir),
         XDG_STATE_HOME: stateDir,
         AKM_BUNDLE_DIR: bundleDir,
       },
