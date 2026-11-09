@@ -1725,7 +1725,7 @@ async function sessionStart(): Promise<string> {
     outcome: { status: "ok" },
   })
   // Every `akm ...` this context (and akm's own output) tells the model to run means the CLI the plugin carries.
-  let body = `${SESSION_START_HEADER}\n\nIn this session \`akm\` means \`bun "${BUNDLED_AKM_CLI}"\`: run every akm command above, and any akm hint in tool output, that way. There is no \`akm\` on PATH.`
+  let body = `${SESSION_START_HEADER}\n\nIn this session \`akm\` means \`bun "${BUNDLED_AKM_CLI}"\`: run every akm command above, and any akm hint in tool output, that way. Do not use any other \`akm\`.`
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
   if (workflowSummary) body = `${body}\n\n${workflowSummary}`
