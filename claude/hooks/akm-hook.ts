@@ -16,6 +16,7 @@ import {
   shouldSubmitAutomaticFeedback,
 } from "../shared/feedback-signals"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../shared/curate-render"
+import { akmResultList } from "../shared/result-list"
 import { appendMemoryEvent, getEventLogPath } from "../shared/memory-events"
 import {
   appendCapturedLearningSignal,
@@ -1655,6 +1656,7 @@ function captureRetrospectiveFeedback(text: string, sid: string) {
 // argv curatePrompt() has always sent, so that (default, tested) path is
 // unchanged.
 function buildCurateArgs(query: string, limit: number): string[] {
+  // `agent`, not `normal`: released akm's curate `normal` adds preview and why lines (about 55% more text); a newer akm treats `agent` as its `normal`, today's agent set.
   const args = ["curate", query, "--limit", String(limit), "--detail", "agent", "-q"]
   if (CURATE_TYPE) args.push("--type", CURATE_TYPE)
   args.push("--format", CURATE_MIN_SCORE > 0 ? "json" : "text")
@@ -1669,8 +1671,7 @@ function buildCurateArgs(query: string, limit: number): string[] {
 // and when the response fails to parse (fails closed, same as every other
 // akm response this hook reads).
 function renderCuratedJson(raw: string, query: string): string {
-  const parsed = safeJsonParse<{ items?: unknown }>(raw.trim())
-  const items = filterAndRankCuratedItems(parsed?.items, CURATE_MIN_SCORE)
+  const items = filterAndRankCuratedItems(akmResultList(safeJsonParse<unknown>(raw.trim())), CURATE_MIN_SCORE)
   return items.length > 0 ? renderCuratedItems(query, items) : ""
 }
 

@@ -48,7 +48,7 @@ describe("opencode-shared tools", () => {
   })
 
   it("adds the proposed-quality warning once", () => {
-    const raw = JSON.stringify({ hits: [{ ref: "a", quality: "proposed" }] })
+    const raw = JSON.stringify({ results: [{ ref: "a", quality: "proposed" }] })
     const once = withProposedWarnings(raw)
     expect(JSON.parse(once).warnings).toEqual(["Do not treat proposed assets as curated until accepted."])
     expect(withProposedWarnings(once)).toBe(once)

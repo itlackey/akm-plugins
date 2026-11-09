@@ -59,11 +59,11 @@ export function classifyToolFeedback(value: unknown): "positive" | "negative" | 
   if ("ok" in value && (value as { ok?: unknown }).ok === false) return "negative"
   if ("error" in value && typeof (value as { error?: unknown }).error === "string") return "negative"
   if ("ok" in value && (value as { ok?: unknown }).ok === true) return "positive"
-  if ("type" in value || "hits" in value || "items" in value) return "positive"
+  if ("type" in value || "results" in value || "hits" in value || "items" in value) return "positive"
   return undefined
 }
 
-/** Refs an akm tool call named (its `ref` argument) or returned (`ref`, `hits[]`, `items[]`). */
+/** Refs an akm tool call named (its `ref` argument) or returned (`ref`, `results[]`, or the older `hits[]` / `items[]`). */
 export function extractToolRefs(args: Record<string, unknown>, output: unknown): string[] {
   const named = [args.ref, args.package_ref].map(akmRefFromValue).filter((ref): ref is string => !!ref)
   return [...new Set([...named, ...refsOfAkmResult(output)])]

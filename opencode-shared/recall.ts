@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import path from "node:path"
 import { runAge } from "../claude/shared/run-age"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
+import { akmResultList } from "../claude/shared/result-list"
 import { type CurateOptions, loadCurate } from "./akm-api"
 import type { ResolvedAkmCommand } from "./akm-cli"
 
@@ -146,13 +147,13 @@ function apiErrorMessage(error: unknown): string {
 // when the response fails to parse.
 export function renderCuratedJsonResponse(raw: string | null, query: string): string | null {
   if (raw === null) return null
-  let parsed: { items?: unknown } | undefined
+  let parsed: unknown
   try {
     parsed = JSON.parse(raw.trim())
   } catch {
     return null
   }
-  const items = filterAndRankCuratedItems(parsed?.items, AKM_CURATE_MIN_SCORE)
+  const items = filterAndRankCuratedItems(akmResultList(parsed), AKM_CURATE_MIN_SCORE)
   return items.length > 0 ? renderCuratedItems(query, items) : null
 }
 

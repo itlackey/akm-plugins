@@ -9,9 +9,8 @@
 //
 // The floor is akm 0.10.261111, the first release with projects (akm#1461). The
 // plugins run every akm call in the session's directory and pass `--project` and
-// the API's `cwd`/`project`, which older releases do not know. The plugins also pass
-// `--detail agent` (rejected by akm 0.9) and the `--replace/--with/--source`
-// feedback flags, and rely on the index/state migrations of the monthly releases.
+// the API's `cwd`/`project`, which older releases do not know. The plugins also pass the
+// `--replace/--with/--source` feedback flags, and rely on the index/state migrations of the monthly releases.
 //
 // The comparison is numeric on major.minor.patch and ignores any prerelease or
 // build tag on the installed version, so 0.10.261111-beta meets the floor. That

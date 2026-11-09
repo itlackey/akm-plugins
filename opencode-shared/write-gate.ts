@@ -12,10 +12,12 @@
 // entrypoint. Nothing here writes to the console.
 import path from "node:path"
 import { type EventWriter, buildEventScope, opencodeEventLog } from "./events"
+import { akmResultList } from "../claude/shared/result-list"
 import type { LearningLog } from "./learning"
 
 export type GateSearchHit = { name?: string; ref?: string; description?: string }
-export type GateSearchResponse = { hits?: GateSearchHit[] }
+/** A search response: its list is `results`, or `hits` from older akm (see akmResultList). */
+export type GateSearchResponse = { results?: GateSearchHit[]; hits?: GateSearchHit[] }
 
 export type GateHost = {
   log: LearningLog
@@ -608,7 +610,7 @@ async function resolveIdentity(host: GateHost, token: string, sessionID: string 
         WRITE_GATE_RESOLVE_TIMEOUT_MS,
       )
       if (raced === WRITE_GATE_TIMEOUT) return rememberResolution(key, { status: "error", reason: "search-timeout" })
-      const hits = Array.isArray((raced as GateSearchResponse | undefined)?.hits) ? (raced as GateSearchResponse).hits! : []
+      const hits = akmResultList(raced) as GateSearchHit[]
       for (const hit of hits) {
         if (!assetDeclaresFormat(token, hit as { name?: string })) continue
         const ref = typeof hit.ref === "string" ? hit.ref : ""

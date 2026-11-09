@@ -48,7 +48,7 @@ const mockAkmSearch = mock(async (input: Record<string, unknown>) => ({
   schemaVersion: 1,
   bundleDir: "/tmp/akm-bundle",
   source: input.source ?? "local",
-  hits: [{ type: "skill", ref: "skills/review", quality: input.includeProposed ? "proposed" : "curated" }],
+  results: [{ type: "skill", ref: "skills/review", quality: input.includeProposed ? "proposed" : "curated" }],
 }))
 const mockAkmShowUnified = mock(async (input: Record<string, unknown>) => ({
   type: "knowledge",
@@ -58,7 +58,7 @@ const mockAkmShowUnified = mock(async (input: Record<string, unknown>) => ({
 const mockAkmCurate = mock(async (input: Record<string, unknown>) => ({
   query: input.query,
   summary: "one match",
-  items: [{ type: "skill", ref: "skills/review" }],
+  results: [{ type: "skill", ref: "skills/review" }],
 }))
 const mockPackCuratedHits = mock(async (input: Record<string, unknown>, budget: number) => ({
   query: input.query,
@@ -247,7 +247,7 @@ describe("akm-opencode plugin", () => {
       schemaVersion: 1,
       bundleDir: "/tmp/akm-bundle",
       source: input.source ?? "local",
-      hits: [{ type: "skill", ref: "skills/review", quality: input.includeProposed ? "proposed" : "curated" }],
+      results: [{ type: "skill", ref: "skills/review", quality: input.includeProposed ? "proposed" : "curated" }],
     }))
     mockAkmShowUnified.mockImplementation(async (input: Record<string, unknown>) => ({
       type: "knowledge",
@@ -257,7 +257,7 @@ describe("akm-opencode plugin", () => {
     mockAkmCurate.mockImplementation(async (input: Record<string, unknown>) => ({
       query: input.query,
       summary: "one match",
-      items: [{ type: "skill", ref: "skills/review" }],
+      results: [{ type: "skill", ref: "skills/review" }],
     }))
   })
 
@@ -870,7 +870,7 @@ describe("akm-opencode plugin", () => {
       mockAkmSearch.mockImplementation(async (input: Record<string, unknown>) => ({
         schemaVersion: 1,
         project: { name: "acme" }, // a project applies, so no default-bundle fallback
-        hits: input.query === "--by-usage" ? [{ type: "skill", ref: "skills/used-most", description: "Used most" }] : input.query === "" ? [{ type: "rule", ref: "rules/r1", description: "R1" }] : [],
+        results: input.query === "--by-usage" ? [{ type: "skill", ref: "skills/used-most", description: "Used most" }] : input.query === "" ? [{ type: "rule", ref: "rules/r1", description: "R1" }] : [],
       }))
       mockAkmShowUnified.mockImplementation(async (input: Record<string, unknown>) => ({ type: "rule", ref: input.ref, content: "---\ndescription: R1\n---\n- Keep changes small\n" }))
     })
@@ -1535,7 +1535,7 @@ describe("akm-opencode plugin", () => {
     function stubSearch(hits: unknown[], delayMs = 0) {
       mockAkmSearch.mockImplementation(async () => {
         if (delayMs) await settle(delayMs)
-        return { schemaVersion: 1, bundleDir: "/tmp/akm-bundle", source: "local", hits }
+        return { schemaVersion: 1, bundleDir: "/tmp/akm-bundle", source: "local", results: hits }
       })
     }
 
@@ -1880,6 +1880,25 @@ describe("akm-opencode plugin", () => {
       expect(gateReasons()).toEqual(["fired", "latched"])
     })
 
+    // The gate reads the search list under `results`, or the older `hits` / `items`, and searches with --detail normal.
+    for (const key of ["results", "hits", "items"]) {
+      it(`resolves the format asset from a search list under ${key}`, async () => {
+        useMode("enforce")
+        mockAkmSearch.mockImplementation(async () => ({
+          schemaVersion: 1,
+          bundleDir: "/tmp/akm-bundle",
+          source: "local",
+          [key]: [{ type: "skill", ref: "skills/inkwell", name: "inkwell", description: INKWELL_DESCRIPTION }],
+        }))
+        const hooks = await AkmPlugin(createPluginInput())
+        await readServiceYaml(hooks, `gate-key-${key}`)
+        await expect(hooks["tool.execute.before"]!(beforeInput(`gate-key-${key}`), beforeOutput())).rejects.toThrow(/skills\/inkwell/)
+        const gateSearch = execFileCalls.find((c) => c.args[0] === "search" && c.args.includes("inkwell"))
+        expect(gateSearch?.args).toEqual(expect.arrayContaining(["--detail", "normal"]))
+        expect(gateSearch?.args).not.toContain("agent")
+      })
+    }
+
     it("throws out of the hook rather than swallowing the throw in the failure wrapper", async () => {
       // Every hook body in opencode/index.ts wraps itself in
       // `try { … } catch { logHookFailure }` by convention. A throw placed
@@ -2140,7 +2159,7 @@ describe("akm-opencode plugin", () => {
           output: JSON.stringify({
             query: "inkwell scaling",
             summary: "Selected 1 curated result: skills/inkwell.",
-            items: [{ type: "skill", ref: "skills/inkwell", description: INKWELL_DESCRIPTION }],
+            results: [{ type: "skill", ref: "skills/inkwell", description: INKWELL_DESCRIPTION }],
           }),
           title: "akm_curate",
         },
@@ -2536,7 +2555,7 @@ describe("akm-opencode plugin", () => {
         schemaVersion: 1,
         bundleDir: "/tmp/akm-bundle",
         source: "local",
-        hits: input.query === "inkwell/v2"
+        results: input.query === "inkwell/v2"
           ? [{ type: "skill", ref: "skills/inkwell/v2", name: "inkwell/v2", description: INKWELL_DESCRIPTION }]
           : [{ type: "skill", ref: "skills/inkwell", name: "inkwell", description: INKWELL_DESCRIPTION }],
       }))

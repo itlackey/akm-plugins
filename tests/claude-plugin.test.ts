@@ -1355,7 +1355,7 @@ exit 0
     }
 
     const MIXED_ITEMS = JSON.stringify({
-      items: [
+      results: [
         { type: "website", name: "unrelated-blog-post", ref: "docs//blog/post", description: "scraped snapshot", score: 0.42 },
         { type: "lesson", name: "curate-tuning-notes", ref: "lessons/curate-tuning", description: "authored lesson", score: 0.41 },
         { type: "wiki", name: "yt-transcript", ref: "wikis/yt-123", description: "weak match", score: 0.2 },
@@ -1386,14 +1386,35 @@ exit 0
       expect(stdout.trim()).toBe("")
     })
 
+    // akm names the list `results`; older akm used `hits` (search) and `items` (curate).
+    for (const key of ["results", "hits", "items"]) {
+      itPosix(`reads the curate list under ${key}`, () => {
+        const body = JSON.stringify({ [key]: [{ type: "lesson", name: `listed-under-${key}`, ref: "lessons/x", score: 0.9 }] })
+        const { curatedContent } = runCurateWithJson(body, { AKM_CURATE_MIN_SCORE: "0.5" })
+        expect(curatedContent).toContain(`listed-under-${key}`)
+      })
+
+      itPosix(`writes no curated block for an empty ${key} list`, () => {
+        const { stdout, curatedContent } = runCurateWithJson(JSON.stringify({ [key]: [] }), { AKM_CURATE_MIN_SCORE: "0.5" })
+        expect(curatedContent).toBe("")
+        expect(stdout.trim()).toBe("")
+      })
+    }
+
+    itPosix("asks curate for --detail agent, which keeps the injected text smaller than normal", () => {
+      const { invocations } = runCurateWithJson(MIXED_ITEMS)
+      expect(invocations).toContain("--detail agent")
+      expect(invocations).not.toContain("--detail normal")
+    })
+
     itPosix("keeps an item with no numeric score rather than dropping it as unscored", () => {
-      const items = JSON.stringify({ items: [{ type: "lesson", name: "no-score-item", ref: "lessons/x" }] })
+      const items = JSON.stringify({ results: [{ type: "lesson", name: "no-score-item", ref: "lessons/x" }] })
       const { curatedContent } = runCurateWithJson(items, { AKM_CURATE_MIN_SCORE: "0.5" })
       expect(curatedContent).toContain("no-score-item")
     })
 
     itPosix("passes AKM_CURATE_TYPE through as --type on the curate call", () => {
-      const { invocations } = runCurateWithJson('{"items":[]}', { AKM_CURATE_TYPE: "lesson" })
+      const { invocations } = runCurateWithJson('{"results":[]}', { AKM_CURATE_TYPE: "lesson" })
       expect(invocations).toContain("--type lesson")
     })
   })
