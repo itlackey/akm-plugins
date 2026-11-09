@@ -1,8 +1,10 @@
 ---
 description: Show an AKM asset by concept-ID ref, with optional bounded fragment context.
 argument-hint: <[bundle//]conceptId[#fragment]> [--context exact|lead] [--max-tokens N|--max-chars N]
-allowed-tools: Bash(akm show *) Bash(akm search *)
+allowed-tools: Bash(bun *akm-cli/dist/cli.js* show *) Bash(bun *akm-cli/dist/cli.js* search *)
 ---
+
+`${CLAUDE_PLUGIN_ROOT}` is this plugin's directory, which carries the AKM CLI; Codex leaves it unfilled, so use the directory this plugin is installed in. Run every AKM command through it, as written below.
 
 Parse the text the user gave with this command (in Claude Code it follows
 below as `ARGUMENTS:`; in Codex it is the user's request) as one required
@@ -16,7 +18,7 @@ own shell argument. Quoting the entire text turns the flags into
 part of the ref. Run:
 
 ```sh
-akm show "<ref>" <flags> --format json -q
+bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" show "<ref>" <flags> --format json -q
 ```
 
 Exact remains the default and returns only the selected fragment. For an
@@ -29,4 +31,4 @@ user. Preserve
 estimates, `contextMode`, and truncation state, as well as fields such as
 `prompt`, `template`, `run`, `origin`, `editable`, and `action` when relevant.
 
-When the ref does not resolve, do not stop at "not found": run `akm search "<last path segment of the ref>" --format json -q` and offer the closest matches.
+When the ref does not resolve, do not stop at "not found": run `bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" search "<last path segment of the ref>" --format json -q` and offer the closest matches.

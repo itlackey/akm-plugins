@@ -3,3 +3,7 @@
 # (a Windows clone with autocrlf=true), and tests/codex-plugin.test.ts compares the
 # manifests to JSON.stringify output.
 * text=auto eol=lf
+
+# akm-cli's files, committed for Codex on release tags only (see "Commit and tag" in .github/workflows/release.yml):
+# byte for byte, and out of diffs and language statistics.
+claude/node_modules/** -text -diff linguist-vendored

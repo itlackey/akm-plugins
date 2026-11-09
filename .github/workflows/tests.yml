@@ -13,8 +13,13 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      # akm-cli, the plugin's one dependency: --frozen-lockfile also proves claude/bun.lock agrees with claude/package.json,
+      # which is what Claude Code checks before it installs the plugin's dependencies.
       - name: Install claude plugin deps
         working-directory: claude
+        run: bun install --frozen-lockfile
+
+      - name: Install development deps
         run: bun install --frozen-lockfile
 
       - name: Install opencode plugin deps
@@ -26,7 +31,6 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Typecheck claude plugin
-        working-directory: claude
         run: bun run typecheck
 
       - name: Typecheck opencode plugin
@@ -77,19 +81,8 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      # npm's own shims for akm (akm.cmd beside an extensionless sh script), so the
-      # hook is also run against the real thing rather than only against the fake.
-      # The version is the one the OpenCode packages pin (opencode/package.json), read here, not repeated.
-      - name: Install akm-cli with npm
-        shell: pwsh
-        run: |
-          $prefix = Join-Path $env:RUNNER_TEMP "akm-npm"
-          $akm = node -p "require('./opencode/package.json').dependencies['akm-cli']"
-          npm install "akm-cli@$akm" --prefix $prefix --omit=optional --ignore-scripts --no-audit --no-fund
-          (Join-Path $prefix 'node_modules/.bin') | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-
       - name: Run hook tests
-        run: bun test --timeout 60000 tests/claude-plugin.test.ts tests/codex-plugin.test.ts tests/hook-commands.test.ts tests/akm-version-check.test.ts tests/ref-extraction.test.ts tests/ref-resolver-contract.test.ts tests/learning-signals.test.ts tests/recall-policy.test.ts tests/redaction.test.ts tests/vendor-semver.test.ts tests/version-policy.test.ts
+        run: bun test --timeout 60000 tests/claude-plugin.test.ts tests/codex-plugin.test.ts tests/hook-commands.test.ts tests/akm-availability.test.ts tests/ref-extraction.test.ts tests/ref-resolver-contract.test.ts tests/learning-signals.test.ts tests/recall-policy.test.ts tests/redaction.test.ts tests/version-policy.test.ts
 
       # The real hosts, started offline against this checkout's plugin (tests/real-hosts.test.ts):
       # no login and no model call. `claude -p` runs its SessionStart, UserPromptSubmit and SessionEnd

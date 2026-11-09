@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
+import { writeBridgedAkmCli } from "../evals/lib/plugin-root"
 import { IS_WINDOWS, hostEnv, makeBinDir, sandboxPath } from "./host-runtime"
 
 // The real Claude Code and the real Codex, started offline against this checkout's plugin, with the repo's fake
@@ -13,6 +14,10 @@ import { IS_WINDOWS, hostEnv, makeBinDir, sandboxPath } from "./host-runtime"
 //   "Not logged in" before anything is sent anywhere.
 // - `codex exec` runs its SessionStart and UserPromptSubmit hooks before the model request, and the model
 //   provider here is a dead local port, so the request is refused on the machine.
+//
+// The plugin carries its own akm-cli (node_modules/akm-cli, which Claude Code installs from package.json and Codex gets
+// as committed files). Here each host is given a local copy of the marketplace whose cli.js is a bridge to the fake akm
+// on PATH, so no registry or real akm is involved in what the hosts run (evals/lib/plugin-root.ts).
 //
 // Skipped unless `claude` / `codex` is on PATH (the Windows CI job installs both from npm and adds them to PATH; the
 // Linux jobs in tests.yml and release.yml install Codex the same way). The state they write goes under a temp
@@ -98,6 +103,23 @@ function makeSandbox() {
   return { root, home, project, xdgState, callLog, env }
 }
 
+/**
+ * A copy of the repo's marketplace for `host`, over a copy of claude/ whose akm-cli is the bridge. A marketplace added
+ * from a local path is read in place, and Codex's real entry (a git-subdir source that names a tag on GitHub) is made
+ * local, so what the host runs is this checkout's plugin and nothing is fetched.
+ */
+function makeMarketplace(root: string, host: "claude" | "codex") {
+  const marketplaceRoot = path.join(root, `${host}-marketplace`)
+  const manifest = host === "claude" ? ".claude-plugin/marketplace.json" : ".agents/plugins/marketplace.json"
+  mkdirSync(path.dirname(path.join(marketplaceRoot, manifest)), { recursive: true })
+  const marketplace = JSON.parse(readFileSync(path.join(repoRoot, manifest), "utf8"))
+  if (host === "codex") for (const plugin of marketplace.plugins) plugin.source = { source: "local", path: "./claude" }
+  writeFileSync(path.join(marketplaceRoot, manifest), JSON.stringify(marketplace, null, 2))
+  cpSync(path.join(repoRoot, "claude"), path.join(marketplaceRoot, "claude"), { recursive: true, filter: (source) => !source.includes("node_modules") })
+  writeBridgedAkmCli(path.join(marketplaceRoot, "claude"))
+  return marketplaceRoot
+}
+
 function lines(file: string) {
   return readFileSync(file, "utf8").trim().split("\n").filter(Boolean)
 }
@@ -113,7 +135,7 @@ describe.skipIf(!claudeBin)("the real Claude Code", () => {
       const claude = (args: string[]) =>
         Bun.spawnSync([claudeBin as string, ...args], { cwd: sandbox.project, env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 120_000 })
 
-      const added = claude(["plugin", "marketplace", "add", repoRoot])
+      const added = claude(["plugin", "marketplace", "add", makeMarketplace(sandbox.root, "claude")])
       expect({ step: "marketplace add", exit: added.exitCode, out: added.stdout.toString() + added.stderr.toString() }).toMatchObject({ exit: 0 })
       const installed = claude(["plugin", "install", "akm@akm-plugins"])
       expect({ step: "plugin install", exit: installed.exitCode, out: installed.stdout.toString() + installed.stderr.toString() }).toMatchObject({ exit: 0 })
@@ -126,15 +148,14 @@ describe.skipIf(!claudeBin)("the real Claude Code", () => {
       // Claude Code registered exactly this manifest's handlers, from the plugin it installed.
       const debug = readFileSync(debugLog, "utf8")
       expect(debug).toContain(`Registered ${claudeHandlerCount} hooks`)
-      // SessionStart, through `bun <plugin root>/hooks/akm-hook.ts session-start` with no shell: the hook found akm and
-      // asked it for its version, and Claude Code accepted what the hook printed.
+      // SessionStart, through `bun <plugin root>/hooks/akm-hook.ts session-start` with no shell: the hook found the
+      // akm-cli the plugin carries, and Claude Code accepted what the hook printed.
       expect(debug).toMatch(/Hook SessionStart:startup \(SessionStart\) success/)
       const stateDir = path.join(sandbox.xdgState, "akm-claude")
       expect(lines(path.join(stateDir, "session.log"))[0]).toContain("akm_ready\tpath")
       // UserPromptSubmit: the prompt was recorded and handed to akm to curate.
       expect(readFileSync(path.join(stateDir, "feedback.log"), "utf8")).toContain(`user\tprompt\t${prompt}`)
       const calls = readCallLog(sandbox.callLog)
-      expect(calls.some((call) => call.argv[0] === "--version")).toBe(true)
       expect(calls.find((call) => call.argv[0] === "curate" && call.argv[1] === prompt)).toBeTruthy()
       expect(lines(path.join(stateDir, "events.jsonl")).map((line) => JSON.parse(line).harness)).not.toContain("codex")
       // SessionEnd: the reindex it starts detached outlives Claude Code's own hook runner.
@@ -195,7 +216,7 @@ describe.skipIf(!codexBin)("the real Codex", () => {
       const env = sandbox.env({ CODEX_HOME: codexHome })
       const codex = (args: string[]) => Bun.spawnSync([codexBin as string, ...args], { cwd: sandbox.project, env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 120_000 })
 
-      const added = codex(["plugin", "marketplace", "add", repoRoot])
+      const added = codex(["plugin", "marketplace", "add", makeMarketplace(sandbox.root, "codex")])
       expect({ step: "marketplace add", exit: added.exitCode, out: added.stdout.toString() + added.stderr.toString() }).toMatchObject({ exit: 0 })
       const installed = codex(["plugin", "add", "akm@akm-plugins"])
       expect({ step: "plugin add", exit: installed.exitCode, out: installed.stdout.toString() + installed.stderr.toString() }).toMatchObject({ exit: 0 })
@@ -267,7 +288,6 @@ describe.skipIf(!codexBin)("the real Codex", () => {
         expect(events.every((event) => event.harness === "codex")).toBe(true)
         expect(new Set(events.map((event) => event.sessionId)).size).toBe(1)
         const calls = readCallLog(sandbox.callLog)
-        expect(calls.some((call) => call.argv[0] === "--version")).toBe(true)
         expect(calls.find((call) => call.argv[0] === "curate" && call.argv[1] === prompt)).toBeTruthy()
         expect(readFileSync(path.join(dataDir, "feedback.log"), "utf8")).toContain(`user\tprompt\t${prompt}`)
         // Nothing of Codex's went to Claude's state.

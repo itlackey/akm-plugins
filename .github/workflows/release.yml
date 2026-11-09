@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI version these plugins target (at or above the Claude minimum, AKM_MIN_VERSION). For akm 0.10+ (e.g. 0.10.261001-beta, already on npm) the plugins release as 0.10.<UTC YYMM><NN>[-stage], NN being the next free release number of the current UTC month among the published 6-digit akm-opencode versions, and the stage (alpha, beta or rc) copied from akm_version; a stage makes it a `next` release. A retired 8-digit daily akm version (0.10.YYMMDDNN) is rejected. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
+        description: "The exact akm CLI version these plugins target and carry. For akm 0.10+ (e.g. 0.10.261001-beta, already on npm) the plugins release as 0.10.<UTC YYMM><NN>[-stage], NN being the next free release number of the current UTC month among the published 6-digit akm-opencode versions, and the stage (alpha, beta or rc) copied from akm_version; a stage makes it a `next` release. A retired 8-digit daily akm version (0.10.YYMMDDNN) is rejected. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
         required: true
         type: string
 
 jobs:
   # One job decides what is published, in this order: derive and validate the version, stamp the manifests, pin
-  # akm-cli (a `next` release), install, typecheck and test that tree, and only then commit and tag it. The publish jobs
+  # akm-cli (a `next` release), install, typecheck and test that tree, and only then commit and tag it. The Codex
+  # plugin carries its akm-cli as committed files that exist on the tag's commit alone (see "Commit and tag"). The publish jobs
   # check out the tag, so they publish the tree that was tested. A test job ahead of this one would run before the pin
   # exists and so test a different akm-cli than the one published.
   version:
@@ -73,9 +74,8 @@ jobs:
 
       # Four rules, all checked before the tag exists (npm would otherwise be
       # the first thing to reject a bad version, by which point the tag is
-      # already pushed): the supplied akm version must be plain semver and at or
-      # above the Claude minimum (AKM_MIN_VERSION; a later minor is fine), both
-      # OpenCode packages must exact-pin that same version, and the derived version
+      # already pushed): the supplied akm version must be plain semver, both
+      # OpenCode packages and the Claude/Codex plugin must exact-pin that same version, and the derived version
       # must sort ABOVE whatever npm currently calls `latest`.
       #
       # A `next` release changes two of them: the pin is set in the build and not
@@ -95,14 +95,9 @@ jobs:
           const akmVersion = process.env.AKM_VERSION
           const version = process.env.VERSION
           const next = process.env.NEXT === 'true'
-          const source = fs.readFileSync('claude/shared/akm-version.ts', 'utf8')
+          const claudePackage = JSON.parse(fs.readFileSync('claude/package.json', 'utf8'))
           const opencodePackage = JSON.parse(fs.readFileSync('opencode/package.json', 'utf8'))
           const opencodeV2Package = JSON.parse(fs.readFileSync('opencode-v2/package.json', 'utf8'))
-          const minVersion = /AKM_MIN_VERSION\s*=\s*"([^"]+)"/.exec(source)?.[1]
-          if (!minVersion) {
-            console.error('Could not read AKM_MIN_VERSION from claude/shared/akm-version.ts')
-            process.exit(1)
-          }
 
           const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
           const parsedAkm = SEMVER.exec(akmVersion)
@@ -118,27 +113,11 @@ jobs:
             process.exit(1)
           }
 
-          const floor = SEMVER.exec(minVersion)
-          if (!floor) {
-            console.error(`AKM_MIN_VERSION "${minVersion}" is not valid semver.`)
-            process.exit(1)
-          }
-
-          // Claude's check is a floor on the release core (prerelease ignored), so
-          // an akm_version passes exactly when its core is at or above the floor.
-          // A later minor is fine; only a build below the floor is refused. The
-          // OpenCode pin below is exact, so it moves with akm_version, not the floor.
-          const belowFloor = [1, 2, 3].map((i) => Number(parsedAkm[i]) - Number(floor[i])).find((diff) => diff !== 0) < 0
-          if (belowFloor) {
-            console.error(`akm_version "${akmVersion}" is below AKM_MIN_VERSION ${minVersion}: its release core must be ${floor[1]}.${floor[2]}.${floor[3]} or later.`)
-            process.exit(1)
-          }
-
-          // Both OpenCode plugins run the akm-cli they declare, against the user's
-          // shared AKM databases. A range would let one plugin release run an
-          // untested CLI on some machines, and let the two plugins disagree about
-          // which CLI owns those databases, so both exact-pin the tested akm_version.
-          // Claude resolves its CLI through public verbs and only enforces the floor.
+          // Every plugin runs the akm-cli it declares, against the user's shared AKM
+          // databases. A range would let one plugin release run an untested CLI on
+          // some machines, and let the plugins disagree about which CLI owns those
+          // databases, so all three exact-pin the tested akm_version.
+          const claudeAkm = claudePackage.dependencies?.['akm-cli']
           const opencodeAkm = opencodePackage.dependencies?.['akm-cli']
           const opencodeV2Akm = opencodeV2Package.dependencies?.['akm-cli']
           if (next) {
@@ -177,6 +156,10 @@ jobs:
             }
             if (opencodeV2Akm !== akmVersion) {
               console.error(`opencode-v2/package.json must exact-pin akm-cli to "${akmVersion}"; found "${opencodeV2Akm ?? '<missing>'}".`)
+              process.exit(1)
+            }
+            if (claudeAkm !== akmVersion) {
+              console.error(`claude/package.json must exact-pin akm-cli to "${akmVersion}"; found "${claudeAkm ?? '<missing>'}".`)
               process.exit(1)
             }
           }
@@ -236,7 +219,7 @@ jobs:
             console.log(`${version} sorts above the published ${channel} ${published}.`)
           }
 
-          console.log(`Version ${version} is valid semver; Claude requires akm >= ${minVersion} and both OpenCode packages exact-pin akm-cli ${next ? akmVersion : opencodeAkm}.`)
+          console.log(`Version ${version} is valid semver; the Claude/Codex plugin and both OpenCode packages exact-pin akm-cli ${next ? akmVersion : opencodeAkm}.`)
           EOF
 
       - name: Bump versions
@@ -257,23 +240,34 @@ jobs:
           updateJsonFile('claude/package.json', (pkg) => ({ ...pkg, version }))
           updateJsonFile('claude/.claude-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
           updateJsonFile('claude/.codex-plugin/plugin.json', (plugin) => ({ ...plugin, version }))
+          // Codex installs the plugin from the git ref its marketplace entry names; this release's tag is the commit that
+          // carries akm-cli's files (see "Commit and tag"). Claude Code's marketplace entry is unchanged.
+          updateJsonFile('.agents/plugins/marketplace.json', (marketplace) => ({
+            ...marketplace,
+            plugins: marketplace.plugins.map((plugin) => (plugin.name === 'akm' ? { ...plugin, source: { ...plugin.source, ref: `v${version}` } } : plugin)),
+          }))
           EOF
 
-      # `next` only: both OpenCode builds pin the exact akm prerelease. The pins
+      # `next` only: the Claude/Codex plugin and both OpenCode builds pin the exact akm prerelease. The pins
       # and the regenerated lockfiles live in the tagged commit alone, never on
-      # main, where the pins stay on the last stable build. This runs before the
+      # main, where the pins stay on the last stable build. Claude Code installs the plugin's dependencies only when
+      # package.json and bun.lock agree, so the lock is regenerated with the pin. This runs before the
       # installs, typechecks and tests below, which therefore run against the pin.
       - name: Pin akm-cli to the akm prerelease
         if: ${{ steps.derive.outputs.next == 'true' }}
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
         run: |
-          for dir in opencode opencode-v2; do
+          for dir in opencode opencode-v2 claude; do
             (cd "$dir" && npm pkg set "dependencies.akm-cli=$AKM_VERSION" && bun install)
           done
 
+      # The plugin's own dependency (akm-cli) and the lockfile Claude Code installs it from.
       - name: Install claude deps
         working-directory: claude
+        run: bun install --frozen-lockfile
+
+      - name: Install development deps
         run: bun install --frozen-lockfile
 
       - name: Install opencode deps
@@ -289,7 +283,6 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Typecheck claude plugin
-        working-directory: claude
         run: bun run typecheck
 
       - name: Typecheck opencode plugin
@@ -329,17 +322,28 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add claude/package.json opencode/package.json opencode-v2/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json
+          git add claude/package.json opencode/package.json opencode-v2/package.json claude/.claude-plugin/plugin.json claude/.codex-plugin/plugin.json .agents/plugins/marketplace.json
 
           if [ "${{ steps.derive.outputs.next }}" = "true" ]; then
             # Committed locally and reachable only from the tag and the `next` branch; main is not pushed.
-            git add opencode/bun.lock opencode-v2/bun.lock
+            git add opencode/bun.lock opencode-v2/bun.lock claude/bun.lock
             # Nothing to commit when the branch already carries this version: tag HEAD as it is.
             git diff --cached --quiet || git commit -m "chore: next build ${{ steps.derive.outputs.version }}"
           elif ! git diff --cached --quiet; then
             git commit -m "chore: bump version to ${{ steps.derive.outputs.version }}"
-            git push
           fi
+          # What a stable release puts on the default branch: the bump, and never akm-cli's files.
+          MAIN_SHA="$(git rev-parse HEAD)"
+
+          # Codex installs nothing from package.json, so the tag's commit carries akm-cli's files: what
+          # `bun install --production --omit optional` writes, without .bin (symlinks). Claude Code installs
+          # claude/package.json's dependency itself and ignores this tree. They are on the tag's commit alone,
+          # a child of the commit above, so main and the `next` history never hold them.
+          rm -rf claude/node_modules
+          (cd claude && bun install --production --omit optional --frozen-lockfile)
+          rm -rf claude/node_modules/.bin
+          git add -f claude/node_modules
+          git commit -q -m "chore: akm-cli files for v${{ steps.derive.outputs.version }}"
 
           if git ls-remote --exit-code --tags origin "refs/tags/v${{ steps.derive.outputs.version }}" >/dev/null; then
             echo "tag_exists=true" >> "$GITHUB_OUTPUT"
@@ -349,11 +353,18 @@ jobs:
             echo "tag_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+          # Stable only, after the tag exists: the Codex marketplace entry on the default branch names this tag.
+          if [ "${{ steps.derive.outputs.next }}" != "true" ]; then
+            git push origin "$MAIN_SHA:${{ github.ref }}"
+          fi
+
           # `next` only: move the `next` branch to the tagged commit. A marketplace pinned to a
           # tag never changes, so `claude plugin update` and `codex plugin marketplace upgrade`
           # find nothing; one that follows a branch sees each new commit. Users on the prerelease
           # channel follow `next` (Claude `#next`, Codex `--ref next`) and stable users the default
-          # branch. Force, because every `next` build commit hangs off the release branch and the
+          # branch. On `next` the Codex marketplace entry names this release's own tag, so the plugin
+          # Codex installs is the commit that carries akm-cli's files. Force, because every `next`
+          # build commit hangs off the release branch and the
           # previous one is not its ancestor. The tag's own commit, so a re-run of an existing tag
           # puts `next` on that tag and not on a fresh rebuild.
           if [ "${{ steps.derive.outputs.next }}" = "true" ]; then

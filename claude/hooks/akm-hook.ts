@@ -1,13 +1,11 @@
 #!/usr/bin/env bun
 
-import { accessSync, appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { AKM_MIN_VERSION, meetsAkmMinVersion } from "../shared/akm-version"
 import { runAge } from "../shared/run-age"
-import { valid } from "../shared/vendor-semver"
 import {
   classifyFeedbackSignal,
   EXPLICIT_CORRECTION_RE,
@@ -49,14 +47,6 @@ const LOADED_SETTINGS = loadSettings()
 const SETTINGS = LOADED_SETTINGS.settings
 configureRedaction(SETTINGS.redact)
 
-// AKM_MIN_VERSION is the single shared version floor imported from
-// ../shared/akm-version (also consumed by the OpenCode plugin). AKM_PACKAGE_REF
-// is a separate concern: the package range passed to Bun/npm. `-0` is the lowest
-// prerelease of the floor, so the range admits the floor's own prereleases
-// (0.10.261111-beta) and every later release; npm `latest` may still be older.
-const AKM_PACKAGE_REF = process.env.AKM_PACKAGE_REF ?? `akm-cli@>=${AKM_MIN_VERSION}-0`
-// The ref contains `>`, so it is double-quoted (works in sh, cmd and PowerShell) wherever it is shown as a command.
-const AKM_INSTALL_COMMAND = (manager: "bun" | "npm") => `${manager} install -g "${AKM_PACKAGE_REF}"`
 // Claude Code unless the command says `--harness=codex`. The Codex manifest's
 // hook commands (.codex-plugin/plugin.json) run this same hook that way, on
 // every platform. A Codex run keeps its state in PLUGIN_DATA, the plugin data
@@ -159,8 +149,6 @@ const SESSION_START_HEADER = [
 // the `refs:` field of memory events and out of the auto-feedback path. A local
 // "any path-like token" pattern used to shadow it and reintroduced exactly the
 // false positives the shared extractor exists to prevent.
-// Absolute, because akm is spawned in the session's directory, not this one.
-const LOCAL_AKM_BUILD_CLI = process.env.AKM_LOCAL_BUILD_CLI?.trim() ? path.resolve(process.env.AKM_LOCAL_BUILD_CLI.trim()) : ""
 const CURATED_DIR = path.join(STATE_DIR, "curated")
 
 function gatherCwdContext(): string {
@@ -461,10 +449,6 @@ type AkmCommandSpec = {
   displayPath: string
 }
 
-// The PATHEXT extensions CreateProcess can start. The rest (.JS, .VBS, ...) are
-// associations for the shell, not programs.
-const WINDOWS_PROGRAM_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"])
-
 // The fire-and-forget akm children (index, extract) outlive the hook, so they are
 // detached. On Windows runPlan() puts a detached bun (hooks/akm-run.ts) in front
 // of akm: see spawn-plan.ts for why akm.cmd cannot be detached directly.
@@ -473,79 +457,22 @@ function spawnDetachedAkm(command: string, args: string[], stdio: "ignore" | ["i
   return spawn(plan.command, plan.args, { detached: true, stdio, windowsHide: true, cwd: akmCwd })
 }
 
-function findCommandOnPath(command: string): string | undefined {
-  const isWindows = process.platform === "win32"
-  const searchPath = process.env.PATH ?? ""
-  const separator = isWindows ? ";" : ":"
-  // On Windows PATHEXT controls which extensions are tried, in its order, and the
-  // bare name is never one of them: npm drops an extensionless `akm` sh script
-  // beside `akm.cmd`, and that script is not a program there. On POSIX we only
-  // try the bare name with an executable-bit check.
-  const extensions = isWindows
-    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
-        .split(";")
-        .map((entry) => entry.trim())
-        .filter((entry) => WINDOWS_PROGRAM_EXTENSIONS.has(entry.toLowerCase()))
-    : [""]
-  for (const entry of searchPath.split(separator)) {
-    if (!entry) continue
-    for (const ext of extensions) {
-      const candidate = path.join(entry, command + ext)
-      try {
-        if (isWindows) {
-          // X_OK is unreliable on Windows; existence + PATHEXT match is
-          // the documented resolution rule (see CreateProcess on MSDN).
-          accessSync(candidate, constants.F_OK)
-        } else {
-          accessSync(candidate, constants.X_OK)
-        }
-        return path.resolve(candidate)
-      } catch {
-        // keep searching
-      }
-    }
-  }
-  return undefined
-}
-
-function firstLine(value: string): string {
-  return value.replace(/\r/g, "").split("\n")[0] ?? ""
-}
-
-function parseAkmVersion(value: string): string {
-  const line = firstLine(value).trim()
-  const match = /\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)\b/.exec(line)
-  return match?.[1] ?? ""
-}
+// The akm the plugin runs is the akm-cli it carries: a dependency in package.json that Claude Code installs
+// beside the plugin, or, for Codex, files committed on the release tag. It runs under the Bun that runs this
+// hook, from the plugin root the host exports (Claude Code sets CLAUDE_PLUGIN_ROOT, Codex PLUGIN_ROOT) or, when
+// neither is set, from the directory above hooks/. The `akm` on the user's PATH is not consulted.
+const PLUGIN_ROOT =
+  process.env.CLAUDE_PLUGIN_ROOT?.trim() || process.env.PLUGIN_ROOT?.trim() || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const BUNDLED_AKM_CLI = path.join(PLUGIN_ROOT, "node_modules", "akm-cli", "dist", "cli.js")
 
 function resolveAkmCommandSpec(): AkmCommandSpec | null {
-  if (LOCAL_AKM_BUILD_CLI) {
-    return {
-      command: process.env.BUN || "bun",
-      argsPrefix: [LOCAL_AKM_BUILD_CLI],
-      displayPath: LOCAL_AKM_BUILD_CLI,
-    }
-  }
-  const onPath = findCommandOnPath("akm")
-  return onPath ? { command: onPath, argsPrefix: [], displayPath: onPath } : null
-}
-
-function readAkmVersion(commandSpec: AkmCommandSpec): string {
-  const result = runCommand(commandSpec.command, [...commandSpec.argsPrefix, "--version"], { timeoutMs: VERSION_TIMEOUT_MS })
-  return parseAkmVersion(result.stdout)
-}
-
-function akmVersionSatisfies(commandSpec: AkmCommandSpec): { ok: boolean; version: string; error?: string } {
-  const version = readAkmVersion(commandSpec)
-  if (!version) return { ok: false, version: "unknown", error: "unable to parse akm version" }
-  if (!valid(version)) return { ok: false, version, error: "akm version is not valid semver" }
-  if (!meetsAkmMinVersion(version)) return { ok: false, version, error: `akm version is below ${AKM_MIN_VERSION}` }
-  return { ok: true, version }
+  if (!existsSync(BUNDLED_AKM_CLI)) return null
+  return { command: process.execPath, argsPrefix: [BUNDLED_AKM_CLI], displayPath: BUNDLED_AKM_CLI }
 }
 
 // Every subprocess this file spawns is capped here, by spawnSync itself. The
 // cap used to be delegated to the `timeout(1)` binary and applied only when
-// findCommandOnPath("timeout") resolved — true on Linux, false on stock macOS,
+// `timeout` was found on PATH — true on Linux, false on stock macOS,
 // where the curate timeout therefore degraded to no limit at all and a wedged
 // akm could burn the entire hook budget. spawnSync's own `timeout` needs no
 // external binary, so the cap is real on every platform.
@@ -1018,31 +945,6 @@ function sessionEnd(): string {
   const sid = extractSessionId(rawInput)
   runIndexOnSessionEnd("session-end", sid, "")
   return ""
-}
-
-// checkAkmVersion replaces the pre-0.8.0 ensureAkm() behavior. Until 0.7.x the
-// plugin silently spawned `bun install -g akm-cli@…` (or npm) on every
-// SessionStart whenever akm was missing or out of range. Installing global
-// packages without explicit user consent is too aggressive for a public
-// release. Starting with 0.8.0 we detect-and-warn instead: if akm is missing
-// or out of range, we log the mismatch to the plugin state dir and return a
-// structured verdict; callers surface the user-facing consent prompt through
-// their own output channel (see sessionStart()'s degraded additionalContext)
-// rather than raw diagnostics on stderr. We never spawn an install from this
-// path.
-function checkAkmVersion(): { ok: boolean; reason?: string; version?: string; path?: string } {
-  const existing = resolveAkmCommandSpec()
-  if (existing) {
-    const current = akmVersionSatisfies(existing)
-    if (current.ok) {
-      appendLog(SESSION_LOG, "akm_ready", "path", existing.displayPath, current.version)
-      return { ok: true, version: current.version, path: existing.displayPath }
-    }
-    appendLog(SESSION_LOG, "akm_version_mismatch", "path", existing.displayPath, current.version, AKM_MIN_VERSION, current.error ?? "below_floor")
-    return { ok: false, reason: "version-mismatch", version: current.version, path: existing.displayPath }
-  }
-  appendLog(SESSION_LOG, "akm_missing", "path", AKM_PACKAGE_REF, AKM_MIN_VERSION)
-  return { ok: false, reason: "not-installed" }
 }
 
 // Per-entry freshness for quality-cache.tsv (F2-1). Rotation is only a SIZE
@@ -1717,61 +1619,29 @@ async function sessionStart(): Promise<string> {
   const settingsNotes = LOADED_SETTINGS.warnings.map((warning) => `AKM plugin settings: ${warning}`)
   for (const note of settingsNotes) appendLog(SESSION_LOG, "settings", note)
   const withSettingsNotes = (message: string) => [message, ...settingsNotes].join("\n")
-  const versionCheck = checkAkmVersion()
-  if (!versionCheck.ok) {
-    // checkAkmVersion() already logged the mismatch to the plugin state dir
-    // (no raw diagnostics on stderr — see AGENTS.md). The user-facing consent
-    // prompt travels through this SessionStart additionalContext instead, so
-    // the agent both knows akm CLI tooling is unavailable this session (and
-    // won't keep trying to call it) and can relay the install hint to the
-    // user. We intentionally do NOT crash the hook — the rest of Claude Code
-    // stays fully functional.
-    const install = [`  ${AKM_INSTALL_COMMAND("bun")}`, `  ${AKM_INSTALL_COMMAND("npm")}`]
-    const reason = versionCheck.reason ?? "unknown"
-    if (reason === "version-mismatch") {
-      // Installed but below the floor (or its version could not be read). The
-      // hook's own calls would fail against an older akm (`curate --detail agent`
-      // is rejected before 0.10), so the hook-driven features stay off for the
-      // session. The agent is NOT told to avoid akm entirely: a plain
-      // `akm curate/show` still works on an older CLI, and a blanket ban
-      // silently disabled akm for every agent when the installed version moved.
-      return emitHookContext(
-        "SessionStart",
-        [
-          "# AKM plugin features are off in this session: akm is too old",
-          "",
-          `Installed akm: ${versionCheck.version ?? "unknown"} (${versionCheck.path ?? "akm"}). The plugin needs ${AKM_MIN_VERSION} or newer, so automatic recall and session hooks are disabled.`,
-          "You may still run `akm` commands yourself, but flags and output the plugin documents may not work on this version. Ask the user to upgrade akm-cli:",
-          ...install,
-        ].join("\n"),
-        withSettingsNotes(`AKM ${versionCheck.version ?? "unknown"} is older than the required ${AKM_MIN_VERSION}, so the AKM plugin is off this session. Upgrade with: ${AKM_INSTALL_COMMAND("bun")}`),
-      )
-    }
+  const akm = resolveAkmCommandSpec()
+  if (!akm) {
+    // The plugin carries its own akm-cli (see BUNDLED_AKM_CLI). Claude Code installs it when the plugin is installed
+    // or updated, and that install can fail (no network, no Bun on PATH, the 60 s limit); a Codex install without
+    // the release's files lands here too. The hook does not crash: the rest of the host stays fully functional.
+    appendLog(SESSION_LOG, "akm_missing", "path", BUNDLED_AKM_CLI)
     return emitHookContext(
       "SessionStart",
       [
         "# AKM is NOT available in this session",
         "",
-        `The akm CLI is not installed (reason: ${reason}). The plugin needs ${AKM_MIN_VERSION} or newer.`,
-        "Do not call any `akm` Bash command. Ask the user to install akm-cli manually:",
-        ...install,
+        "The AKM plugin's dependencies are not installed, so the akm CLI it carries is missing.",
+        "Do not call any `akm` Bash command. Ask the user to update or reinstall the AKM plugin, and to check that Bun is on PATH and the network is reachable.",
       ].join("\n"),
-      // The model cannot install anything; the user can. Give the human the
-      // one command they need instead of leaving the whole failure inside the
-      // model's context window.
-      withSettingsNotes(`AKM is unavailable this session (${reason}). Install it with: ${AKM_INSTALL_COMMAND("bun")}`),
+      withSettingsNotes("AKM is unavailable this session: the plugin's dependencies are not installed. Update or reinstall the AKM plugin."),
     )
   }
-  if (!akmAvailable()) return ""
-
-  const akm = resolveAkmCommandSpec()
-  if (akm) {
-    try {
-      const child = spawnDetachedAkm(akm.command, [...akm.argsPrefix, "index"], "ignore")
-      child.unref()
-    } catch {
-      // best-effort only
-    }
+  appendLog(SESSION_LOG, "akm_ready", "path", akm.displayPath)
+  try {
+    const child = spawnDetachedAkm(akm.command, [...akm.argsPrefix, "index"], "ignore")
+    child.unref()
+  } catch {
+    // best-effort only
   }
 
   // Resolve the bundle roots exactly once for this SessionStart: the

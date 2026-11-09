@@ -5,7 +5,7 @@ import path from "node:path"
 import { type FakeAkmAsset, installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
 import { type BootstrapRun, DUPLICATE_WINDOW_MS, RULES_LIST_LIMIT, USAGE_LIST_SIZE, claimBootstrap, loadSessionBootstrap } from "../claude/shared/session-bootstrap"
 import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
-import { hostEnv, installScriptedAkm, makeBinDir, runClaudeHandler, sandboxPath, itPosix, type ClaudeHandler } from "./host-runtime"
+import { PLUGIN_DIR, hostEnv, installScriptedAkm, makeBinDir, runClaudeHandler, sandboxPath, itPosix, type ClaudeHandler } from "./host-runtime"
 
 // The session bootstrap (#154): the project's rules and the assets used most in it, loaded at session
 // start and after each compaction. The loader runs against the repo's fake akm, which models akm's
@@ -332,7 +332,7 @@ describe("session-start hook", () => {
     const inputPath = path.join(world.root, `stdin-${Math.random().toString(36).slice(2)}.json`)
     writeFileSync(inputPath, JSON.stringify({ session_id: SESSION, cwd: world.acme, ...input }))
     const result = runClaudeHandler(handler, {
-      pluginRoot: pluginDir,
+      pluginRoot: PLUGIN_DIR,
       cwd: world.acme,
       env: hostEnv({ HOME: home, XDG_STATE_HOME: stateHome, PATH: sandboxPath(world.binDir), CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0", ...env }, (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name)),
       stdin: Bun.file(inputPath),
@@ -421,7 +421,7 @@ describe("session-start hook", () => {
     writeFileSync(inputPath, JSON.stringify({ session_id: SESSION, cwd: world.acme, prompt }))
     const promptHandler = manifest.hooks.UserPromptSubmit[0].hooks[0] as ClaudeHandler
     const result = runClaudeHandler(promptHandler, {
-      pluginRoot: pluginDir,
+      pluginRoot: PLUGIN_DIR,
       cwd: world.acme,
       env: hostEnv({ HOME: path.join(world.root, "home"), XDG_STATE_HOME: path.join(world.root, "xdg-state"), PATH: sandboxPath(world.binDir), CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0" }, (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name)),
       stdin: Bun.file(inputPath),
