@@ -1,8 +1,8 @@
 /**
- * The plugins' learning settings, mapped onto akm's own learning switch
- * (`akm setup --learning on|off`). One implementation for the Claude/Codex hook
- * and both OpenCode plugins; the host supplies `run`, which invokes the public
- * `akm` CLI and returns its stdout ("" when the call failed).
+ * The Claude plugin's `auto_learning` option, mapped onto akm's own learning
+ * switch (`akm setup --learning on|off`), and the reading of `learning.on` the
+ * capture paths of every plugin share. The host supplies `run`, which invokes
+ * the public `akm` CLI and returns its stdout ("" when the call failed).
  *
  * Zero third-party imports: the Claude hook runs as a bare Bun script.
  */
