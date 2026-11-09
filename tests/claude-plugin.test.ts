@@ -119,7 +119,7 @@ function runHook(args: string[], options?: { input?: string; env?: Record<string
         // Unit tests opt out unless a case explicitly exercises proposal
         // submission; otherwise a test that inherits a real akm on PATH could
         // enqueue a proposal in the developer's actual bundle.
-        ...(options?.env?.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING === undefined && !args.includes("extract-session") ? { AKM_AUTO_LEARNING: "0" } : {}),
+        ...(options?.env?.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING === undefined && !args.includes("extract-session") ? { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0" } : {}),
         ...options?.env,
       },
       (key) => key.startsWith("AKM_") || key.startsWith("XDG_") || key.startsWith("CLAUDE_PLUGIN_OPTION_") || key === "CLAUDE_PROJECT_DIR",
@@ -611,7 +611,7 @@ exit 0
       XDG_STATE_HOME: stateDir,
       AKM_AUTO_CURATE: "0",
       AKM_AUTO_FEEDBACK: "0",
-      AKM_AUTO_LEARNING: "1",
+      CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined,
       AKM_AUTO_SKILL_PROPOSALS: "0",
     }
     const input = JSON.stringify({
@@ -1217,7 +1217,7 @@ exit 0
           PATH: `${binDir}:/usr/bin:/bin`,
           XDG_STATE_HOME: stateDir,
           AKM_AUTO_CURATE: "0",
-          AKM_AUTO_LEARNING: "1",
+          CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined,
           // Capture the signal, but never spawn a detached proposal worker.
           AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1",
         },
@@ -3181,8 +3181,8 @@ exit 0
         expect(runSessionEnd("1")).toContain("index_spawned")
       })
 
-      itPosix("auto_learning controls prompt capture, and an off value in either place opts out", () => {
-        function captured(option: string, explicitEnv?: string) {
+      itPosix("auto_learning controls prompt capture", () => {
+        function captured(option: string) {
           const tempDir = makeTempDir()
           const binDir = path.join(tempDir, "bin")
           const stateDir = path.join(tempDir, "state")
@@ -3206,7 +3206,6 @@ exit 0
               AKM_AUTO_SKILL_PROPOSALS: "0",
               AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1",
               CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: option,
-              ...(explicitEnv === undefined ? {} : { AKM_AUTO_LEARNING: explicitEnv }),
             },
           })
 
@@ -3215,8 +3214,6 @@ exit 0
 
         expect(captured("false")).toBe(false)
         expect(captured("true")).toBe(true)
-        expect(captured("true", "0")).toBe(false)
-        expect(captured("false", "1")).toBe(false)
       })
     })
 
@@ -3263,7 +3260,7 @@ exit 0
       expect(getFirstLogEntry(stateDir, "memory.log")).toContain("user\tintent")
     })
 
-    itPosix("AKM_AUTO_MEMORY=0 skips the SessionEnd extraction entirely", () => {
+    itPosix("an off auto_learning option skips the SessionEnd extraction", () => {
       const tempDir = makeTempDir()
       const binDir = path.join(tempDir, "bin")
       const stateDir = path.join(tempDir, "state")
@@ -3271,40 +3268,14 @@ exit 0
       mkdirSync(binDir, { recursive: true })
       mkdirSync(stateDir, { recursive: true })
       makeLoggingAkm(binDir, callLog)
-
-      expect(
-        runHook(["extract-session"], {
-          input: JSON.stringify({ session_id: "sess-no-memory", reason: "other" }),
-          env: {
-            HOME: tempDir,
-            PATH: `${binDir}:/usr/bin:/bin`,
-            XDG_STATE_HOME: stateDir,
-            AKM_AUTO_MEMORY: "0",
-          },
-        }),
-      ).toBe("")
+      const transcriptPath = path.join(tempDir, "t.jsonl")
+      writeFileSync(transcriptPath, '{"type":"user"}\n')
+      runHook(["extract-session"], {
+        input: JSON.stringify({ session_id: "sess-off", reason: "other", transcript_path: transcriptPath }),
+        env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir, CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "false" },
+      })
       expect(existsSync(path.join(stateDir, "akm-claude/extract.log"))).toBe(false)
       expect(existsSync(callLog)).toBe(false)
-    })
-
-    itPosix("each of AKM_AUTO_LEARNING=0, AKM_AUTO_MEMORY=0 and an off auto_learning option skips the SessionEnd extraction", () => {
-      for (const off of [{ AKM_AUTO_LEARNING: "0" }, { AKM_AUTO_MEMORY: "0" }, { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "false" }]) {
-        const tempDir = makeTempDir()
-        const binDir = path.join(tempDir, "bin")
-        const stateDir = path.join(tempDir, "state")
-        const callLog = path.join(tempDir, "akm-calls.log")
-        mkdirSync(binDir, { recursive: true })
-        mkdirSync(stateDir, { recursive: true })
-        makeLoggingAkm(binDir, callLog)
-        const transcriptPath = path.join(tempDir, "t.jsonl")
-        writeFileSync(transcriptPath, '{"type":"user"}\n')
-        runHook(["extract-session"], {
-          input: JSON.stringify({ session_id: "sess-off", reason: "other", transcript_path: transcriptPath }),
-          env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir, ...off },
-        })
-        expect(existsSync(path.join(stateDir, "akm-claude/extract.log"))).toBe(false)
-        expect(existsSync(callLog)).toBe(false)
-      }
     })
 
     itPosix("treats any AKM_AUTO_FEEDBACK value other than 0 as enabled, matching OpenCode", () => {

@@ -39,8 +39,8 @@
     },
     "auto_learning": {
       "type": "boolean",
-      "title": "Propose durable learnings automatically",
-      "description": "Capture explicit memories, corrections, guardrails, and preferences from prompts and submit high-confidence AKM proposals for review. Repeated task intents across distinct sessions can also propose reusable skills. Turning it off stops all of AKM's automatic learning for this library, including the scheduled `improve` run: at session start the plugin runs `akm setup --learning off`, and turns it back on if the plugin was what turned it off.",
+      "title": "Automatic learning",
+      "description": "Capture explicit memories, corrections, guardrails, and preferences from prompts and submit high-confidence AKM proposals for review. Repeated task intents across distinct sessions can also propose reusable skills. Turning it off stops all of AKM's automatic learning on this host, for all bundles, including the scheduled `improve` run: at session start the plugin runs `akm setup --learning off`, and turns it back on if the plugin was what turned it off.",
       "default": true
     },
     "curate_limit": {

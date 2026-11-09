@@ -92,7 +92,7 @@ function sandboxEnv(sandbox: Sandbox, extra: Record<string, string | undefined> 
       XDG_STATE_HOME: sandbox.xdgState,
       PATH: sandboxPath(sandbox.binDir),
       // A test that exercises proposal submission turns this on itself.
-      AKM_AUTO_LEARNING: "0",
+      CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0",
       ...extra,
     },
     (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name),
@@ -176,7 +176,7 @@ describe("Claude plugin manifest hook commands", () => {
         // The post-tool handlers validate refs against the bundle without asking akm for it.
         AKM_BUNDLE_DIR: fixtureStash,
         // The sandbox opts out to silence prompt capture; extraction is part of what that opt-out stops.
-        ...(mode === "extract-session" ? { AKM_AUTO_LEARNING: "1" } : {}),
+        ...(mode === "extract-session" ? { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined } : {}),
       })
       expect({ event, mode, exitCode: result.exitCode, stderr: result.stderr }).toEqual({ event, mode, exitCode: 0, stderr: "" })
       // Hooks answer with nothing or with one JSON object; Claude Code ignores anything else.
@@ -271,7 +271,7 @@ describe("Claude hooks through the manifest commands", () => {
     const sandbox = makeSandbox()
 
     expect(runHandler(handlerFor("session-end"), sandbox, payloadFor("session-end", sandbox)).exitCode).toBe(0)
-    expect(runHandler(handlerFor("extract-session"), sandbox, payloadFor("extract-session", sandbox), { AKM_AUTO_LEARNING: "1" }).exitCode).toBe(0)
+    expect(runHandler(handlerFor("extract-session"), sandbox, payloadFor("extract-session", sandbox), { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined }).exitCode).toBe(0)
 
     // Both children outlive the hook, so the fake akm runs after it has returned.
     await settle(sandbox, { index: 1, extract: true })
@@ -451,7 +451,7 @@ if (${hangsWhen}) {
       handlerFor("curate-prompt"),
       sandbox,
       { ...(payloadFor("curate-prompt", sandbox) as object), prompt: "no, use pnpm not npm for this repository" },
-      { AKM_AUTO_LEARNING: "1", AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_LEARNING_PROPOSAL_TIMEOUT_MS: "3000" },
+      { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined, AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_LEARNING_PROPOSAL_TIMEOUT_MS: "3000" },
     )
 
     expect(result.exitCode).toBe(0)
@@ -476,11 +476,11 @@ describe("Claude hooks map the learning settings onto akm's learning switch", ()
 
   it("an opt-out turns learning off and records the marker; removing it turns learning back on", async () => {
     const sandbox = makeSandbox()
-    sessionStart(sandbox, { AKM_FAKE_LEARNING: "on", AKM_AUTO_LEARNING: "0" })
+    sessionStart(sandbox, { AKM_FAKE_LEARNING: "on", CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0" })
     expect(learningState(sandbox)).toBe(false)
     expect(existsSync(marker(sandbox))).toBe(true)
 
-    sessionStart(sandbox, { AKM_FAKE_LEARNING: "on", AKM_AUTO_LEARNING: undefined })
+    sessionStart(sandbox, { AKM_FAKE_LEARNING: "on", CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined })
     expect(learningState(sandbox)).toBe(true)
     expect(existsSync(marker(sandbox))).toBe(false)
     expect(infoLearning(sandbox)).toBe(true)
@@ -489,7 +489,7 @@ describe("Claude hooks map the learning settings onto akm's learning switch", ()
 
   it("learning turned off by hand, with no opt-out and no marker, stays off", async () => {
     const sandbox = makeSandbox()
-    sessionStart(sandbox, { AKM_FAKE_LEARNING: "off", AKM_AUTO_LEARNING: undefined })
+    sessionStart(sandbox, { AKM_FAKE_LEARNING: "off", CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined })
     expect(learningState(sandbox)).toBeUndefined()
     expect(readCallLog(sandbox.callLog).some((call) => call.argv[0] === "setup")).toBe(false)
     await settle(sandbox, { index: 1 })
@@ -497,7 +497,7 @@ describe("Claude hooks map the learning settings onto akm's learning switch", ()
 
   it("an akm that does not report learning is left alone", async () => {
     const sandbox = makeSandbox()
-    sessionStart(sandbox, { AKM_AUTO_LEARNING: "0" })
+    sessionStart(sandbox, { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0" })
     expect(readCallLog(sandbox.callLog).some((call) => call.argv[0] === "setup")).toBe(false)
     expect(existsSync(marker(sandbox))).toBe(false)
     await settle(sandbox, { index: 1 })
@@ -510,7 +510,7 @@ describe("Claude hooks map the learning settings onto akm's learning switch", ()
         handlerFor("curate-prompt"),
         sandbox,
         { ...(payloadFor("curate-prompt", sandbox) as object), prompt: "no, use pnpm not npm for this repository" },
-        { AKM_AUTO_LEARNING: "1", AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_FAKE_LEARNING: learning },
+        { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined, AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_FAKE_LEARNING: learning },
       )
       expect(result.exitCode).toBe(0)
       // The worker is detached: it always asks `akm info` first.

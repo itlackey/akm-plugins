@@ -18,7 +18,6 @@ import {
   AKM_CURATED_TAIL,
   AKM_HINTS_PREFIX,
   applyContextBudget,
-  autoMemoryEnabled,
   AKM_CURATED_POINTER_CHARS,
   bootstrapBudgetChars,
   buildCurateOptions,
@@ -35,9 +34,9 @@ import {
 } from "../opencode-shared/recall"
 import { createBundleDirResolver } from "../opencode-shared/bundle"
 import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
-import { syncLearningSwitch } from "../claude/shared/learning-switch"
+import { noteRetiredLearningEnv } from "../claude/shared/learning-switch"
 import { loadSessionBootstrap } from "../claude/shared/session-bootstrap"
-import { buildEventScope, opencodeEventLog, opencodeStateDir, writeOpencodeEvent } from "../opencode-shared/events"
+import { buildEventScope, opencodeEventLog, writeOpencodeEvent } from "../opencode-shared/events"
 import {
   classifyToolFeedback,
   createFeedbackTracker,
@@ -626,12 +625,6 @@ function extractSessionIdFromEvent(payload: unknown): string | undefined {
  * regardless of exit status, so the actionable code/hint reaches the log.
  */
 function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, directory: string | undefined): void {
-  // AKM_AUTO_MEMORY=0 turns native-transcript extraction off, matching the
-  // Claude hook's SessionEnd behavior. Prompt-time correction/preference
-  // proposals use AKM_AUTO_LEARNING. Read per call rather than at import, like
-  // shouldIndexOnSessionEnd(), because the plugin process outlives many
-  // sessions.
-  if (!autoMemoryEnabled()) return
   const now = Date.now()
   const last = sessionLastExtractAt.get(sid) ?? 0
   if (now - last < AKM_EXTRACT_MIN_INTERVAL_MS) return
@@ -1019,16 +1012,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             // Best-effort, fire-and-forget, fully error-trapped internally —
             // must never block or fail session.created (13: "tmp-file cleanup").
             void pruneStaleCuratedFiles()
-            void syncLearningSwitch({
-              run: async (args) => {
-                const command = resolveAkmCommand()
-                if (isCliError(command)) return ""
-                const result = await runAkm(command, args, { cwd: directory, timeoutMs: AKM_CURATE_TIMEOUT_MS, packageName: "akm-opencode" })
-                return result.ok ? result.stdout : ""
-              },
-              stateDir: opencodeStateDir(),
-              log: (message) => void writePluginLog(logClient, "warn", message, { subsystem: "learning", sessionID: sid }),
-            })
+            noteRetiredLearningEnv((message) => void writePluginLog(logClient, "warn", message, { subsystem: "learning", sessionID: sid }))
             warmIndexInBackground()
             void bootstrap.ensure(sid)
             if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {

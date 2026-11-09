@@ -11,15 +11,17 @@ import path from "node:path"
 
 const OFF_VALUES = new Set(["0", "false", "off", "no"])
 
-/**
- * True when any of `AKM_AUTO_LEARNING`, `AKM_AUTO_MEMORY` (the literal "0") or the Claude
- * `auto_learning` option (`CLAUDE_PLUGIN_OPTION_AUTO_LEARNING`, an off value) opts out. Any one
- * of them means all automatic learning is off.
- */
+/** True when the Claude `auto_learning` option (`CLAUDE_PLUGIN_OPTION_AUTO_LEARNING`) is off. */
 export function learningOptedOut(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.AKM_AUTO_LEARNING === "0" || env.AKM_AUTO_MEMORY === "0") return true
   const option = env.CLAUDE_PLUGIN_OPTION_AUTO_LEARNING?.trim().toLowerCase()
   return option !== undefined && OFF_VALUES.has(option)
+}
+
+/** Warn-and-ignore notice for the two retired environment opt-outs. */
+export function noteRetiredLearningEnv(log: (message: string) => void, env: NodeJS.ProcessEnv = process.env): void {
+  if (env.AKM_AUTO_MEMORY === "0" || env.AKM_AUTO_LEARNING === "0") {
+    log("AKM_AUTO_MEMORY and AKM_AUTO_LEARNING no longer do anything; to stop background learning run: akm setup --learning off")
+  }
 }
 
 /** `learning.on` from `akm info` JSON, or undefined when akm does not report it (an older akm). */
@@ -42,14 +44,6 @@ export type LearningSwitchHost = {
   log: (message: string) => void
 }
 
-function succeeded(raw: string): boolean {
-  try {
-    return (JSON.parse(raw) as { ok?: unknown } | null)?.ok === true
-  } catch {
-    return false
-  }
-}
-
 /**
  * Called once at session start. The marker records that the plugin, not the person, turned
  * learning off, so only the plugin's own change is ever undone. Nothing happens when akm does not
@@ -65,17 +59,21 @@ export async function syncLearningSwitch(host: LearningSwitchHost): Promise<void
   try {
     if (optedOut) {
       if (!on) return
-      if (!succeeded(await host.run(["setup", "--learning", "off", "--format", "json", "-q"]))) {
+      if (!(await host.run(["setup", "--learning", "off", "--format", "json", "-q"]))) {
         host.log("AKM learning opt-out could not be applied: `akm setup --learning off` failed; it will be retried next session")
         return
       }
       mkdirSync(host.stateDir, { recursive: true })
       writeFileSync(marker, "")
+      host.log("AKM learning turned off: the plugin's auto_learning option is off")
       return
     }
-    if (!on && !succeeded(await host.run(["setup", "--learning", "on", "--format", "json", "-q"]))) {
-      host.log("AKM learning could not be turned back on: `akm setup --learning on` failed; it will be retried next session")
-      return
+    if (!on) {
+      if (!(await host.run(["setup", "--learning", "on", "--format", "json", "-q"]))) {
+        host.log("AKM learning could not be turned back on: `akm setup --learning on` failed; it will be retried next session")
+        return
+      }
+      host.log("AKM learning turned back on: the plugin's auto_learning option is on again")
     }
     rmSync(marker, { force: true })
   } catch (error: unknown) {

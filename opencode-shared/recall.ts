@@ -10,7 +10,6 @@ import path from "node:path"
 import { runAge } from "../claude/shared/run-age"
 import { filterAndRankCuratedItems, renderCuratedItems } from "../claude/shared/curate-render"
 import { type CurateOptions, loadCurate } from "./akm-api"
-import { learningOptedOut } from "../claude/shared/learning-switch"
 import type { ResolvedAkmCommand } from "./akm-cli"
 
 export const AKM_CURATE_LIMIT = Math.max(1, Number(process.env.AKM_CURATE_LIMIT ?? "5") || 5)
@@ -297,10 +296,6 @@ export const AKM_EXTRACT_OUTPUT_MAX_CHARS = 2_000
 export function extractMinIntervalMs(): number {
   const raw = Number(process.env.AKM_EXTRACT_MIN_INTERVAL_MS)
   return Number.isFinite(raw) && raw >= 0 ? raw : 10 * 60 * 1000 // default 10 min
-}
-
-export function autoMemoryEnabled(): boolean {
-  return !learningOptedOut()
 }
 
 // `unref()` exists on the net.Socket node hands back for a piped child stream,

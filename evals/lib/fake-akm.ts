@@ -547,7 +547,7 @@ function xdgDir(akmVar, xdgVar, fallback) {
 
 // Learning, as akm 0.10's \`info\` reports it and \`setup --learning on|off\` flips it. A test-only
 // AKM_FAKE_LEARNING=on|off sets the starting state; unset, \`info\` carries no \`learning\` (an
-// older akm). AKM_FAKE_LEARNING_SETUP_FAILS=1 makes the flip fail.
+// older akm).
 const learningStatePath = path.join(path.dirname(idx.callLog), "akm-learning.json")
 function learningOn() {
   try {
@@ -558,13 +558,9 @@ function learningOn() {
 }
 
 if (verb === "setup" && tail[0] === "--learning") {
-  if (process.env.AKM_FAKE_LEARNING_SETUP_FAILS) {
-    process.stderr.write(JSON.stringify({ ok: false, error: "setup failed" }))
-    process.exit(1)
-  }
   const on = tail[1] === "on"
   writeFileSync(learningStatePath, JSON.stringify({ on }))
-  process.stdout.write(JSON.stringify({ ok: true, learning: { on, agent: null, scheduled: false }, shape: "setup", schemaVersion: 1 }))
+  process.stdout.write(JSON.stringify({ learning: { on, harness: null, scheduled: false } }))
   process.exit(0)
 }
 
@@ -613,7 +609,7 @@ if (verb === "info") {
         hasEmbeddings: false,
         vecAvailable: false,
       },
-      ...(learning === undefined ? {} : { learning: { on: learning, agent: null, scheduled: false } }),
+      ...(learning === undefined ? {} : { learning: { on: learning, harness: null, scheduled: false } }),
       shape: "info",
     }),
   )

@@ -13,7 +13,6 @@ import type { PluginInput } from "@opencode-ai/plugin"
 // tests would be appending to — the developer's real ~/.local/state tree.
 const eventStateDir = mkdtempSync(path.join(tmpdir(), "akm-opencode-test-state-"))
 process.env.XDG_STATE_HOME = eventStateDir
-process.env.AKM_AUTO_LEARNING = "1"
 process.env.AKM_AUTO_SKILL_PROPOSALS = "1"
 const eventLogPath = path.join(eventStateDir, "akm-opencode", "events.jsonl")
 
@@ -397,59 +396,16 @@ describe("akm-opencode plugin", () => {
       }
     })
 
-    it("maps the opt-out onto akm at session.created and back, and leaves a hand-made off alone", async () => {
-      const markerPath = path.join(eventStateDir, "akm-opencode", "learning-off-by-plugin")
-      const setupCalls = () => execFileCalls.filter((c) => c.args[0] === "setup").map((c) => c.args.slice(0, 3).join(" "))
-      const created = async (sessionID: string) => {
-        const hooks = await AkmPlugin(createPluginInput())
-        await hooks.event!({ event: { type: "session.created", properties: { sessionID } } } as any)
-        await Bun.sleep(80)
-      }
-      const previous = process.env.AKM_AUTO_LEARNING
+    it("never runs `akm setup --learning`: it only follows akm's switch", async () => {
+      mockLearning = true
       try {
-        mockLearning = true
-        process.env.AKM_AUTO_LEARNING = "0"
-        await created("map-1")
-        expect(mockLearning).toBe(false)
-        expect(existsSync(markerPath)).toBe(true)
-
-        delete process.env.AKM_AUTO_LEARNING
-        await created("map-2")
+        const hooks = await AkmPlugin(createPluginInput())
+        await hooks.event!({ event: { type: "session.created", properties: { sessionID: "no-setup" } } } as any)
+        await Bun.sleep(80)
+        expect(execFileCalls.some((c) => c.args[0] === "setup")).toBe(false)
         expect(mockLearning).toBe(true)
-        expect(existsSync(markerPath)).toBe(false)
-        expect(setupCalls()).toEqual(["setup --learning off", "setup --learning on"])
-
-        // Off by hand, no opt-out, no marker: left off.
-        mockLearning = false
-        await created("map-3")
-        expect(mockLearning).toBe(false)
-        expect(setupCalls()).toHaveLength(2)
       } finally {
-        if (previous === undefined) delete process.env.AKM_AUTO_LEARNING
-        else process.env.AKM_AUTO_LEARNING = previous
         mockLearning = undefined
-        rmSync(markerPath, { force: true })
-      }
-    })
-
-    it("an off AKM_AUTO_LEARNING or AKM_AUTO_MEMORY stops both prompt capture and session extraction", async () => {
-      for (const key of ["AKM_AUTO_LEARNING", "AKM_AUTO_MEMORY"]) {
-        const previous = process.env[key]
-        process.env[key] = "0"
-        try {
-          const hooks = await AkmPlugin(createPluginInput())
-          const before = mockSpawn.mock.calls.length
-          await hooks["chat.message"]!(
-            { sessionID: `gate-${key}`, messageID: "message-1", agent: "build" } as any,
-            { parts: [{ type: "text", text: `I prefer ${key} for scripts in this repository` }] } as any,
-          )
-          await hooks.event!({ event: { type: "session.idle", properties: { sessionID: `gate-idle-${key}` } } } as any)
-          await Bun.sleep(80)
-          expect(mockSpawn.mock.calls.length).toBe(before)
-        } finally {
-          if (previous === undefined) delete process.env[key]
-          else process.env[key] = previous
-        }
       }
     })
 
@@ -1296,30 +1252,6 @@ describe("akm-opencode plugin", () => {
       // and the reindex is opt-OUT there (AKM_INDEX_ON_SESSION_END=0 disables it).
       await hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "index-gate-1" } } } as any)
       expect(indexCalls()).toBe(1)
-    })
-
-    it("AKM_AUTO_MEMORY=0 skips the session.idle extraction entirely", async () => {
-      // Same kill switch as the Claude hook's SessionEnd extract: this controls
-      // native-transcript extraction on both harnesses. Prompt-time learning
-      // proposals use the separate AKM_AUTO_LEARNING switch.
-      const hooks = await AkmPlugin(createPluginInput())
-      const extractCalls = () =>
-        mockSpawn.mock.calls.filter(([, args]: any[]) => Array.isArray(args) && args[0] === "proposal" && args[1] === "extract").length
-
-      const previous = process.env.AKM_AUTO_MEMORY
-      process.env.AKM_AUTO_MEMORY = "0"
-      try {
-        await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "auto-memory-off" } } } as any)
-        expect(extractCalls()).toBe(0)
-      } finally {
-        if (previous === undefined) delete process.env.AKM_AUTO_MEMORY
-        else process.env.AKM_AUTO_MEMORY = previous
-      }
-
-      // ...and the default still harvests. A different session id, because the
-      // gate returns before the min-interval bookkeeping.
-      await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "auto-memory-on" } } } as any)
-      expect(extractCalls()).toBe(1)
     })
 
     it("surfaces a failed session extract through the plugin log", async () => {

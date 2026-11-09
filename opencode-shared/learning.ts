@@ -21,7 +21,7 @@ import {
   removeLearningProposalJob,
   reserveLearningProposal,
 } from "../claude/shared/learning-signals"
-import { learningOptedOut, parseLearningOn } from "../claude/shared/learning-switch"
+import { parseLearningOn } from "../claude/shared/learning-switch"
 import { type CliError, type ResolvedAkmCommand, isCliError, runAkm } from "./akm-cli"
 import { type EventWriter, buildEventScope, opencodeEventLog, opencodeStateDir } from "./events"
 import { parseToolOutput, type SessionBufferEntry } from "./feedback"
@@ -29,7 +29,6 @@ import { AKM_EXTRACT_OUTPUT_MAX_CHARS, truncateLogText, unrefChildStream } from 
 
 export type LearningLog = (level: "debug" | "info" | "warn" | "error", message: string, extra: Record<string, unknown>) => void
 
-const autoLearningEnabled = (): boolean => !learningOptedOut()
 const autoSkillProposalsEnabled = (): boolean => (process.env.AKM_AUTO_SKILL_PROPOSALS ?? "1") !== "0"
 const proposalTimeoutMs = (): number => Math.max(1_000, Number(process.env.AKM_LEARNING_PROPOSAL_TIMEOUT_MS ?? "600000") || 600_000)
 
@@ -79,7 +78,7 @@ export type LearningHost = {
 export function createLearning(host: LearningHost) {
   /** Fire-and-forget semantic authoring; AKM owns the proposal and its review. */
   async function submitLearningProposal(candidate: ProposalCandidate, directory: string | undefined): Promise<void> {
-    if (!autoLearningEnabled() || candidate.confidence < learningProposalMinConfidence()) return
+    if (candidate.confidence < learningProposalMinConfidence()) return
     const command = host.resolveCommand()
     if (isCliError(command)) {
       host.log("warn", "AKM learning proposal skipped", {
@@ -232,7 +231,6 @@ export function createLearning(host: LearningHost) {
     project: string,
     directory: string | undefined,
   ): void {
-    if (!autoLearningEnabled()) return
     const stateDir = opencodeStateDir()
     const signal = captureLearningSignal({
       text,
