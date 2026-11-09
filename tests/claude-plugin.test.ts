@@ -1401,10 +1401,10 @@ exit 0
       })
     }
 
-    itPosix("asks curate for --detail normal", () => {
+    itPosix("asks curate for --detail agent, which keeps the injected text smaller than normal", () => {
       const { invocations } = runCurateWithJson(MIXED_ITEMS)
-      expect(invocations).toContain("--detail normal")
-      expect(invocations).not.toContain("--detail agent")
+      expect(invocations).toContain("--detail agent")
+      expect(invocations).not.toContain("--detail normal")
     })
 
     itPosix("keeps an item with no numeric score rather than dropping it as unscored", () => {
@@ -1483,7 +1483,7 @@ exit 0
     expect(curatedContent).toContain("# curated") // the actual recalled content is still present
     const invocations = readFileSync(invokeLog, "utf8")
     expect(invocations).toContain("curate")
-    expect(invocations).toContain("--detail normal")
+    expect(invocations).toContain("--detail agent")
     expect(invocations).toContain("--format text")
     expect(invocations).not.toContain("--for-agent")
     expect(invocations).not.toContain("--run sess-start-1")

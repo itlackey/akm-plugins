@@ -1656,7 +1656,8 @@ function captureRetrospectiveFeedback(text: string, sid: string) {
 // argv curatePrompt() has always sent, so that (default, tested) path is
 // unchanged.
 function buildCurateArgs(query: string, limit: number): string[] {
-  const args = ["curate", query, "--limit", String(limit), "--detail", "normal", "-q"]
+  // `agent`, not `normal`: released akm's curate `normal` adds preview and why lines (about 55% more text); a newer akm treats `agent` as its `normal`, today's agent set.
+  const args = ["curate", query, "--limit", String(limit), "--detail", "agent", "-q"]
   if (CURATE_TYPE) args.push("--type", CURATE_TYPE)
   args.push("--format", CURATE_MIN_SCORE > 0 ? "json" : "text")
   return args
