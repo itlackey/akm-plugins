@@ -94,12 +94,14 @@ export type LearningProposalJob = {
   eventLog?: string
   reservation: LearningProposalReservation
   candidate: ProposalCandidate
+  /** How long the worker lets `akm proposal new` run. Absent: the worker's own cap (10 minutes). */
+  timeoutMs?: number
 }
 
 const MAX_CAPTURE_PROMPT_LENGTH = 500
 const MAX_WEAK_PATTERN_LENGTH = 150
 const MIN_SHORT_CORRECTION_LENGTH = 80
-const DEFAULT_WORKFLOW_MIN_SESSIONS = 3
+const WORKFLOW_MIN_SESSIONS = 3
 const WORKFLOW_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000
 const WORKFLOW_SIMILARITY_THRESHOLD = 0.68
 const PROPOSAL_RETRY_MS = 60 * 60 * 1000
@@ -495,11 +497,7 @@ export function observeRecurringWorkflow(input: {
   )
   const latestBySession = new Map<string, WorkflowObservation>()
   for (const entry of matches) latestBySession.set(entry.sessionId, entry)
-  const requiredRaw = Number(process.env.AKM_WORKFLOW_PROPOSAL_MIN_SESSIONS)
-  const required = Number.isFinite(requiredRaw) && requiredRaw >= 2
-    ? Math.floor(requiredRaw)
-    : DEFAULT_WORKFLOW_MIN_SESSIONS
-  if (latestBySession.size < required) return undefined
+  if (latestBySession.size < WORKFLOW_MIN_SESSIONS) return undefined
   const evidence = [...latestBySession.values()]
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
     .slice(-5)
@@ -677,6 +675,7 @@ export function createLearningProposalJob(input: {
   reservation: LearningProposalReservation
   logFile: string
   eventLog?: string
+  timeoutMs?: number
 }): { job: LearningProposalJob; jobFile: string } {
   ensureStateDir(input.stateDir)
   const jobsDir = statePath(input.stateDir, "proposal-jobs")
@@ -694,6 +693,7 @@ export function createLearningProposalJob(input: {
     ...(input.eventLog ? { eventLog: input.eventLog } : {}),
     reservation: input.reservation,
     candidate: input.candidate,
+    ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
   }
   try {
     writeFileSync(taskFile, buildLearningProposalTask(input.candidate), { mode: 0o600 })

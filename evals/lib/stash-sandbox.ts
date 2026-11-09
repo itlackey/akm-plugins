@@ -1,5 +1,5 @@
 // Spin up an isolated sandbox for running the plugin hooks during evals.
-// The hook script writes to $AKM_PLUGIN_STATE_DIR and consults $AKM_BUNDLE_DIR
+// The hook script writes to $XDG_STATE_HOME/akm-claude and consults $AKM_BUNDLE_DIR
 // — both must point at temp directories so concurrent evals don't collide
 // and so each scenario starts from a clean slate.
 //
@@ -67,7 +67,6 @@ export function createSandbox(opts: SandboxOptions = {}): Sandbox {
     XDG_STATE_HOME: stateDir,
     XDG_CONFIG_HOME: configDir,
     XDG_CACHE_HOME: cacheDir,
-    AKM_PLUGIN_STATE_DIR: path.join(stateDir, "akm-claude"),
     // AKM 0.9 bundle-root override. Both plugins read this first
     // (claude/hooks/akm-hook.ts resolveStashRoots(), opencode/index.ts
     // getAkmBundleDir()); without it they fall back to `akm info --format

@@ -182,11 +182,7 @@ export async function runFeedbackMetric(opts: FeedbackOptions): Promise<MetricRe
     for (const f of fixtures) {
       const sandbox = createSandbox({ sourceStash: opts.stashDir })
       try {
-        // Per-prompt curation is off for this metric: chat.message is used
-        // below only to deliver a retrospective confirmation, and the
-        // fire-and-forget `akm curate` it would otherwise schedule is unrelated
-        // background noise in the same call log.
-        const harness = await createOpenCodeHarness({ ...sandbox.env, AKM_AUTO_CURATE: "0" })
+        const harness = await createOpenCodeHarness(sandbox.env)
         const outputForDrive = (drive: string) =>
           drive === "failure"
             ? `{"ok":false,"error":"failure","ref":"${f.refs[0] ?? ""}"}`

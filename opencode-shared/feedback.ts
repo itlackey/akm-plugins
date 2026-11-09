@@ -14,21 +14,14 @@
 import { spawn } from "node:child_process"
 import {
   classifyFeedbackSignal,
-  createExplicitCorrectionRegex,
-  createRetrospectiveFeedbackRegex,
-  createRetrospectiveNegativeRegex,
+  EXPLICIT_CORRECTION_RE,
+  RETROSPECTIVE_FEEDBACK_RE,
+  RETROSPECTIVE_NEGATIVE_RE,
   shouldSubmitAutomaticFeedback,
 } from "../claude/shared/feedback-signals"
 import { akmRefFromValue, extractAkmRefsFromString, refsOfAkmResult, validateRefCandidates } from "../claude/shared/ref-extraction"
 import { type ResolvedAkmCommand, isCliError, runAkm } from "./akm-cli"
 import { type EventWriter, buildEventScope } from "./events"
-
-const RETROSPECTIVE_FEEDBACK_RE = createRetrospectiveFeedbackRegex()
-const RETROSPECTIVE_NEGATIVE_RE = createRetrospectiveNegativeRegex()
-const EXPLICIT_CORRECTION_RE = createExplicitCorrectionRegex()
-
-/** Read per call: the plugin process outlives many sessions and the operator may flip it. */
-export const autoFeedbackEnabled = (): boolean => (process.env.AKM_AUTO_FEEDBACK ?? "1") !== "0"
 
 // Refs that must never receive automatic feedback, in bundle-qualified form
 // too (`local//lessons/foo`). Lessons take feedback through the proposal
@@ -111,7 +104,14 @@ export type FeedbackTracker = ReturnType<typeof createFeedbackTracker>
  * Per-session record of the refs a session touched and the retrospective
  * negative-signal window. Torn down with the session via `clear()`.
  */
-export function createFeedbackTracker(options: { maxBufferEntries: number; now?: () => number }) {
+export function createFeedbackTracker(options: {
+  /** `plugins.autoFeedback`, read per call: the plugin process outlives many sessions. */
+  autoFeedback: () => boolean
+  /** The per-session buffer cap; the oldest entry goes first. */
+  maxBufferEntries?: number
+  now?: () => number
+}) {
+  const maxBufferEntries = options.maxBufferEntries ?? 200
   const now = options.now ?? Date.now
   const buffers = new Map<string, SessionBufferEntry[]>()
   const retrospective = new Map<string, RetrospectiveState>()
@@ -121,7 +121,7 @@ export function createFeedbackTracker(options: { maxBufferEntries: number; now?:
     const buffer = buffers.get(sessionID) ?? []
     buffer.push({ timestamp: new Date(now()).toISOString(), ...entry })
     // Drop-oldest cap: a long session accumulates one entry per observed ref.
-    if (buffer.length > options.maxBufferEntries) buffer.splice(0, buffer.length - options.maxBufferEntries)
+    if (buffer.length > maxBufferEntries) buffer.splice(0, buffer.length - maxBufferEntries)
     buffers.set(sessionID, buffer)
   }
 
@@ -162,7 +162,7 @@ export function createFeedbackTracker(options: { maxBufferEntries: number; now?:
     const explicitCorrection = EXPLICIT_CORRECTION_RE.test(text)
     const negativeSignal = RETROSPECTIVE_NEGATIVE_RE.test(text)
 
-    if (autoFeedbackEnabled() && RETROSPECTIVE_FEEDBACK_RE.test(text) && !negativeSignal && !explicitCorrection) {
+    if (options.autoFeedback() && RETROSPECTIVE_FEEDBACK_RE.test(text) && !negativeSignal && !explicitCorrection) {
       const seen = new Set<string>()
       for (const ref of recentToolRefs(sessionID)) {
         if (seen.has(ref)) continue

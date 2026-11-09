@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import { akmResultList } from "../claude/shared/result-list"
 import { classifyToolFeedback } from "../opencode-shared/feedback"
-import { renderCuratedJsonResponse } from "../opencode-shared/recall"
 import { withProposedWarnings } from "../opencode-shared/tools"
 import { refsOfAkmResult } from "../claude/shared/ref-extraction"
 import { loadSessionBootstrap } from "../claude/shared/session-bootstrap"
@@ -53,13 +52,6 @@ describe("every reader accepts all three key names and an empty list", () => {
       expect(JSON.parse(once).warnings).toEqual(["Do not treat proposed assets as curated until accepted."])
       const none = JSON.stringify({ [key]: [] })
       expect(withProposedWarnings(none)).toBe(none)
-    })
-
-    it(`renderCuratedJsonResponse renders ${key}`, () => {
-      const out = renderCuratedJsonResponse(JSON.stringify({ [key]: [entry] }), "deploy")
-      expect(out).toContain("[skill] deploy")
-      expect(out).toContain("ref: skills/deploy")
-      expect(renderCuratedJsonResponse(JSON.stringify({ [key]: [] }), "deploy")).toBeNull()
     })
 
     it(`the session bootstrap lists rules from ${key}`, async () => {

@@ -5,6 +5,7 @@ import path from "node:path"
 import { installFakeAkm, type FakeAkmAsset } from "../evals/lib/fake-akm"
 import { validateRefCandidates } from "../claude/shared/ref-extraction"
 import { akmResultList } from "../claude/shared/result-list"
+import { akmConfigPath } from "../claude/shared/settings"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
 // actually invoke (search, curate, info, workflow list --active, proposal
@@ -91,12 +92,13 @@ function spawnSync(cmd: string, args: string[], env?: Record<string, string | un
 }
 
 function realAkmEnv(cwd: RealEnv): Record<string, string | undefined> {
+  // tests/preload.ts points AKM_CONFIG_DIR at an empty directory for the plugins; the real akm must keep to its own sandbox.
+  const { AKM_CONFIG_DIR: _config, ...inherited } = process.env
   return {
-    ...process.env,
+    ...inherited,
     HOME: cwd.HOME,
     XDG_CONFIG_HOME: cwd.XDG_CONFIG_HOME,
     AKM_BUNDLE_DIR: cwd.AKM_BUNDLE_DIR,
-    AKM_FORCE_INIT_TMP_STASH: "1",
     // akm-cli refuses to resolve a data/state directory under `bun test`
     // unless these are explicitly pointed at a temp dir (guards against
     // tests touching the developer's real ~/.local/share|state/akm).
@@ -165,6 +167,31 @@ describe("fake-akm envelope contract", () => {
     }
   }, REAL_AKM_TIMEOUT_MS)
 
+  // The plugins read their settings from akm's config.json and find it by a copy of akm's path rule
+  // (claude/shared/settings.ts). This pins the copy to what the real akm reports as its config
+  // directory, for each way a host points akm at one.
+  test.skipIf(!akmAvailable)("the plugins find config.json where the real akm keeps it", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "akm-contract-config-"))
+    try {
+      const base = { PATH: process.env.PATH ?? "", XDG_DATA_HOME: path.join(root, "data"), XDG_STATE_HOME: path.join(root, "state"), XDG_CACHE_HOME: path.join(root, "cache") }
+      const shapes: Array<[string, Record<string, string>]> = [
+        ["AKM_CONFIG_DIR", { HOME: root, AKM_CONFIG_DIR: path.join(root, "explicit") }],
+        ["XDG_CONFIG_HOME", { HOME: root, XDG_CONFIG_HOME: path.join(root, "xdg") }],
+        ["HOME only", { HOME: root }],
+        ["AKM_CONFIG_DIR beats XDG_CONFIG_HOME", { HOME: root, AKM_CONFIG_DIR: path.join(root, "explicit"), XDG_CONFIG_HOME: path.join(root, "xdg") }],
+      ]
+      for (const [label, env] of shapes) {
+        const full = { ...base, ...env }
+        const result = spawnSync(process.execPath, [REAL_AKM, "--format", "json", "-q", "info"], full)
+        expect({ label, exit: result.exitCode, stderr: result.exitCode === 0 ? "" : result.stderr }).toEqual({ label, exit: 0, stderr: "" })
+        const configDir = (JSON.parse(result.stdout) as { configDir: string }).configDir
+        expect({ label, path: akmConfigPath(full, "linux") }).toEqual({ label, path: path.join(configDir, "config.json") })
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, REAL_AKM_TIMEOUT_MS)
+
   test.skipIf(!akmAvailable)("curate envelope matches real akm", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
@@ -191,10 +218,7 @@ describe("fake-akm envelope contract", () => {
     const fake = makeFakeEnv()
     try {
       const realEnvelope = runReal(real, ["--format", "json", "-q", "info"]) as Record<string, unknown>
-      // Without this the fake plays an akm that predates `learning`.
-      process.env.AKM_FAKE_LEARNING = "on"
       const fakeEnvelope = runFake(fake.akmPath, ["--format", "json", "-q", "info"]) as Record<string, unknown>
-      delete process.env.AKM_FAKE_LEARNING
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
       // The two fields the plugins actually consume: .bundleDir (the bundle
       // root every ref resolves against) and .assetTypes (the 0.9 asset-type

@@ -71,15 +71,15 @@ Hook processing never prints secret values. Automatic feedback skips references 
 At session start, and again after each compaction, the `SessionStart` hook puts two sections into the model's context, ahead of the curated results: the project's **rules** (every applicable `rules/` asset, in full, under its ref), then an ordered list of the project's **most-used assets** (ref and description only; counts and ranking stay inside akm). Both come from the public `akm` CLI (`akm search "" --type rule`, `akm show <ref>`, `akm search --by-usage`); the plugin keeps no popularity store and opens no database. They need an akm that has them (akm#1512); on an older one the lookups fail, are logged, and the session carries on without the sections.
 
 - **Which project.** The session's directory selects the project through akm's `projects` config, as for every other call. With no project, both sections read only your default bundle (`--project none --from <defaultBundle>`), with no selection filters or preferences; with no default bundle configured, `--project none` alone.
-- **When.** `SessionStart` with source `startup`, `clear` or `compact` (a missing source counts as a start). A `resume` or `fork` does not reload: the transcript still holds them. Duplicate callbacks for the same event within 10 seconds load once. Ordinary prompts never reload. `AKM_AUTO_CURATE=0` does not switch this off.
+- **When.** `SessionStart` with source `startup`, `clear` or `compact` (a missing source counts as a start). A `resume` or `fork` does not reload: the transcript still holds them. Duplicate callbacks for the same event within 10 seconds load once. Ordinary prompts never reload.
 - **Codex.** The same hook runs under Codex, whose manifest is unchanged (a changed hook command asks every user to trust it again). Codex fires `SessionStart` with source `compact` after a compaction, so the reload needs no separate hook.
-- **Budget.** `AKM_CONTEXT_BUDGET_CHARS` covers the whole `SessionStart` context. The sections take what the primer, warnings, pending proposals and workflows before them leave, rule text first. A rule is shown whole or left out; if rules are left out (or akm's listing was cut at 200), the section ends with a note saying how many and how to list them. The most-used list names at most 10 assets and says when it was cut or left out to fit. A project with rules and no usage history gets its rules and no list.
+- **Budget.** The 4000-character context budget covers the whole `SessionStart` context. The sections take what the primer, warnings, pending proposals and workflows before them leave, rule text first. A rule is shown whole or left out; if rules are left out (or akm's listing was cut at 200), the section ends with a note saying how many and how to list them. The most-used list names at most 10 assets and says when it was cut or left out to fit. A project with rules and no usage history gets its rules and no list.
 - **What counts as use.** akm counts `akm show` events by a user in the last 90 days, per project; search and curate results do not count. The plugin runs its own reads with `AKM_EVENT_SOURCE=unknown`, so loading the sections never raises their own ranking. Events recorded before akm attributed a project count for no project.
 - **Prompt-time curation** is unchanged and independent of this load.
 
 ### Automatic learning proposals
 
-The prompt hook uses a conservative local classifier as a fast first pass. Explicit `remember:` requests, durable preferences, guardrails, and corrections above the confidence floor are redacted, deduplicated per project, then sent to a detached proposal-authoring worker. The worker submits an `instruction` or `memory` through `akm proposal new`; it never edits `CLAUDE.md`, `AGENTS.md`, rules, commands, or project files. AKM's normal proposal commands own review, acceptance, rejection, and later improvement. Proposal authoring requires the AKM agent profile configured by `akm setup`; failures are retained in the proposal ledger and worker log. Learning is switched with `akm setup --learning on|off`, on this host and for all bundles. The plugin's **Automatic learning** option (`auto_learning`, Claude `/plugin` dialog) drives that switch: at session start, if the option is off the plugin runs `akm setup --learning off`, which also stops the scheduled `improve` run, and if the plugin turned learning off it turns it back on once the option is on again. With the option off, a hand-run `akm setup --learning on` is undone at the next session. It never turns learning on otherwise, and does nothing with an akm that does not report `learning`.
+The prompt hook uses a conservative local classifier as a fast first pass. Explicit `remember:` requests, durable preferences, guardrails, and corrections above the confidence floor are redacted, deduplicated per project, then sent to a detached proposal-authoring worker. The worker submits an `instruction` or `memory` through `akm proposal new`; it never edits `CLAUDE.md`, `AGENTS.md`, rules, commands, or project files. AKM's normal proposal commands own review, acceptance, rejection, and later improvement. Proposal authoring requires the AKM agent profile configured by `akm setup`; failures are retained in the proposal ledger and worker log. Learning is akm's own switch, `akm setup --learning on|off` (`improve.enabled` in `config.json`), on this host and for all bundles; the plugin reads it and never changes it: while it is off, nothing is captured, no proposal is authored and no session is extracted.
 
 Positive feedback is retained as evidence and continues to drive feedback for recently used assets, but praise by itself does not create a content-free proposal. Separately, short task intents are compared within the project. A similar intent must occur in at least three distinct sessions before the plugin submits a cross-platform `skill` proposal. Exact and near-duplicate submissions are suppressed by the durable ledger under the plugin state directory.
 
@@ -105,13 +105,13 @@ Codex gets:
 
 On macOS and Linux the hooks go through `hooks/akm-hook.sh`; on Windows each hook's `commandWindows` runs `hooks/akm-hook.ts` directly (see [Windows](#windows)).
 
-**No tool feedback.** Codex's `PostToolUse` gives a Bash command's output but no exit status, and it has no failure event, so a failed `akm` command cannot be told from a successful one. The Codex manifest registers no `PostToolUse` hook (nor any other hook of the Lifecycle Hooks table), and the hook submits no feedback under Codex whatever `AKM_AUTO_FEEDBACK` says: nothing is recorded as used, and no feedback is sent, neither after a tool call nor for a "that worked". Record feedback yourself, with `akm feedback` or the `akm-feedback` command.
+**No tool feedback.** Codex's `PostToolUse` gives a Bash command's output but no exit status, and it has no failure event, so a failed `akm` command cannot be told from a successful one. The Codex manifest registers no `PostToolUse` hook (nor any other hook of the Lifecycle Hooks table), and the hook submits no feedback under Codex whatever `plugins.autoFeedback` says: nothing is recorded as used, and no feedback is sent, neither after a tool call nor for a "that worked". Record feedback yourself, with `akm feedback` or the `akm-feedback` command.
 
 **Updates.** Codex updates the plugin by itself every time it starts; `codex plugin marketplace upgrade akm-plugins` does it on demand. A release that changes a hook's command shows that hook as modified in `/hooks`, and it does not run until you trust it again.
 
 On macOS and Linux each hook's command starts with `[ -f "${PLUGIN_ROOT}/hooks/akm-hook.sh" ] || exit 0;`. In Codex 0.147 the start-up marketplace upgrade runs while the first session after a plugin release is being created: that session starts with the previous version's absolute hook path, and the upgrade then deletes that version's directory. `sh` on the missing script exits 2, which Codex counts as a block (`SessionStart` Failed, and the first prompt Blocked and never sent). With the guard that session simply runs without the AKM hooks. Codex 0.159 refreshes its hook runtime after the upgrade and is not affected. The guard protects the upgrade *from* a release that has it, so an install that predates the guard still hits the race once more. Windows has no guard: `bun` on a missing script exits 1, which Codex reports as Failed, not Blocked.
 
-Codex has no equivalent of the `/plugin` configuration dialog, so set the `AKM_*` variables below in the environment Codex starts in. The Codex hooks keep their state in Codex's plugin data directory (`$CODEX_HOME/plugins/data/akm-akm-plugins`, normally under `~/.codex`) and label their records `codex`, so Codex's state stays out of `$XDG_STATE_HOME/akm-claude`. On macOS and Linux the command sets `AKM_PLUGIN_STATE_DIR` and `AKM_PLUGIN_HARNESS=codex` in front of `sh`; on Windows `commandWindows` passes `--harness=codex` and the hook takes the directory from the `PLUGIN_DATA` variable Codex exports to it, since a `NAME=value command` prefix is not PowerShell or cmd.exe syntax. The files listed under Troubleshooting appear in that directory.
+Codex reads the same `plugins` section of akm's `config.json` as every other build ([Settings](#settings)). The Codex hooks keep their state in Codex's plugin data directory (`$CODEX_HOME/plugins/data/akm-akm-plugins`, normally under `~/.codex`) and label their records `codex`, so Codex's state stays out of `$XDG_STATE_HOME/akm-claude`. Both platforms' commands pass `--harness=codex`; the hook takes the directory from the `PLUGIN_DATA` variable Codex exports to it. The files listed under Troubleshooting appear in that directory.
 
 **Blocking destructive commands.** No hook gates `akm` commands ([Locking down destructive commands](#locking-down-destructive-commands)); Codex's own rules do. A `prefix_rule` in `~/.codex/rules/default.rules` matches the start of a command and either asks first (`prompt`) or refuses it (`forbidden`, with the justification shown to the model):
 
@@ -179,64 +179,45 @@ Use Claude Code's own permission rules in `~/.claude/settings.json`:
 
 Independently of any permission rule, the AKM skill instructs the agent to get explicit user approval before invoking a destructive verb — `proposal accept`, `proposal reject`, `proposal revert`, `sync --push`, `remove`, env/secret writes, `task add` / `task run`, `upgrade`, `update --all`, `config set`.
 
-## Environment
+## Settings
 
-Every kill switch below is opt-out and reads the same way: only the literal `0` disables it. Any other value — including `false` — leaves the feature on.
+The plugin has no settings of its own and no environment variables for them. Its settings are the `plugins` section of akm's own `config.json` (the file `akm config` edits: `AKM_CONFIG_DIR`, else `$XDG_CONFIG_HOME/akm`, else `~/.config/akm`; `%APPDATA%\akm` on Windows). The hooks read that file directly; no `akm` process is started for it. The Claude Code `/plugin` configuration dialog is gone, and Codex and the two OpenCode plugins read the same file. Every key is optional:
 
-The most useful settings are also exposed in Claude Code's `/plugin` configuration dialog: **AKM bundle directory**, **Record feedback automatically**, **Automatic learning** (`auto_learning`), **Curated results per prompt**, and **Refresh the AKM index when a session ends**. Four of the five are aliases for `AKM_BUNDLE_DIR`, `AKM_AUTO_FEEDBACK`, `AKM_CURATE_LIMIT`, and `AKM_INDEX_ON_SESSION_END`; `auto_learning` has no variable, it drives `akm setup --learning`. For the four, an environment variable you set yourself always wins over the dialog, so exporting one of these pins it regardless of what the UI shows.
+```jsonc
+{
+  "plugins": {
+    "autoFeedback": true,          // automatic feedback, "that worked" included. Always off under Codex.
+    "indexOnSessionEnd": true,     // `akm index` at session end; false on CI runners and low-power machines
+    "curateLimit": 5,              // curated results per prompt or session, 1 to 25
+    "curateTimeoutSeconds": 8,     // how long a hook waits for `akm`. The `akm --version` probe has its own fixed cap (3 s, 10 s on Windows).
+    "pendingProposalTimeoutSeconds": 2,
+    "redact": { "pii": false, "highEntropy": false }
+  }
+}
+```
 
-### Core
+Background learning (capturing corrections and preferences, and the `proposal extract` at session end) is akm's own switch, `improve.enabled`: `akm setup --learning off` turns it off for the whole host, `akm setup --learning on` back on.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. Set this. When it is unset the hooks discover the bundle by spawning `akm info`, which adds a subprocess to every file-tool hook that sees a concept-like token; setting it removes that spawn entirely. The session-start hook tells you to set it when no bundle is configured. |
-| `AKM_LOCAL_BUILD_CLI` | unset | Absolute path to a locally built AKM CLI entry point. |
-| `AKM_PACKAGE_REF` | `akm-cli@>=0.10.261111-0` | Package specification shown when AKM is unavailable. It is never installed automatically. |
-| `AKM_PLUGIN_STATE_DIR` | `$XDG_STATE_HOME/akm-claude` (`~/.local/state/akm-claude`; under Codex, its plugin data directory) | Local plugin state directory. The home directory is `os.homedir()`, so on Windows it is `%USERPROFILE%\.local\state\akm-claude`. |
-| `AKM_PLUGIN_HARNESS` | `claude-code` | Host the hook labels its records with. The Codex manifest sets it to `codex` on macOS and Linux (on Windows it passes `--harness=codex` instead); leave it alone otherwise. |
-| `AKM_AUTO_CURATE` | `1` | Set to `0` to disable prompt curation (`UserPromptSubmit`) and the session-start curate call. Feedback logging, memory-intent logging, and retrospective feedback keep working, and so does the session rules and most-used assets load. |
-| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback, including retrospective ("that worked") capture. Always off under Codex. |
-| `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the `akm index` refresh at session end. Useful on CI runners and low-power machines; the periodic `akm improve` pass remains the backstop. |
+A wrong value is ignored with a warning (the default applies): one line in `session.log` and in the `SessionStart` message. A config file that does not parse leaves every setting at its default. `akm config set plugins.curateLimit 8` writes a key.
+
+**Redaction cannot silently turn off.** `redact.pii` (credit-card-shaped digit runs, US SSNs, phone numbers) and `redact.highEntropy` (long base64/hex-shaped strings, 32 characters or more) are off when the key is absent, because both over-redact ordinary logs. An explicit `false` turns one off. A value that is not `true` or `false`, or a config file that exists but cannot be read, leaves redaction **on** and says so. The retired `AKM_REDACT_PII` and `AKM_REDACT_HIGH_ENTROPY` variables are not settings any more, but while one is set and its config key is absent that redaction stays on, with a warning to set the key: moving to the config file never drops redaction.
+
+The other variables the plugin reads are not settings:
+
+| Variable | Purpose |
+| --- | --- |
+| `AKM_CONFIG_DIR` | Where akm's `config.json` is (akm's own location variable). |
+| `AKM_BUNDLE_DIR` | The AKM bundle root (akm's own variable). Set it when you can: without it the hooks discover the bundle by spawning `akm info`, which adds a subprocess to every file-tool hook that sees a concept-like token. |
+| `AKM_LOCAL_BUILD_CLI` | Absolute path to a locally built AKM CLI entry point. |
+| `AKM_PACKAGE_REF` | Package specification shown when AKM is unavailable (`akm-cli@>=0.10.261111-0`). It is never installed automatically. |
+
+The retired setting variables (`AKM_AUTO_FEEDBACK`, `AKM_INDEX_ON_SESSION_END`, `AKM_CURATE_LIMIT`, `AKM_CURATE_TIMEOUT`, `AKM_PENDING_PROPOSAL_TIMEOUT`, `AKM_AUTO_LEARNING`, `AKM_AUTO_MEMORY`) are ignored, and a warning names the key that replaces each. Everything else that used to be a variable is a constant now: prompt curation is always on; the curate score floor and `--type` filter are gone; the context budget is 4000 characters; state files are capped at 1 MiB; the cached quality classification lives 24 hours; automatic feedback needs a classifier confidence of 0.6, a learning proposal 0.75 and a skill proposal three distinct sessions; the proposal worker is capped at 10 minutes; the retrospective vocabulary is fixed.
+
+Hooks keep their state under `$XDG_STATE_HOME/akm-claude` (`~/.local/state/akm-claude`; `%USERPROFILE%\.local\state\akm-claude` on Windows), and under Codex in its plugin data directory (`PLUGIN_DATA`), labelled `codex` by the `--harness=codex` flag in the Codex manifest's commands.
 
 ### Scope
 
-Every `akm` call a hook makes runs in the session's directory (`CLAUDE_PROJECT_DIR` when set, otherwise the hook payload's `cwd`), so akm resolves the user's project from the `projects` entry in its own config.
-
-Two labels are attached to the plugin's own lifecycle records in `events.jsonl`, next to the session ID:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AKM_REPO` | unset | Repository label. Always recorded. |
-| `AKM_BRANCH` | unset | Branch label. Always recorded. |
-
-### Tuning
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AKM_CURATE_LIMIT` | `5` | Maximum curated results requested per prompt or session. |
-| `AKM_CURATE_TIMEOUT` | `8` | Timeout in seconds for hook AKM calls. The session-start `akm --version` probe uses a fixed, much tighter cap instead: 3 seconds, or 10 on Windows, where akm is `akm.cmd` and the first call after boot is slow. |
-| `AKM_CURATE_MIN_SCORE` | `0` (disabled) | Minimum per-item relevance score to keep a curated result. `0` preserves the long-standing behavior: whatever `akm curate` returns (up to `AKM_CURATE_LIMIT` results) is shown, unfiltered. Set it above `0` and two things change together: items below the floor are dropped — if none survive, no curated block is written at all, rather than showing weak results because there was nothing better — and the surviving items are reordered so locally authored assets (lesson, memory, knowledge, skill, command, agent, instruction, rule, fact, workflow, task, env, secret) come before imported snapshots (website, wiki, or any other adapter-defined type). `akm curate`'s score scale is not documented as a stable contract (see akm's `STABILITY.md`), so there is no universally "right" value here — start from `curate --format json` output on your own stash and see what your strong hits score. |
-| `AKM_CURATE_TYPE` | unset | Passthrough for `akm curate --type`. Narrows curation to a single exact asset type instead of competing against every type for the same `AKM_CURATE_LIMIT` slots. |
-| `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum length of the text a hook injects into the model's context. At session start the primer, warnings, pending proposals and active workflows come first, then the project's rules and most-used list, then curated results, all inside this budget; the session-start curated block is added in whole hits, and left out when not even one fits (rules keep priority); curated results are otherwise injected directly and trimmed to it; the full, untrimmed results are also written to a file under the plugin state dir for follow-up and debugging. The user-visible `systemMessage` channel is not subject to it. |
-| `AKM_PLUGIN_MAX_LOG_BYTES` | `1048576` | Size cap for each append-only state file. Past the cap the newest half is retained. |
-| `AKM_PLUGIN_QUALITY_TTL_MS` | `86400000` | Freshness window for the cached per-concept quality classification. Past it the `akm show` probe re-runs, so a `proposed` asset later promoted to `curated` stops being misclassified. |
-| `AKM_AUTO_FEEDBACK_MIN_CONFIDENCE` | `0.6` | Minimum classifier confidence before automatic feedback is actually submitted. Raise it to submit less. |
-| `AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE` | `0.75` | Minimum correction/preference confidence required before `akm proposal new` is dispatched. Lower-confidence signals remain in the local evidence log for native session extraction. |
-| `AKM_LEARNING_PROPOSAL_TIMEOUT_MS` | `600000` | Maximum runtime for the detached Claude proposal-authoring worker. |
-| `AKM_AUTO_SKILL_PROPOSALS` | `1` | Set to `0` to retain correction/preference proposals but disable recurring-intent skill proposals. |
-| `AKM_WORKFLOW_PROPOSAL_MIN_SESSIONS` | `3` | Number of distinct sessions that must express a similar task intent before a skill proposal is submitted. Values below `2` fall back to `3`. |
-| `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | positive confirmation phrases | Case-insensitive regex for retrospective confirmation. The default covers thanks/worked plus phrases such as “exactly right,” “great approach,” “love it,” and “nailed it.” Retune it for other languages or project jargon. An invalid regex falls back to the default rather than failing the hook. |
-| `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong\|failed\|broken\|didn't work\|did not work\|bad)\b` | Case-insensitive regex that vetoes retrospective credit, so a mixed message ("thanks, but it did not work") is skipped rather than misread as praise. Same fallback behavior. |
-
-### Redaction
-
-These three are read once, when the hook process imports the redaction module, so they must be set in the environment **before** the hook starts — exporting them mid-session has no effect. Both matchers are off by default because both over-redact on ordinary logs.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AKM_REDACT_HIGH_ENTROPY` | unset (off) | Set to `1` to redact long base64/hex-shaped strings that look like secrets. |
-| `AKM_REDACT_ENTROPY_MIN_LEN` | `32` | Minimum length for the high-entropy matcher. Values below `32` are clamped to `32`. No effect unless `AKM_REDACT_HIGH_ENTROPY=1`. |
-| `AKM_REDACT_PII` | unset (off) | Set to `1` to redact credit-card-shaped digit runs, US SSNs, and phone numbers. |
+Every `akm` call a hook makes runs in the session's directory (`CLAUDE_PROJECT_DIR` when set, otherwise the hook payload's `cwd`), so akm resolves the user's project from the `projects` entry in its own config. The plugin's lifecycle records in `events.jsonl` carry the session ID and the project.
 
 ## Troubleshooting
 

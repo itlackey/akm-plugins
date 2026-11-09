@@ -5,11 +5,13 @@ import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
 import {
   IS_WINDOWS,
+  LEARNING_OFF,
   codexEffectiveCommand,
   codexShells,
   hostEnv,
   installScriptedAkm,
   makeBinDir,
+  makeConfigDir,
   runClaudeHandler,
   sandboxPath,
   substituteCodexPlaceholders,
@@ -27,6 +29,7 @@ import {
 // there. POSIX CI also runs `commandWindows` through sh: it is plain `bun ...`.
 
 const repoRoot = path.resolve(import.meta.dir, "..")
+const LEARNING_OFF_CONFIG_DIR = makeConfigDir(LEARNING_OFF)
 const pluginDir = path.join(repoRoot, "claude")
 const codexManifestPath = path.join(pluginDir, ".codex-plugin/plugin.json")
 const claudeManifestPath = path.join(pluginDir, ".claude-plugin/plugin.json")
@@ -218,7 +221,7 @@ describe("Codex plugin metadata", () => {
       // Codex runs on macOS and Linux, and Codex hashes it (not `commandWindows`): any edit to it asks every Codex
       // user to trust the hook again, and real-hosts.test.ts pins the hashes this text produces.
       expect(handler.command).toBe(
-        `[ -f "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ] || exit 0; AKM_PLUGIN_HARNESS=codex AKM_PLUGIN_STATE_DIR="\${PLUGIN_DATA}" sh "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ${mode}`,
+        `[ -f "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ] || exit 0; sh "\${PLUGIN_ROOT}/hooks/akm-hook.sh" ${mode} --harness=codex`,
       )
       expect(hookSource).toContain(`case "${mode}":`)
       const claudeHandler = claude.hooks[event][0].hooks[0]
@@ -397,8 +400,8 @@ describe("Codex hook runtime", () => {
         PLUGIN_DATA: sandbox.dataDir,
         CLAUDE_PLUGIN_ROOT: pluginDir,
         CLAUDE_PLUGIN_DATA: sandbox.dataDir,
-        // A test that opts into proposal submission sets this itself.
-        CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0",
+        // akm's learning switch is off; a test that opts into proposal submission passes a config of its own.
+        AKM_CONFIG_DIR: LEARNING_OFF_CONFIG_DIR,
         ...env,
       },
       (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name),
@@ -451,7 +454,7 @@ describe("Codex hook runtime", () => {
 
     // Everything the hook wrote is under PLUGIN_DATA, keyed by Codex's session id
     // and labelled Codex. events.jsonl in particular used to follow
-    // XDG_STATE_HOME/akm-claude whatever AKM_PLUGIN_STATE_DIR said.
+    // XDG_STATE_HOME/akm-claude.
     const events = readEvents(sandbox.dataDir)
     expect(events.map((event) => event.event)).toEqual(["prompt_recall"])
     expect(events.every((event) => event.harness === "codex")).toBe(true)
@@ -515,8 +518,8 @@ describe("Codex hook runtime", () => {
         "UserPromptSubmit",
         sandbox,
         { prompt, ...extra },
-        // Capture the signal, but never spawn a detached proposal worker.
-        { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined, AKM_AUTO_CURATE: "0", AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE: "1" },
+        // Learning on (no improve.enabled in the config).
+        { AKM_CONFIG_DIR: makeConfigDir({}) },
       )
       return {
         memoryLog: existsSync(path.join(sandbox.dataDir, "memory.log")) ? readFileSync(path.join(sandbox.dataDir, "memory.log"), "utf8") : "",
@@ -590,7 +593,7 @@ console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: {
       "UserPromptSubmit",
       sandbox,
       { prompt: "no, use pnpm not npm for this repository" },
-      { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined, AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0" },
+      { AKM_CONFIG_DIR: makeConfigDir({}) },
     )
 
     // The worker is detached: it writes learning_proposal once akm answers.
@@ -598,7 +601,7 @@ console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: {
       const all = readEvents(sandbox.dataDir)
       return all.some((event) => event.event === "learning_proposal") ? all : undefined
     })
-    expect(events.map((event) => event.event).sort()).toEqual(["learning_proposal", "learning_signal"])
+    expect(events.map((event) => event.event).filter((event) => event !== "prompt_recall").sort()).toEqual(["learning_proposal", "learning_signal"])
     expect(events.every((event) => event.harness === "codex")).toBe(true)
     expect(JSON.parse(readLines(path.join(sandbox.dataDir, "learning-signals.jsonl"))[0]).harness).toBe("codex")
     expect(readFileSync(sandbox.callLog, "utf8")).toMatch(/proposal new instruction use-pnpm-not-npm-repository-[a-f0-9]{8} --file /)
@@ -612,7 +615,7 @@ console.log(JSON.stringify({ ok: true, ref: "instructions/use-pnpm", proposal: {
     writeFileSync(inputPath, JSON.stringify(codexEvent("UserPromptSubmit", sandbox.project, { prompt: "help me plan the akm release rollout this afternoon" })))
 
     // Claude's own manifest handler, run as Claude Code runs it, in an environment that also carries the Codex
-    // plugin variables: no --harness and no AKM_PLUGIN_*, so PLUGIN_DATA must not become its state directory.
+    // plugin variables: no --harness, so PLUGIN_DATA must not become its state directory.
     const result = runClaudeHandler(handler, { pluginRoot: pluginDir, cwd: sandbox.project, env: codexEnv(sandbox), stdin: Bun.file(inputPath) })
 
     expect(result.exitCode).toBe(0)

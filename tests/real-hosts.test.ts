@@ -14,14 +14,14 @@ import { IS_WINDOWS, hostEnv, makeBinDir, sandboxPath } from "./host-runtime"
 // - `codex exec` runs its SessionStart and UserPromptSubmit hooks before the model request, and the model
 //   provider here is a dead local port, so the request is refused on the machine.
 //
-// Skipped unless AKM_REAL_CLAUDE_BIN / AKM_REAL_CODEX_BIN point at the host's executable (the Windows CI job installs
-// both from npm; the Linux jobs in tests.yml and release.yml install Codex). The state they write goes under a temp
+// Skipped unless `claude` / `codex` is on PATH (the Windows CI job installs both from npm and adds them to PATH; the
+// Linux jobs in tests.yml and release.yml install Codex the same way). The state they write goes under a temp
 // tree; nothing outside it is read or written.
 
 const repoRoot = path.resolve(import.meta.dir, "..")
 const fixtureStash = path.join(repoRoot, "evals/fixtures/stash")
-const claudeBin = process.env.AKM_REAL_CLAUDE_BIN
-const codexBin = process.env.AKM_REAL_CODEX_BIN
+const claudeBin = Bun.which("claude") ?? undefined
+const codexBin = Bun.which("codex") ?? undefined
 const claudeManifest = JSON.parse(readFileSync(path.join(repoRoot, "claude/.claude-plugin/plugin.json"), "utf8"))
 const claudeHandlerCount = Object.values(claudeManifest.hooks as Record<string, Array<{ hooks: unknown[] }>>).reduce(
   (total, groups) => total + groups.reduce((sum, group) => sum + group.hooks.length, 0),
@@ -34,8 +34,8 @@ const claudeHandlerCount = Object.values(claudeManifest.hooks as Record<string, 
 // 0.159.0 and 0.159.3; 0.160.0 hashes with the same sources (hooks/src/engine/discovery.rs, config/src/fingerprint.rs).
 const TRUST_HASHES = {
   posix: {
-    sessionStart: "sha256:179686e716a7d991572fa95bdb62da4ba36bdf04ccd5b51d9a06316270b7708f",
-    userPromptSubmit: "sha256:fd4b7b7159980e2bba6c702636a67a6e808c5e03236ab15cf1b998d88520a3b5",
+    sessionStart: "sha256:6c7c4ebaa7d4f77513de3a63794d72db52f2736fed74ba481768b31b491c22a5",
+    userPromptSubmit: "sha256:a76719185323239f40679d64d0ba75121428435cac1c83963c54793bb1309637",
   },
   windows: {
     sessionStart: "sha256:e7e57212c07fed2b3a1379af5e9673427775519d8fc3a0a7956037eb63dc0e2b",
@@ -216,7 +216,7 @@ describe.skipIf(!codexBin)("the real Codex", () => {
       expect(hooks.every((hook) => hook.trustStatus === "untrusted")).toBe(true)
       expect(Object.fromEntries(hooks.map((hook) => [hook.eventName, hook.currentHash]))).toEqual(TRUST_HASHES[IS_WINDOWS ? "windows" : "posix"])
       for (const hook of hooks) {
-        expect(hook.command).toContain(IS_WINDOWS ? "--harness=codex" : "AKM_PLUGIN_HARNESS=codex")
+        expect(hook.command).toContain("--harness=codex")
         expect(hook.command).not.toContain("${")
       }
 

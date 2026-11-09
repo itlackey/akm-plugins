@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createRequire } from "node:module"
 import type { PluginInput } from "@opencode-ai/plugin"
+import { LEARNING_OFF, makeConfigDir } from "./host-runtime"
 
 // The plugin captures its structured-event log path at module load
 // (OPENCODE_EVENT_LOG = getEventLogPath("opencode")), so this redirect has to
@@ -13,7 +14,6 @@ import type { PluginInput } from "@opencode-ai/plugin"
 // tests would be appending to — the developer's real ~/.local/state tree.
 const eventStateDir = mkdtempSync(path.join(tmpdir(), "akm-opencode-test-state-"))
 process.env.XDG_STATE_HOME = eventStateDir
-process.env.AKM_AUTO_SKILL_PROPOSALS = "1"
 const eventLogPath = path.join(eventStateDir, "akm-opencode", "events.jsonl")
 
 const realChildProcess = await import("node:child_process")
@@ -93,17 +93,11 @@ function decodeReadArgv(args: string[]): { verb: string; input: Record<string, u
   if (args.includes("--include-proposed")) input.includeProposed = true
   return { verb, input, pack: flag("--pack") ? Number(flag("--pack")) : undefined }
 }
-// What `akm info` reports as learning.on; undefined is an akm that does not report it. `akm setup --learning` flips it.
-let mockLearning: boolean | undefined
 const mockExecFile = mock((_command: string, args: string[], options: any, callback: (...cb: any[]) => void) => {
   execFileCalls.push({ args, env: options?.env ?? {}, cwd: options?.cwd })
   const decoded = decodeReadArgv(args)
   const run = async (): Promise<unknown> => {
-    if (decoded.verb === "info") return mockLearning === undefined ? { ok: true } : { ok: true, learning: { on: mockLearning } }
-    if (decoded.verb === "setup") {
-      mockLearning = args[args.indexOf("--learning") + 1] === "on"
-      return { ok: true, learning: { on: mockLearning } }
-    }
+    if (decoded.verb === "info") return { ok: true }
     if (decoded.verb === "search") {
       const input = { ...decoded.input }
       if (options?.env?.AKM_EVENT_SOURCE === "audit") (input as any).skipLogging = true
@@ -374,8 +368,9 @@ describe("akm-opencode plugin", () => {
       expect(signalLog).toContain('"kind":"preference"')
     })
 
-    it("skips the proposal quietly while akm reports learning off: nothing reserved, submitted or failed", async () => {
-      mockLearning = false
+    it("skips the proposal quietly while akm's learning switch (improve.enabled) is off: nothing reserved, submitted or failed", async () => {
+      const previous = process.env.AKM_CONFIG_DIR
+      process.env.AKM_CONFIG_DIR = makeConfigDir(LEARNING_OFF)
       try {
         const client = createMockClient()
         const hooks = await AkmPlugin(createPluginInput(client))
@@ -384,7 +379,6 @@ describe("akm-opencode plugin", () => {
           { parts: [{ type: "text", text: "I prefer Deno for scripts in this repository" }] } as any,
         )
         await Bun.sleep(80)
-        expect(execFileCalls.some((c) => c.args[0] === "info")).toBe(true)
         expect(mockSpawn.mock.calls.some(([, args]: any[]) => Array.isArray(args) && args[0] === "proposal" && args[1] === "new")).toBe(false)
         const ledgerPath = path.join(eventStateDir, "akm-opencode", "learning-proposals.jsonl")
         const ledger = existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8") : ""
@@ -392,21 +386,15 @@ describe("akm-opencode plugin", () => {
         const messages = (client.app.log as any).mock.calls.map(([call]: any[]) => call.body.message)
         expect(messages.some((m: string) => m.startsWith("AKM learning proposal"))).toBe(false)
       } finally {
-        mockLearning = undefined
+        process.env.AKM_CONFIG_DIR = previous
       }
     })
 
     it("never runs `akm setup --learning`: it only follows akm's switch", async () => {
-      mockLearning = true
-      try {
-        const hooks = await AkmPlugin(createPluginInput())
-        await hooks.event!({ event: { type: "session.created", properties: { sessionID: "no-setup" } } } as any)
-        await Bun.sleep(80)
-        expect(execFileCalls.some((c) => c.args[0] === "setup")).toBe(false)
-        expect(mockLearning).toBe(true)
-      } finally {
-        mockLearning = undefined
-      }
+      const hooks = await AkmPlugin(createPluginInput())
+      await hooks.event!({ event: { type: "session.created", properties: { sessionID: "no-setup" } } } as any)
+      await Bun.sleep(80)
+      expect(execFileCalls.some((c) => c.args[0] === "setup")).toBe(false)
     })
 
     it("unwraps the JSON-string text shape emitted by opencode run before classifying", async () => {
@@ -1220,6 +1208,72 @@ describe("akm-opencode plugin", () => {
     })
   })
 
+  describe("settings from akm's config.json", () => {
+    /** Build the plugin with `config` as the akm config.json it reads, and put the environment back. */
+    async function withConfig<T>(config: Record<string, unknown>, run: (hooks: any) => Promise<T>): Promise<T> {
+      const previous = process.env.AKM_CONFIG_DIR
+      process.env.AKM_CONFIG_DIR = makeConfigDir(config)
+      try {
+        return await run(await AkmPlugin(createPluginInput()))
+      } finally {
+        process.env.AKM_CONFIG_DIR = previous
+      }
+    }
+    const prompt = "fix the flaky retry logic in the deploy pipeline. ".repeat(10)
+
+    it("plugins.curateLimit is the number of results automatic recall asks curate for", async () => {
+      await withConfig({ plugins: { curateLimit: 9 } }, async (hooks) => {
+        await hooks["chat.message"]!({ sessionID: "limit-9", messageID: "message-1", agent: "build" } as any, { parts: [{ type: "text", text: prompt }] } as any)
+        await waitFor(() => (curateCalls.length > 0 ? true : undefined))
+      })
+      expect(curateCalls.at(-1)?.options).toEqual(expect.objectContaining({ limit: 9, format: "text" }))
+    })
+
+    it("plugins.indexOnSessionEnd=false skips the session-end `akm index`", async () => {
+      const indexCalls = () => mockExecFileSync.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === "index").length
+      await withConfig({ plugins: { indexOnSessionEnd: false } }, (hooks) =>
+        hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "index-off" } } } as any))
+      expect(indexCalls()).toBe(0)
+    })
+
+    it("plugins.autoFeedback=false credits nothing when the user says it worked, and a wrong value keeps the default", async () => {
+      const positive = () => mockSpawn.mock.calls.filter(([, args]: any[]) => Array.isArray(args) && args.includes("feedback") && args.includes("--positive")).length
+      const confirm = async (config: Record<string, unknown>, sessionID: string) => {
+        await withConfig(config, async (hooks) => {
+          await hooks["tool.execute.after"](
+            { tool: "akm_show", sessionID, callID: "call-show", args: { ref: "skills/review" }, directory: "/tmp/project" },
+            { output: JSON.stringify({ ok: true, ref: "skills/review", content: "..." }), title: "akm_show" },
+          )
+          await hooks["chat.message"]!({ sessionID, messageID: "message-1", agent: "build" } as any, { parts: [{ type: "text", text: "thanks, that worked" }] } as any)
+        })
+      }
+      mockSpawn.mockClear()
+      await confirm({ plugins: { autoFeedback: false } }, "feedback-off")
+      expect(positive()).toBe(0)
+      await confirm({ plugins: { autoFeedback: "off" } }, "feedback-bad-value")
+      expect(positive()).toBe(1)
+    })
+
+    it("a wrong or retired setting is said once in the host's log, not thrown", async () => {
+      const previousFeedback = process.env.AKM_AUTO_FEEDBACK
+      process.env.AKM_AUTO_FEEDBACK = "0"
+      const previous = process.env.AKM_CONFIG_DIR
+      process.env.AKM_CONFIG_DIR = makeConfigDir({ plugins: { curateLimit: 99 } })
+      try {
+        const client = createMockClient()
+        await AkmPlugin(createPluginInput(client))
+        await Bun.sleep(20)
+        const messages = (client.app.log as any).mock.calls.map(([call]: any[]) => call.body.message as string)
+        expect(messages.filter((m) => m.includes("plugins.curateLimit must be a whole number from 1 to 25"))).toHaveLength(1)
+        expect(messages.filter((m) => m.includes("AKM_AUTO_FEEDBACK is retired"))).toHaveLength(1)
+      } finally {
+        process.env.AKM_CONFIG_DIR = previous
+        if (previousFeedback === undefined) delete process.env.AKM_AUTO_FEEDBACK
+        else process.env.AKM_AUTO_FEEDBACK = previousFeedback
+      }
+    })
+  })
+
   describe("background akm invocations", () => {
     it("warms the index with a detached spawn instead of a shell command string", async () => {
       const hooks = await AkmPlugin(createPluginInput())
@@ -1249,7 +1303,7 @@ describe("akm-opencode plugin", () => {
       expect(indexCalls()).toBe(0)
 
       // session.deleted is the closest OpenCode analogue to Claude's SessionEnd,
-      // and the reindex is opt-OUT there (AKM_INDEX_ON_SESSION_END=0 disables it).
+      // and the reindex is opt-OUT there (`plugins.indexOnSessionEnd: false` disables it).
       await hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "index-gate-1" } } } as any)
       expect(indexCalls()).toBe(1)
     })
@@ -1501,15 +1555,6 @@ describe("akm-opencode plugin", () => {
       "</content>",
     ].join("\n")
 
-    // The gate no longer defaults to `enforce` (#99 review: stage 1 of the
-    // rollout is ledger-only), so a test that wants blocking has to ask for it
-    // by name. Passing undefined exercises the shipped default.
-    function useMode(mode: string | undefined) {
-      if (mode === undefined) delete process.env.AKM_WRITE_GATE
-      else process.env.AKM_WRITE_GATE = mode
-      AkmPlugin.__resetWriteGateForTests()
-    }
-
     function clearEventLog() {
       // The plugin creates the state dir lazily on its first event, so a
       // filtered run (`bun test -t …`) can reach here before it exists.
@@ -1566,7 +1611,6 @@ describe("akm-opencode plugin", () => {
     }
 
     beforeEach(() => {
-      delete process.env.AKM_WRITE_GATE
       AkmPlugin.__resetWriteGateForTests()
       clearEventLog()
     })
@@ -1843,26 +1887,6 @@ describe("akm-opencode plugin", () => {
 
     // --- message ------------------------------------------------------------
 
-    it("names the file, the token, the ref and the asset's own one-liner", () => {
-      // The description is inlined ON PURPOSE and must not be trimmed to "force"
-      // a tool call: it already contains `spec.scaling`, the exact nesting the
-      // failing trajectory invented. Comply and engagement moves; refuse and
-      // retry and the answer was handed over anyway. Reward is the objective.
-      const message = AkmPlugin.__formatGateMessage(
-        "/app/service.yaml",
-        "inkwell",
-        "skills/inkwell",
-        INKWELL_DESCRIPTION,
-      )
-      expect(message.startsWith("AKM:")).toBe(true)
-      expect(message).toContain("/app/service.yaml")
-      expect(message).toContain("`inkwell`")
-      expect(message).toContain("skills/inkwell")
-      expect(message).toContain("spec.scaling")
-      expect(message).toContain("akm_show")
-      expect(message.length).toBeLessThanOrEqual(600)
-    })
-
     // --- hook behaviour -----------------------------------------------------
 
     it("blocks the first edit to an identified file and releases on the retry", async () => {
@@ -1870,20 +1894,18 @@ describe("akm-opencode plugin", () => {
       // returned, so the model can always get its edit through by repeating it.
       // A latch conditioned on compliance would be a livelock, which is a worse
       // failure than the one this fixes.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-release")
 
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-release"), beforeOutput())).rejects.toThrow(/^AKM:/)
+      await hooks["tool.execute.before"]!(beforeInput("gate-release"), beforeOutput())
       await expect(hooks["tool.execute.before"]!(beforeInput("gate-release"), beforeOutput())).resolves.toBeUndefined()
-      expect(gateReasons()).toEqual(["fired", "latched"])
+      expect(gateReasons()).toEqual(["observe", "latched"])
     })
 
     // The gate reads the search list under `results`, or the older `hits` / `items`, and searches with --detail normal.
     for (const key of ["results", "hits", "items"]) {
       it(`resolves the format asset from a search list under ${key}`, async () => {
-        useMode("enforce")
         mockAkmSearch.mockImplementation(async () => ({
           schemaVersion: 1,
           bundleDir: "/tmp/akm-bundle",
@@ -1892,30 +1914,13 @@ describe("akm-opencode plugin", () => {
         }))
         const hooks = await AkmPlugin(createPluginInput())
         await readServiceYaml(hooks, `gate-key-${key}`)
-        await expect(hooks["tool.execute.before"]!(beforeInput(`gate-key-${key}`), beforeOutput())).rejects.toThrow(/skills\/inkwell/)
+        await hooks["tool.execute.before"]!(beforeInput(`gate-key-${key}`), beforeOutput())
+        expect(writeGateEvents().at(-1)!.refs).toEqual(["skills/inkwell"])
         const gateSearch = execFileCalls.find((c) => c.args[0] === "search" && c.args.includes("inkwell"))
         expect(gateSearch?.args).toEqual(expect.arrayContaining(["--detail", "normal"]))
         expect(gateSearch?.args).not.toContain("agent")
       })
     }
-
-    it("throws out of the hook rather than swallowing the throw in the failure wrapper", async () => {
-      // Every hook body in opencode/index.ts wraps itself in
-      // `try { … } catch { logHookFailure }` by convention. A throw placed
-      // inside that wrapper resolves instead of rejecting: the gate never fires
-      // and the ledger stays clean. That is the defect this file's own
-      // convention would otherwise have caused.
-      useMode("enforce")
-      stubInkwellHit()
-      const client = createMockClient()
-      const hooks = await AkmPlugin(createPluginInput(client))
-      await readServiceYaml(hooks, "gate-throw")
-
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-throw"), beforeOutput())).rejects.toThrow(/^AKM:/)
-      expect(client.app.log).not.toHaveBeenCalledWith(expect.objectContaining({
-        body: expect.objectContaining({ message: "AKM tool.execute.before hook failed" }),
-      }))
-    })
 
     it("never blocks an edit because of a fault inside the plugin", async () => {
       // The other half of the throw placement: a plugin bug must cost a log
@@ -1936,7 +1941,6 @@ describe("akm-opencode plugin", () => {
     it("does not re-block a model that already opened the asset", async () => {
       // Re-blocking the compliant model for doing exactly what the gate asked
       // is the one behaviour that would make this feature indefensible.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-shown")
@@ -1950,14 +1954,13 @@ describe("akm-opencode plugin", () => {
       expect(gateReasons()).toEqual(["already-shown"])
     })
 
-    it("ships in observe, not enforce, when AKM_WRITE_GATE is unset", async () => {
+    it("records the would-fire and blocks nothing", async () => {
       // #99 review, decision 2: shipping the default as `enforce` inverts the
       // agreed rollout — it makes stage 2 the thing that lands. #99 measured the
       // problem, not this gate's effect on reward, so the shipped default is
       // ledger-only until a train-slice histogram of write_gate reasons argues
       // for promotion. Everything runs, the would-fire count is recorded, and
       // nothing is blocked.
-      useMode(undefined)
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-default")
@@ -1965,37 +1968,6 @@ describe("akm-opencode plugin", () => {
 
       await expect(hooks["tool.execute.before"]!(beforeInput("gate-default"), beforeOutput())).resolves.toBeUndefined()
       expect(gateReasons()).toEqual(["observe"])
-    })
-
-    it("refuses to run on an unrecognized AKM_WRITE_GATE value, and says so", async () => {
-      // #99 review: a typo'd value silently becoming the default produces a
-      // histogram in a mode nobody chose — the exact class of quiet wrongness
-      // this feature's ledger exists to make impossible. One loud error per
-      // process quoting what was typed, plus a typed skip on every call.
-      useMode("enfroce")
-      const client = createMockClient()
-      stubInkwellHit()
-      const hooks = await AkmPlugin(createPluginInput(client))
-      await readServiceYaml(hooks, "gate-typo")
-      clearEventLog()
-
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-typo"), beforeOutput())).resolves.toBeUndefined()
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-typo"), beforeOutput())).resolves.toBeUndefined()
-      await settle(10)
-
-      expect(gateReasons()).toEqual(["invalid-mode", "invalid-mode"])
-      const errors = client.app.log.mock.calls.filter(([call]: any[]) =>
-        call?.body?.message === "AKM write gate disabled: unrecognized AKM_WRITE_GATE value")
-      expect(errors).toHaveLength(1)
-      expect(errors[0]![0].body.extra.value).toBe("enfroce")
-
-      // And exactly one complaint: the "never acted" inert warning is correct
-      // here — the gate refused on purpose — so it must not fire and bury the
-      // error that actually explains why.
-      await hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "gate-typo" } } } as any)
-      await settle(10)
-      expect(client.app.log.mock.calls.filter(([call]: any[]) =>
-        call?.body?.message === "AKM write gate never acted")).toHaveLength(0)
     })
 
     // The two create hooks a real trajectory runs, in the order the runtime runs
@@ -2018,7 +1990,6 @@ describe("akm-opencode plugin", () => {
       // put the gate inside the fictional-create (96%) and real-create (29%)
       // cells, so movement there could no longer be read as noise and
       // attribution was confounded across three of the four measurement cells.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await createServiceYaml(hooks, "gate-create")
@@ -2044,7 +2015,6 @@ describe("akm-opencode plugin", () => {
       // The read-back is a REAL read envelope, so the extractor really does
       // record inkwell/v2 for this path — the insulation has to survive that,
       // not depend on the read failing to parse.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await createServiceYaml(hooks, "gate-create-readback")
@@ -2066,14 +2036,13 @@ describe("akm-opencode plugin", () => {
       // difference is that this session did not create the file. If the
       // create-path bookkeeping ever widens to cover an ordinary edit, the gate
       // goes silently inert and every ledger line still looks legitimate.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-preexisting")
       clearEventLog()
 
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-preexisting"), beforeOutput())).rejects.toThrow(/^AKM:/)
-      expect(gateReasons()).toEqual(["fired"])
+      await hooks["tool.execute.before"]!(beforeInput("gate-preexisting"), beforeOutput())
+      expect(gateReasons()).toEqual(["observe"])
     })
 
     it("does not carry a create record past the end of its session", async () => {
@@ -2082,7 +2051,6 @@ describe("akm-opencode plugin", () => {
       // for that path forever, and a record shared ACROSS sessions would disable
       // it for a session that never wrote the file — both are the gate going
       // silently inert while every ledger line still looks legitimate.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
 
@@ -2090,16 +2058,16 @@ describe("akm-opencode plugin", () => {
       await createServiceYaml(hooks, "gate-create-session-a")
       await readServiceYaml(hooks, "gate-create-session-b")
       clearEventLog()
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-create-session-b"), beforeOutput())).rejects.toThrow(/^AKM:/)
-      expect(gateReasons()).toEqual(["fired"])
+      await hooks["tool.execute.before"]!(beforeInput("gate-create-session-b"), beforeOutput())
+      expect(gateReasons()).toEqual(["observe"])
 
       // The same session id, reused after teardown: also not the writer.
       await hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "gate-create-session-a" } } } as any)
       await settle(10)
       await readServiceYaml(hooks, "gate-create-session-a")
       clearEventLog()
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-create-session-a"), beforeOutput())).rejects.toThrow(/^AKM:/)
-      expect(gateReasons()).toEqual(["fired"])
+      await hooks["tool.execute.before"]!(beforeInput("gate-create-session-a"), beforeOutput())
+      expect(gateReasons()).toEqual(["observe"])
     })
 
     it("insulates a file created by an edit with an empty oldString, read back afterwards", async () => {
@@ -2109,7 +2077,6 @@ describe("akm-opencode plugin", () => {
       // read it back to check itself, and edit it again. Without a create record
       // the read-back re-arms the gate on that path exactly as it did for
       // `write` (#99 review round 3).
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await hooks["tool.execute.before"]!(
@@ -2131,7 +2098,6 @@ describe("akm-opencode plugin", () => {
       // {filePath, oldString, newString}, and opencode 1.18 rejects an empty
       // oldString on an existing file outright ("oldString cannot be empty when
       // editing an existing file"), so an empty one is a create by construction.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-create-edit")
@@ -2149,7 +2115,6 @@ describe("akm-opencode plugin", () => {
       // plugin's own guidance points the model at, and its result already
       // carries the ref and the one-line description the gate message would have
       // handed over. Blocking a model that curated is blocking it for complying.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-curated")
@@ -2176,7 +2141,6 @@ describe("akm-opencode plugin", () => {
       // once. Only the last is the real/known-tool cell that is CORRECT at zero;
       // the middle one is the read-output parse bug stage 1 exists to catch, and
       // it is indistinguishable from a healthy ledger while they share a word.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
 
@@ -2266,26 +2230,6 @@ describe("akm-opencode plugin", () => {
       // did it never fire? An early `return` without an event destroys that
       // distinction, so every branch is enumerated here.
       const cases: Array<{ reason: string; status: string; run: () => Promise<void> }> = [
-        {
-          reason: "disabled",
-          status: "skipped",
-          run: async () => {
-            process.env.AKM_WRITE_GATE = "off"
-            AkmPlugin.__resetWriteGateForTests()
-            const hooks = await AkmPlugin(createPluginInput())
-            await hooks["tool.execute.before"]!(beforeInput("led-disabled"), beforeOutput())
-          },
-        },
-        {
-          reason: "invalid-mode",
-          status: "skipped",
-          run: async () => {
-            process.env.AKM_WRITE_GATE = "enfroce"
-            AkmPlugin.__resetWriteGateForTests()
-            const hooks = await AkmPlugin(createPluginInput())
-            await hooks["tool.execute.before"]!(beforeInput("led-invalid"), beforeOutput())
-          },
-        },
         {
           reason: "apply-patch-unsupported",
           status: "skipped",
@@ -2413,8 +2357,6 @@ describe("akm-opencode plugin", () => {
           reason: "observe",
           status: "ok",
           run: async () => {
-            process.env.AKM_WRITE_GATE = "observe"
-            AkmPlugin.__resetWriteGateForTests()
             stubInkwellHit()
             const hooks = await AkmPlugin(createPluginInput())
             await readServiceYaml(hooks, "led-observe")
@@ -2423,28 +2365,13 @@ describe("akm-opencode plugin", () => {
           },
         },
         {
-          reason: "fired",
-          status: "ok",
-          run: async () => {
-            process.env.AKM_WRITE_GATE = "enforce"
-            AkmPlugin.__resetWriteGateForTests()
-            stubInkwellHit()
-            const hooks = await AkmPlugin(createPluginInput())
-            await readServiceYaml(hooks, "led-fired")
-            clearEventLog()
-            await expect(hooks["tool.execute.before"]!(beforeInput("led-fired"), beforeOutput())).rejects.toThrow(/^AKM:/)
-          },
-        },
-        {
           reason: "latched",
           status: "skipped",
           run: async () => {
-            process.env.AKM_WRITE_GATE = "enforce"
-            AkmPlugin.__resetWriteGateForTests()
             stubInkwellHit()
             const hooks = await AkmPlugin(createPluginInput())
             await readServiceYaml(hooks, "led-latched")
-            await expect(hooks["tool.execute.before"]!(beforeInput("led-latched"), beforeOutput())).rejects.toThrow(/^AKM:/)
+            await hooks["tool.execute.before"]!(beforeInput("led-latched"), beforeOutput())
             clearEventLog()
             await hooks["tool.execute.before"]!(beforeInput("led-latched"), beforeOutput())
           },
@@ -2452,8 +2379,7 @@ describe("akm-opencode plugin", () => {
       ]
 
       for (const { reason, status, run } of cases) {
-        delete process.env.AKM_WRITE_GATE
-            AkmPlugin.__resetWriteGateForTests()
+        AkmPlugin.__resetWriteGateForTests()
         mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
           if (args?.[0] === "--version") return "akm 0.9.14\n"
           if (args?.[0] === "feedback" || args?.[0] === "remember") return JSON.stringify({ ok: true })
@@ -2468,31 +2394,19 @@ describe("akm-opencode plugin", () => {
       }
     }, 15_000)
 
-    it("honours the kill switch and the observe-mode shadow run", async () => {
-      // `off` is the term on which blocking a user's edit is defensible at all.
-      // `observe` is stage 1 of the rollout: everything runs, nothing is
-      // blocked, and the would-fire count is readable before an eval slice is
-      // spent. It still sets the latch, so an observe run counts the same
-      // (file, session) exactly once — the same number enforce mode would.
-      process.env.AKM_WRITE_GATE = "off"
-      AkmPlugin.__resetWriteGateForTests()
+    it("records what it would do and never blocks: the latch still counts a file once per session", async () => {
+      // The gate ships recording only: everything runs, nothing is blocked, and the would-fire
+      // count is readable before an eval slice is spent. It still sets the latch, so a run counts
+      // the same (file, session) exactly once.
       stubInkwellHit()
-      let hooks = await AkmPlugin(createPluginInput())
-      await readServiceYaml(hooks, "gate-off")
-      clearEventLog()
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-off"), beforeOutput())).resolves.toBeUndefined()
-      expect(gateReasons()).toEqual(["disabled"])
-
-      process.env.AKM_WRITE_GATE = "observe"
-      AkmPlugin.__resetWriteGateForTests()
-      stubInkwellHit()
-      hooks = await AkmPlugin(createPluginInput())
+      const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-observe")
       clearEventLog()
       await expect(hooks["tool.execute.before"]!(beforeInput("gate-observe"), beforeOutput())).resolves.toBeUndefined()
       await expect(hooks["tool.execute.before"]!(beforeInput("gate-observe"), beforeOutput())).resolves.toBeUndefined()
       expect(gateReasons()).toEqual(["observe", "latched"])
       expect(writeGateEvents()[0]!.outcome?.status).toBe("ok")
+      expect(writeGateEvents()[0]!.input?.mode).toBe("observe")
     })
 
     it("drops file identity, the latch and the shown-ref set on session teardown", async () => {
@@ -2550,7 +2464,6 @@ describe("akm-opencode plugin", () => {
       // search stub answers per query, because that is the only way the ladder's
       // ORDER is observable: a stub that answers the same way for both keys
       // passes whichever order the loop runs in.
-      useMode("enforce")
       mockAkmSearch.mockImplementation(async (input: Record<string, unknown>) => ({
         schemaVersion: 1,
         bundleDir: "/tmp/akm-bundle",
@@ -2563,8 +2476,8 @@ describe("akm-opencode plugin", () => {
       await readServiceYaml(hooks, "gate-ladder")
       clearEventLog()
 
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-ladder"), beforeOutput())).rejects.toThrow(/inkwell\/v2/)
-      expect(gateReasons()).toEqual(["fired"])
+      await hooks["tool.execute.before"]!(beforeInput("gate-ladder"), beforeOutput())
+      expect(gateReasons()).toEqual(["observe"])
       // The key that resolved is on the event. Without it an analyst reading the
       // stage-1 histogram cannot tell a specific declaration from a
       // bare-namespace fallback, which is the difference between a strong hit
@@ -2580,14 +2493,13 @@ describe("akm-opencode plugin", () => {
       // for it and the ladder falls through to the bare namespace. This is the
       // rung that carries all 7 inkwell service.yaml trajectories now that a tag
       // can no longer authorize the gate (#99 review round 3).
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-fallback")
       clearEventLog()
 
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-fallback"), beforeOutput())).rejects.toThrow(/^AKM:/)
-      expect(gateReasons()).toEqual(["fired"])
+      await hooks["tool.execute.before"]!(beforeInput("gate-fallback"), beforeOutput())
+      expect(gateReasons()).toEqual(["observe"])
       expect(writeGateEvents()[0]!.input?.token).toBe("inkwell")
     })
 
@@ -2599,7 +2511,6 @@ describe("akm-opencode plugin", () => {
       // stash contained. This drives the whole path — read, extract, search,
       // classify, gate — because the unit-level matcher test alone would still
       // pass if the token never reached the classifier.
-      useMode("enforce")
       stubSearch([{
         type: "knowledge",
         ref: "knowledge/compose-spec",
@@ -2630,8 +2541,8 @@ describe("akm-opencode plugin", () => {
       await expect(hooks["tool.execute.before"]!(
         beforeInput("gate-hyphen"),
         beforeOutput({ filePath: "/app/compose.yaml", oldString: "a", newString: "b" }),
-      )).rejects.toThrow(/compose-spec/)
-      expect(gateReasons()).toEqual(["fired"])
+      )).resolves.toBeUndefined()
+      expect(gateReasons()).toEqual(["observe"])
       expect(writeGateEvents()[0]!.input?.token).toBe("compose-spec")
     })
 
@@ -2694,7 +2605,6 @@ describe("akm-opencode plugin", () => {
       // opened it. That writes a ledger row asserting an outcome that did not
       // happen — and it is precisely the row an analyst reads as "the model
       // complied".
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await readServiceYaml(hooks, "gate-failed-show")
@@ -2704,14 +2614,13 @@ describe("akm-opencode plugin", () => {
       )
       clearEventLog()
 
-      await expect(hooks["tool.execute.before"]!(beforeInput("gate-failed-show"), beforeOutput())).rejects.toThrow(/^AKM:/)
-      expect(gateReasons()).toEqual(["fired"])
+      await hooks["tool.execute.before"]!(beforeInput("gate-failed-show"), beforeOutput())
+      expect(gateReasons()).toEqual(["observe"])
     })
 
     it("never gates a prose file that merely quotes a format declaration", async () => {
       // The end-to-end half of the documents-vs-declares split: the same bytes
       // that declare inkwell in service.yaml declare nothing in README.md.
-      useMode("enforce")
       stubInkwellHit()
       const hooks = await AkmPlugin(createPluginInput())
       await hooks["tool.execute.after"](

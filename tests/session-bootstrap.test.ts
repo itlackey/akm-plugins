@@ -352,11 +352,10 @@ describe("session-start hook", () => {
     expect(context.indexOf("# AKM assets used most here")).toBeLessThan(context.indexOf("The public plugin surface"))
   })
 
-  itPosix("a missing source is a start, and AKM_AUTO_CURATE=0 does not switch the bootstrap off", () => {
+  itPosix("a missing source is a start", () => {
     const world = makeWorld()
-    const { context } = startHook(world, {}, { AKM_AUTO_CURATE: "0" })
+    const { context } = startHook(world, {})
     expect(context).toContain("## rules/acme-only")
-    expect(calls(world).some((a) => a[0] === "curate")).toBe(false)
   })
 
   itPosix("a compaction reloads both into the new context, each time", () => {

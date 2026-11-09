@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
 import { runPlan, spawnPlan } from "../claude/shared/spawn-plan"
-import { IS_WINDOWS, hostEnv, installScriptedAkm, makeBinDir, runClaudeHandler, sandboxPath, whichOn, type ClaudeHandler } from "./host-runtime"
+import { IS_WINDOWS, LEARNING_OFF, hostEnv, installScriptedAkm, makeBinDir, makeConfigDir, runClaudeHandler, sandboxPath, whichOn, type ClaudeHandler } from "./host-runtime"
+import { captureLearningSignal, createLearningProposalJob, reserveLearningProposal } from "../claude/shared/learning-signals"
 
 // The Claude Code hooks, run the way Claude Code runs them: every handler in
 // .claude-plugin/plugin.json is exec form, so there is no shell between the host and
@@ -24,6 +25,10 @@ const handlers: Array<{ event: string; matcher?: string; handler: ClaudeHandler 
 )
 
 const tempDirs: string[] = []
+// The plugin reads akm's learning switch from config.json: the sandbox has it off, a case that needs learning passes the other.
+const LEARNING_OFF_CONFIG_DIR = makeConfigDir(LEARNING_OFF)
+const LEARNING_ON_CONFIG_DIR = makeConfigDir({})
+const THREE_SECOND_CONFIG_DIR = makeConfigDir({ ...LEARNING_OFF, plugins: { curateTimeoutSeconds: 3 } })
 
 function makeTempDir() {
   const dir = mkdtempSync(path.join(tmpdir(), "akm-hook-commands-"))
@@ -91,8 +96,8 @@ function sandboxEnv(sandbox: Sandbox, extra: Record<string, string | undefined> 
       HOME: sandbox.home,
       XDG_STATE_HOME: sandbox.xdgState,
       PATH: sandboxPath(sandbox.binDir),
-      // A test that exercises proposal submission turns this on itself.
-      CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0",
+      // A test that exercises proposal submission turns learning on itself.
+      AKM_CONFIG_DIR: LEARNING_OFF_CONFIG_DIR,
       ...extra,
     },
     (name) => /^(AKM_|XDG_|CLAUDE_PLUGIN_|PLUGIN_)/.test(name),
@@ -175,8 +180,8 @@ describe("Claude plugin manifest hook commands", () => {
       const result = runHandler(handler, sandbox, payloadFor(mode, sandbox), {
         // The post-tool handlers validate refs against the bundle without asking akm for it.
         AKM_BUNDLE_DIR: fixtureStash,
-        // The sandbox opts out to silence prompt capture; extraction is part of what that opt-out stops.
-        ...(mode === "extract-session" ? { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined } : {}),
+        // The sandbox has learning off to silence prompt capture; extraction is part of what that stops.
+        ...(mode === "extract-session" ? { AKM_CONFIG_DIR: LEARNING_ON_CONFIG_DIR } : {}),
       })
       expect({ event, mode, exitCode: result.exitCode, stderr: result.stderr }).toEqual({ event, mode, exitCode: 0, stderr: "" })
       // Hooks answer with nothing or with one JSON object; Claude Code ignores anything else.
@@ -271,7 +276,7 @@ describe("Claude hooks through the manifest commands", () => {
     const sandbox = makeSandbox()
 
     expect(runHandler(handlerFor("session-end"), sandbox, payloadFor("session-end", sandbox)).exitCode).toBe(0)
-    expect(runHandler(handlerFor("extract-session"), sandbox, payloadFor("extract-session", sandbox), { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined }).exitCode).toBe(0)
+    expect(runHandler(handlerFor("extract-session"), sandbox, payloadFor("extract-session", sandbox), { AKM_CONFIG_DIR: LEARNING_ON_CONFIG_DIR }).exitCode).toBe(0)
 
     // Both children outlive the hook, so the fake akm runs after it has returned.
     await settle(sandbox, { index: 1, extract: true })
@@ -420,7 +425,7 @@ if (${hangsWhen}) {
     const pids = installHangingAkm(sandbox, 'args[0] === "curate"')
 
     const started = Date.now()
-    const result = runHandler(handlerFor("curate-prompt"), sandbox, payloadFor("curate-prompt", sandbox), { AKM_CURATE_TIMEOUT: "3" })
+    const result = runHandler(handlerFor("curate-prompt"), sandbox, payloadFor("curate-prompt", sandbox), { AKM_CONFIG_DIR: THREE_SECOND_CONFIG_DIR })
 
     expect(result.exitCode).toBe(0)
     // The hook gave up after its 3 s, not after akm's 90.
@@ -434,7 +439,7 @@ if (${hangsWhen}) {
     const pids = installHangingAkm(sandbox, 'args.includes("proposal")')
 
     const started = Date.now()
-    const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), { AKM_CURATE_TIMEOUT: "3" })
+    const result = runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), { AKM_CONFIG_DIR: THREE_SECOND_CONFIG_DIR })
 
     expect(result.exitCode).toBe(0)
     expect(Date.now() - started).toBeLessThan(30_000)
@@ -447,86 +452,82 @@ if (${hangsWhen}) {
     const sandbox = makeSandbox({ withAkm: false })
     const pids = installHangingAkm(sandbox, 'args[0] === "proposal" && args[1] === "new"')
 
-    const result = runHandler(
-      handlerFor("curate-prompt"),
-      sandbox,
-      { ...(payloadFor("curate-prompt", sandbox) as object), prompt: "no, use pnpm not npm for this repository" },
-      { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined, AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_LEARNING_PROPOSAL_TIMEOUT_MS: "3000" },
-    )
-
-    expect(result.exitCode).toBe(0)
-    // The worker is detached: it records the failure once its akm has been given up on.
-    await waitFor(() => (readFileSync(path.join(sandbox.stateDir, "learning-proposals.log"), "utf8").includes("\tfailed\t") ? true : undefined))
+    // The worker's cap is 10 minutes, so the job carries a short one (the hook never sets it).
+    mkdirSync(sandbox.stateDir, { recursive: true })
+    const candidate = captureLearningSignal({ text: "no, use pnpm not npm for this repository", harness: "claude-code", project: sandbox.project, sessionId: SESSION_ID })
+    if (!candidate) throw new Error("the prompt should be a learning signal")
+    const reservation = reserveLearningProposal(sandbox.stateDir, candidate)
+    if (!reservation) throw new Error("the proposal should be reservable")
+    const akm = whichOn("akm", sandboxPath(sandbox.binDir))
+    const { jobFile } = createLearningProposalJob({
+      stateDir: sandbox.stateDir,
+      command: akm as string,
+      argsPrefix: [],
+      candidate,
+      reservation,
+      logFile: path.join(sandbox.stateDir, "learning-proposals.log"),
+      timeoutMs: 3000,
+    })
+    const worker = Bun.spawnSync([process.execPath, path.join(pluginDir, "hooks/akm-proposal-worker.ts"), jobFile], {
+      cwd: sandbox.project,
+      env: sandboxEnv(sandbox, { AKM_CONFIG_DIR: LEARNING_ON_CONFIG_DIR }),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect(worker.exitCode).toBe(0)
+    expect(readFileSync(path.join(sandbox.stateDir, "learning-proposals.log"), "utf8")).toContain("\tfailed\t")
     await expectNothingLeftRunning(pids)
   })
 })
 
-describe("Claude hooks map the learning settings onto akm's learning switch", () => {
-  const learningState = (sandbox: Sandbox) => {
-    const file = path.join(path.dirname(sandbox.callLog), "akm-learning.json")
-    return existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as { on: boolean }).on : undefined
-  }
-  const marker = (sandbox: Sandbox) => path.join(sandbox.stateDir, "learning-off-by-plugin")
-  const sessionStart = (sandbox: Sandbox, env: Record<string, string | undefined>) =>
-    expect(runHandler(handlerFor("session-start"), sandbox, payloadFor("session-start", sandbox), { AKM_BUNDLE_DIR: fixtureStash, AKM_AUTO_CURATE: "0", ...env }).exitCode).toBe(0)
-  const infoLearning = (sandbox: Sandbox) => {
-    const result = Bun.spawnSync([path.join(sandbox.binDir, "akm"), "info", "--format", "json"], { env: { ...process.env, AKM_FAKE_LEARNING: "on" } })
-    return JSON.parse(result.stdout.toString()).learning?.on
-  }
-
-  it("an opt-out turns learning off and records the marker; removing it turns learning back on", async () => {
-    const sandbox = makeSandbox()
-    sessionStart(sandbox, { AKM_FAKE_LEARNING: "on", CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0" })
-    expect(learningState(sandbox)).toBe(false)
-    expect(existsSync(marker(sandbox))).toBe(true)
-
-    sessionStart(sandbox, { AKM_FAKE_LEARNING: "on", CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined })
-    expect(learningState(sandbox)).toBe(true)
-    expect(existsSync(marker(sandbox))).toBe(false)
-    expect(infoLearning(sandbox)).toBe(true)
-    await settle(sandbox, { index: 2 })
-  })
-
-  it("learning turned off by hand, with no opt-out and no marker, stays off", async () => {
-    const sandbox = makeSandbox()
-    sessionStart(sandbox, { AKM_FAKE_LEARNING: "off", CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined })
-    expect(learningState(sandbox)).toBeUndefined()
-    expect(readCallLog(sandbox.callLog).some((call) => call.argv[0] === "setup")).toBe(false)
-    await settle(sandbox, { index: 1 })
-  })
-
-  it("an akm that does not report learning is left alone", async () => {
-    const sandbox = makeSandbox()
-    sessionStart(sandbox, { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: "0" })
-    expect(readCallLog(sandbox.callLog).some((call) => call.argv[0] === "setup")).toBe(false)
-    expect(existsSync(marker(sandbox))).toBe(false)
-    await settle(sandbox, { index: 1 })
-  })
-
+describe("Claude hooks follow akm's learning switch (improve.enabled)", () => {
   it("the proposal worker skips quietly while learning is off, and submits while it is on", async () => {
-    const run = async (learning: "on" | "off") => {
+    const run = async (config: Record<string, unknown>) => {
       const sandbox = makeSandbox()
       const result = runHandler(
         handlerFor("curate-prompt"),
         sandbox,
         { ...(payloadFor("curate-prompt", sandbox) as object), prompt: "no, use pnpm not npm for this repository" },
-        { CLAUDE_PLUGIN_OPTION_AUTO_LEARNING: undefined, AKM_AUTO_CURATE: "0", AKM_AUTO_SKILL_PROPOSALS: "0", AKM_FAKE_LEARNING: learning },
+        { AKM_CONFIG_DIR: makeConfigDir(config) },
       )
       expect(result.exitCode).toBe(0)
-      // The worker is detached: it always asks `akm info` first.
-      await waitFor(() => (readCallLog(sandbox.callLog).filter((call) => call.argv[0] === "info").length > 0 ? true : undefined))
-      await Bun.sleep(600)
+      await Bun.sleep(1500)
       return sandbox
     }
 
-    const off = await run("off")
+    // Off: nothing is captured, so no worker runs and nothing is submitted.
+    const off = await run(LEARNING_OFF)
     expect(readCallLog(off.callLog).some((call) => call.argv[0] === "proposal" && call.argv[1] === "new")).toBe(false)
-    const ledger = readFileSync(path.join(off.stateDir, "learning-proposals.jsonl"), "utf8")
-    expect(ledger).not.toContain('"status":"submitted"')
-    expect(ledger).not.toContain('"status":"failed"')
+    expect(existsSync(path.join(off.stateDir, "learning-proposals.jsonl"))).toBe(false)
 
-    const on = await run("on")
+    const on = await run({})
     await waitFor(() => (readCallLog(on.callLog).some((call) => call.argv[0] === "proposal" && call.argv[1] === "new") ? true : undefined))
+  })
+
+  it("the worker itself skips a job when the switch was turned off after the prompt, with no failure recorded", async () => {
+    const sandbox = makeSandbox()
+    mkdirSync(sandbox.stateDir, { recursive: true })
+    const candidate = captureLearningSignal({ text: "no, use pnpm not npm for this repository", harness: "claude-code", project: sandbox.project, sessionId: SESSION_ID })
+    if (!candidate) throw new Error("the prompt should be a learning signal")
+    const reservation = reserveLearningProposal(sandbox.stateDir, candidate)
+    if (!reservation) throw new Error("the proposal should be reservable")
+    const { jobFile } = createLearningProposalJob({
+      stateDir: sandbox.stateDir,
+      command: whichOn("akm", sandboxPath(sandbox.binDir)) as string,
+      argsPrefix: [],
+      candidate,
+      reservation,
+      logFile: path.join(sandbox.stateDir, "learning-proposals.log"),
+    })
+    const worker = Bun.spawnSync([process.execPath, path.join(pluginDir, "hooks/akm-proposal-worker.ts"), jobFile], {
+      cwd: sandbox.project,
+      env: sandboxEnv(sandbox),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect(worker.exitCode).toBe(0)
+    expect(readCallLog(sandbox.callLog).some((call) => call.argv[0] === "proposal")).toBe(false)
+    expect(readFileSync(path.join(sandbox.stateDir, "learning-proposals.jsonl"), "utf8")).not.toContain('"status":"failed"')
   })
 })
 
@@ -598,9 +599,11 @@ describe("runPlan: how the hook runs akm and gives up on it", () => {
   })
 })
 
-describe.skipIf(!IS_WINDOWS || !process.env.AKM_REAL_NPM_BIN)("Claude hooks against akm-cli as npm installed it", () => {
+// The CI job puts npm's bin directory (akm.cmd beside the extensionless sh script) on PATH.
+const REAL_NPM_AKM_CMD = IS_WINDOWS ? Bun.which("akm.cmd") : null
+describe.skipIf(!REAL_NPM_AKM_CMD)("Claude hooks against akm-cli as npm installed it", () => {
   it("session-start takes the real akm.cmd, not the sh script beside it, and accepts the version it prints", async () => {
-    const realBin = process.env.AKM_REAL_NPM_BIN as string
+    const realBin = path.dirname(REAL_NPM_AKM_CMD as string)
     expect(existsSync(path.join(realBin, "akm"))).toBe(true)
     expect(existsSync(path.join(realBin, "akm.cmd"))).toBe(true)
     const sandbox = makeSandbox({ withAkm: false })

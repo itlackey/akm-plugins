@@ -44,41 +44,12 @@ export type GateHost = {
 // call is worth everything. So this is the first akm behaviour that removes the
 // wrong action instead of adding an argument for the right one: when a file the
 // session READ declares a format the stash documents and that asset has not
-// been opened this session, the first edit/write to it throws, and the model
-// receives the gate message as the edit tool's error result. Under the shipped
-// default (`observe`) that last step is recorded and not taken — see
-// resolveWriteGateMode().
-// "invalid" is a resolved state of the setting, not a mode anyone can ask for:
-// it is what an unrecognized AKM_WRITE_GATE value becomes so the misconfiguration
-// travels all the way into the ledger instead of dissolving into a default.
-type GateMode = "off" | "observe" | "enforce" | "invalid"
-// The raw value that failed to resolve, kept only so the once-per-process warn
-// below can quote what the operator actually typed.
-let writeGateInvalidValue: string | undefined
-export function resolveWriteGateMode(raw: string | undefined): GateMode {
-  writeGateInvalidValue = undefined
-  const v = (raw ?? "").trim().toLowerCase()
-  // Unset ships as `observe`: ledger-only, no behaviour change. #99 measured
-  // the problem; it did not measure this gate's effect on reward, and the
-  // promotion to `enforce` is a decision a train-slice histogram of `write_gate`
-  // reasons has to justify. Defaulting to `enforce` would have inverted the
-  // agreed rollout by making stage 2 the thing that ships.
-  if (!v) return "observe"
-  if (v === "off" || v === "0") return "off"
-  if (v === "observe") return "observe"
-  if (v === "enforce" || v === "1") return "enforce"
-  // Never silently fall back to a default. A typo here (`enfroce`, `on`, `true`)
-  // would otherwise produce a histogram in a mode nobody chose, which is the
-  // failure this whole feature's ledger exists to make impossible. Same
-  // treatment as apply_patch below — one loud warning per process plus a typed
-  // skip on every watched call — and it refuses to run rather than guessing.
-  writeGateInvalidValue = raw
-  return "invalid"
-}
-// `let`, not `const`, only so __resetWriteGateForTests() can re-read the env:
-// one process runs every test, and a mode captured at import would pin the
-// first test's env for all of them. Nothing in the plugin reassigns it.
-let AKM_WRITE_GATE: GateMode = resolveWriteGateMode(process.env.AKM_WRITE_GATE)
+// been opened this session, the first edit/write to it would be blocked and the
+// model handed the asset to read. The gate ships recording only (`observe`):
+// everything runs, the would-fire count lands in the ledger, and nothing is
+// blocked. #99 measured the problem; it did not measure this gate's effect on
+// reward, so the blocking stage was removed rather than kept behind a setting.
+const WRITE_GATE_MODE = "observe"
 const WRITE_GATE_HEAD_BYTES = 4096
 // Raised from 750 when the identity search moved from an in-process library call
 // (~2 ms warm) to the public `akm search` CLI (~450-550 ms, mostly process
@@ -86,8 +57,6 @@ const WRITE_GATE_HEAD_BYTES = 4096
 // have turned a loaded machine into a silently fail-open gate.
 const WRITE_GATE_RESOLVE_TIMEOUT_MS = 2000
 const WRITE_GATE_INFLIGHT_WAIT_MS = 400
-const WRITE_GATE_DESC_CHARS = 240
-const WRITE_GATE_MESSAGE_CHARS = 600
 const WRITE_GATE_SESSION_PATH_CAP = 64
 const WRITE_GATE_IDENTITY_CACHE_CAP = 256
 // A negative resolution is a statement about the stash at one instant, and the
@@ -141,7 +110,7 @@ type Resolution =
   // highest-volume bucket of the stage-1 histogram was mis-labelled, and that
   // histogram is the instrument the promote-to-enforce decision reads. The
   // matcher is fixed; the bucket is renamed to say what it now means.
-  | { status: "resolved"; ref: string; description: string }
+  | { status: "resolved"; ref: string }
   | { status: "none"; cause: "no-search-hits" | "no-declaration" }
   | { status: "error"; reason: "search-timeout" | "search-error" }
 
@@ -175,12 +144,9 @@ let gateEverActed = false
 let gateWatchedInvocations = 0
 let gateInertWarned = false
 let applyPatchWarned = false
-let writeGateModeWarned = false
 const gateSkipReasons = new Map<string, number>()
 
 type GateReason =
-  | "disabled"
-  | "invalid-mode"
   | "apply-patch-unsupported"
   | "no-file-path"
   | "create-not-edit"
@@ -213,18 +179,13 @@ type GateReason =
   | "search-error"
   | "already-shown"
   | "observe"
-  | "fired"
 
-export type GateDecision = { filePath: string; token: string; ref: string; description: string }
-
-// Test-only: drop the process-wide inert-latch counters and re-read
-// AKM_WRITE_GATE from the env. One process runs the whole suite, so a cache or
-// a mode captured by the first test would otherwise decide the rest.
+// Test-only: drop the process-wide inert-latch counters. One process runs the
+// whole suite, so a cache captured by the first test would otherwise decide the rest.
 // Deliberately does NOT touch the session-keyed maps: those are torn down by
 // clearSessionState() on session.deleted, and one test drives the gate against
 // an identity recorded before the caches were dropped.
 export function resetWriteGateForTests(): void {
-  AKM_WRITE_GATE = resolveWriteGateMode(process.env.AKM_WRITE_GATE)
   identityCache.clear()
   identityInflight.clear()
   gateSkipReasons.clear()
@@ -232,7 +193,6 @@ export function resetWriteGateForTests(): void {
   gateWatchedInvocations = 0
   gateInertWarned = false
   applyPatchWarned = false
-  writeGateModeWarned = false
   gateLedgerWriteWarned = false
 }
 
@@ -527,34 +487,6 @@ export function assetDeclaresFormat(key: string, hit: { name?: string }): "name"
   return name && normalizeIdentityField(name) === needle ? "name" : null
 }
 
-/**
- * The asset's one-line description is inlined ON PURPOSE. It is already in the
- * search hit (free), and it is what manufactures the experience of uncertainty
- * that prompt sentences could not: the #99 trajectory failed because a file it
- * could already read made the task feel self-sufficient. Belt and braces — a
- * model that refuses the gate and simply retries the edit may still have been
- * handed the answer. Do NOT trim it to "force" a tool call: reward is the
- * objective, engagement is only the proxy.
- */
-export function formatGateMessage(filePath: string, token: string, ref: string, description: string): string {
-  const build = (desc: string) => {
-    const cited = desc ? ` — "${desc}"` : ""
-    return `AKM: ${filePath} declares \`${token}\`. Your bundle documents this format at \`${ref}\`${cited}.`
-      + ` You have not opened it this session. Call akm_show with ref "${ref}", then repeat this edit.`
-      + " This gate fires once per file per session; repeating this edit unchanged will proceed."
-  }
-  const trimmed = description.replace(/\s+/g, " ").trim().slice(0, WRITE_GATE_DESC_CHARS)
-  let message = build(trimmed)
-  if (message.length > WRITE_GATE_MESSAGE_CHARS) {
-    // Shrink the flexible part (the description) before touching the
-    // instruction; the trailing "call akm_show / retry" sentence is the whole
-    // point of the message and must survive a long path or ref.
-    const overflow = message.length - WRITE_GATE_MESSAGE_CHARS
-    message = build(trimmed.slice(0, Math.max(0, trimmed.length - overflow)))
-  }
-  return message.length > WRITE_GATE_MESSAGE_CHARS ? `${message.slice(0, WRITE_GATE_MESSAGE_CHARS - 1)}…` : message
-}
-
 // --- write gate: resolution (#99) -------------------------------------------
 
 function rememberResolution(token: string, resolution: Resolution): Resolution {
@@ -615,11 +547,7 @@ async function resolveIdentity(host: GateHost, token: string, sessionID: string 
         if (!assetDeclaresFormat(token, hit as { name?: string })) continue
         const ref = typeof hit.ref === "string" ? hit.ref : ""
         if (!ref) continue
-        return rememberResolution(key, {
-          status: "resolved",
-          ref,
-          description: typeof hit.description === "string" ? hit.description : "",
-        })
+        return rememberResolution(key, { status: "resolved", ref })
       }
       return rememberResolution(key, { status: "none", cause: hits.length === 0 ? "no-search-hits" : "no-declaration" })
     } catch (error: unknown) {
@@ -772,7 +700,7 @@ export function observeFileIdentity(
 // byte-for-byte what "the gate never fired" looks like. The promote-to-enforce
 // decision would then be made against a file nothing ever reached. Once per
 // process, matching this file's existing convention for structural faults
-// (applyPatchWarned, writeGateModeWarned): the condition is persistent, so
+// (applyPatchWarned): the condition is persistent, so
 // repeating it on every write would bury everything else in the log.
 let gateLedgerWriteWarned = false
 
@@ -795,7 +723,7 @@ function emitWriteGate(
     event: "write_gate",
     sessionId: input.sessionID,
     scope: buildEventScope(input.sessionID, directory, input.tool),
-    input: { tool: input.tool, callID: input.callID, reason, mode: AKM_WRITE_GATE, filePath, token },
+    input: { tool: input.tool, callID: input.callID, reason, mode: WRITE_GATE_MODE, filePath, token },
     refs,
     outcome: { status },
   })
@@ -812,8 +740,8 @@ function emitWriteGate(
 }
 
 /**
- * Decide whether this write-path tool call is blocked. Returns null for every
- * non-fire path.
+ * Record what the gate would do with this write-path tool call. It never blocks:
+ * the gate is recording only (WRITE_GATE_MODE).
  *
  * INVARIANT: every watched-tool invocation emits EXACTLY ONE `write_gate` event
  * with a named reason. There is no branch that declines to gate without leaving
@@ -825,34 +753,13 @@ export async function gateDecision(
   host: GateHost,
   input: { tool: string; sessionID: string; callID: string },
   output: { args?: unknown },
-): Promise<GateDecision | null> {
+): Promise<void> {
   gateWatchedInvocations += 1
   const directory = typeof (input as { directory?: unknown }).directory === "string"
     ? (input as { directory?: string }).directory
     : undefined
   const args = (output?.args ?? {}) as Record<string, unknown>
 
-  // Checked before "off" so a misconfiguration is never reported as a
-  // deliberate kill switch. resolveWriteGateMode() refuses to guess; this is
-  // where the refusal becomes visible on every watched call.
-  if (AKM_WRITE_GATE === "invalid") {
-    if (!writeGateModeWarned) {
-      writeGateModeWarned = true
-      host.log("error", "AKM write gate disabled: unrecognized AKM_WRITE_GATE value", {
-        subsystem: "write-gate",
-        sessionID: input.sessionID,
-        value: writeGateInvalidValue,
-        expected: "off | observe | enforce",
-        reason: "an unrecognized value is a configuration error, not a request for the default mode",
-      })
-    }
-    emitWriteGate(host, input, directory, undefined, "invalid-mode", "skipped")
-    return null
-  }
-  if (AKM_WRITE_GATE === "off") {
-    emitWriteGate(host, input, directory, undefined, "disabled", "skipped")
-    return null
-  }
   // apply_patch carries `patchText` and no `filePath`, so the gate is
   // STRUCTURALLY blind on the gpt-* model family. Parsing the patch envelope to
   // recover paths is deliberately out of scope; pretending the gate is live
@@ -869,7 +776,7 @@ export async function gateDecision(
       })
     }
     emitWriteGate(host, input, directory, undefined, "apply-patch-unsupported", "skipped")
-    return null
+    return
   }
   // `filePath` (not `path`) on edit/write/read — confirmed against the
   // installed opencode 1.18 tool schemas. A `path`-only args object must
@@ -877,7 +784,7 @@ export async function gateDecision(
   const targetPath = args[host.pathKey]
   if (typeof targetPath !== "string" || !targetPath) {
     emitWriteGate(host, input, directory, undefined, "no-file-path", "skipped")
-    return null
+    return
   }
   const absPath = resolveGatePath(directory, targetPath)
 
@@ -912,17 +819,17 @@ export async function gateDecision(
 
   if (input.tool === "edit" && typeof args.oldString === "string" && args.oldString === "") {
     emitWriteGate(host, input, directory, absPath, "create-not-edit", "skipped")
-    return null
+    return
   }
 
   if (sessionCreatedPaths.get(input.sessionID)?.has(absPath)) {
     emitWriteGate(host, input, directory, absPath, "session-created", "skipped")
-    return null
+    return
   }
 
   if (sessionGateLatched.get(input.sessionID)?.has(absPath)) {
     emitWriteGate(host, input, directory, absPath, "latched", "skipped")
-    return null
+    return
   }
 
   if (!observed) {
@@ -930,7 +837,7 @@ export async function gateDecision(
     // is editing from knowledge it got somewhere else. Creates no longer land
     // here; they land on `session-created` above. Zero cost, no I/O.
     emitWriteGate(host, input, directory, absPath, "file-not-read", "skipped")
-    return null
+    return
   }
   const tokens = observed.tokens
   if (tokens.length === 0) {
@@ -940,7 +847,7 @@ export async function gateDecision(
     // shape this module parses, so the extractor could not have worked and a
     // clean-looking ledger would have been a lie.
     emitWriteGate(host, input, directory, absPath, observed.recognized ? "no-identity" : "read-output-unrecognized", "skipped")
-    return null
+    return
   }
 
   let resolved: { token: string; resolution: Extract<Resolution, { status: "resolved" }> } | undefined
@@ -987,12 +894,12 @@ export async function gateDecision(
     } else {
       emitWriteGate(host, input, directory, absPath, "resolution-pending", "skipped")
     }
-    return null
+    return
   }
 
   if (sessionShownRefs.get(input.sessionID)?.has(resolved.resolution.ref)) {
     emitWriteGate(host, input, directory, absPath, "already-shown", "skipped", [resolved.resolution.ref], resolved.token)
-    return null
+    return
   }
 
   // Latch BEFORE returning the decision, so release is unconditional and
@@ -1000,19 +907,8 @@ export async function gateDecision(
   // through by repeating it. A latch conditioned on compliance would be a trap.
   latchGate(input.sessionID, absPath)
   gateEverActed = true
-  if (AKM_WRITE_GATE === "observe") {
-    // Stage 1 of the rollout: everything runs, nothing is blocked, and the
-    // would-fire count is readable off the ledger before an eval slice is spent.
-    emitWriteGate(host, input, directory, absPath, "observe", "ok", [resolved.resolution.ref], resolved.token)
-    return null
-  }
-  emitWriteGate(host, input, directory, absPath, "fired", "ok", [resolved.resolution.ref], resolved.token)
-  return {
-    filePath: targetPath,
-    token: resolved.token,
-    ref: resolved.resolution.ref,
-    description: resolved.resolution.description,
-  }
+  // Everything ran and nothing is blocked: the would-fire count is readable off the ledger.
+  emitWriteGate(host, input, directory, absPath, "observe", "ok", [resolved.resolution.ref], resolved.token)
 }
 
 // Warn once per process if watched write tools were seen and the gate never
@@ -1020,15 +916,11 @@ export async function gateDecision(
 // state — the events are all there, they just all say "skipped" — so without
 // this the feature can ship dead and nobody notices.
 export function warnIfWriteGateInert(host: GateHost): void {
-  // Not a warning when the operator turned the gate off — "never acted" is the
-  // requested behaviour there, not a symptom. Nor on `invalid`, which already
-  // produced its own, louder error; a second warning would just bury it.
-  if (AKM_WRITE_GATE === "off" || AKM_WRITE_GATE === "invalid") return
   if (gateInertWarned || gateEverActed || gateWatchedInvocations === 0) return
   gateInertWarned = true
   host.log("warn", "AKM write gate never acted", {
     subsystem: "write-gate",
-    mode: AKM_WRITE_GATE,
+    mode: WRITE_GATE_MODE,
     watchedInvocations: gateWatchedInvocations,
     skipReasons: Object.fromEntries(gateSkipReasons),
   })

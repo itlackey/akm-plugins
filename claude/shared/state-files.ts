@@ -63,15 +63,11 @@ export function atomicWriteFileSync(filePath: string, content: string, mode?: nu
 
 // State-file rotation/caps (release-0.9.0 review §2 "Unbounded state growth"):
 // every append-only file under the harness state dir previously grew without
-// bound for the lifetime of the machine. AKM_PLUGIN_MAX_LOG_BYTES (default
-// 1 MiB) is the shared cap for all of them.
-const MAX_LOG_BYTES = (() => {
-  const raw = Number(process.env.AKM_PLUGIN_MAX_LOG_BYTES)
-  return Number.isFinite(raw) && raw > 0 ? raw : 1024 * 1024
-})()
+// bound for the lifetime of the machine. 1 MiB is the shared cap for all of them.
+const MAX_LOG_BYTES = 1024 * 1024
 
 /**
- * Before an append: if the file already exceeds AKM_PLUGIN_MAX_LOG_BYTES,
+ * Before an append: if the file already exceeds that cap,
  * rewrite it down to its newest half (by line count) via write-temp-then-rename
  * so a concurrent reader/writer never observes a truncated or partial file.
  *

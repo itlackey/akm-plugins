@@ -8,8 +8,8 @@ import {
   recordLearningProposalStatus,
   removeLearningProposalJob,
 } from "../shared/learning-signals"
-import { parseLearningOn } from "../shared/learning-switch"
 import { redactSecrets } from "../shared/redaction"
+import { loadSettings } from "../shared/settings"
 import { RUN_TIMED_OUT, runPlan } from "../shared/spawn-plan"
 import { chmodSafe, rotateIfOversized } from "../shared/state-files"
 
@@ -88,18 +88,9 @@ function run(): void {
   try {
     job = JSON.parse(readFileSync(jobFile, "utf8")) as LearningProposalJob
     if (job.version !== 1 || !job.command || !job.taskFile) return
-    // Quiet skip while akm's learning switch is off: not a failure, nothing submitted.
-    const infoPlan = runPlan(job.command, [...job.argsPrefix, "info", "--format", "json", "-q"], 15_000)
-    const info = spawnSync(infoPlan.command, infoPlan.args, {
-      encoding: "utf8",
-      cwd: job.candidate.project && existsSync(job.candidate.project) ? job.candidate.project : undefined,
-      timeout: infoPlan.timeoutMs,
-      stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true,
-    })
-    if (parseLearningOn(typeof info.stdout === "string" ? info.stdout : "") === false) return
-    const timeoutRaw = Number(process.env.AKM_LEARNING_PROPOSAL_TIMEOUT_MS)
-    const timeout = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : DEFAULT_TIMEOUT_MS
+    // Quiet skip while akm's learning switch (`improve.enabled`) is off: not a failure, nothing submitted.
+    if (!loadSettings().settings.learning) return
+    const timeout = job.timeoutMs ?? DEFAULT_TIMEOUT_MS
     const plan = runPlan(job.command, [
       ...job.argsPrefix,
       "proposal",

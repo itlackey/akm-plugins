@@ -23,43 +23,22 @@ export type AkmFeedbackSignal = {
  * agree on what counts as a signal, or the same message produces opposite
  * verdicts depending on the harness.
  *
- * AKM_RETROSPECTIVE_FEEDBACK_PATTERN / AKM_RETROSPECTIVE_NEGATIVE_PATTERN let
- * an operator retune the vocabulary (other languages, project jargon). A
- * user-supplied pattern is untrusted input, so an invalid one falls back to the
- * default instead of throwing at module load and taking the plugin down with
- * it.
+ * Constants, not settings: a pattern taken from the environment was also a
+ * ReDoS input.
  */
-export function createRetrospectiveFeedbackRegex(): RegExp {
-  const pattern = process.env.AKM_RETROSPECTIVE_FEEDBACK_PATTERN
-    ?? "\\b(thanks|thank you|perfect|worked|exactly right|great approach|keep doing this|love it|excellent|nailed it)\\b|that's exactly|that's what I wanted"
-  try {
-    return new RegExp(pattern, "i")
-  } catch {
-    return /\b(thanks|thank you|perfect|worked|exactly right|great approach|keep doing this|love it|excellent|nailed it)\b|that's exactly|that's what I wanted/i
-  }
-}
+export const RETROSPECTIVE_FEEDBACK_RE =
+  /\b(thanks|thank you|perfect|worked|exactly right|great approach|keep doing this|love it|excellent|nailed it)\b|that's exactly|that's what I wanted/i
 
-export function createRetrospectiveNegativeRegex(): RegExp {
-  const pattern = process.env.AKM_RETROSPECTIVE_NEGATIVE_PATTERN ?? "\\b(wrong|failed|broken|didn't work|did not work|bad)\\b"
-  try {
-    return new RegExp(pattern, "i")
-  } catch {
-    return /\b(wrong|failed|broken|didn't work|did not work|bad)\b/i
-  }
-}
+export const RETROSPECTIVE_NEGATIVE_RE = /\b(wrong|failed|broken|didn't work|did not work|bad)\b/i
 
 /**
  * Explicit corrections ("that was wrong") are a stronger, narrower signal than
- * the tunable negative matcher, so this one is deliberately not overridable.
+ * the retrospective negative matcher above.
  */
-export function createExplicitCorrectionRegex(): RegExp {
-  return /\b(this was wrong|that was wrong|you were wrong|incorrect|not correct|that's wrong|that is wrong|I meant|I said|I told you|I already told you|from now on)\b|^(?:no[,. ]+|don't\b|do not\b|stop\b|never\b|actually[,. ])/i
-}
+export const EXPLICIT_CORRECTION_RE =
+  /\b(this was wrong|that was wrong|you were wrong|incorrect|not correct|that's wrong|that is wrong|I meant|I said|I told you|I already told you|from now on)\b|^(?:no[,. ]+|don't\b|do not\b|stop\b|never\b|actually[,. ])/i
 
-export function getAutoFeedbackMinConfidence(): number {
-  const raw = Number(process.env.AKM_AUTO_FEEDBACK_MIN_CONFIDENCE ?? "0.6")
-  return Number.isFinite(raw) ? raw : 0.6
-}
+const AUTO_FEEDBACK_MIN_CONFIDENCE = 0.6
 
 export function classifyFeedbackSignal(input: {
   ref: string
@@ -112,5 +91,5 @@ export function classifyFeedbackSignal(input: {
 }
 
 export function shouldSubmitAutomaticFeedback(signal: AkmFeedbackSignal): boolean {
-  return signal.confidence >= getAutoFeedbackMinConfidence()
+  return signal.confidence >= AUTO_FEEDBACK_MIN_CONFIDENCE
 }

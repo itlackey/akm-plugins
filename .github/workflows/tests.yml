@@ -59,7 +59,7 @@ jobs:
           npm install @openai/codex@0.160.0 --prefix "$prefix" --no-audit --no-fund
           codex="$(find "$prefix/node_modules" -type f -name codex -path '*/vendor/*' | head -n 1)"
           "$codex" --version
-          echo "AKM_REAL_CODEX_BIN=$codex" >> "$GITHUB_ENV"
+          dirname "$codex" >> "$GITHUB_PATH"
 
       - name: Run the real Codex
         run: bun test --timeout 300000 tests/real-hosts.test.ts
@@ -86,7 +86,7 @@ jobs:
           $prefix = Join-Path $env:RUNNER_TEMP "akm-npm"
           $akm = node -p "require('./opencode/package.json').dependencies['akm-cli']"
           npm install "akm-cli@$akm" --prefix $prefix --omit=optional --ignore-scripts --no-audit --no-fund
-          "AKM_REAL_NPM_BIN=$(Join-Path $prefix 'node_modules/.bin')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          (Join-Path $prefix 'node_modules/.bin') | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: Run hook tests
         run: bun test --timeout 60000 tests/claude-plugin.test.ts tests/codex-plugin.test.ts tests/hook-commands.test.ts tests/akm-version-check.test.ts tests/ref-extraction.test.ts tests/ref-resolver-contract.test.ts tests/learning-signals.test.ts tests/recall-policy.test.ts tests/redaction.test.ts tests/vendor-semver.test.ts tests/version-policy.test.ts
@@ -105,8 +105,8 @@ jobs:
           $codex = (Get-ChildItem (Join-Path $prefix 'node_modules') -Recurse -Filter codex.exe | Where-Object { $_.FullName -match 'vendor' } | Select-Object -First 1).FullName
           & $claude --version
           & $codex --version
-          "AKM_REAL_CLAUDE_BIN=$claude" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "AKM_REAL_CODEX_BIN=$codex" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          (Split-Path $claude) | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          (Split-Path $codex) | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: Run the real hosts
         run: bun test --timeout 300000 tests/real-hosts.test.ts

@@ -1,6 +1,6 @@
 // Curated-material volume + pipeline-integrity metric.
 //
-// This is NOT a measurement of AKM_CONTEXT_BUDGET_CHARS compliance on the
+// This is NOT a measurement of the context budget compliance on the
 // Claude side, despite the name. The curate-prompt hook does not inline
 // curated text any more: it writes the curation to a file under the plugin
 // state dir and injects a one-line pointer to it, and the budget caps only
@@ -17,7 +17,7 @@
 //     cannot itself cause.
 //   - opencode avg_chars / max_chars / violations: the real thing. The
 //     OpenCode side measures output.system verbatim, with no hydration, so
-//     it is exactly the text AKM_CONTEXT_BUDGET_CHARS truncates in
+//     it is exactly the text the context budget truncates in
 //     experimental.chat.system.transform.
 //   - drop_rate (both): end-to-end pipeline integrity — of the refs the
 //     fake-akm produced, how many reach the model by either route
@@ -30,6 +30,7 @@ import { createSandbox } from "../../lib/stash-sandbox"
 import { runClaudeHook, parseInjectedRefs } from "../harness/claude"
 import { createOpenCodeHarness, parseRefs } from "../harness/opencode"
 import { installFakeAkm, loadFixtureStash } from "../../lib/fake-akm"
+import { CONTEXT_BUDGET_CHARS } from "../../../opencode-shared/recall"
 import type { MetricResult } from "../../lib/report"
 
 const EVALS_ROOT = path.resolve(import.meta.dir, "../..")
@@ -37,7 +38,6 @@ const EVALS_ROOT = path.resolve(import.meta.dir, "../..")
 export type ContextBudgetOptions = {
   goldPath: string
   stashDir: string
-  budget?: number
   // Cap on how many gold prompts to use (keeps OpenCode runtime down,
   // since opencode-harness imports the full plugin).
   maxPrompts?: number
@@ -78,7 +78,7 @@ function summarize(samples: Sample[]) {
 }
 
 export async function runContextBudgetMetric(opts: ContextBudgetOptions): Promise<MetricResult> {
-  const budget = opts.budget ?? 4000
+  const budget = CONTEXT_BUDGET_CHARS
   const max = opts.maxPrompts ?? 12
   const gold = readFileSync(opts.goldPath, "utf8")
     .split("\n")
@@ -92,7 +92,6 @@ export async function runContextBudgetMetric(opts: ContextBudgetOptions): Promis
   for (const entry of gold) {
     const sandbox = createSandbox({
       sourceStash: opts.stashDir,
-      env: { AKM_CONTEXT_BUDGET_CHARS: String(budget) },
     })
     try {
       // Claude: invoke curate-prompt hook
@@ -124,7 +123,6 @@ export async function runContextBudgetMetric(opts: ContextBudgetOptions): Promis
   try {
     opencodeSandbox = createSandbox({
       sourceStash: opts.stashDir,
-      env: { AKM_CONTEXT_BUDGET_CHARS: String(budget) },
     })
     opencodeHarness = await createOpenCodeHarness(opencodeSandbox.env)
     for (const entry of gold) {

@@ -20,13 +20,11 @@ import {
   applyContextBudget,
   AKM_CURATED_POINTER_CHARS,
   bootstrapBudgetChars,
-  buildCurateOptions,
   createCuratedFileStore,
-  extractMinIntervalMs,
   gatherCwdContext,
   formatWorkflowContext,
+  EXTRACT_MIN_INTERVAL_MS,
   recallCurate,
-  renderCuratedJsonResponse,
   spawnSessionExtract,
   summarizeActiveWorkflows,
   truncateLogText,
@@ -34,7 +32,7 @@ import {
 } from "../opencode-shared/recall"
 import { createBundleDirResolver } from "../opencode-shared/bundle"
 import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
-import { noteRetiredLearningEnv } from "../claude/shared/learning-switch"
+import { loadSettings, type PluginSettings } from "../claude/shared/settings"
 import { loadSessionBootstrap } from "../claude/shared/session-bootstrap"
 import { buildEventScope, opencodeEventLog, writeOpencodeEvent } from "../opencode-shared/events"
 import {
@@ -46,13 +44,11 @@ import {
   spawnPositiveFeedback,
 } from "../opencode-shared/feedback"
 import {
-  type GateDecision,
   type GateHost,
   type GateSearchResponse,
   clearGateSession,
   assetDeclaresFormat,
   extractFormatIdentity,
-  formatGateMessage,
   gateDecision,
   noteShownRefs,
   observeFileIdentity,
@@ -62,16 +58,18 @@ import {
 import { createLearning, createPendingProposals } from "../opencode-shared/learning"
 import { TOOL_SPECS, type ToolSpec, buildFeedbackArgs, buildRememberArgs, withProposedWarnings } from "../opencode-shared/tools"
 import { shouldRecall } from "../claude/shared/recall-policy"
-import { redactObject } from "../claude/shared/redaction"
+import { configureRedaction, redactObject } from "../claude/shared/redaction"
 import { extractRefsFromAkmOutput, validateRefCandidates } from "../claude/shared/ref-extraction"
 import { akmResultList } from "../claude/shared/result-list"
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
-const AKM_AUTO_CURATE = (process.env.AKM_AUTO_CURATE ?? "1") !== "0"
-const AKM_PENDING_PROPOSAL_TIMEOUT_MS = Math.max(500, (Number(process.env.AKM_PENDING_PROPOSAL_TIMEOUT ?? "2") || 2) * 1_000)
-const AKM_CURATE_MIN_CHARS = Math.max(1, Number(process.env.AKM_CURATE_MIN_CHARS ?? "16") || 16)
-const AKM_READ_TOOL_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_READ_TOOL_TIMEOUT ?? "60") || 60) * 1_000)
-const AKM_CURATE_TIMEOUT_MS = Math.max(1_000, (Number(process.env.AKM_CURATE_TIMEOUT ?? "8") || 8) * 1_000)
+// The plugin's settings (see claude/shared/settings.ts). Read at import so the module-level
+// helpers below have them, and again when the plugin is built, which also reports what was wrong with them.
+let SETTINGS: PluginSettings = loadSettings().settings
+const CURATE_MIN_CHARS = 16
+const READ_TOOL_TIMEOUT_MS = 60_000
+const curateTimeoutMs = () => Math.max(1_000, SETTINGS.curateTimeoutSeconds * 1_000)
+const pendingProposalTimeoutMs = () => Math.max(500, SETTINGS.pendingProposalTimeoutSeconds * 1_000)
 // Exactly the opencode 1.18 write-path tool ids, verified against the installed
 // binary's tool schemas: edit -> {filePath, oldString, newString},
 // write -> {content, filePath}, apply_patch -> {patchText}. `patch` and
@@ -84,7 +82,6 @@ const WATCHED_WRITE_TOOLS = new Set(["edit", "write", "apply_patch"])
 // 13: "Memory leaks" — the session buffer previously grew without bound for the
 // life of a session (a long-running session accumulates one entry per
 // observed tool ref / memory intent). The tracker caps it drop-oldest.
-const AKM_SESSION_BUFFER_MAX_ENTRIES = Math.max(1, Number(process.env.AKM_SESSION_BUFFER_MAX_ENTRIES ?? "200") || 200)
 // Best-effort sweep age for orphaned curated tmp files (os.tmpdir()/akm-opencode/curated).
 // A session that ends without ever firing session.deleted (host crash, forced
 // kill) would otherwise leak its curated file on disk forever.
@@ -100,16 +97,15 @@ const sessionCuratedFile = new Map<string, string>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
 // Refs touched and the negative-signal window, shared with the V2 plugin.
-const feedbackTracker = createFeedbackTracker({ maxBufferEntries: AKM_SESSION_BUFFER_MAX_ENTRIES })
+const feedbackTracker = createFeedbackTracker({ autoFeedback: () => SETTINGS.autoFeedback })
 // Event-driven extraction (opencode): opencode has no true "session end" event
 // and `session.idle` fires after EVERY turn. To avoid flooding extract while a
 // session is actively worked, we min-interval-gate per session — at most one
-// extract per AKM_EXTRACT_MIN_INTERVAL_MS. The akm content-hash ledger
+// extract per EXTRACT_MIN_INTERVAL_MS. The akm content-hash ledger
 // (akm-cli #602 / ≥0.9.0-beta.33) further no-ops unchanged content for free.
 // The hourly `akm improve` extract pass (the periodic backstop) catches the
 // final delta after the last turn.
 const sessionLastExtractAt = new Map<string, number>()
-const AKM_EXTRACT_MIN_INTERVAL_MS = extractMinIntervalMs()
 // Passive ref observation (narrower than explicit show/search input, so
 // ordinary repository paths cannot become automatic feedback targets) lives in
 // claude/shared/ref-extraction.ts. This module deliberately keeps no local copy
@@ -246,14 +242,14 @@ async function logHookFailure(
   })
 }
 
-// Opt-OUT (default enabled), matching the Claude hook's INDEX_ON_SESSION_END so
+// Opt-OUT (`plugins.indexOnSessionEnd`, default enabled), matching the Claude hook's INDEX_ON_SESSION_END so
 // the same install ends a session with the same stash freshness on either
 // harness. It was opt-IN because the call site fired on
 // session.compacted/idle/deleted, and `session.idle` fires after EVERY turn —
 // enabling it meant a blocking `akm index` between turns. The call site is now
 // narrowed to session.deleted, so the default can match Claude's.
 function shouldIndexOnSessionEnd(): boolean {
-  return (process.env.AKM_INDEX_ON_SESSION_END ?? "1") !== "0"
+  return SETTINGS.indexOnSessionEnd
 }
 
 function bumpCuratedVersion(sessionID: string) {
@@ -346,7 +342,7 @@ function truncateLine(value: string, maxChars = 220): string {
 }
 
 function runCurate(args: string[]): string | null {
-  const result = runCliSyncRaw(args, AKM_CURATE_TIMEOUT_MS)
+  const result = runCliSyncRaw(args, curateTimeoutMs())
   if (!result.ok) return null
   const body = result.stdout.trim()
   return body || null
@@ -359,7 +355,7 @@ async function runRecall(
   query: string,
   meta: CliLogMeta & { operation: string },
 ): Promise<string | null> {
-  const outcome = await recallCurate(query, { timeoutMs: AKM_CURATE_TIMEOUT_MS, cwd: meta.directory })
+  const outcome = await recallCurate(query, { timeoutMs: curateTimeoutMs(), limit: SETTINGS.curateLimit, cwd: meta.directory })
   if (outcome.ok) return outcome.text
   await writePluginLog(client, "warn", "AKM recall failed", {
     subsystem: "curation",
@@ -373,7 +369,7 @@ async function runRecall(
 }
 
 async function runCurateForPrompt(client: LogCapableClient, text: string, sessionID: string | undefined, directory: string | undefined): Promise<string | null> {
-  if (!text || text.length < AKM_CURATE_MIN_CHARS) return null
+  if (!text || text.length < CURATE_MIN_CHARS) return null
   return runRecall(client, text, { toolName: "chat.message", sessionID, directory, operation: "prompt-curate" })
 }
 
@@ -388,7 +384,7 @@ async function runCurateForSession(client: LogCapableClient, sessionID: string, 
 }
 
 async function runWorkflowSummaryForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
-  const raw = await runCliSyncBestEffort(client, ["--format", "json", "-q", "workflow", "list", "--active"], AKM_CURATE_TIMEOUT_MS, {
+  const raw = await runCliSyncBestEffort(client, ["--format", "json", "-q", "workflow", "list", "--active"], curateTimeoutMs(), {
     toolName: "session.start",
     sessionID,
     subsystem: "workflow",
@@ -404,7 +400,7 @@ const bundleDirResolver = createBundleDirResolver()
 async function getAkmBundleDir(client?: LogCapableClient): Promise<string | undefined> {
   return bundleDirResolver.get(async () =>
     client
-      ? runCliSyncBestEffort(client, ["info", "--format", "json", "-q"], AKM_CURATE_TIMEOUT_MS, {
+      ? runCliSyncBestEffort(client, ["info", "--format", "json", "-q"], curateTimeoutMs(), {
         toolName: "shell.env",
         subsystem: "info",
         operation: "get-bundle-dir",
@@ -513,7 +509,7 @@ const pendingProposals = createPendingProposals({
   list: async (args) => {
     const command = resolveAkmCommand()
     if (isCliError(command)) throw new Error(command.error)
-    return execResolvedAkm(command, args, { encoding: "utf8", timeout: AKM_PENDING_PROPOSAL_TIMEOUT_MS, cwd: pluginDirectory })
+    return execResolvedAkm(command, args, { encoding: "utf8", timeout: pendingProposalTimeoutMs(), cwd: pluginDirectory })
   },
   formatError: formatCliError,
 })
@@ -566,7 +562,7 @@ async function maybeIndexSessionMemory(
   ref: string,
 ): Promise<void> {
   if (!shouldIndexOnSessionEnd()) return
-  const result = runCliSyncRaw(["index"], AKM_CURATE_TIMEOUT_MS)
+  const result = runCliSyncRaw(["index"], curateTimeoutMs())
   if (result.ok) return
   await writePluginLog(client, "warn", "AKM session indexing failed", {
     subsystem: "memory",
@@ -607,7 +603,7 @@ function extractSessionIdFromEvent(payload: unknown): string | undefined {
 /**
  * Event-driven extraction trigger for opencode (Option #3: min-interval gate).
  * Called on `session.idle` (which fires after every turn). Extracts the session
- * into the proposal queue at most once per AKM_EXTRACT_MIN_INTERVAL_MS, so a
+ * into the proposal queue at most once per EXTRACT_MIN_INTERVAL_MS, so a
  * burst of turns collapses to a single periodic checkpoint instead of flooding.
  * `extract --session-id` respects the content-hash ledger, so an extract landing
  * on unchanged content is a free no-op. Fire-and-forget (detached + unref'd) so
@@ -628,7 +624,7 @@ function extractSessionIdFromEvent(payload: unknown): string | undefined {
 function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, directory: string | undefined): void {
   const now = Date.now()
   const last = sessionLastExtractAt.get(sid) ?? 0
-  if (now - last < AKM_EXTRACT_MIN_INTERVAL_MS) return
+  if (now - last < EXTRACT_MIN_INTERVAL_MS) return
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) return // akm unavailable — cron backstop covers it
   sessionLastExtractAt.set(sid, now)
@@ -806,7 +802,7 @@ async function runInProcess(
   // leftover from when this called the library in-process.)
   try {
     const result = await readVerbToolOutput(resolveAkmCommand(), operation, input, {
-      timeoutMs: AKM_READ_TOOL_TIMEOUT_MS,
+      timeoutMs: READ_TOOL_TIMEOUT_MS,
       cwd: meta.directory,
       packageName: "akm-opencode",
     })
@@ -933,6 +929,11 @@ function v1Args(spec: ToolSpec): Record<string, any> {
 const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
   pluginDirectory = directory
   const logClient = client as unknown as LogCapableClient
+  // Settings come from akm's config.json. A wrong or retired setting is said once, here, in the host's log.
+  const loaded = loadSettings()
+  SETTINGS = loaded.settings
+  configureRedaction(SETTINGS.redact)
+  for (const warning of loaded.warnings) void writePluginLog(logClient, "warn", `AKM plugin settings: ${warning}`, { subsystem: "settings" })
   const gateHost: GateHost = {
     log: (level, message, extra) => void writePluginLog(logClient, level, message, extra),
     writeEvent: writeStructuredEvent,
@@ -959,13 +960,12 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
   }
   // The rules and most-used list: loaded at session start and after each compaction, held per
   // session, and sent with every request (the host rebuilds the system prompt each time).
-  // Independent of AKM_AUTO_CURATE.
   const bootstrap = createSessionBootstrap((sessionID) =>
     loadSessionBootstrap(
       async (args, env) => {
         const command = resolveAkmCommand()
         if (isCliError(command)) return ""
-        const result = await runAkm(command, args, { cwd: directory, timeoutMs: AKM_CURATE_TIMEOUT_MS, env, packageName: "akm-opencode" })
+        const result = await runAkm(command, args, { cwd: directory, timeoutMs: curateTimeoutMs(), env, packageName: "akm-opencode" })
         if (result.ok) return result.stdout
         await writePluginLog(logClient, "warn", "AKM session bootstrap lookup failed", {
           subsystem: "bootstrap",
@@ -984,6 +984,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     log: (level, message, extra) => void writePluginLog(logClient, level, message, extra),
     writeEvent: writeStructuredEvent,
     resolveCommand: resolveAkmCommand,
+    learningOn: () => SETTINGS.learning,
     formatError: formatCliError,
     addBufferEntry: feedbackTracker.addBufferEntry,
     onSubmitted: (sessionID) => pendingProposals.invalidate(sessionID),
@@ -1010,10 +1011,9 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
             // Best-effort, fire-and-forget, fully error-trapped internally —
             // must never block or fail session.created (13: "tmp-file cleanup").
             void pruneStaleCuratedFiles()
-            noteRetiredLearningEnv((message) => void writePluginLog(logClient, "warn", message, { subsystem: "learning", sessionID: sid }))
             warmIndexInBackground()
             void bootstrap.ensure(sid)
-            if (AKM_AUTO_CURATE && !sessionCurated.has(sid)) {
+            if (!sessionCurated.has(sid)) {
               const cwdContext = gatherCwdContext(directory)
               const curated = await runCurateForSession(logClient, sid, directory, cwdContext || undefined)
               if (curated) {
@@ -1052,7 +1052,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
           // touched the most assets — and the retrospective auto-feedback path
           // in chat.message reads that buffer to decide what a later "thanks,
           // that worked" credits. The buffer is bounded by
-          // AKM_SESSION_BUFFER_MAX_ENTRIES and torn down by clearSessionState()
+          // the feedback tracker's buffer cap and torn down by clearSessionState()
           // on the terminal session.deleted below; nothing else may discard it.
 
           // Event-driven extraction: only on session.idle (per-turn quiescence),
@@ -1098,7 +1098,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     // no-pending-proposal session got AKM's framing on turn one and never
     // again — including after a compaction, exactly when it is needed most.
     // The block set is stable turn to turn (prompt-cache friendly, unlike the
-    // sporadic push it replaces) and AKM_CONTEXT_BUDGET_CHARS still caps it.
+    // sporadic push it replaces) and the context budget still caps it.
     "experimental.chat.system.transform": async (
       input: { sessionID?: string; session_id?: string } | undefined,
       output: { system?: string[] } | undefined,
@@ -1190,7 +1190,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
         })
         learning.capturePromptLearning(text, input.sessionID, directory || worktree, directory)
 
-        if (AKM_AUTO_CURATE && input.sessionID) {
+        if (input.sessionID) {
           const decision = shouldRecall(text, { activeWorkflow: !!sessionWorkflow.get(input.sessionID), recentAssetFailure: feedbackTracker.hasRecentNegativeSignal(input.sessionID) })
           if (decision.shouldRecall) {
             // Do NOT block the model on `akm curate` — previously this awaited
@@ -1314,35 +1314,18 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
     //   - The CLI's default `search` shape drops `description` and `tags`;
     //     `--detail normal` keeps `description`, which the gate quotes; it reads `name`, `ref` and `description` only.
     //
-    // The throw sits OUTSIDE the try/catch on purpose. Every other hook body in
-    // this file wraps itself in `try { … } catch { logHookFailure }` by
-    // convention; a throw placed inside that wrapper would be swallowed, the
-    // gate would never fire, and the ledger would stay perfectly clean while
-    // the feature did nothing. Verified end to end against the installed
-    // opencode 1.18 / effect 4.0.0-beta.83: Plugin.trigger runs each hook as
-    // `Effect.promise(async () => hook(input, output))` inside the tool's own
-    // `Effect.runPromise(Effect.gen(...))`, and a rejection there surfaces with
-    // `error.message` verbatim, which the session turns into a `tool-error`
-    // part the model reads. (Recorded because the opposite — "a hook cannot
-    // block a tool call" — was asserted as verified during design and is false.)
-    //
-    // A plugin-internal fault must NOT block a user's edit, so everything that
-    // can throw for our own reasons stays inside the catch and returns.
+    // The gate only records (see opencode-shared/write-gate.ts): it never blocks the call, and a
+    // plugin-internal fault must not disturb the user's edit.
     "tool.execute.before": async (input, output) => {
-      let decision: GateDecision | null = null
       try {
         if (!WATCHED_WRITE_TOOLS.has(input.tool)) return
-        decision = await gateDecision(gateHost, input, output)
+        await gateDecision(gateHost, input, output)
       } catch (error: unknown) {
         await logHookFailure(logClient, "tool.execute.before", error, {
           toolName: input?.tool,
           sessionID: input?.sessionID,
           callID: input?.callID,
         })
-        return
-      }
-      if (decision) {
-        throw new Error(formatGateMessage(decision.filePath, decision.token, decision.ref, decision.description))
       }
     },
     "tool.execute.after": async (input, output) => {
@@ -1609,19 +1592,8 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }) => {
 // denylist of names that have already burned us once.
 export const AkmPlugin = Object.assign(akmPlugin, {
   __curatedDirForTests,
-  // #110 — AKM_CURATE_MIN_SCORE / AKM_CURATE_TYPE are read into module-level
-  // consts at import, so the only way to cover the env -> behaviour wiring is
-  // to import this module afresh under a chosen environment. bun:test's
-  // `mock.module` is process-global for a whole `bun test tests/` run (see
-  // tests/fake-akm-contract.test.ts's header), so a second in-process test
-  // file that re-imports here would leak into tests/opencode-plugin.test.ts.
-  // tests/opencode-curate-floor.test.ts therefore drives these two seams from
-  // a subprocess instead, which shares no module registry with anything.
-  __buildCurateOptionsForTests: buildCurateOptions,
-  __renderCuratedJsonResponseForTests: renderCuratedJsonResponse,
   __resetWriteGateForTests: resetWriteGateForTests,
   __extractFormatIdentity: extractFormatIdentity,
   __assetDeclaresFormat: assetDeclaresFormat,
-  __formatGateMessage: formatGateMessage,
   __watchedWriteTools: WATCHED_WRITE_TOOLS,
 })

@@ -45,14 +45,14 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 | `session.updated` | Backfills the bundle warning and the workflow summary for a session the plugin has not prepared yet. It does not re-run session-created work. |
 | `chat.message` | Records feedback/memory intent, captures corrections, guardrails, preferences, explicit memories, and positive feedback, and can schedule non-blocking curation. High-confidence durable signals submit asynchronous AKM proposals; recurring task intent across distinct sessions can submit a skill proposal. Only the text you typed counts; the synthetic parts OpenCode adds (an attached file's contents, the Read call that fetched it) are ignored. |
 | `experimental.chat.system.transform` | Injects the project's rules and most-used assets, the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. A session the plugin first sees here (a resumed one) has its rules and list loaded at that request. |
-| `tool.execute.before` | The format-declaration write gate (`AKM_WRITE_GATE`, `observe` by default). Blocks the first `edit`/`write` to an existing file that declares a format your bundle documents and hands the model the ref to read. Once per file per session, released unconditionally on the retry. |
+| `tool.execute.before` | The format-declaration write gate: records, in the ledger, the first `edit`/`write` to an existing file that declares a format your bundle documents. It never blocks ([Write gate](#write-gate)). |
 | `tool.execute.after` | Tracks concepts used by AKM tools and checkpoints session observations. It also records what a file the session `read` declares about its own format, which is what the write gate above keys on. `write` is deliberately not a source: a file the session created is not one it needs the bundle to explain. The create itself is recorded on the write's `tool.execute.before` pass, so a later read-back of that file cannot re-arm the gate. |
 | `shell.env` | Exposes `AKM_PLUGIN_VERSION` and the resolved `AKM_BUNDLE_DIR` to shell tools. |
 | `session.idle` | Runs interval-gated memory extraction. Fires after every turn, so it is rate-limited. |
 | `session.compacted` | Records a post-compaction event and reloads the project's rules and most-used assets from akm (duplicate events within 10 seconds load once), so the next request carries the current ones. |
 | `session.deleted` | Refreshes the local AKM index, warns once if the write gate saw write-path tool calls but never acted on any, then drops all per-session state and the temporary curation file. |
 
-The session observation buffer that retrospective feedback reads from survives every non-terminal event: it is bounded by `AKM_SESSION_BUFFER_MAX_ENTRIES` and dropped only on `session.deleted`. Discarding it at `session.idle` would empty it between turns, so "thanks, that worked" would credit nothing in exactly the sessions that used the most assets.
+The session observation buffer that retrospective feedback reads from survives every non-terminal event: it is bounded (200 entries) and dropped only on `session.deleted`. Discarding it at `session.idle` would empty it between turns, so "thanks, that worked" would credit nothing in exactly the sessions that used the most assets.
 
 Automatic feedback skips references that AKM reports as ineligible, and no `akm_*` tool call submits feedback on its own. A *successful* `akm_show` / `akm_search` / `akm_curate` only inspected a concept, which is not evidence that it helped, so on OpenCode the positive signal comes from a retrospective confirmation instead. A *failed* call (an error result, a timeout, an ambiguous ref) is not feedback on the asset either, and is only logged, as a warning that names its ref and the error: its ref is not remembered as used, so a later "thanks, that worked" does not credit it and a later correction does not blame it. Same rules as the Claude plugin, which applies them to the `akm` subcommand of a Bash invocation.
 
@@ -70,62 +70,38 @@ OpenCode has no first-class permission DSL today, so enforce it outside the plug
 
 Independently of any such control, agents should treat these verbs as requiring explicit user approval: `proposal accept`, `proposal reject`, `proposal revert`, `sync --push`, `remove`, env/secret writes, `task add` / `task run`, `upgrade`, `update --all`, `config set`.
 
-## Environment
+## Settings
 
-Every kill switch below is opt-out and reads the same way: only the literal `0` disables it. Any other value — including `false` — leaves the feature on.
+The plugin has no environment variables for its settings. They are the `plugins` section of akm's own `config.json` (`AKM_CONFIG_DIR`, else `$XDG_CONFIG_HOME/akm`, else `~/.config/akm`), which the plugin reads itself when OpenCode builds it; the Claude and Codex plugins read the same file ([the Claude plugin's Settings section](../claude/README.md#settings) lists the keys and how redaction fails closed). Every key is optional:
 
-### Core
+```jsonc
+{
+  "plugins": {
+    "autoFeedback": true,          // the retrospective ("that worked") confirmation
+    "indexOnSessionEnd": true,     // `akm index` on `session.deleted` only, never on `session.idle`
+    "curateLimit": 5,              // curated results injected per prompt, 1 to 25
+    "curateTimeoutSeconds": 8,     // timeout for AKM calls made by hooks
+    "pendingProposalTimeoutSeconds": 2,
+    "redact": { "pii": false, "highEntropy": false }
+  }
+}
+```
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AKM_BUNDLE_DIR` | unset | Absolute path to the AKM bundle root. When unset the plugin discovers it once per process by running `akm info`. The resolved value is re-exported to shell tools through the `shell.env` hook. |
-| `AKM_OPENCODE_CLI` | unset | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency, exec'd as-is. Used by the eval harness to substitute a deterministic shim. |
-| `AKM_READ_TOOL_TIMEOUT` | `60` | Seconds allowed for one `akm_search` / `akm_show` / `akm_curate` call. |
-| `AKM_AUTO_CURATE` | `1` | Set to `0` to disable automatic prompt curation. The rules and most-used assets load regardless. |
-| `AKM_AUTO_FEEDBACK` | `1` | Set to `0` to disable automatic feedback: the retrospective ("that worked") confirmation. |
-| `AKM_INDEX_ON_SESSION_END` | `1` | Set to `0` to skip the `akm index` refresh. It runs only on `session.deleted` — never on `session.idle`, which fires after every turn. |
-| `AKM_WRITE_GATE` | `observe` | The format-declaration write gate (#99). When a file the session **read** declares a format your bundle documents — an `apiVersion:` namespace, a `yaml-language-server` pragma, a `$schema` key, an XML root namespace — and that asset has not been opened this session, the FIRST `edit`/`write` to that file is blocked once and the model is told which ref to read. It ships in `observe`: everything runs and the would-fire count lands in the ledger, but nothing is blocked. Set `enforce` to block, or `off`/`0` to disable it entirely. An unrecognized value is a configuration error — it logs one error per process and the gate refuses to run rather than guessing a default. It never fires on a file this session created: the create is recorded when it happens — a `write` to a path this session has not read, or an `edit` with an empty `oldString` — and that path stays insulated for the rest of the session, so reading back the model's own output does not re-arm it (ledger reason `session-created`). It is inert on `apply_patch` (which carries no file path) — that case logs one warning per process rather than failing quietly. |
+Learning is akm's own switch, `improve.enabled` (`akm setup --learning on|off`): while it is off, no proposal is authored. A wrong value is ignored with a warning in OpenCode's log, and a retired `AKM_*` setting variable is ignored with a warning that names its key. Redaction fails closed: a wrong `redact` value, an unreadable config file, or a retired `AKM_REDACT_PII` / `AKM_REDACT_HIGH_ENTROPY` variable with no config key leaves that redaction on.
 
-### Scope
+Everything that used to be a variable beyond those is a constant: prompt curation is always on, the context budget is 4000 characters, a prompt needs 16 characters to be curated, a tool call may take 60 seconds, the session buffer holds 200 entries, extraction runs at most once per 10 minutes per session, state files are capped at 1 MiB, and the confidence and recurrence thresholds are fixed.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AKM_REPO` | unset | Repository label recorded on lifecycle events. |
-| `AKM_BRANCH` | unset | Branch label recorded on lifecycle events. |
+The variables that remain are not settings:
 
-Every `akm` call runs in the session's directory, so akm resolves the user's project from the `projects` entry in its own config; `akm_remember` passes no scope flags.
+| Variable | Purpose |
+| --- | --- |
+| `AKM_CONFIG_DIR` | Where akm's `config.json` is (akm's own location variable). |
+| `AKM_BUNDLE_DIR` | Absolute path to the AKM bundle root (akm's own variable). When unset the plugin discovers it once per process by running `akm info`. The resolved value is exported to shell tools. |
+| `AKM_OPENCODE_CLI` | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency, exec'd as-is. Set by akm and by the eval harness. |
 
-### Tuning
+### Write gate
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AKM_CURATE_LIMIT` | `5` | Maximum curated results injected per prompt. |
-| `AKM_CURATE_MIN_CHARS` | `16` | Minimum prompt length for automatic curation. |
-| `AKM_CURATE_TIMEOUT` | `8` | Timeout in seconds for AKM calls made by hooks. |
-| `AKM_CURATE_MIN_SCORE` | `0` (disabled) | Minimum per-item relevance score to keep a curated result. `0` preserves the long-standing behavior. Set it above `0` and items below the floor are dropped (no curated block at all when none survive), and the survivors are reordered so locally authored assets (lesson, memory, knowledge, skill, command, agent, instruction, rule, fact, workflow, task, env, secret) come before imported website/wiki snapshots. Same contract as the Claude plugin's `AKM_CURATE_MIN_SCORE` — see `claude/README.md` for the full explanation, including why there is no universal default value. |
-| `AKM_CURATE_TYPE` | unset | Passthrough for `akm curate --type`. |
-| `AKM_CONTEXT_BUDGET_CHARS` | `4000` | Maximum length of the AKM text injected into the system prompt on one turn. Past it the block is truncated with a marker. The rules and most-used assets lead and take what the plugin's own guidance, notes and curated pointer leave; a rule is shown whole or left out, and a note says how many were left out. The most-used list names at most 10 assets and says when it was cut or left out to fit. A request waits at most 3 seconds for a slow load; it then goes out without the sections, which arrive with the next one. |
-| `AKM_PENDING_PROPOSAL_TIMEOUT` | `2` | Timeout in seconds for the pending-proposal count. Floored at 0.5s. |
-| `AKM_SESSION_BUFFER_MAX_ENTRIES` | `200` | Per-session cap on buffered observations. Oldest entries are dropped first. |
-| `AKM_EXTRACT_MIN_INTERVAL_MS` | `600000` | Minimum gap between `akm proposal extract` runs for one session. `session.idle` fires after every turn, so without this gate extraction would flood. |
-| `AKM_PLUGIN_MAX_LOG_BYTES` | `1048576` | Size cap for each append-only state file under `$XDG_STATE_HOME/akm-opencode`. Past the cap the newest half is retained. |
-| `AKM_AUTO_FEEDBACK_MIN_CONFIDENCE` | `0.6` | Minimum classifier confidence before automatic feedback is actually submitted. Raise it to submit less. |
-| `AKM_LEARNING_PROPOSAL_MIN_CONFIDENCE` | `0.75` | Minimum correction/preference confidence required before `akm proposal new` is dispatched. Lower-confidence evidence remains available to native session extraction. |
-| `AKM_LEARNING_PROPOSAL_TIMEOUT_MS` | `600000` | Maximum runtime for one detached proposal-authoring child. |
-| `AKM_AUTO_SKILL_PROPOSALS` | `1` | Set to `0` to retain correction/preference proposals but disable recurring-intent skill proposals. |
-| `AKM_WORKFLOW_PROPOSAL_MIN_SESSIONS` | `3` | Distinct-session recurrence required before a skill proposal is submitted. Values below `2` fall back to `3`. |
-| `AKM_RETROSPECTIVE_FEEDBACK_PATTERN` | positive confirmation phrases | Case-insensitive regex for retrospective confirmation. The default covers thanks/worked plus “exactly right,” “great approach,” “love it,” and “nailed it.” Retune it for other languages or project jargon. An invalid regex falls back to the default rather than failing the hook. |
-| `AKM_RETROSPECTIVE_NEGATIVE_PATTERN` | `\b(wrong\|failed\|broken\|didn't work\|did not work\|bad)\b` | Case-insensitive regex that vetoes retrospective credit, so a mixed message ("thanks, but it did not work") is skipped rather than misread as praise. Same fallback behavior. |
-
-### Redaction
-
-These three are read once, when the plugin module is imported, so they must be set in the environment **before** OpenCode starts. Both matchers are off by default because both over-redact on ordinary logs.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AKM_REDACT_HIGH_ENTROPY` | unset (off) | Set to `1` to redact long base64/hex-shaped strings that look like secrets. |
-| `AKM_REDACT_ENTROPY_MIN_LEN` | `32` | Minimum length for the high-entropy matcher. Values below `32` are clamped to `32`. No effect unless `AKM_REDACT_HIGH_ENTROPY=1`. |
-| `AKM_REDACT_PII` | unset (off) | Set to `1` to redact credit-card-shaped digit runs, US SSNs, and phone numbers. |
+The format-declaration write gate (#99) watches `edit`/`write` (and is inert on `apply_patch`, which carries no file path: one warning per process). When a file the session **read** declares a format your bundle documents — an `apiVersion:` namespace, a `yaml-language-server` pragma, a `$schema` key, an XML root namespace — and that asset has not been opened this session, the first `edit`/`write` to that file is recorded in the memory-event ledger as it would have been blocked (ledger reason `observe`). The gate only records: it never blocks a call and has no setting. It never records a file this session created: the create is noted when it happens — a `write` to a path this session has not read, or an `edit` with an empty `oldString` — and that path stays insulated for the rest of the session (ledger reason `session-created`).
 
 ## Usage
 

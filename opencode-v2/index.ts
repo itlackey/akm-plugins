@@ -9,7 +9,6 @@
 // captured from the plugin's own fiber context, i.e. the host's logger. Nothing
 // here writes to the console, stdout or stderr.
 import { Plugin } from "@opencode/plugin/effect"
-import type { Tool } from "@opencode/schema/tool"
 import { Effect, Stream } from "effect"
 import { realpathSync } from "node:fs"
 import path from "node:path"
@@ -119,18 +118,10 @@ const plugin = Plugin.define({
         }),
       )
 
-      // The write gate: fail an edit/write with the gate's message. The host reads a pre-tool
-      // failure's `message` when it is a Tool.Error (verified against the 2.0.26 binary: a
-      // `_tag: "Tool.Error"` error reaches the model as the tool's error result; an untagged one
-      // is treated as a declined call). `schema/tool` is not importable from a plugin, so the
-      // error is built here with the tag the host matches on.
+      // The write gate: records what it would have blocked; it never fails the call.
       yield* ctx.tool.hook("execute.before", (input) =>
         Effect.promise(() =>
           core.onToolBefore({ tool: input.tool, sessionID: String(input.sessionID), callID: String(input.id), input: input.input }),
-        ).pipe(
-          Effect.flatMap((message) =>
-            message === undefined ? Effect.void : Effect.fail(Object.assign(new Error(message), { _tag: "Tool.Error" }) as unknown as Tool.Error),
-          ),
         ),
       )
 
