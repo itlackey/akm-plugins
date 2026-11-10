@@ -73,6 +73,18 @@ Every `akm` call runs in the session's directory (in-process recall passes it as
 
 Differences from V1 in general: V1 awaits some hooks synchronously; V2's helpers are asynchronous (pending count, bundle dir, negative feedback). `opencode run` hands the prompt to the hook as a JSON string literal; the plugin unwraps it exactly as V1 does so start-anchored signals still match. V2 has no equivalent of V1's bundle-missing warning, nor of V1's "AKM user feedback recorded" log line per message.
 
+## Read-only mode
+
+For restricted sessions, set the plugin option `readonly` (a per-plugin OpenCode option, not an akm setting; only the boolean `true` counts, anything else is warned about once and ignored):
+
+```jsonc
+{ "plugins": [{ "package": "akm-opencode-v2", "options": { "readonly": true } }] }
+```
+
+Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. Prompt and session-start recall and the injected context still work, with hints that do not mention `akm_remember`. Everything that records is off: session extraction, learning proposals and signals, the pending-proposal and active-workflow notes, the write gate, automatic feedback, the shell environment, and the plugin's event ledger. Usage akm itself records for the read tools, and explicit `akm_feedback` calls, are unchanged.
+
+The plugin does not deny `bash` or file edits. Do that with OpenCode's own `permission` config.
+
 ## Settings
 
 The settings are the `plugins` section of akm's own `config.json` (`AKM_CONFIG_DIR`, else `$XDG_CONFIG_HOME/akm`, else `~/.config/akm`), read when the plugin starts, the same keys and rules as [`akm-opencode`](../opencode/README.md#settings): `autoFeedback`, `indexOnSessionEnd` (unused here), `curateLimit`, `curateTimeoutSeconds`, `pendingProposalTimeoutSeconds` and `redact.pii` / `redact.highEntropy`, with learning on akm's `improve.enabled`. A wrong value is ignored with a warning in the host's log; redaction fails closed. The rest are constants: the prompt hook waits up to 3 seconds for curation before the request proceeds without it, a prompt needs 16 characters, injected text is capped at 4000 characters (the rules and most-used assets lead, ahead of the recalled block; they take what the guidance, the note blocks and the recalled block leave; a rule is shown whole or left out, and a note says how many were left out; the most-used list names at most 10 assets and says when it was cut or left out to fit), a tool call may take 60 seconds, extraction runs at most once per 10 minutes per session.

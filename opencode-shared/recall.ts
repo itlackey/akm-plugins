@@ -134,6 +134,14 @@ export const AKM_HINTS_PREFIX = [
   "- `akm help` has the CLI.",
 ].join("\n")
 
+// Read-only sessions: the same guidance without the write tools and the CLI.
+export const AKM_READONLY_HINTS_PREFIX = [
+  "# AKM is available in this session",
+  "",
+  "- Assets for this project (skills, knowledge, memories, lessons, workflows) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
+  "- Record `akm_feedback` on an asset when it helped, or when its content proved wrong or stale.",
+].join("\n")
+
 export const AKM_CURATED_TAIL = "\n\nTip: call `akm_show <ref>` to fetch full content. Only if an asset is wrong or stale, call `akm_feedback <ref> negative` with a note saying <what is wrong and what it should say>: that lowers its ranking. To correct a fact you have verified, also pass `replace`, `with` and `source`. Use `positive` when it helped. An asset that simply didn't fit your task is not negative feedback: record nothing."
 const AKM_CONTEXT_TRUNCATED_MARKER = "\n\n[truncated for context]"
 

@@ -13,6 +13,7 @@ import { Effect, Stream } from "effect"
 import { realpathSync } from "node:fs"
 import path from "node:path"
 import { readPluginVersion } from "../opencode-shared/bundle"
+import { readonlyOption } from "../opencode-shared/tools"
 import { type LogLevel, PLUGIN_ID, createCore } from "./core"
 
 /** Same directory despite a trailing slash or a symlink; falls back to the resolved path when it cannot be resolved. */
@@ -60,7 +61,10 @@ const plugin = Plugin.define({
       const services = yield* Effect.context<never>()
       const runPromise = Effect.runPromiseWith(services)
 
+      // `{ "package": "akm-opencode-v2", "options": { "readonly": true } }` in the host's `plugins`.
+      const mode = readonlyOption((ctx as { options?: unknown }).options)
       const core = createCore({
+        readonly: mode.readonly,
         directory: ctx.location.directory,
         pluginVersion: readPluginVersion(import.meta.url, PLUGIN_ID),
         moduleUrl: import.meta.url,
@@ -72,12 +76,14 @@ const plugin = Plugin.define({
         },
       })
 
+      if (mode.warning) core.log("warn", mode.warning, { subsystem: "settings" })
+
       // Cleanup: unregistering hooks/tools/subscriptions is scoped to the plugin
       // (they are released when the scope closes); this also cancels in-flight akm
       // calls and drops per-session state.
       yield* Effect.addFinalizer(() => Effect.sync(() => core.dispose()))
 
-      // The five tools. `transform` re-runs on tool reload, so adding by id is idempotent.
+      // The tools (the four read tools only in read-only mode). `transform` re-runs on tool reload, so adding by id is idempotent.
       yield* ctx.tool.transform((editor) => {
         for (const definition of core.tools) {
           editor.add({

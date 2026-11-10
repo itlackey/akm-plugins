@@ -59,6 +59,7 @@ import {
 import {
   AKM_CURATED_TAIL,
   AKM_HINTS_PREFIX,
+  AKM_READONLY_HINTS_PREFIX,
   RECALLED_CONTENT_PROVENANCE,
   applyContextBudget,
   bootstrapBudgetChars,
@@ -76,6 +77,7 @@ import {
   TOOL_SPECS,
   type ToolSpec,
   buildFeedbackArgs,
+  READONLY_TOOLS,
   buildRememberArgs,
   toJsonSchema,
   withProposedWarnings,
@@ -96,6 +98,8 @@ export type CoreOptions = {
   moduleUrl: string
   /** The host's session record (`parentID`, `metadata`), read at call time. Only `metadata.akm.project` is used. */
   session?: (sessionID: string) => Promise<{ parentID?: string; metadata?: Record<string, unknown> } | undefined>
+  /** Read-only mode: only the four read tools, recall and its context, and no memory, learning, extraction or ledger writes. */
+  readonly?: boolean
   /** The plugin's own version, exported to shell environments as AKM_PLUGIN_VERSION. */
   pluginVersion?: string
   /** Test seam: where structured memory events go. Defaults to the shared `opencode` ledger. */
@@ -168,7 +172,8 @@ export function createCore(options: CoreOptions) {
   const resolveCommand = options.resolveCommand ?? (() => resolveAkmCommand(options.moduleUrl, PACKAGE_NAME))
   const extractSession = options.extract ?? spawnSessionExtract
   let disposed = false
-  const writeEvent = options.writeEvent ?? writeOpencodeEvent
+  const readonly = options.readonly === true
+  const writeEvent: EventWriter = readonly ? () => ({ ok: true, redacted: false, categories: [] }) : (options.writeEvent ?? writeOpencodeEvent)
   const tracker = createFeedbackTracker({ autoFeedback: () => settings.autoFeedback })
   const bundleDir = createBundleDirResolver()
 
@@ -408,7 +413,7 @@ export function createCore(options: CoreOptions) {
       if (!text) return
       // Read before the feedback plan updates the window, as the V1 hook does.
       const recentAssetFailure = tracker.hasRecentNegativeSignal(sessionID)
-      observeUserMessage(sessionID, text)
+      if (!readonly) observeUserMessage(sessionID, text)
       const st = state(sessionID)
       const decision = shouldRecall(text, { activeWorkflow: !!st.workflow, recentAssetFailure })
       if (!decision.shouldRecall) {
@@ -464,10 +469,10 @@ export function createCore(options: CoreOptions) {
         // The rules lead: they are the standing guidance, and the budget cuts from the end.
         childSessions.has(sessionID) ? "" : await bootstrap.text(sessionID),
         st?.curated ? `${RECALLED_CONTENT_PROVENANCE}${st.curated}${AKM_CURATED_TAIL}` : "",
-        AKM_HINTS_PREFIX,
+        readonly ? AKM_READONLY_HINTS_PREFIX : AKM_HINTS_PREFIX,
         st?.workflow ? formatWorkflowContext(st.workflow) : "",
         // The pending-proposal nag: only when something awaits review (cached for a minute).
-        await pendingProposals.contextBlock(sessionID),
+        readonly ? "" : await pendingProposals.contextBlock(sessionID),
       ]
       return applyContextBudget(blocks).join("\n\n")
     } catch (error: unknown) {
@@ -482,7 +487,7 @@ export function createCore(options: CoreOptions) {
     const cwdContext = gatherCwdContext(options.directory)
     const [curated, workflowRaw] = await Promise.all([
       cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
-      runBestEffort(sessionID, ["--format", "json", "-q", "workflow", "list", "--active"], { operation: "active-workflow-summary" }),
+      readonly ? Promise.resolve(null) : runBestEffort(sessionID, ["--format", "json", "-q", "workflow", "list", "--active"], { operation: "active-workflow-summary" }),
     ])
     if (disposed || sessions.get(sessionID) !== st) return
     if (curated && !st.curated) st.curated = curated
@@ -619,11 +624,11 @@ export function createCore(options: CoreOptions) {
           break
         case "session.execution.succeeded":
           // A turn finished: the V2 analogue of V1's per-turn `session.idle`.
-          maybeExtract(sessionID)
+          if (!readonly) maybeExtract(sessionID)
           break
         case "session.deleted":
           // The gate is the one feature whose total failure looks exactly like normal operation.
-          warnIfWriteGateInert(gateHost)
+          if (!readonly) warnIfWriteGateInert(gateHost)
           dropSession(sessionID)
           break
         default:
@@ -694,7 +699,7 @@ export function createCore(options: CoreOptions) {
     }
   }
 
-  const tools: ToolDefinition[] = (Object.keys(TOOL_SPECS) as ToolSpec["name"][]).map((name) => ({
+  const tools: ToolDefinition[] = ((readonly ? READONLY_TOOLS : Object.keys(TOOL_SPECS)) as readonly ToolSpec["name"][]).map((name) => ({
     name,
     description: TOOL_SPECS[name].description,
     inputSchema: toJsonSchema(TOOL_SPECS[name]),
@@ -711,9 +716,10 @@ export function createCore(options: CoreOptions) {
     tools,
     onPrompt,
     contextText,
-    onToolBefore,
-    onToolResult,
-    shellEnv,
+    // Read-only: no write gate, no auto-feedback tracking, no shell environment.
+    onToolBefore: readonly ? async () => {} : onToolBefore,
+    onToolResult: readonly ? async () => {} : onToolResult,
+    shellEnv: readonly ? async () => {} : shellEnv,
     onEvent,
     dispose,
     log,

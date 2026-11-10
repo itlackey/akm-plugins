@@ -70,6 +70,18 @@ OpenCode has no first-class permission DSL today, so enforce it outside the plug
 
 Independently of any such control, agents should treat these verbs as requiring explicit user approval: `proposal accept`, `proposal reject`, `proposal revert`, `sync --push`, `remove`, env/secret writes, `task add` / `task run`, `upgrade`, `update --all`, `config set`.
 
+## Read-only mode
+
+For restricted sessions, set the plugin option `readonly` (a per-plugin OpenCode option, not an akm setting; only the boolean `true` counts, anything else is warned about once and ignored):
+
+```jsonc
+{ "plugin": [["akm-opencode", { "readonly": true }]] }
+```
+
+Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. Prompt and session-start recall and the injected context still work (the recalled text is injected inline, with hints that do not mention `akm_remember`). Everything that records is off: session extraction, learning proposals and signals, the pending-proposal note, the write gate, automatic feedback, `shell.env`, index-on-session-end, and the plugin's event ledger. Usage akm itself records for the read tools, and explicit `akm_feedback` calls, are unchanged.
+
+The plugin does not deny `bash` or file edits. Do that with OpenCode's own `permission` config.
+
 ## Settings
 
 The plugin has no environment variables for its settings. They are the `plugins` section of akm's own `config.json` (`AKM_CONFIG_DIR`, else `$XDG_CONFIG_HOME/akm`, else `~/.config/akm`), which the plugin reads itself when OpenCode builds it; the Claude and Codex plugins read the same file ([the Claude plugin's Settings section](../claude/README.md#settings) lists the keys and how redaction fails closed). Every key is optional:
