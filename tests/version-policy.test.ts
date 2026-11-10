@@ -97,7 +97,7 @@ describe("version policy", () => {
   test("the release workflow derives the version instead of accepting a typed one", () => {
     // The release version is derived from the akm version and the UTC clock by scripts/release-version.ts (see
     // tests/release-version.test.ts for the schemes). On the akm 0.9 line that is <akm_version><UTC yyyymmddhhmm>, e.g.
-    // akm 0.9.1 released at 2026-08-24 20:12 UTC -> 0.9.1202608242012; from akm 0.10 it is 0.10.YYMMNN.
+    // akm 0.9.1 released at 2026-08-24 20:12 UTC -> 0.9.1202608242012; from akm 0.10 it is 0.10.YYMMNN, and from akm 0.11 plain semver with the plugins' own patch.
     //
     // This is enforced rather than conventional because the hand-typed scheme
     // it replaced shipped two releases with a typo'd YEAR -- 0.9.202808211043

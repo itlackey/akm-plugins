@@ -1,5 +1,7 @@
 // scripts/release-version.ts: the plugin release version for an akm version (akm#1089).
 //
+// From akm 0.11 the plugins release as 0.<minor>.<P>[-<stage>.<N>]: their own patch inside akm's minor (akm#1591).
+//
 // From akm 0.10 the plugins release as 0.10.YYMMNN[-stage] with their own monthly counter: every release consumes the
 // next NN of the UTC month, whatever its stage. The akm 0.9 line keeps <akm_version><yyyymmddhhmm>, which for 0.10 would
 // be an 18-digit patch above Number.MAX_SAFE_INTEGER that node-semver and npm reject.
@@ -150,9 +152,15 @@ describe("akm 0.11+: semver, the plugins' own patch inside akm's minor", () => {
     expect(d("0.11.1-beta.1", ["0.11.0", "0.11.1-beta.1"]).version).toBe("0.11.1-beta.2")
   })
 
+  test("a stage that goes backwards derives a version npm's next already outranks, so the workflow refuses it", () => {
+    const version = d("0.11.0-beta.3", ["0.11.0-rc.1"]).version
+    expect(version).toBe("0.11.0-beta.1")
+    expect(order(version, "0.11.0-rc.1")).toBe(-1)
+  })
+
   test("an invalid akm version is rejected", () => {
-    for (const bad of ["0.11", "0.11.x", "0.11.0+build", "1.0.0", "v0.11.0", "0.11.0-", "0.11.0-1"]) {
-      expect(() => d(bad)).toThrow(/not a semver akm version/)
+    for (const bad of ["0.11", "0.11.x", "0.11.0+build", "1.0.0", "v0.11.0", "0.11.0-", "0.11.0-1", "0.11.0-beta", "0.11.0-gamma.1"]) {
+      expect(() => d(bad)).toThrow(/0\.<minor>\.<patch>/)
     }
   })
 })

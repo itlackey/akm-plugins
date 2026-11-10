@@ -3,7 +3,7 @@
 // akm 0.11 onward uses plain semver (0.11.0-beta.1, 0.11.0, 0.11.1). The plugins keep their own patch inside akm's
 // major.minor: a stable release is 0.<minor>.<P>, P one above the highest stable patch of that minor on npm (0 if none);
 // a prerelease is 0.<minor>.<P>-<stage>.<N> with the same P and N one above the highest published -<stage>.N of that
-// 0.<minor>.<P> (1 if none).
+// 0.<minor>.<P> (1 if none). A stage is alpha, beta or rc; an akm_version outside that shape is rejected.
 //
 // akm 0.10 versions its releases as 0.10.YYMMNN: YY the UTC year, MM the month and NN the release number within
 // that month (01 to 99), two digits each, with -alpha, -beta or -rc for a prerelease and no ".N". Every release, whatever
@@ -22,9 +22,9 @@
 //   AKM_VERSION=0.10.261001-beta bun scripts/release-version.ts derive >> "$GITHUB_OUTPUT"
 
 import { execFileSync } from "node:child_process"
-import semver from "semver"
 
 const MONTHLY_MINOR = 10
+const SEMVER_0 = /^0\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$/
 const MONTHLY = /^0\.(\d+)\.(\d{2})(\d{2})(\d{2})(?:-(alpha|beta|rc))?$/
 
 const pad2 = (n: number): string => String(n).padStart(2, "0")
@@ -55,16 +55,17 @@ export interface Derived {
 
 /** The plugin version for akm 0.11+: its own patch inside akm's 0.<minor>, a stage becoming -<stage>.<N>. */
 function deriveSemver(akmVersion: string, published: readonly string[]): string {
-  const akm = semver.parse(akmVersion, { loose: false })
-  const stage = akm?.prerelease[0]
-  if (!akm || akm.major !== 0 || akm.build.length > 0 || (akm.prerelease.length > 0 && typeof stage !== "string")) {
-    throw new Error(`"${akmVersion}" is not a semver akm version 0.<minor>.<patch> with an optional -<stage>[.N] prerelease`)
-  }
-  const line = published.map((v) => semver.parse(v)).filter((v): v is semver.SemVer => v !== null && v.major === 0 && v.minor === akm.minor)
-  const patch = Math.max(-1, ...line.filter((v) => v.prerelease.length === 0).map((v) => v.patch)) + 1
-  if (typeof stage !== "string") return `0.${akm.minor}.${patch}`
-  const counts = line.filter((v) => v.patch === patch && v.prerelease[0] === stage).map((v) => Number(v.prerelease[1]) || 0)
-  return `0.${akm.minor}.${patch}-${stage}.${Math.max(0, ...counts) + 1}`
+  const akm = SEMVER_0.exec(akmVersion)
+  if (!akm) throw new Error(`"${akmVersion}" is not 0.<minor>.<patch> with an optional -alpha.N, -beta.N or -rc.N prerelease`)
+  const [, minor, , stage] = akm
+  const line = published.flatMap((v) => {
+    const m = SEMVER_0.exec(v)
+    return m && m[1] === minor ? [{ patch: Number(m[2]), stage: m[3], n: Number(m[4] ?? 0) }] : []
+  })
+  const patch = Math.max(-1, ...line.filter((v) => !v.stage).map((v) => v.patch)) + 1
+  if (!stage) return `0.${minor}.${patch}`
+  const n = Math.max(0, ...line.filter((v) => v.patch === patch && v.stage === stage).map((v) => v.n))
+  return `0.${minor}.${patch}-${stage}.${n + 1}`
 }
 
 /**
@@ -92,7 +93,7 @@ export function deriveRelease(akmVersionInput: string, now: Date, listPublished:
     if (highest >= 99) throw new Error(`0.${minor}.${month}99 is already published: no release numbers are left for this UTC month`)
     version = `0.${minor}.${month}${pad2(highest + 1)}${stage ? `-${stage}` : ""}`
   } else if (minor === undefined) {
-    throw new Error(`"${akmVersion}" is not a semver akm version 0.<minor>.<patch> with an optional -<stage>[.N] prerelease`)
+    throw new Error(`"${akmVersion}" is not an akm version 0.<minor>.<patch>[-<stage>]`)
   } else {
     // The 0.9 line and older: the timestamp is glued onto the patch (stable) or added as a prerelease identifier.
     const stamp = `${now.getUTCFullYear()}${pad2(now.getUTCMonth() + 1)}${pad2(now.getUTCDate())}${pad2(now.getUTCHours())}${pad2(now.getUTCMinutes())}`

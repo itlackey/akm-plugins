@@ -18,7 +18,7 @@
 | `ref-extraction.test.ts` | `extractAkmRefs()` pattern matching: all ref shapes, edge cases |
 | `ref-resolver-contract.test.ts` | Ref resolver contract: resolve + feedback integration |
 | `opencode-eval-harness.test.ts` | Eval harness fixtures and score thresholds |
-| `release-version.test.ts` | `scripts/release-version.ts`: the plugin release version derived from the akm version (0.10 monthly release numbers `0.10.YYMMNN[-stage]` with their own counter, retired 8-digit daily builds ignored and rejected, and the pinned ordering below them; the 0.9 `<akm_version><yyyymmddhhmm>` scheme), validation, and that no derived version is an 18-digit patch |
+| `release-version.test.ts` | `scripts/release-version.ts`: the plugin release version derived from the akm version (0.11+ semver with the plugins' own patch, 0.10 monthly release numbers `0.10.YYMMNN[-stage]` with their own counter, retired 8-digit daily builds ignored and rejected, and the pinned ordering below them; the 0.9 `<akm_version><yyyymmddhhmm>` scheme), validation, and that no derived version is an 18-digit patch |
 | `akm-availability.test.ts` | The plugin's bundled akm-cli: a missing one is reported through SessionStart context and the state log, never stderr, and nothing is installed; a healthy one ships the primer header and footer; against the akm-cli `claude/` declares (skipped unless `claude/`'s dependencies are installed) the hook runs the pinned version with no akm on PATH |
 
 ## AKM CLI resolution (audit #19)
