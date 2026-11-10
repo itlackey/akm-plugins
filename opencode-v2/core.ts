@@ -98,7 +98,10 @@ export type CoreOptions = {
   moduleUrl: string
   /** The host's session record (`parentID`, `metadata`), read at call time. Only `metadata.akm.project` is used. */
   session?: (sessionID: string) => Promise<{ parentID?: string; metadata?: Record<string, unknown> } | undefined>
-  /** Read-only mode: only the four read tools, recall and its context, and no memory, learning, extraction or ledger writes. */
+  /**
+   * Read-only mode: only the four read tools, recall and its context, and no memory, learning, extraction or ledger writes.
+   * The entrypoint must also leave the tool and shell hooks unregistered: `onToolBefore`, `onToolResult` and `shellEnv` do not check this flag.
+   */
   readonly?: boolean
   /** The plugin's own version, exported to shell environments as AKM_PLUGIN_VERSION. */
   pluginVersion?: string
