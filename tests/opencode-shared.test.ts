@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test"
 import { buildReadArgs } from "../opencode-shared/akm-cli"
 import { formatPendingProposalContext } from "../opencode-shared/learning"
-import { AKM_HINTS_PREFIX, formatRunAge, formatWorkflowContext, summarizeActiveWorkflows } from "../opencode-shared/recall"
-import { ASSET_TYPES, TOOL_SPECS, buildFeedbackArgs, toJsonSchema, withProposedWarnings } from "../opencode-shared/tools"
+import { AKM_HINTS_PREFIX, AKM_READONLY_HINTS_PREFIX, formatRunAge, formatWorkflowContext, summarizeActiveWorkflows } from "../opencode-shared/recall"
+import { ASSET_TYPES, TOOL_SPECS, buildFeedbackArgs, readonlyOption, toJsonSchema, withProposedWarnings } from "../opencode-shared/tools"
 
 // Pure argv/schema builders shared by akm-opencode (V1) and akm-opencode-v2.
 describe("opencode-shared read argv", () => {
@@ -87,5 +87,25 @@ describe("opencode-shared session context", () => {
   it("names lessons among the assets and no longer points at `akm hints`", () => {
     expect(AKM_HINTS_PREFIX).toContain("lessons")
     expect(AKM_HINTS_PREFIX).not.toContain("akm hints")
+  })
+})
+
+describe("opencode-shared read-only option", () => {
+  it("only a literal true turns it on; any other value warns, except an absent or false one", () => {
+    expect(readonlyOption({ readonly: true })).toEqual({ readonly: true })
+    for (const value of [undefined, false]) expect(readonlyOption({ readonly: value })).toEqual({ readonly: false })
+    expect(readonlyOption(undefined)).toEqual({ readonly: false })
+    for (const value of ["true", 1, null, {}]) {
+      const result = readonlyOption({ readonly: value })
+      expect(result.readonly).toBe(false)
+      expect(result.warning).toContain("`readonly`")
+    }
+  })
+
+  it("read-only hints name no write tool", () => {
+    expect(AKM_READONLY_HINTS_PREFIX).toContain("akm_curate")
+    expect(AKM_READONLY_HINTS_PREFIX).toContain("akm_feedback")
+    expect(AKM_READONLY_HINTS_PREFIX).not.toContain("akm_remember")
+    expect(AKM_READONLY_HINTS_PREFIX).not.toContain("akm help")
   })
 })

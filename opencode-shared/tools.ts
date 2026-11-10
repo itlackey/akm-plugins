@@ -96,6 +96,19 @@ export const TOOL_SPECS: Record<ToolSpec["name"], ToolSpec> = {
   },
 }
 
+/** The tools a read-only session gets: reads and explicit feedback, nothing that writes memory. */
+export const READONLY_TOOLS = ["akm_search", "akm_show", "akm_curate", "akm_feedback"] as const
+
+/**
+ * The plugin option `readonly`. Only a literal `true` turns it on; any other value is ignored
+ * with a warning (the caller says it once in the host's log).
+ */
+export function readonlyOption(options: unknown): { readonly: boolean; warning?: string } {
+  const value = options && typeof options === "object" ? (options as { readonly?: unknown }).readonly : undefined
+  if (value === undefined || value === false || value === true) return { readonly: value === true }
+  return { readonly: false, warning: "AKM plugin option `readonly` must be the boolean true to turn read-only mode on; ignoring it and running normally." }
+}
+
 /** JSON Schema (draft 2020-12 subset) for one tool's arguments. */
 export function toJsonSchema(spec: ToolSpec): Record<string, unknown> {
   const properties: Record<string, unknown> = {}

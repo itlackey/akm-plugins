@@ -72,6 +72,8 @@ function frontmatterFree(content: string): string {
 export type BootstrapOptions = {
   /** The host's explicit project override (`--project`), when it set one. */
   project?: string
+  /** Read-only OpenCode sessions have no CLI: the text names the `akm_search` / `akm_show` tools instead of commands. */
+  readonly?: boolean
   /** Characters this block may use; rule text comes first, then the list. */
   budgetChars: number
   /** Test seam: how long the whole load may take. */
@@ -152,7 +154,7 @@ async function load(run: BootstrapRun, options: BootstrapOptions): Promise<strin
     const cut = total >= RULES_LIST_LIMIT
     const note =
       leftOut > 0 || cut
-        ? `Not every rule is shown: ${leftOut} of ${cut ? `the first ${total}` : total} left out (context budget or unreadable)${cut ? `, and akm listed no more than ${RULES_LIST_LIMIT}` : ""}. List them with \`akm search "" --type rule --limit 200\`.`
+        ? `Not every rule is shown: ${leftOut} of ${cut ? `the first ${total}` : total} left out (context budget or unreadable)${cut ? `, and akm listed no more than ${RULES_LIST_LIMIT}` : ""}. List them with ${options.readonly ? "`akm_search` (type rule, limit 200)" : '`akm search "" --type rule --limit 200`'}.`
         : ""
     if (bodies.length > 0 || note) {
       const text = [heading, ...bodies, ...(note ? [note] : [])].join("\n\n")
@@ -162,7 +164,7 @@ async function load(run: BootstrapRun, options: BootstrapOptions): Promise<strin
   }
 
   if (usage.hits.length > 0 && remaining > 0) {
-    const heading = "# AKM assets used most here\nMost used first. Read one with `akm show <ref>` before relying on it."
+    const heading = `# AKM assets used most here\nMost used first. Read one with ${options.readonly ? "`akm_show`" : "`akm show <ref>`"} before relying on it.`
     const lines: string[] = []
     let used = heading.length + 1 + USAGE_CUT_NOTE.length
     for (const hit of usage.hits) {

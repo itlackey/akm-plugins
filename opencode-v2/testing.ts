@@ -35,7 +35,7 @@ export type HostFake = {
   callTool(name: string, input: unknown, sessionID?: string): Promise<{ content: string; metadata?: Record<string, unknown> }>
 }
 
-export async function startPlugin(directory: string): Promise<HostFake> {
+export async function startPlugin(directory: string, options?: unknown): Promise<HostFake> {
   const tools = new Map<string, any>()
   const sessionHooks = new Map<string, Callback>()
   const toolHooks = new Map<string, Callback>()
@@ -51,6 +51,7 @@ export async function startPlugin(directory: string): Promise<HostFake> {
   const registration = { dispose: Effect.void }
   const ctx: any = {
     location: { directory, project: { directory } },
+    options,
     tool: {
       transform: (callback: (editor: unknown) => void) =>
         Effect.sync(() => {

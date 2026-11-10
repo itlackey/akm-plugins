@@ -567,6 +567,60 @@ describe("akm-opencode-v2 plugin", () => {
     })
   })
 
+  describe("read-only mode", () => {
+    const stateDir = () => path.join(process.env.XDG_STATE_HOME!, "akm-opencode")
+
+    it("registers exactly the four read tools and no write-gate, tracking or shell hook", async () => {
+      host = await startPlugin(project, { readonly: true })
+      expect([...host.tools.keys()].sort()).toEqual(["akm_curate", "akm_feedback", "akm_search", "akm_show"])
+      expect(host.logs.some((line) => line.level === "Warn")).toBe(false)
+      expect(host.toolHooks.size).toBe(0)
+      expect(host.shellHooks.size).toBe(0)
+    })
+
+    it("keeps recall and its context, with hints that never mention akm_remember, and writes nothing", async () => {
+      host = await startPlugin(project, { readonly: true })
+      await host.subscribed
+      await host.emit({ type: "session.created", data: { sessionID: "ses_ro", location: { directory: project } }, location: { directory: project } })
+      await settle(300)
+      expect(curateCalls.some((c) => c.query.includes("fixture-project"))).toBe(true)
+      await host.runPrompt("ses_ro", PROMPT)
+      const text = (await host.runContext("ses_ro", []))[0].text
+      expect(text).toContain("AKM PROVENANCE")
+      expect(text).toContain("skills/nginx-proxy")
+      expect(text).toContain("akm_curate")
+      expect(text).toContain("akm_feedback")
+      expect(text).not.toContain("akm_remember")
+    })
+
+    it("starts no extraction, learning proposal, workflow listing, auto-feedback or ledger write", async () => {
+      host = await startPlugin(project, { readonly: true })
+      await host.subscribed
+      const loc = { directory: project }
+      await host.emit({ type: "session.created", data: { sessionID: "ses_ro2", location: loc }, location: loc })
+      await host.runPrompt("ses_ro2", "Remember that we always deploy the staging stack with docker compose on port 8443")
+      await host.runPrompt("ses_ro2", "thanks, that worked")
+      await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_ro2", location: loc }, location: loc })
+      await host.emit({ type: "session.deleted", data: { sessionID: "ses_ro2" }, location: loc })
+      await settle(600)
+      const verbs = new Set(fake.calls().map((a) => a[0]))
+      // `config get` is the session bootstrap's read of the default bundle.
+      for (const verb of verbs) expect(["search", "show", "curate", "feedback", "config"]).toContain(verb)
+      // An explicit feedback call still goes through, and is not recording.
+      expect(JSON.parse((await host.callTool("akm_feedback", { ref: "skills/nginx-proxy", sentiment: "positive" })).content).ok).toBe(true)
+      expect(fake.calls().some((a) => a[0] === "feedback")).toBe(true)
+      expect(existsSync(stateDir())).toBe(false)
+    })
+
+    it("treats a non-true value as normal mode and says so once in the host's log", async () => {
+      host = await startPlugin(project, { readonly: "yes" })
+      await settle(100)
+      expect([...host.tools.keys()]).toHaveLength(5)
+      const warnings = host.logs.filter((line) => line.level === "Warn" && line.message.includes("`readonly`"))
+      expect(warnings).toHaveLength(1)
+    })
+  })
+
   describe("shell environment", () => {
     it("exports the plugin version to every shell it starts, and no project or bundle variable", async () => {
       process.env.AKM_BUNDLE_DIR = "/srv/bundle"

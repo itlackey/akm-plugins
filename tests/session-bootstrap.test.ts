@@ -510,6 +510,18 @@ describe("loadSessionBootstrap: failures, sources and time", () => {
     const text = await loadSessionBootstrap(world.run(world.acme), { budgetChars: 500 })
     expect(text).toContain('akm search "" --type rule --limit 200')
   })
+
+  it("read-only sessions are pointed at the akm tools, not the CLI", async () => {
+    const cut = makeWorld({ assets: Array.from({ length: 4 }, (_, n) => rule(`r${n}`, `- ${"x".repeat(200)}`)), usage: [] })
+    const rules = await loadSessionBootstrap(cut.run(cut.acme), { budgetChars: 500, readonly: true })
+    expect(rules).toContain("List them with `akm_search` (type rule, limit 200).")
+    expect(rules).not.toContain("akm search")
+
+    const world = makeWorld()
+    const text = await loadSessionBootstrap(world.run(world.acme), { budgetChars: BIG, readonly: true })
+    expect(text).toContain("Read one with `akm_show` before relying on it.")
+    expect(text).not.toContain("akm show <ref>")
+  })
 })
 
 describe("createSessionBootstrap: a slow akm does not hold a request back", () => {

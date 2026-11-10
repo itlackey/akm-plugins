@@ -135,6 +135,7 @@ mock.module("node:child_process", () => ({
 const { setCurateForTests } = await import("../opencode-shared/akm-api.ts")
 const pluginModule = await import("../opencode/index.ts")
 const { AkmPlugin } = pluginModule
+const __curatedDir = AkmPlugin.__curatedDirForTests
 
 function createMockClient() {
   return {
@@ -317,6 +318,82 @@ describe("akm-opencode plugin", () => {
       expect(hooks["tool.execute.before"]).toBeDefined()
       expect(hooks["experimental.session.compacting"]).toBeUndefined()
       expect((hooks as Record<string, unknown>).stop).toBeUndefined()
+    })
+
+    describe("read-only mode", () => {
+      const sizeOf = (file: string) => (existsSync(file) ? readFileSync(file, "utf8").length : 0)
+      // The ledger and the learning stores, all under the plugin's state dir.
+      const ledgerSize = () => ["events.jsonl", "learning-signals.jsonl", "learning-proposals.jsonl"].map((name) => sizeOf(path.join(path.dirname(eventLogPath), name))).join(",")
+
+      it("registers exactly the four read tools and only the recall hooks", async () => {
+        const hooks = await AkmPlugin(createPluginInput(), { readonly: true })
+        expect(Object.keys(hooks.tool!).sort()).toEqual(["akm_curate", "akm_feedback", "akm_search", "akm_show"])
+        expect(Object.keys(hooks).sort()).toEqual(["chat.message", "event", "experimental.chat.system.transform", "tool"])
+      })
+
+      it("recalls and injects inline context without akm_remember, and records and spawns nothing", async () => {
+        const client = createMockClient()
+        const ledgerBefore = ledgerSize()
+        const hooks = await AkmPlugin(createPluginInput(client), { readonly: true })
+        await hooks.event!({ event: { type: "session.created", properties: { sessionID: "ro-1" } } } as any)
+        await hooks["chat.message"]!(
+          { sessionID: "ro-1", messageID: "m1", agent: "build" } as any,
+          { parts: [{ type: "text", text: "Remember that we always deploy the staging stack with docker compose on port 8443" }] } as any,
+        )
+        await waitFor(() => (curateCalls.length >= 2 ? true : undefined))
+        await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "ro-1" } } } as any)
+        await hooks.event!({ event: { type: "session.compacted", properties: { sessionID: "ro-1" } } } as any)
+
+        const output = { system: ["host prompt"] }
+        await hooks["experimental.chat.system.transform"]!({ sessionID: "ro-1" } as any, output as any)
+        expect(output.system).toHaveLength(1)
+        expect(output.system[0]).toContain("AKM PROVENANCE")
+        expect(output.system[0]).toContain("skills/review")
+        expect(output.system[0]).toContain("akm_feedback")
+        expect(output.system[0]).not.toContain("akm_remember")
+        expect(output.system[0]).not.toContain("AKM bundle curation written to")
+
+        await hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "ro-1" } } } as any)
+        await Bun.sleep(100)
+        expect(mockSpawn).not.toHaveBeenCalled()
+        const verbs = [...mockExecFileSync.mock.calls.map(([, args]) => args?.[0]), ...execFileCalls.map((call) => call.args[0])]
+        // `config get` is the session bootstrap's read of the default bundle.
+        for (const verb of verbs) expect(["search", "show", "curate", "feedback", "config"]).toContain(verb as string)
+        expect(ledgerSize()).toBe(ledgerBefore)
+        expect(existsSync(path.join(__curatedDir(), "ro-1.md"))).toBe(false)
+      })
+
+      it("keeps explicit akm_feedback working without writing the ledger", async () => {
+        const ledgerBefore = ledgerSize()
+        const hooks = await AkmPlugin(createPluginInput(), { readonly: true })
+        const out = await (hooks.tool!.akm_feedback as any).execute({ ref: "skills/review", sentiment: "positive" }, createToolContext())
+        expect(JSON.parse(out).ok).toBe(true)
+        expect(mockExecFileSync.mock.calls.some(([, args]) => args?.[0] === "feedback")).toBe(true)
+        expect(ledgerSize()).toBe(ledgerBefore)
+      })
+
+      it("is per instance: a readonly and a normal plugin in one process do not leak into each other", async () => {
+        const readonly = await AkmPlugin(createPluginInput(), { readonly: true })
+        const normal = await AkmPlugin(createPluginInput())
+        const before = ledgerSize()
+        await (readonly.tool!.akm_search as any).execute({ query: "review" }, createToolContext())
+        await (readonly.tool!.akm_feedback as any).execute({ ref: "skills/review", sentiment: "positive" }, createToolContext())
+        expect(ledgerSize()).toBe(before)
+        await (normal.tool!.akm_search as any).execute({ query: "review" }, createToolContext())
+        expect(ledgerSize()).not.toBe(before)
+        const middle = ledgerSize()
+        await (readonly.tool!.akm_show as any).execute({ ref: "skills/review" }, createToolContext())
+        expect(ledgerSize()).toBe(middle)
+      })
+
+      it("treats a non-true value as normal mode and says so in the host log", async () => {
+        const client = createMockClient()
+        const hooks = await AkmPlugin(createPluginInput(client), { readonly: "yes" })
+        expect(Object.keys(hooks.tool!)).toHaveLength(5)
+        expect(hooks["shell.env"]).toBeDefined()
+        const warnings = client.app.log.mock.calls.filter(([arg]: any) => arg.body.level === "warn" && arg.body.message.includes("`readonly`"))
+        expect(warnings).toHaveLength(1)
+      })
     })
 
     it("does not initialize agent configuration on session creation", async () => {
