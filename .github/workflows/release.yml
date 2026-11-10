@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       akm_version:
-        description: "The exact akm CLI version these plugins target and carry. For akm 0.10+ (e.g. 0.10.261001-beta, already on npm) the plugins release as 0.10.<UTC YYMM><NN>[-stage], NN being the next free release number of the current UTC month among the published 6-digit akm-opencode versions, and the stage (alpha, beta or rc) copied from akm_version; a stage makes it a `next` release. A retired 8-digit daily akm version (0.10.YYMMDDNN) is rejected. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
+        description: "The exact akm CLI version these plugins target and carry. For akm 0.11+ (plain semver, e.g. 0.11.0-beta.1 or 0.11.0, already on npm) the plugins release as 0.<minor>.<P> (P one above the highest stable akm-opencode patch of that minor, or 0) or, for a prerelease, 0.<minor>.<P>-<stage>.<N> (N one above the highest published); a stage makes it a `next` release. For akm 0.10 (e.g. 0.10.261001-beta) the plugins release as 0.10.<UTC YYMM><NN>[-stage]. For akm 0.9 (e.g. 0.9.30) the version is <akm_version><UTC yyyymmddhhmm>, or <akm_version>.<UTC yyyymmddhhmm> for a prerelease (e.g. 0.9.31-alpha.4). You never type the date."
         required: true
         type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   # One job decides what is published, in this order: derive and validate the version, stamp the manifests, pin
@@ -48,13 +52,18 @@ jobs:
       # silently never become `latest`. Removing the human from the date
       # removes that whole failure class.
       #
-      # akm 0.10 and later (akm#1089): akm versions are monthly release
+      # akm 0.11 and later (akm#1591): akm uses plain semver. The plugins keep
+      # their own patch inside akm's 0.<minor>: stable 0.<minor>.<P>, P one
+      # above the highest stable akm-opencode patch of that minor on npm (0 if
+      # none); prerelease 0.<minor>.<P>-<stage>.<N>, N one above the highest
+      # published for that P. A prerelease akm_version is a `next` release.
+      #
+      # akm 0.10 (akm#1089): akm versions are monthly release
       # numbers, 0.10.YYMMNN with -alpha/-beta/-rc for a prerelease. The
       # plugins use the same shape with their own counter: 0.10.<UTC YYMM><NN>
       # [-stage], NN one above the highest 6-digit akm-opencode version already
       # on npm for the current UTC month (stage ignored, retired 8-digit daily
-      # builds ignored), the stage copied from akm_version. A stage is a `next`
-      # release. A retired 8-digit daily akm_version is rejected.
+      # builds ignored), the stage copied from akm_version.
       #
       # akm 0.9 (the old scheme, still releasable): <akm_version><yyyymmddhhmm>,
       # e.g. akm 0.9.1 at 2026-08-24 20:12 UTC -> 0.9.1202608242012. A
@@ -103,7 +112,7 @@ jobs:
           const parsedAkm = SEMVER.exec(akmVersion)
           if (!parsedAkm) {
             console.error(`akm_version "${akmVersion}" is not valid semver (MAJOR.MINOR.PATCH).`)
-            console.error('Supply the exact akm CLI version these plugins target, e.g. 0.9.30 -- the workflow appends the timestamp.')
+            console.error('Supply the exact akm CLI version these plugins target, e.g. 0.11.0 or 0.11.0-beta.1.')
             process.exit(1)
           }
 
@@ -486,22 +495,6 @@ jobs:
         if: ${{ steps.npm_version.outputs.exists != 'true' }}
         working-directory: opencode-v2
         run: npm publish ${{ steps.publish_args.outputs.publish_args }}
-
-      # TEMPORARY, until the first stable 0.10 plugin release: also point npm `latest` at this prerelease, so a bare
-      # `opencode plugin add akm-opencode-v2` installs a 0.10 build. Turn it off by setting the repository variable
-      # OPENCODE_V2_PRERELEASE_LATEST=false; delete this step once a stable release owns `latest`.
-      # Needs "Allow npm dist-tag" enabled on akm-opencode-v2's trusted publisher (npmjs.com -> package settings).
-      # It never fails the release: if npm refuses, it leaves a warning and `latest` where it was.
-      - name: Point latest at this prerelease (temporary)
-        if: ${{ needs.version.outputs.next == 'true' && vars.OPENCODE_V2_PRERELEASE_LATEST != 'false' }}
-        working-directory: opencode-v2
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          if npm dist-tag add "akm-opencode-v2@$VERSION" latest; then
-            echo "akm-opencode-v2 latest -> $VERSION"
-          else
-            echo "::warning::Could not point akm-opencode-v2 latest at $VERSION. Enable 'Allow npm dist-tag' on the package's trusted publisher, or run: npm dist-tag add akm-opencode-v2@$VERSION latest"
-          fi
 
   github-release:
     needs: [version, publish-opencode, publish-opencode-v2]

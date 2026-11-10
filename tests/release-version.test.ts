@@ -1,5 +1,7 @@
 // scripts/release-version.ts: the plugin release version for an akm version (akm#1089).
 //
+// From akm 0.11 the plugins release as 0.<minor>.<P>[-<stage>.<N>]: their own patch inside akm's minor (akm#1591).
+//
 // From akm 0.10 the plugins release as 0.10.YYMMNN[-stage] with their own monthly counter: every release consumes the
 // next NN of the UTC month, whatever its stage. The akm 0.9 line keeps <akm_version><yyyymmddhhmm>, which for 0.10 would
 // be an 18-digit patch above Number.MAX_SAFE_INTEGER that node-semver and npm reject.
@@ -61,7 +63,7 @@ describe("akm 0.10: monthly release numbers", () => {
 
   test("every derived version is valid semver with a safe 6-digit patch, never the 18-digit concatenation", () => {
     for (const month of ["2026-01", "2026-09", "2026-12", "2027-01", "2028-02", "2099-12"]) {
-      for (const akm of ["0.10.261001", "0.10.261001-alpha", "0.10.261001-beta", "0.10.261001-rc", "0.11.270101"]) {
+      for (const akm of ["0.10.261001", "0.10.261001-alpha", "0.10.261001-beta", "0.10.261001-rc"]) {
         const published: string[] = []
         let previous = ""
         for (let release = 1; release <= 99; release++) {
@@ -110,9 +112,9 @@ describe("akm 0.10: monthly release numbers", () => {
     expect(() => derive("0.10.261001", "2026-10-12T04:00:00Z", ["0.10.261099"])).toThrow(/no release numbers/)
   })
 
-  test("a retired 8-digit daily akm version is rejected with a message that names the new form", () => {
+  test("a retired 8-digit daily akm version is rejected", () => {
     for (const legacy of ["0.10.26101001", "0.10.26101002-alpha", "0.10.26101201-rc"]) {
-      expect(() => derive(legacy, "2026-10-12T04:00:00Z")).toThrow(/retired daily build.*YYMMNN/)
+      expect(() => derive(legacy, "2026-10-12T04:00:00Z")).toThrow(/YYMMNN/)
     }
   })
 
@@ -122,6 +124,44 @@ describe("akm 0.10: monthly release numbers", () => {
     }
     expect(() => deriveRelease("0.10.261001", at("2026-10-12T04:00:00Z"), listPublished)).toThrow("npm was read")
     expect(deriveRelease("0.9.30", at("2026-10-10T04:00:00Z"), listPublished).version).toBe("0.9.30202610100400")
+  })
+})
+
+describe("akm 0.11+: semver, the plugins' own patch inside akm's minor", () => {
+  const d = (akm: string, published: string[] = []) => derive(akm, "2026-12-01T00:00:00Z", published)
+
+  test("a prerelease is 0.<minor>.<P>-<stage>.<N>, N counting up and a next release", () => {
+    expect(d("0.11.0-beta.1")).toEqual({ akmVersion: "0.11.0-beta.1", next: true, version: "0.11.0-beta.1" })
+    expect(d("0.11.0-beta.2", ["0.11.0-beta.1"]).version).toBe("0.11.0-beta.2")
+    expect(d("0.11.0-rc.1", ["0.11.0-beta.1", "0.11.0-beta.2"]).version).toBe("0.11.0-rc.1")
+    expect(d("0.12.0-beta.1", ["0.11.0", "0.11.3"])).toEqual({ akmVersion: "0.12.0-beta.1", next: true, version: "0.12.0-beta.1" })
+  })
+
+  test("a stable release is the next patch above the highest stable one of that minor", () => {
+    expect(d("0.11.0")).toEqual({ akmVersion: "0.11.0", next: false, version: "0.11.0" })
+    expect(d("0.11.0", ["0.11.0-beta.1", "0.11.0-beta.2"]).version).toBe("0.11.0")
+    expect(d("0.11.0", ["0.11.0"]).version).toBe("0.11.1")
+    expect(d("0.11.2", ["0.11.0", "0.11.4", "0.11.1"]).version).toBe("0.11.5")
+    expect(d("0.12.0", ["0.11.4", "0.10.261117"]).version).toBe("0.12.0")
+  })
+
+  test("a prerelease after stable patches uses the next stable patch and sorts above them", () => {
+    const version = d("0.11.1-beta.1", ["0.11.0", "0.11.0-beta.3"]).version
+    expect(version).toBe("0.11.1-beta.1")
+    expect(order(version, "0.11.0")).toBe(1)
+    expect(d("0.11.1-beta.1", ["0.11.0", "0.11.1-beta.1"]).version).toBe("0.11.1-beta.2")
+  })
+
+  test("a stage that goes backwards derives a version npm's next already outranks, so the workflow refuses it", () => {
+    const version = d("0.11.0-beta.3", ["0.11.0-rc.1"]).version
+    expect(version).toBe("0.11.0-beta.1")
+    expect(order(version, "0.11.0-rc.1")).toBe(-1)
+  })
+
+  test("an invalid akm version is rejected", () => {
+    for (const bad of ["0.11", "0.11.x", "0.11.0+build", "1.0.0", "v0.11.0", "0.11.0-", "0.11.0-1", "0.11.0-beta", "0.11.0-gamma.1"]) {
+      expect(() => d(bad)).toThrow(/0\.<minor>\.<patch>/)
+    }
   })
 })
 
