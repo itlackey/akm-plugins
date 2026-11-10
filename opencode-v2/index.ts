@@ -62,7 +62,7 @@ const plugin = Plugin.define({
       const runPromise = Effect.runPromiseWith(services)
 
       // `{ "package": "akm-opencode-v2", "options": { "readonly": true } }` in the host's `plugins`.
-      const mode = readonlyOption((ctx as { options?: unknown }).options)
+      const mode = readonlyOption(ctx.options)
       const core = createCore({
         readonly: mode.readonly,
         directory: ctx.location.directory,
@@ -124,32 +124,35 @@ const plugin = Plugin.define({
         }),
       )
 
-      // The write gate: records what it would have blocked; it never fails the call.
-      yield* ctx.tool.hook("execute.before", (input) =>
-        Effect.promise(() =>
-          core.onToolBefore({ tool: input.tool, sessionID: String(input.sessionID), callID: String(input.id), input: input.input }),
-        ),
-      )
+      // Read-only mode registers neither the write gate, the auto-feedback tracking nor the shell hook.
+      if (!mode.readonly) {
+        // The write gate: records what it would have blocked; it never fails the call.
+        yield* ctx.tool.hook("execute.before", (input) =>
+          Effect.promise(() =>
+            core.onToolBefore({ tool: input.tool, sessionID: String(input.sessionID), callID: String(input.id), input: input.input }),
+          ),
+        )
 
-      // Tool post-processing, for every tool: note the akm refs it touched (what a later
-      // "thanks, that worked" credits) and record the plugin's own tools' results.
-      yield* ctx.tool.hook("execute.after", (input) =>
-        Effect.promise(() =>
-          core.onToolResult({
-            tool: input.tool,
-            sessionID: String(input.sessionID),
-            callID: String(input.id),
-            args: input.input,
-            status: input.status,
-            text: input.status === "error" ? String(input.error?.message ?? "") : resultText(input.result),
-            readContent: input.status === "completed" ? readFileText(input.result) : undefined,
-          }),
-        ),
-      )
+        // Tool post-processing, for every tool: note the akm refs it touched (what a later
+        // "thanks, that worked" credits) and record the plugin's own tools' results.
+        yield* ctx.tool.hook("execute.after", (input) =>
+          Effect.promise(() =>
+            core.onToolResult({
+              tool: input.tool,
+              sessionID: String(input.sessionID),
+              callID: String(input.id),
+              args: input.input,
+              status: input.status,
+              text: input.status === "error" ? String(input.error?.message ?? "") : resultText(input.result),
+              readContent: input.status === "completed" ? readFileText(input.result) : undefined,
+            }),
+          ),
+        )
 
-      // Shell environment: the V2 analogue of V1's `shell.env`. `env` is the full environment
-      // the host is about to spawn the shell with, mutated in place.
-      yield* ctx.shell.hook("create.before", (input) => Effect.promise(() => core.shellEnv(input.env)))
+        // Shell environment: the V2 analogue of V1's `shell.env`. `env` is the full environment
+        // the host is about to spawn the shell with, mutated in place.
+        yield* ctx.shell.hook("create.before", (input) => Effect.promise(() => core.shellEnv(input.env)))
+      }
 
       // Session lifecycle: one native event subscription, closed with the plugin scope.
       const directory = ctx.location.directory

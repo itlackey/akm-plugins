@@ -213,7 +213,7 @@ export function createCore(options: CoreOptions) {
         log("warn", "AKM session bootstrap lookup failed", { operation: "session-bootstrap", sessionID, args, error: result.error })
         return ""
       },
-      { project: await projectFor(sessionID), budgetChars: bootstrapBudgetChars(curatedTextChars(settings.curateLimit)) },
+      { readonly, project: await projectFor(sessionID), budgetChars: bootstrapBudgetChars(curatedTextChars(settings.curateLimit)) },
     )
   })
   const gateHost: GateHost = {
@@ -716,10 +716,9 @@ export function createCore(options: CoreOptions) {
     tools,
     onPrompt,
     contextText,
-    // Read-only: no write gate, no auto-feedback tracking, no shell environment.
-    onToolBefore: readonly ? async () => {} : onToolBefore,
-    onToolResult: readonly ? async () => {} : onToolResult,
-    shellEnv: readonly ? async () => {} : shellEnv,
+    onToolBefore,
+    onToolResult,
+    shellEnv,
     onEvent,
     dispose,
     log,

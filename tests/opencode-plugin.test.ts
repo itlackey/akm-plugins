@@ -321,7 +321,9 @@ describe("akm-opencode plugin", () => {
     })
 
     describe("read-only mode", () => {
-      const ledgerSize = () => (existsSync(eventLogPath) ? readFileSync(eventLogPath, "utf8").length : 0)
+      const sizeOf = (file: string) => (existsSync(file) ? readFileSync(file, "utf8").length : 0)
+      // The ledger and the learning stores, all under the plugin's state dir.
+      const ledgerSize = () => ["events.jsonl", "learning-signals.jsonl", "learning-proposals.jsonl"].map((name) => sizeOf(path.join(path.dirname(eventLogPath), name))).join(",")
 
       it("registers exactly the four read tools and only the recall hooks", async () => {
         const hooks = await AkmPlugin(createPluginInput(), { readonly: true })
@@ -349,7 +351,7 @@ describe("akm-opencode plugin", () => {
         expect(output.system[0]).toContain("skills/review")
         expect(output.system[0]).toContain("akm_feedback")
         expect(output.system[0]).not.toContain("akm_remember")
-        expect(output.system[0]).not.toContain("curated file")
+        expect(output.system[0]).not.toContain("AKM bundle curation written to")
 
         await hooks.event!({ event: { type: "session.deleted", properties: { sessionID: "ro-1" } } } as any)
         await Bun.sleep(100)
@@ -368,6 +370,20 @@ describe("akm-opencode plugin", () => {
         expect(JSON.parse(out).ok).toBe(true)
         expect(mockExecFileSync.mock.calls.some(([, args]) => args?.[0] === "feedback")).toBe(true)
         expect(ledgerSize()).toBe(ledgerBefore)
+      })
+
+      it("is per instance: a readonly and a normal plugin in one process do not leak into each other", async () => {
+        const readonly = await AkmPlugin(createPluginInput(), { readonly: true })
+        const normal = await AkmPlugin(createPluginInput())
+        const before = ledgerSize()
+        await (readonly.tool!.akm_search as any).execute({ query: "review" }, createToolContext())
+        await (readonly.tool!.akm_feedback as any).execute({ ref: "skills/review", sentiment: "positive" }, createToolContext())
+        expect(ledgerSize()).toBe(before)
+        await (normal.tool!.akm_search as any).execute({ query: "review" }, createToolContext())
+        expect(ledgerSize()).not.toBe(before)
+        const middle = ledgerSize()
+        await (readonly.tool!.akm_show as any).execute({ ref: "skills/review" }, createToolContext())
+        expect(ledgerSize()).toBe(middle)
       })
 
       it("treats a non-true value as normal mode and says so in the host log", async () => {

@@ -170,6 +170,8 @@ type LogCapableClient = {
 }
 
 type CliLogMeta = {
+  /** The instance's ledger writer (a no-op in read-only mode); the shared ledger when absent. */
+  writeEvent?: EventWriter
   toolName: string
   directory?: string
   sessionID?: string
@@ -225,8 +227,6 @@ async function writePluginLog(client: LogCapableClient, level: LogLevel, message
   }
 }
 
-// Read-only mode swaps this for a no-op when the plugin is built, so nothing below writes the ledger.
-let writeStructuredEvent: EventWriter = writeOpencodeEvent
 
 const curatedFiles = createCuratedFileStore(path.join(os.tmpdir(), "akm-opencode", "curated"))
 const CURATED_DIR = curatedFiles.dir
@@ -463,14 +463,14 @@ function safeJsonParse<T>(raw: string): T | undefined {
   }
 }
 
-function emitWorkflowTelemetry(client: LogCapableClient, level: LogLevel, eventType: string, extra: Record<string, unknown>) {
+function emitWorkflowTelemetry(write: EventWriter, client: LogCapableClient, level: LogLevel, eventType: string, extra: Record<string, unknown>) {
   // Every call site passes an `akm.<surface>.<outcome>` string, so the
   // structured event is always the one literal. This used to map through
   // `eventType as AkmMemoryEvent["event"]` for anything containing
   // "workflow_", which let an arbitrary caller string become an "event" name
   // the union never declared. eventType is not lost — the plugin log below
   // records it verbatim, and it is also in `extra`.
-  void writeStructuredEvent({
+  void write({
     event: "workflow_step",
     sessionId: typeof extra.sessionID === "string" ? extra.sessionID : undefined,
     workflowRunId: typeof extra.runId === "string" ? extra.runId : undefined,
@@ -528,7 +528,7 @@ async function recordNegativeFeedback(client: LogCapableClient, sessionID: strin
   })
   const parsed = safeJsonParse<{ ok?: boolean }>(raw)
   if (parsed?.ok === true) {
-    await emitWorkflowTelemetry(client, "info", "akm.feedback.recorded", {
+    await emitWorkflowTelemetry(writeOpencodeEvent, client, "info", "akm.feedback.recorded", {
       sessionID,
       toolName: "akm_feedback",
       assetRef: negative.ref,
@@ -641,7 +641,7 @@ function maybeExtractSessionOnIdle(client: LogCapableClient, sid: string, direct
       error,
       ...extra,
     })
-    void emitWorkflowTelemetry(client, "warn", "akm.extract.failed", {
+    void emitWorkflowTelemetry(writeOpencodeEvent, client, "warn", "akm.extract.failed", {
       sessionID: sid,
       directory,
       toolName: "session.idle",
@@ -674,6 +674,7 @@ function resolveAkmCommand(): ResolvedAkmCommand | CliError {
 }
 
 async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta): Promise<string> {
+  const write = meta.writeEvent ?? writeOpencodeEvent
   const command = resolveAkmCommand()
   if (typeof command === "object" && "ok" in command) {
     await writePluginLog(client, "error", "AKM command resolution failed", {
@@ -710,7 +711,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
     const refs = extractRefsFromAkmOutput(stdout)
     feedbackTracker.noteRecentRefs(meta.sessionID, refs)
     if (meta.toolName === "akm_search") {
-      await emitWorkflowTelemetry(client, "info", "akm.search.invoked", {
+      await emitWorkflowTelemetry(write, client, "info", "akm.search.invoked", {
         sessionID: meta.sessionID,
         toolName: meta.toolName,
         assetRef: refs[0] ?? null,
@@ -720,7 +721,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       })
     }
     if (meta.toolName === "akm_curate") {
-      await emitWorkflowTelemetry(client, "info", "akm.curate.invoked", {
+      await emitWorkflowTelemetry(write, client, "info", "akm.curate.invoked", {
         sessionID: meta.sessionID,
         toolName: meta.toolName,
         assetRef: refs[0] ?? null,
@@ -730,7 +731,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       })
     }
     if (meta.toolName === "akm_show") {
-      await emitWorkflowTelemetry(client, "info", "akm.show.invoked", {
+      await emitWorkflowTelemetry(write, client, "info", "akm.show.invoked", {
         sessionID: meta.sessionID,
         toolName: meta.toolName,
         assetRef: args[1] ?? refs[0] ?? null,
@@ -740,7 +741,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       })
     }
     if (args[0] === "proposal" && ["show", "diff"].includes(args[1] ?? "")) {
-      await emitWorkflowTelemetry(client, "info", "akm.proposal.reviewed", {
+      await emitWorkflowTelemetry(write, client, "info", "akm.proposal.reviewed", {
         sessionID: meta.sessionID,
         toolName: meta.toolName,
         proposalId,
@@ -749,7 +750,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       })
     }
     if (args[0] === "proposal" && ["accept", "reject", "drain"].includes(args[1] ?? "")) {
-      await emitWorkflowTelemetry(client, "info", args[1] === "accept" ? "akm.proposal.accept.requested" : args[1] === "drain" ? "akm.proposal.drain.requested" : "akm.proposal.reject.requested", {
+      await emitWorkflowTelemetry(write, client, "info", args[1] === "accept" ? "akm.proposal.accept.requested" : args[1] === "drain" ? "akm.proposal.drain.requested" : "akm.proposal.reject.requested", {
         sessionID: meta.sessionID,
         toolName: meta.toolName,
         proposalId,
@@ -782,7 +783,7 @@ async function runCli(client: LogCapableClient, args: string[], meta: CliLogMeta
       stderr: toLogString((error as { stderr?: unknown }).stderr) ?? message,
     })
     if (meta.toolName.startsWith("akm_")) {
-      await emitWorkflowTelemetry(client, "warn", `${meta.toolName}.failed`, {
+      await emitWorkflowTelemetry(write, client, "warn", `${meta.toolName}.failed`, {
         sessionID: meta.sessionID,
         toolName: meta.toolName,
         proposalId,
@@ -801,6 +802,7 @@ async function runInProcess(
   input: Record<string, unknown>,
   meta: CliLogMeta,
 ): Promise<string> {
+  const write = meta.writeEvent ?? writeOpencodeEvent
   // The three read tools go through the public `akm` CLI (`--format json`)
   // via the shared helper, never through akm-cli internals. (The name is a
   // leftover from when this called the library in-process.)
@@ -820,7 +822,7 @@ async function runInProcess(
         operation,
         error: message,
       })
-      await emitWorkflowTelemetry(client, "warn", `${meta.toolName}.failed`, {
+      await emitWorkflowTelemetry(write, client, "warn", `${meta.toolName}.failed`, {
         sessionID: meta.sessionID,
         toolName: meta.toolName,
         outcome: "error",
@@ -840,7 +842,7 @@ async function runInProcess(
       operation,
       refs,
     })
-    await emitWorkflowTelemetry(client, "info", `akm.${operation}.invoked`, {
+    await emitWorkflowTelemetry(write, client, "info", `akm.${operation}.invoked`, {
       sessionID: meta.sessionID,
       toolName: meta.toolName,
       assetRef: operation === "show" ? String(input.ref ?? refs[0] ?? "") || null : refs[0] ?? null,
@@ -935,7 +937,8 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
   pluginDirectory = directory
   const logClient = client as unknown as LogCapableClient
   const mode = readonlyOption(options)
-  writeStructuredEvent = mode.readonly ? () => ({ ok: true, redacted: false, categories: [] }) : writeOpencodeEvent
+  // Read-only: a no-op ledger writer, per instance (one process may host a readonly and a normal project).
+  const writeStructuredEvent: EventWriter = mode.readonly ? () => ({ ok: true, redacted: false, categories: [] }) : writeOpencodeEvent
   if (mode.warning) void writePluginLog(logClient, "warn", mode.warning, { subsystem: "settings" })
   // Settings come from akm's config.json. A wrong or retired setting is said once, here, in the host's log.
   const loaded = loadSettings()
@@ -985,7 +988,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
         })
         return ""
       },
-      { budgetChars: bootstrapBudgetChars(mode.readonly ? curatedTextChars(SETTINGS.curateLimit) : AKM_CURATED_POINTER_CHARS) },
+      { readonly: mode.readonly, budgetChars: bootstrapBudgetChars(mode.readonly ? curatedTextChars(SETTINGS.curateLimit) : AKM_CURATED_POINTER_CHARS) },
     ),
   )
   const learning = createLearning({
@@ -1474,7 +1477,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
               source,
               includeProposed: include_proposed,
             },
-            { toolName: "akm_search", sessionID: context.sessionID, directory: context.directory },
+            { toolName: "akm_search", sessionID: context.sessionID, directory: context.directory, writeEvent: writeStructuredEvent },
           )
           return withProposedWarnings(raw)
         },
@@ -1487,7 +1490,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
             client as unknown as LogCapableClient,
             "show",
             { ref, detail },
-            { toolName: "akm_show", sessionID: toolContext.sessionID, directory: toolContext.directory },
+            { toolName: "akm_show", sessionID: toolContext.sessionID, directory: toolContext.directory, writeEvent: writeStructuredEvent },
           )
         },
       }),
@@ -1496,7 +1499,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
         args: v1Args(TOOL_SPECS.akm_remember),
         async execute({ content, name, force }: { content: string; name?: string; force?: boolean }, context) {
           const args = buildRememberArgs({ content, name, force })
-          return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_remember", sessionID: context.sessionID, directory: context.directory })
+          return runCli(client as unknown as LogCapableClient, args, { toolName: "akm_remember", sessionID: context.sessionID, directory: context.directory, writeEvent: writeStructuredEvent })
         },
       }),
       akm_feedback: tool({
@@ -1517,7 +1520,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
             return JSON.stringify({ ok: false, error: built.refusal })
           }
           const args = built.args
-          const raw = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_feedback", sessionID: context.sessionID, directory: context.directory })
+          const raw = await runCli(client as unknown as LogCapableClient, args, { toolName: "akm_feedback", sessionID: context.sessionID, directory: context.directory, writeEvent: writeStructuredEvent })
           const parsed = safeJsonParse<{ ok?: boolean; error?: string }>(raw)
           if (parsed?.ok === false) {
             const error = parsed.error ?? "Unknown akm feedback error"
@@ -1532,7 +1535,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
                 reason: "ref_not_indexed",
                 error,
               })
-              await emitWorkflowTelemetry(logClient, "warn", "akm.feedback.skipped", {
+              await emitWorkflowTelemetry(writeStructuredEvent, logClient, "warn", "akm.feedback.skipped", {
                 sessionID: context.sessionID,
                 toolName: "akm_feedback",
                 assetRef: ref,
@@ -1544,7 +1547,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
             }
             return raw
           }
-          await emitWorkflowTelemetry(logClient, "info", "akm.feedback.recorded", {
+          await emitWorkflowTelemetry(writeStructuredEvent, logClient, "info", "akm.feedback.recorded", {
             sessionID: context.sessionID,
             toolName: "akm_feedback",
             assetRef: ref,
@@ -1570,7 +1573,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
             client as unknown as LogCapableClient,
             "curate",
             { query, type: type === "any" ? undefined : type, limit, source, pack },
-            { toolName: "akm_curate", sessionID: context.sessionID, directory: context.directory },
+            { toolName: "akm_curate", sessionID: context.sessionID, directory: context.directory, writeEvent: writeStructuredEvent },
           )
         },
       }),
@@ -1596,7 +1599,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
         } else if (type === "session.compacted") {
           void bootstrap.compacted(sid)
         } else if (type === "session.deleted") {
-          sessionCurated.delete(sid)
+          clearSessionState(sid)
           bootstrap.clear(sid)
         }
       } catch (error: unknown) {

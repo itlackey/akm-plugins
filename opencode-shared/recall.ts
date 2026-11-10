@@ -212,11 +212,7 @@ export type CuratedFileStore = {
 }
 
 export function createCuratedFileStore(dir: string): CuratedFileStore {
-  try {
-    mkdirSync(dir, { recursive: true })
-  } catch {
-    // Best-effort: write() reports the failure per call.
-  }
+  // The directory is created on the first write, so a session that never writes creates nothing.
   return {
     dir,
     write(sessionID, content) {

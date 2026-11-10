@@ -568,13 +568,14 @@ describe("akm-opencode-v2 plugin", () => {
   })
 
   describe("read-only mode", () => {
-    const ledger = () => path.join(process.env.XDG_STATE_HOME!, "akm-opencode", "events.jsonl")
+    const stateDir = () => path.join(process.env.XDG_STATE_HOME!, "akm-opencode")
 
-    it("registers exactly the four read tools, with no memory tool and no shell, write-gate or tracking hooks doing work", async () => {
+    it("registers exactly the four read tools and no write-gate, tracking or shell hook", async () => {
       host = await startPlugin(project, { readonly: true })
       expect([...host.tools.keys()].sort()).toEqual(["akm_curate", "akm_feedback", "akm_search", "akm_show"])
       expect(host.logs.some((line) => line.level === "Warn")).toBe(false)
-      expect(await host.runShellCreate({ PATH: "/usr/bin" })).toEqual({ PATH: "/usr/bin" })
+      expect(host.toolHooks.size).toBe(0)
+      expect(host.shellHooks.size).toBe(0)
     })
 
     it("keeps recall and its context, with hints that never mention akm_remember, and writes nothing", async () => {
@@ -598,8 +599,6 @@ describe("akm-opencode-v2 plugin", () => {
       const loc = { directory: project }
       await host.emit({ type: "session.created", data: { sessionID: "ses_ro2", location: loc }, location: loc })
       await host.runPrompt("ses_ro2", "Remember that we always deploy the staging stack with docker compose on port 8443")
-      await host.runToolHook("execute.before", { tool: "edit", sessionID: "ses_ro2", id: "c1", input: { path: "/tmp/x.yaml", oldString: "a", newString: "b" } })
-      await host.runToolHook("execute.after", { tool: "akm_show", sessionID: "ses_ro2", id: "c2", status: "completed", input: { ref: "skills/nginx-proxy" }, result: { content: "skills/nginx-proxy" } })
       await host.runPrompt("ses_ro2", "thanks, that worked")
       await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_ro2", location: loc }, location: loc })
       await host.emit({ type: "session.deleted", data: { sessionID: "ses_ro2" }, location: loc })
@@ -610,7 +609,7 @@ describe("akm-opencode-v2 plugin", () => {
       // An explicit feedback call still goes through, and is not recording.
       expect(JSON.parse((await host.callTool("akm_feedback", { ref: "skills/nginx-proxy", sentiment: "positive" })).content).ok).toBe(true)
       expect(fake.calls().some((a) => a[0] === "feedback")).toBe(true)
-      expect(existsSync(ledger())).toBe(false)
+      expect(existsSync(stateDir())).toBe(false)
     })
 
     it("treats a non-true value as normal mode and says so once in the host's log", async () => {

@@ -78,7 +78,7 @@ For restricted sessions, set the plugin option `readonly` (a per-plugin OpenCode
 { "plugin": [["akm-opencode", { "readonly": true }]] }
 ```
 
-Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. Prompt and session-start recall and the injected context still work (the recalled text is injected inline, with hints that do not mention `akm_remember`). Everything that records is off: session extraction, learning proposals and signals, the pending-proposal note, the write gate, automatic feedback, `shell.env`, index-on-session-end, and the plugin's event ledger. Usage akm itself records for the read tools, and explicit `akm_feedback` calls, are unchanged.
+Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. Prompt and session-start recall and the injected context still work (the recalled text is injected inline, with hints that do not mention `akm_remember`, and the rules text names the `akm_search` and `akm_show` tools instead of CLI commands). Everything that records is off: session extraction, learning proposals and signals, the pending-proposal, active-workflow and bundle-missing notes, the "Need more AKM context?" hint, the write gate, automatic feedback, `shell.env`, index-on-session-end, and the plugin's event ledger. Usage akm itself records for the read tools, and explicit `akm_feedback` calls, are unchanged.
 
 The plugin does not deny `bash` or file edits. Do that with OpenCode's own `permission` config.
 
