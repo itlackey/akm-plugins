@@ -124,3 +124,9 @@ Same as V1: the plugin does not gate `akm` commands, and agents should get expli
 
 - [AKM CLI](https://github.com/itlackey/akm)
 - [OpenCode 2 plugins](https://opencode.ai/v2/docs/build/plugins/migrate-v1)
+
+### Project include defaults
+
+With a core version supporting `--include`, `metadata.akm.project` selects the configured project's `include` just as it selects `from`, `filters` and `prefer`. The core resolves these defaults for session-start curation, prompt recall, bootstrap searches and explicit tools; the plugin never reads per-session retrieval metadata. For example, a project's `"include": { "quality": "proposed", "type": ["session"] }` restores those default exclusions while preserving the query, filters and source boundaries.
+
+Both OpenCode versions' `akm_search` and `akm_curate` tools accept `include: ["quality=proposed", "type=session"]`; explicit selectors replace the project's entire include value. An empty tool list inherits project defaults. Clearing includes uses project config `{}` or the core API `include: {}`. The plugin's pinned core dependency is unchanged; check the runtime core's help for `--include` before using explicit selectors.

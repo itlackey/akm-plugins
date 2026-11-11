@@ -73,3 +73,7 @@ The fake akm installs an `akm.cmd` beside its extensionless sh script on Windows
 ## Settings in tests
 
 The plugins read their settings from akm's `config.json`. `preload.ts` (registered in the root `bunfig.toml`) points `AKM_CONFIG_DIR` at an empty directory for every test process, so nothing reads a developer's own file. A test that needs settings calls `makeConfigDir({ plugins: { ... } })` (from `host-runtime.ts`) and passes the directory as `AKM_CONFIG_DIR` to the process it starts, or sets it before building an in-process plugin. The hook tests run with akm's learning switch off (`LEARNING_OFF`) unless a case passes a config of its own.
+
+## Candidate core include acceptance
+
+`AKM_INCLUDE_CORE_ROOT=/path/to/akm bun test tests/include-core-integration.test.ts` runs the native V2 plugin with a local candidate core in isolated storage. It verifies that `metadata.akm.project` selects effective project includes for startup/prompt recall and explicit search/curate, and that explicit tool selectors override them. It leaves dependency pins unchanged and skips when the candidate path is absent.

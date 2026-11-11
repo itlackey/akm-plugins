@@ -1466,7 +1466,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
         // rather than living only in AKM_HINTS_PREFIX.
         description: TOOL_SPECS.akm_search.description,
         args: v1Args(TOOL_SPECS.akm_search),
-        async execute({ query, type, limit, source, include_proposed }: { query?: string; type?: string; limit?: number; source?: string; include_proposed?: boolean }, context) {
+        async execute({ query, type, limit, source, include_proposed, include }: { query?: string; type?: string; limit?: number; source?: string; include_proposed?: boolean; include?: string[] }, context) {
           const raw = await runInProcess(
             client as unknown as LogCapableClient,
             "search",
@@ -1476,6 +1476,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
               limit,
               source,
               includeProposed: include_proposed,
+              include,
             },
             { toolName: "akm_search", sessionID: context.sessionID, directory: context.directory, writeEvent: writeStructuredEvent },
           )
@@ -1568,11 +1569,11 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
         // reading the file — is what it has to win on.
         description: TOOL_SPECS.akm_curate.description,
         args: v1Args(TOOL_SPECS.akm_curate),
-        async execute({ query, type, limit, source, pack }: { query: string; type?: string; limit?: number; source?: string; pack?: number }, context) {
+        async execute({ query, type, limit, source, pack, include }: { query: string; type?: string; limit?: number; source?: string; pack?: number; include?: string[] }, context) {
           return runInProcess(
             client as unknown as LogCapableClient,
             "curate",
-            { query, type: type === "any" ? undefined : type, limit, source, pack },
+            { query, type: type === "any" ? undefined : type, limit, source, pack, include },
             { toolName: "akm_curate", sessionID: context.sessionID, directory: context.directory, writeEvent: writeStructuredEvent },
           )
         },

@@ -191,6 +191,12 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (project) args.push("--project", project)
     if (typeof pack === "number") args.push("--pack", String(pack))
   }
+  if (operation !== "show" && input.include !== undefined) {
+    if (!Array.isArray(input.include) || !input.include.every((value) => typeof value === "string" && /^(quality=proposed|type=\S+)$/.test(value))) {
+      throw new Error("include must be an array of quality=proposed or type=<asset-type> selectors")
+    }
+    for (const selector of input.include) args.push("--include", selector)
+  }
   args.push("--format", "json")
   return args
 }
