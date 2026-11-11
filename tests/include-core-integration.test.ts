@@ -13,16 +13,17 @@ const acceptance = core && process.platform !== "win32" ? it : it.skip
 
 acceptance("session metadata selects project includes for startup, prompt recall, bootstrap and explicit tools", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "akm-include-acceptance-"))
-  const keys = ["AKM_CONFIG_DIR", "AKM_BUNDLE_DIR", "AKM_CACHE_DIR", "AKM_DATA_DIR", "AKM_STATE_DIR", "AKM_OPENCODE_CLI", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]
+  const keys = ["AKM_CONFIG_FILE", "AKM_CONFIG_DIR", "AKM_BUNDLE_DIR", "AKM_CACHE_DIR", "AKM_DATA_DIR", "AKM_STATE_DIR", "AKM_OPENCODE_CLI", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
   let host: HostFake | undefined
   let resetConfigCache: (() => void) | undefined
   try {
     for (const key of keys) {
-      if (key === "AKM_OPENCODE_CLI") continue
+      if (key === "AKM_OPENCODE_CLI" || key === "AKM_CONFIG_FILE") continue
       process.env[key] = path.join(root, key)
       mkdirSync(process.env[key]!, { recursive: true })
     }
+    process.env.AKM_CONFIG_FILE = path.join(process.env.AKM_CONFIG_DIR!, "config.json")
     const directory = path.join(root, "project")
     mkdirSync(directory)
     writeFileSync(path.join(directory, "package.json"), JSON.stringify({ name: "widgetflux", description: "widgetflux deployment" }))
