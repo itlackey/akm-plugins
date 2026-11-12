@@ -99,7 +99,7 @@ function permissionBits(filePath: string) {
   return statSync(filePath).mode & 0o777
 }
 
-// The hook takes the bundle root from `akm info`, as akm 0.11 no longer reads AKM_BUNDLE_DIR. A scripted akm
+// The hook takes the bundle root from `akm doctor info`, as akm 0.11 no longer reads AKM_BUNDLE_DIR. A scripted akm
 // stub that is given AKM_BUNDLE_DIR answers `info` from it, ahead of anything the stub logs, as the real akm does.
 const INFO_MARKER = "# answers info from AKM_BUNDLE_DIR"
 function answerInfoFromBundleEnv(env: Record<string, string> | undefined) {
@@ -279,7 +279,7 @@ describe("Claude plugin metadata", () => {
     // is stop for a Bash permission prompt. The grant is per-command on
     // purpose: it lasts only the turn that invoked the command, so a command
     // must name every verb its own body reaches for (curate uses 0.9.14's
-    // token-budgeted `--pack`; feedback confirms an ambiguous ref with `akm show`; show
+    // token-budgeted `--max-tokens`; feedback confirms an ambiguous ref with `akm show`; show
     // falls back to `akm search` in the same turn when the ref misses).
     // Asserted as SHAPE + verb set, not as one literal string. Comparing the
     // frontmatter to the same string the author typed cannot tell a grant the
@@ -336,7 +336,7 @@ describe("Claude plugin metadata", () => {
 
   it("documents direct AKM agent dispatch through Bash", () => {
     const skill = readFileSync(akmSkillPath, "utf8")
-    expect(skill).toContain("akm agent <agent-ref>")
+    expect(skill).toContain("akm run <agent-ref>")
     expect(skill).toContain('--prompt "')
     expect(skill).toContain('--cwd "$PWD"')
     expect(skill).toContain("--format json -q")
@@ -562,7 +562,7 @@ exit 0
       const text = readFileSync(callLog, "utf8")
       return text.includes("proposal extract") ? text : undefined
     })
-    expect(invocation).toContain("proposal extract --type claude --session-id sess-extract-log")
+    expect(invocation).toContain("proposal extract --sessions claude --session-id sess-extract-log")
 
     // extract.log carries the same owner-only posture as every other state file.
     expect(permissionBits(extractLogPath)).toBe(0o600)
@@ -1653,24 +1653,28 @@ exit 0
     // A use-shaped invocation, not a lookup: `akm show`/`search`/`curate` only
     // inspect an asset, and a successful inspection no longer counts as a
     // positive signal (see the read-only-verb test below).
-    runHook(["auto-feedback", "success"], {
-      input: JSON.stringify({
-        session_id: "sess-auto-1",
-        tool: "Bash",
-        input: { command: "akm workflow run workflows/code-review" },
-        output: "{\"workflowRef\":\"workflows/code-review\"}",
-      }),
-      env: {
-        HOME: tempDir,
-        PATH: `${binDir}:/usr/bin:/bin`,
-        XDG_STATE_HOME: stateDir,
-        AKM_BUNDLE_DIR: bundleDir,
-      },
-    })
+    // `akm run <ref>` is the current form; `akm workflow run <ref>` stays recognised for recorded history.
+    for (const [index, command] of ["akm run workflows/code-review", "akm workflow run workflows/code-review"].entries()) {
+      rmSync(feedbackLog, { force: true })
+      runHook(["auto-feedback", "success"], {
+        input: JSON.stringify({
+          session_id: `sess-auto-1-${index}`,
+          tool: "Bash",
+          input: { command },
+          output: "{\"workflowRef\":\"workflows/code-review\"}",
+        }),
+        env: {
+          HOME: tempDir,
+          PATH: `${binDir}:/usr/bin:/bin`,
+          XDG_STATE_HOME: stateDir,
+          AKM_BUNDLE_DIR: bundleDir,
+        },
+      })
 
-    const recorded = readFileSync(feedbackLog, "utf8")
-    expect(recorded).toContain("feedback workflows/code-review --positive")
-    expect(recorded).toContain("--reason")
+      const recorded = readFileSync(feedbackLog, "utf8")
+      expect(recorded).toContain("feedback workflows/code-review --positive")
+      expect(recorded).toContain("--reason")
+    }
   })
 
   itPosix("auto-feedback records nothing when the akm command failed", () => {
@@ -2559,7 +2563,7 @@ exit 0
   })
 
   itPosix("spawns no akm subprocess for a ref-free file-tool payload", () => {
-    // resolveStashRoots() shells out to `akm info --format json -q` whenever
+    // resolveStashRoots() shells out to `akm doctor info --format json -q` whenever
     // AKM_BUNDLE_DIR is unset, and it used to be an EAGERLY EVALUATED argument
     // to validateRefCandidates() — which discards the roots outright on an
     // empty candidate list. Every ordinary ref-free Read / Grep therefore paid
@@ -2584,7 +2588,7 @@ exit 0
     chmodSync(path.join(binDir, "akm"), 0o755)
 
     // Deliberately NO AKM_BUNDLE_DIR — that is precisely the configuration in
-    // which resolveStashRoots() falls through to the `akm info` spawn.
+    // which resolveStashRoots() falls through to the `akm doctor info` spawn.
     const env = { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir }
 
     expect(

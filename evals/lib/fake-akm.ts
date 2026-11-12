@@ -8,7 +8,7 @@
 // keyword match (computed in the shim's parent process and baked into the
 // shell script as a static lookup table). It also implements the subset of
 // `akm` verbs the hooks actually call: `curate`, `feedback`, `remember`,
-// `index`, `info`, `search`, `config get`/`config set`,
+// `index`, `doctor info`, `doctor metrics assets`, `search`, `config get`/`config set`,
 // `workflow list`, `proposal list`/`new`, `extract`, `--version`. Non-agent
 // envelope shapes are pinned against a real `akm` binary by
 // tests/fake-akm-contract.test.ts; `proposal new` is an authoring-agent boundary
@@ -18,7 +18,7 @@
 //
 // `info` is the highest-stakes verb here even though nothing "interesting"
 // happens in it: both plugins resolve their bundle root from
-// `akm info --format json` → .bundleDir when $AKM_BUNDLE_DIR is unset, and
+// `akm doctor info --format json` → .bundleDir when $AKM_BUNDLE_DIR is unset, and
 // validateRefCandidates() early-returns [] with no bundle root — so an
 // unimplemented `info` silently disables every ref-driven code path.
 
@@ -30,7 +30,7 @@ export type FakeAkmAsset = {
   // `skills/code-review`, `knowledge/api-error-codes`, `scripts/lint.sh`.
   // (Pre-0.9 this was the `type:slug` form, e.g. `skill:code-review`.)
   ref: string
-  // Singular asset type as reported by `akm info` → .assetTypes.
+  // Singular asset type as reported by `akm doctor info` → .assetTypes.
   type: string
   name: string
   description: string
@@ -58,7 +58,7 @@ export type FakeAkmConfig = {
   // or with `--project <name>`, runs under that project; otherwise under none.
   projects?: Record<string, { paths: string[] }>
   // `akm show` events recorded before the test starts. Only source "user" (the default) counts
-  // for `search --by-usage`.
+  // for `doctor metrics assets`.
   usage?: Array<{ ref: string; project?: string; source?: string }>
 }
 
@@ -139,7 +139,7 @@ function conceptIdFor(dir: string, entry: string): string {
 // `akm bundle create` scaffolds: agents commands env facts instructions
 // knowledge lessons memories scripts secrets sessions skills tasks workflows.
 // (`wikis/` and `vaults/` are NOT 0.9 asset types and were dropped here;
-// `akm info` → .assetTypes lists neither.)
+// `akm doctor info` → .assetTypes lists neither.)
 //
 // `secrets/` is deliberately NOT scanned: a secret is one standalone value
 // per file, and real akm never content-indexes it, so it must never show up
@@ -206,7 +206,7 @@ export function installFakeAkm(config: FakeAkmConfig): LoadedFakeAkm {
     ? config.assets
     : loadFixtureStash(config.assets.stashDir)
   const defaultLimit = config.defaultLimit ?? 5
-  // `akm info` reports the bundle root, and both plugins fall back to it when
+  // `akm doctor info` reports the bundle root, and both plugins fall back to it when
   // $AKM_BUNDLE_DIR is unset. Bake in the same directory the asset inventory
   // was scanned from so the shim's `info` answer stays consistent with what
   // it will actually rank and with what refs resolve against on disk.
@@ -440,7 +440,7 @@ function nonFlagArgs() {
 // (\`none\`: no project), else the one whose configured path contains the working directory,
 // else none, and a response says which in a top-level \`project\`. An unknown \`--project\` name
 // is accepted here (real akm rejects it). A rule applies when it names that project or no project.
-// \`search --by-usage\` lists the eligible assets shown by a user, most shown first.
+// \`doctor metrics assets\` (formerly \`search --by-usage\`) lists the eligible assets shown by a user, most shown first.
 function flagValue(name) {
   const i = argv.indexOf(name)
   return i >= 0 ? argv[i + 1] : undefined
@@ -503,10 +503,11 @@ function usageList(project, limit) {
     .map(([ref]) => toHit(idx.assets.find((a) => a.ref === ref)))
 }
 
-if (verb === "search" && (argv.includes("--by-usage") || flagValue("--type") === "rule")) {
+const byUsage = (verb === "doctor" && tail[0] === "metrics" && tail[1] === "assets") || (verb === "search" && argv.includes("--by-usage"))
+if (byUsage || (verb === "search" && flagValue("--type") === "rule")) {
   const project = resolveProject()
   const limit = getLimit()
-  const hits = argv.includes("--by-usage") ? usageList(project, limit) : applicableRules(project).slice(0, limit).map(toHit)
+  const hits = byUsage ? usageList(project, limit) : applicableRules(project).slice(0, limit).map(toHit)
   process.stdout.write(JSON.stringify({ results: hits, searchMode: "keyword", ...(project ? { project } : {}) }))
   process.exit(0)
 }
@@ -597,7 +598,7 @@ if (verb === "info" || (verb === "doctor" && tail[0] === "info")) {
 }
 
 // --- config get/set -------------------------------------------------------
-// The plugins resolve AKM_BUNDLE_DIR directly and use akm info as their
+// The plugins resolve AKM_BUNDLE_DIR directly and use akm doctor info as their
 // fallback. Keep generic config get/set behavior here because it is still a
 // public AKM surface exercised by eval scenarios.
 // persist defaults.agent / profiles.agent.<platform>). Real akm returns a

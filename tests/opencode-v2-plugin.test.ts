@@ -221,7 +221,7 @@ describe("akm-opencode-v2 plugin", () => {
     await settle(500)
     const extract = () => fake.calls().filter((a) => a[0] === "proposal" && a[1] === "extract")
     expect(extract()).toHaveLength(1)
-    expect(extract()[0]).toEqual(expect.arrayContaining(["proposal", "extract", "--type", "opencode", "--session-id", "ses_x"]))
+    expect(extract()[0]).toEqual(expect.arrayContaining(["proposal", "extract", "--sessions", "opencode", "--session-id", "ses_x"]))
     // The fake akm answers like an install with no LLM engine: exit 78, LLM_NOT_CONFIGURED.
     const failure = host.logs.find((line) => line.message === "AKM extract failed")
     expect(failure?.level).toBe("Warn")
@@ -605,7 +605,7 @@ describe("akm-opencode-v2 plugin", () => {
       await settle(600)
       const verbs = new Set(fake.calls().map((a) => a[0]))
       // `config get` is the session bootstrap's read of the default bundle.
-      for (const verb of verbs) expect(["search", "show", "curate", "feedback", "config"]).toContain(verb)
+      for (const verb of verbs) expect(["search", "show", "curate", "feedback", "config", "doctor"]).toContain(verb)
       // An explicit feedback call still goes through, and is not recording.
       expect(JSON.parse((await host.callTool("akm_feedback", { ref: "skills/nginx-proxy", sentiment: "positive" })).content).ok).toBe(true)
       expect(fake.calls().some((a) => a[0] === "feedback")).toBe(true)
@@ -979,7 +979,7 @@ describe("akm-opencode-v2 plugin", () => {
       fake = freshFakeAkm({ assets: [...assets, ...rules], usage, projects: { acme: { paths: [project] } } })
       process.env.AKM_OPENCODE_CLI = fake.akmPath
     }
-    const listings = () => fake.calls().filter((a) => a[0] === "search" && a.includes("--by-usage")).length
+    const listings = () => fake.calls().filter((a) => a[0] === "doctor" && a[1] === "metrics" && a[2] === "assets").length
     const request = async (sessionID: string) => (await host!.runContext(sessionID, [{ type: "text", text: "base" }]))[0].text
 
     it("a fresh session gets the project's rules, then its most used assets, ahead of the AKM guidance", async () => {
@@ -1070,7 +1070,7 @@ describe("akm-opencode-v2 plugin", () => {
       host.sessions.set("ses_o", { metadata: { akm: { project: "acme" } } })
       await host.emit({ type: "session.created", data: { sessionID: "ses_o" }, location: { directory: project } })
       expect(await request("ses_o")).toContain("## rules/acme")
-      expect(fake.calls().filter((a) => a[0] === "search" && a.includes("--by-usage")).every((a) => a.includes("--project") && a.includes("acme"))).toBe(true)
+      expect(fake.calls().filter((a) => a[0] === "doctor" && a[1] === "metrics" && a[2] === "assets").every((a) => a.includes("--project") && a.includes("acme"))).toBe(true)
     })
 
     it("a failing akm leaves the guidance in place and logs the lookup", async () => {

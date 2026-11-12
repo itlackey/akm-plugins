@@ -3,7 +3,7 @@
 Claude Code plugin for [AKM](https://github.com/itlackey/akm). It carries the `akm-cli` it was tested with. It provides an AKM skill, five slash commands, and lifecycle hooks that curate context and learn from concept usage.
 
 The AKM skill also supports delegating work to an AKM agent through Claude's
-existing Bash tool. It invokes `akm agent` directly; it does not use MCP,
+existing Bash tool. It invokes `akm run <agent-ref>` directly; it does not use MCP,
 generated Claude agent definitions, or hooks that intercept Claude's native
 `Agent` tool. See `skills/akm/SKILL.md` for the dispatch contract.
 
@@ -37,8 +37,8 @@ The hooks require Bun 1.0 or newer on `PATH`. The plugin carries its own AKM: `p
 
 AKM references use `[bundle//]conceptId[#fragment]`, for example `skills/code-review`, `memories/release-retro`, or `team-playbook//knowledge/deploy#Rollback`. Search flags use current source names: `--from local`, `--from registry`, `--from all`, or `--from <bundle-name>`.
 
-`/akm-show` accepts `--context exact|lead` plus one of `--max-tokens N` or
-`--max-chars N`. `exact` is backward-compatible and remains the default.
+`/akm-show` accepts `--lead` plus one of `--max-tokens N` or
+`--max-chars N`. Without `--lead`, the exact selected fragment is returned (the default).
 For an opaque fragment ref returned by search, `lead` returns the indexed-safe
 first fragment followed by an explicitly labelled selected match, bounded to
 3,200 characters unless overridden. Friendly authored heading selectors retain
@@ -68,7 +68,7 @@ Hook processing never prints secret values. Automatic feedback skips references 
 
 ### Session rules and most-used assets
 
-At session start, and again after each compaction, the `SessionStart` hook puts two sections into the model's context, ahead of the curated results: the project's **rules** (every applicable `rules/` asset, in full, under its ref), then an ordered list of the project's **most-used assets** (ref and description only; counts and ranking stay inside akm). Both come from the public `akm` CLI (`akm search "" --type rule`, `akm show <ref>`, `akm search --by-usage`); the plugin keeps no popularity store and opens no database. They need an akm that has them (akm#1512); on an older one the lookups fail, are logged, and the session carries on without the sections.
+At session start, and again after each compaction, the `SessionStart` hook puts two sections into the model's context, ahead of the curated results: the project's **rules** (every applicable `rules/` asset, in full, under its ref), then an ordered list of the project's **most-used assets** (ref and description only; counts and ranking stay inside akm). Both come from the public `akm` CLI (`akm search "" --type rule`, `akm show <ref>`, `akm doctor metrics assets`); the plugin keeps no popularity store and opens no database. They need an akm that has them (akm#1512); on an older one the lookups fail, are logged, and the session carries on without the sections.
 
 - **Which project.** The session's directory selects the project through akm's `projects` config, as for every other call. With no project, both sections read only your default bundle (`--project none --from <defaultBundle>`), with no selection filters or preferences; with no default bundle configured, `--project none` alone.
 - **When.** `SessionStart` with source `startup`, `clear` or `compact` (a missing source counts as a start). A `resume` or `fork` does not reload: the transcript still holds them. Duplicate callbacks for the same event within 10 seconds load once. Ordinary prompts never reload.
@@ -177,7 +177,7 @@ Use Claude Code's own permission rules in `~/.claude/settings.json`:
 }
 ```
 
-Independently of any permission rule, the AKM skill instructs the agent to get explicit user approval before invoking a destructive verb — `proposal accept`, `proposal reject`, `proposal revert`, `sync --push`, `remove`, env/secret writes, `task add` / `task run`, `upgrade`, `update --all`, `config set`.
+Independently of any permission rule, the AKM skill instructs the agent to get explicit user approval before invoking a destructive verb — `proposal accept`, `proposal reject`, `proposal revert`, `sync --push`, `remove`, env/secret writes, `akm import --type task` / `akm run <task-ref>`, `upgrade`, `update --all`, `config set`.
 
 ## Settings
 
@@ -207,7 +207,7 @@ The other variables the plugin reads are not settings:
 | Variable | Purpose |
 | --- | --- |
 | `AKM_CONFIG_DIR` | Where akm's `config.json` is (akm's own location variable). |
-| `AKM_BUNDLE_DIR` | The AKM bundle root (akm's own variable). Set it when you can: without it the hooks discover the bundle by spawning `akm info`, which adds a subprocess to every file-tool hook that sees a concept-like token. |
+| `AKM_BUNDLE_DIR` | The AKM bundle root (akm's own variable). Set it when you can: without it the hooks discover the bundle by spawning `akm doctor info`, which adds a subprocess to every file-tool hook that sees a concept-like token. |
 
 The retired setting variables (`AKM_AUTO_FEEDBACK`, `AKM_INDEX_ON_SESSION_END`, `AKM_CURATE_LIMIT`, `AKM_CURATE_TIMEOUT`, `AKM_PENDING_PROPOSAL_TIMEOUT`, `AKM_AUTO_LEARNING`, `AKM_AUTO_MEMORY`) are ignored, and a warning names the key that replaces each. Everything else that used to be a variable is a constant now: prompt curation is always on; the curate score floor and `--type` filter are gone; the context budget is 4000 characters; state files are capped at 1 MiB; the cached quality classification lives 24 hours; automatic feedback needs a classifier confidence of 0.6, a learning proposal 0.75 and a skill proposal three distinct sessions; the proposal worker is capped at 10 minutes; the retrospective vocabulary is fixed.
 
@@ -239,5 +239,5 @@ Hooks never write diagnostics to stderr. The few failures only you can fix — A
 3. Inspect the selected concept with `/akm-show`.
 4. Record the result with `/akm-feedback`.
 5. Save durable project knowledge with `/akm-remember`.
-6. Delegate specialized work with `akm agent <agent-ref>` when an AKM agent's
+6. Delegate specialized work with `akm run <agent-ref>` when an AKM agent's
    prompt, model, or tool policy is part of the task.

@@ -68,7 +68,7 @@ describe("extractAllRefs", () => {
 
   it("observes the 0.9 concept roots added since 0.8 (facts, instructions, sessions)", () => {
     // `akm bundle create` scaffolds facts/, instructions/ and sessions/ in 0.9
-    // and `akm info --format json` lists fact, instruction and session in
+    // and `akm doctor info --format json` lists fact, instruction and session in
     // assetTypes. Refs to them were previously invisible to passive extraction,
     // so they could never be observed or receive automatic feedback.
     expect(

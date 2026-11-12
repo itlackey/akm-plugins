@@ -7,7 +7,7 @@
 import { akmResultList } from "../claude/shared/result-list"
 
 // The AKM 0.9 asset-type vocabulary, in the singular form `--type` accepts.
-// This is exactly `akm info --format json` -> .assetTypes, sorted; keep the two
+// This is exactly `akm doctor info --format json` -> .assetTypes, sorted; keep the two
 // in step when akm adds a type. There is no `wiki` type in 0.9. `any` is a
 // tool-surface sentinel, not an akm type: it means "no filter" and is stripped
 // before the value reaches akm, so it sorts last.

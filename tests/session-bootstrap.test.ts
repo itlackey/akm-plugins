@@ -9,7 +9,7 @@ import { PLUGIN_DIR, hostEnv, installScriptedAkm, makeBinDir, runClaudeHandler, 
 
 // The session bootstrap (#154): the project's rules and the assets used most in it, loaded at session
 // start and after each compaction. The loader runs against the repo's fake akm, which models akm's
-// project, rule and usage contract (akm#1512): `search --type rule`, `search --by-usage`, `show`
+// project, rule and usage contract (akm#1512): `search --type rule`, `doctor metrics assets`, `show`
 // recording a usage event unless AKM_EVENT_SOURCE says the read is not demand.
 
 const repoRoot = path.resolve(import.meta.dir, "..")
@@ -120,7 +120,7 @@ describe("loadSessionBootstrap", () => {
     expect(byOverride).toBe(byDirectory)
     // The override is passed to akm as `--project`, on the reads too.
     const argv = calls(world)
-    expect(argv.some((a) => a[0] === "search" && a.includes("--by-usage") && a.join(" ").endsWith("--project acme"))).toBe(true)
+    expect(argv.some((a) => a[0] === "doctor" && a[1] === "metrics" && a[2] === "assets" && a.join(" ").endsWith("--project acme"))).toBe(true)
     expect(argv.some((a) => a[0] === "show" && a.includes("--project") && a.includes("acme"))).toBe(true)
   })
 
@@ -143,7 +143,7 @@ describe("loadSessionBootstrap", () => {
     expect(text).not.toContain("beta-only")
     // Every show counts without a project, so review (5) leads deploy (2) and runbook (2).
     expect(text.indexOf("skills/review")).toBeLessThan(text.indexOf("skills/deploy"))
-    const fallbacks = calls(world).filter((a) => a[0] === "search" && a.includes("--project") && a.includes("none"))
+    const fallbacks = calls(world).filter((a) => (a[0] === "search" || a[0] === "doctor") && a.includes("--project") && a.includes("none"))
     expect(fallbacks).toHaveLength(2) // the rules listing and the usage list
     for (const argv of fallbacks) {
       expect(argv.join(" ")).toContain("--project none --from bundle")
@@ -157,7 +157,7 @@ describe("loadSessionBootstrap", () => {
     const world = makeWorld({ defaultBundle: null })
     const text = await loadSessionBootstrap(world.run(world.elsewhere), { budgetChars: BIG })
     expect(text).toContain("rules/shared")
-    const fallbacks = calls(world).filter((a) => a[0] === "search" && a.includes("none"))
+    const fallbacks = calls(world).filter((a) => (a[0] === "search" || a[0] === "doctor") && a.includes("none"))
     expect(fallbacks).toHaveLength(2)
     for (const argv of fallbacks) expect(argv).not.toContain("--from")
   })
@@ -241,7 +241,7 @@ describe("loadSessionBootstrap", () => {
   it("keeps the other half when one lookup fails", async () => {
     const world = makeWorld()
     const real = world.run(world.acme)
-    const noList: BootstrapRun = async (args, env) => (args.includes("--by-usage") ? "" : real(args, env))
+    const noList: BootstrapRun = async (args, env) => (args[0] === "doctor" && args[1] === "metrics" ? "" : real(args, env))
     const text = await loadSessionBootstrap(noList, { budgetChars: BIG })
     expect(text).toContain("## rules/acme-only")
     expect(text).not.toContain("used most")
@@ -341,7 +341,7 @@ describe("session-start hook", () => {
     const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext as string
     return { context, stateDir: path.join(stateHome, "akm-claude") }
   }
-  const bootstrapCalls = (world: World) => calls(world).filter((a) => a[0] === "search" && a.includes("--by-usage")).length
+  const bootstrapCalls = (world: World) => calls(world).filter((a) => a[0] === "doctor" && a[1] === "metrics" && a[2] === "assets").length
 
   itPosix("a fresh session starts with the rules and the most used list in its context, ahead of the closing note", () => {
     const world = makeWorld()
@@ -456,7 +456,7 @@ describe("loadSessionBootstrap: failures, sources and time", () => {
     const world = makeWorld()
     const real = world.run(world.acme)
     // The project listings fail (a locked database); the later `--project none` calls would work.
-    const flaky: BootstrapRun = async (args, env) => (args[0] === "search" && !args.includes("none") ? "" : real(args, env))
+    const flaky: BootstrapRun = async (args, env) => ((args[0] === "search" || args[0] === "doctor") && !args.includes("none") ? "" : real(args, env))
     expect(await loadSessionBootstrap(flaky, { budgetChars: BIG })).toBe("")
     expect(calls(world).some((a) => a.includes("none"))).toBe(false)
   })

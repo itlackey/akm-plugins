@@ -5,7 +5,7 @@
  * invokes the public `akm` CLI and returns its stdout ("" when the call failed).
  *
  * akm is the only source: `akm search --type rule` and `akm show` for the rules,
- * `akm search --by-usage` for the list. Nothing here keeps a popularity store or
+ * `akm doctor metrics assets` for the list. Nothing here keeps a popularity store or
  * opens a database. Every call carries AKM_EVENT_SOURCE=unknown so reading the
  * rules or the list never counts as demand and never raises their own ranking.
  *
@@ -97,7 +97,7 @@ export async function loadSessionBootstrap(run: BootstrapRun, options: Bootstrap
 }
 
 const rulesArgs = (scope: string[]) => ["search", "", "--type", "rule", "--limit", String(RULES_LIST_LIMIT), "--detail", "normal", "--format", "json", "-q", ...scope]
-const usageArgs = (scope: string[]) => ["search", "--by-usage", "--limit", String(USAGE_LIST_SIZE), "--detail", "normal", "--format", "json", "-q", ...scope]
+const usageArgs = (scope: string[]) => ["doctor", "metrics", "assets", "--limit", String(USAGE_LIST_SIZE), "--detail", "normal", "--format", "json", "-q", ...scope]
 
 async function load(run: BootstrapRun, options: BootstrapOptions): Promise<string> {
   if (options.budgetChars <= 0) return ""

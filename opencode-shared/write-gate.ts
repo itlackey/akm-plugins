@@ -60,7 +60,7 @@ const WRITE_GATE_INFLIGHT_WAIT_MS = 400
 const WRITE_GATE_SESSION_PATH_CAP = 64
 const WRITE_GATE_IDENTITY_CACHE_CAP = 256
 // A negative resolution is a statement about the stash at one instant, and the
-// stash changes under a live session — `akm import`, `akm clone`, a sync that
+// stash changes under a live session — `akm import`, a sync that
 // lands the very asset the gate would have pointed at. The first version cached
 // "no" for the life of the process, which outlives many sessions, so a token
 // that started resolving five minutes later could never resolve again. Positive

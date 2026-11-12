@@ -69,7 +69,7 @@ export function createSandbox(opts: SandboxOptions = {}): Sandbox {
     XDG_CACHE_HOME: cacheDir,
     // Bundle-root override for the fake akm and akm 0.10 (newer akm no longer
     // reads it). The plugins no longer read it themselves: they take the bundle
-    // root from `akm info` (claude/hooks/akm-hook.ts resolveStashRoots(),
+    // root from `akm doctor info` (claude/hooks/akm-hook.ts resolveStashRoots(),
     // opencode/index.ts getAkmBundleDir()), which answers from this variable.
     // Ref validation early-returns [] when no bundle root resolves, so an unset
     // AKM_BUNDLE_DIR silently disables ALL ref extraction — and therefore all

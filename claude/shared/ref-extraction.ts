@@ -18,7 +18,7 @@ import { akmResultList } from "./result-list";
 // The concept-root list is the exact set of directories `akm bundle create`
 // scaffolds in 0.9 (agents commands env facts instructions knowledge lessons
 // memories scripts secrets sessions skills tasks workflows), which matches the
-// `assetTypes` array reported by `akm info --format json` modulo pluralization.
+// `assetTypes` array reported by `akm doctor info --format json` modulo pluralization.
 // `wikis` was dropped for 0.9 — it is neither an asset type nor a scaffolded
 // directory — and facts/instructions/sessions were added. Keep this list byte
 // for byte in sync with opencode/index.ts and evals/tier2/metrics/feedback.ts.

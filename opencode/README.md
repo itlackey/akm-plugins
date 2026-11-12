@@ -14,7 +14,7 @@ Add the plugin to `opencode.json`:
 }
 ```
 
-The bare name resolves to the `latest` tag, which is still a stable 0.9 build. For the AKM 0.10 plugin use `"akm-opencode@next"` (the prerelease channel) or an exact version such as `"akm-opencode@0.10.261002-beta"`. To update, run `akm upgrade --next`, or close OpenCode and run `opencode plugin akm-opencode@<version> -g -f` with an exact version (a tag spec like `@next` reuses its cache directory and is not refreshed).
+The bare name resolves to the `latest` tag, which is still a stable 0.9 build. For the AKM 0.10 plugin use `"akm-opencode@next"` (the prerelease channel) or an exact version such as `"akm-opencode@0.10.261002-beta"`. To update, run `akm upgrade --channel next`, or close OpenCode and run `opencode plugin akm-opencode@<version> -g -f` with an exact version (a tag spec like `@next` reuses its cache directory and is not refreshed).
 
 ## Tools
 
@@ -58,7 +58,7 @@ Automatic feedback skips references that AKM reports as ineligible, and no `akm_
 
 ### Automatic learning proposals
 
-The chat hook applies the same shared classifier and proposal contract as the Claude plugin. Redacted, high-confidence memories and behavioral signals are project-scoped and submitted with `akm proposal new` as `memory` or `instruction` proposals. The plugin never writes `AGENTS.md`, `CLAUDE.md`, command files, or rules; AKM's proposal queue owns review and all later state changes. Proposal authoring requires the AKM agent profile configured by `akm setup`; outcomes are recorded through OpenCode app logging and the durable proposal ledger. Learning is switched with `akm setup --learning on|off`, on this host and for all bundles; the plugin follows that switch and skips proposals quietly while `akm info` reports learning off.
+The chat hook applies the same shared classifier and proposal contract as the Claude plugin. Redacted, high-confidence memories and behavioral signals are project-scoped and submitted with `akm proposal new` as `memory` or `instruction` proposals. The plugin never writes `AGENTS.md`, `CLAUDE.md`, command files, or rules; AKM's proposal queue owns review and all later state changes. Proposal authoring requires the AKM agent profile configured by `akm setup`; outcomes are recorded through OpenCode app logging and the durable proposal ledger. Learning is switched with `akm setup --learning on|off`, on this host and for all bundles; the plugin follows that switch and skips proposals quietly while `akm doctor info` reports learning off.
 
 Praise is captured as supporting evidence and can credit recently used assets, but it does not create an empty proposal. Repeated task intents are compared across sessions in the same project; the default threshold is three distinct sessions before a cross-platform `skill` proposal is submitted. A durable ledger suppresses exact and near-duplicate submissions across OpenCode restarts.
 
@@ -68,7 +68,7 @@ The plugin does not gate destructive `akm` commands. The `permission.ask` / `com
 
 OpenCode has no first-class permission DSL today, so enforce it outside the plugin — wrap `akm` in a confirmation script earlier on `PATH`, or use OS-level access controls.
 
-Independently of any such control, agents should treat these verbs as requiring explicit user approval: `proposal accept`, `proposal reject`, `proposal revert`, `sync --push`, `remove`, env/secret writes, `task add` / `task run`, `upgrade`, `update --all`, `config set`.
+Independently of any such control, agents should treat these verbs as requiring explicit user approval: `proposal accept`, `proposal reject`, `proposal revert`, `sync --push`, `remove`, env/secret writes, `akm import --type task` / `akm run <task-ref>`, `upgrade`, `update --all`, `config set`.
 
 ## Read-only mode
 
@@ -108,7 +108,7 @@ The variables that remain are not settings:
 | Variable | Purpose |
 | --- | --- |
 | `AKM_CONFIG_DIR` | Where akm's `config.json` is (akm's own location variable). |
-| `AKM_BUNDLE_DIR` | Absolute path to the AKM bundle root (akm's own variable). When unset the plugin discovers it once per process by running `akm info`. The resolved value is exported to shell tools. |
+| `AKM_BUNDLE_DIR` | Absolute path to the AKM bundle root (akm's own variable). When unset the plugin discovers it once per process by running `akm doctor info`. The resolved value is exported to shell tools. |
 | `AKM_OPENCODE_CLI` | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency, exec'd as-is. Set by akm and by the eval harness. |
 
 ### Write gate

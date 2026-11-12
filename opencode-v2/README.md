@@ -49,7 +49,7 @@ How each V1 responsibility maps onto the OpenCode 2 plugin API (built against 2.
 | Five tools | `tool.transform` with JSON Schema inputs | Registered on load; re-registered on tool reload. |
 | `client.app.log` | Effect logging (`Effect.logWithLevel`) from the plugin's own fiber context | The Promise plugin API has no logger, so this is an Effect plugin: diagnostics reach OpenCode's logger (its log file; `--print-logs` mirrors it to stderr), redacted with the shared redactor. The plugin never writes to the console. |
 
-Session extraction runs `akm proposal extract --type opencode --session-id <id>`, detached, at most once per 10 minutes per session. It requires an LLM engine configured in AKM; without one AKM answers `LLM_NOT_CONFIGURED` and the plugin logs that as a warning (with AKM's code and hint) rather than failing silently.
+Session extraction runs `akm proposal extract --sessions opencode --session-id <id>`, detached, at most once per 10 minutes per session. It requires an LLM engine configured in AKM; without one AKM answers `LLM_NOT_CONFIGURED` and the plugin logs that as a warning (with AKM's code and hint) rather than failing silently.
 
 Unloading the plugin closes its scope: the event subscription ends, hooks and tools are unregistered by the host, in-flight `akm` calls are cancelled and session state is dropped. The plugin writes no temporary files, so there is nothing to clean up on disk.
 
@@ -69,7 +69,7 @@ Every `akm` call runs in the session's directory (in-process recall passes it as
 
 ### Shell environment
 
-`shell.hook("create.before")` is V2's native equivalent of V1's `shell.env`: the host passes the full environment it is about to spawn a shell with and the plugin mutates it. Every shell the agent starts gets `AKM_PLUGIN_VERSION` and, when known, `AKM_BUNDLE_DIR` (from `AKM_BUNDLE_DIR` or `akm info`, asked once and cached). Verified against the 2.0.26 binary: a model-issued `shell` call sees the variables. This also applies to terminals the host creates through the same path.
+`shell.hook("create.before")` is V2's native equivalent of V1's `shell.env`: the host passes the full environment it is about to spawn a shell with and the plugin mutates it. Every shell the agent starts gets `AKM_PLUGIN_VERSION` and, when known, `AKM_BUNDLE_DIR` (from `AKM_BUNDLE_DIR` or `akm doctor info`, asked once and cached). Verified against the 2.0.26 binary: a model-issued `shell` call sees the variables. This also applies to terminals the host creates through the same path.
 
 Differences from V1 in general: V1 awaits some hooks synchronously; V2's helpers are asynchronous (pending count, bundle dir, negative feedback). `opencode run` hands the prompt to the hook as a JSON string literal; the plugin unwraps it exactly as V1 does so start-anchored signals still match. V2 has no equivalent of V1's bundle-missing warning, nor of V1's "AKM user feedback recorded" log line per message.
 
@@ -93,7 +93,7 @@ The settings are the `plugins` section of akm's own `config.json` (`AKM_CONFIG_D
 | --- | --- |
 | `AKM_CONFIG_DIR` | Where akm's `config.json` is (akm's own location variable). |
 | `AKM_OPENCODE_CLI` | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency. |
-| `AKM_BUNDLE_DIR` | Bundle location exported to shells and used to validate refs; otherwise asked from `akm info`. |
+| `AKM_BUNDLE_DIR` | Bundle location exported to shells and used to validate refs; otherwise asked from `akm doctor info`. |
 
 ## Compatibility and updating
 
@@ -107,7 +107,7 @@ Round 1, with recall still going through the CLI: verified against the real bina
 - creating a session delivers `session.created`, and the plugin runs `akm workflow list --active` and a project-anchored `akm curate`;
 - a user prompt runs `akm curate <prompt>` through the `prompt` hook, and the model request that follows carries the recalled block with its provenance banner and the standing AKM rules in its system message;
 - the five tools are offered to the model as direct tool calls, and a model-issued `akm_search` call executes `akm search nginx --detail full --format json` and returns its output as the tool result;
-- when the turn ends, `akm proposal extract --type opencode --session-id <the real session id>` runs, and its `LLM_NOT_CONFIGURED` failure is logged with AKM's code and hint;
+- when the turn ends, `akm proposal extract --sessions opencode --session-id <the real session id>` runs, and its `LLM_NOT_CONFIGURED` failure is logged with AKM's code and hint;
 - a failing `akm` call is logged through OpenCode's logger and the plugin prints nothing to stdout/stderr.
 
 Round 2 (same binary, built `dist/` loaded through a re-exporting plugin directory, mock model, stub `akm`): the shell hook exports `AKM_BUNDLE_DIR` and `AKM_PLUGIN_VERSION` to a model-issued `shell` call; `edit` before an opened asset is blocked in `enforce` and the model receives the gate message; a prompt of "Remember that ..." runs `akm proposal new` and logs `AKM learning proposal submitted`; `akm_show` followed by "thanks, that worked" runs `akm feedback knowledge/inkwell --positive`; the pending count is requested. **In-process recall cannot be exercised for real yet** because no published `akm-cli` provides `akm-cli/api`: against the real binary the plugin logged `AKM recall failed` and carried on, and recall through the API is covered by tests against a fake that follows the contract.
@@ -118,7 +118,7 @@ Not verified against the real binary: a real model's use of the tools, compactio
 
 ## Locking down destructive commands
 
-Same as V1: the plugin does not gate `akm` commands, and agents should get explicit user approval before `proposal accept|reject|revert`, `sync --push`, `remove`, env/secret writes, `task add|run`, `upgrade`, `update --all` or `config set`. See [opencode/README.md](../opencode/README.md#locking-down-destructive-commands).
+Same as V1: the plugin does not gate `akm` commands, and agents should get explicit user approval before `proposal accept|reject|revert`, `sync --push`, `remove`, env/secret writes, `akm import --type task` / `akm run <task-ref>`, `upgrade`, `update --all` or `config set`. See [opencode/README.md](../opencode/README.md#locking-down-destructive-commands).
 
 ## Docs
 

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-// Where the active AKM bundle lives: `akm info`'s `bundleDir`. Used to validate
+// Where the active AKM bundle lives: `akm doctor info`'s `bundleDir`. Used to validate
 // refs seen in arbitrary tool calls. The answer, including "unknown",
 // is cached for the life of the plugin process.
 export type BundleDirResolver = ReturnType<typeof createBundleDirResolver>
@@ -10,7 +10,7 @@ export type BundleDirResolver = ReturnType<typeof createBundleDirResolver>
 export function createBundleDirResolver() {
   let cached: string | undefined
   return {
-    /** `runInfo` returns `akm info --format json -q` stdout, or null when it failed. */
+    /** `runInfo` returns `akm doctor info --format json -q` stdout, or null when it failed. */
     async get(runInfo: () => Promise<string | null>): Promise<string | undefined> {
       if (cached !== undefined) return cached || undefined
       const raw = await runInfo()

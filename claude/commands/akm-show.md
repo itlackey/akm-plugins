@@ -1,6 +1,6 @@
 ---
 description: Show an AKM asset by concept-ID ref, with optional bounded fragment context.
-argument-hint: <[bundle//]conceptId[#fragment]> [--context exact|lead] [--max-tokens N|--max-chars N]
+argument-hint: <[bundle//]conceptId[#fragment]> [--lead] [--max-tokens N|--max-chars N] [--outline]
 allowed-tools: Bash(bun *akm-cli/dist/cli.js* show *) Bash(bun *akm-cli/dist/cli.js* search *)
 ---
 
@@ -9,9 +9,9 @@ allowed-tools: Bash(bun *akm-cli/dist/cli.js* show *) Bash(bun *akm-cli/dist/cli
 Parse the text the user gave with this command (in Claude Code it follows
 below as `ARGUMENTS:`; in Codex it is the user's request) as one required
 reference followed by optional flags. The reference cannot contain spaces.
-Supported flags are `--context exact|lead`, `--max-tokens <positive integer>`,
-`--max-chars <positive integer>`, and `--detail brief|normal|full`. Never pass
-both budget flags. A budget requires `--context lead`.
+Supported flags are `--lead`, `--max-tokens <positive integer>`,
+`--max-chars <positive integer>`, `--outline`, and `--detail normal|full`. Never pass
+both budget flags. `--max-chars` requires `--lead`; `--outline` cannot be combined with `--lead` or a budget.
 
 Quote the reference, but keep each flag and its separately quoted value as its
 own shell argument. Quoting the entire text turns the flags into
@@ -22,7 +22,7 @@ bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" show "<ref>" <flags
 ```
 
 Exact remains the default and returns only the selected fragment. For an
-opaque fragment ref returned by search, `--context lead` prepends indexed-safe
+opaque fragment ref returned by search, `--lead` prepends indexed-safe
 lead context under a 3,200-character default budget and leaves the explicitly
 labelled selected match last. Friendly authored heading selectors retain their
 existing source-live behavior. Summarize the returned asset payload for the

@@ -60,7 +60,7 @@ function runHookSandboxed(args: string[], opts: {
 
   // The fake akm the bridged akm-cli hands its arguments to (see PLUGIN_DIR).
   const fakeAkm = path.join(binDir, "akm")
-  // Answers `info` from AKM_BUNDLE_DIR, as the real akm does: the hook takes the bundle root from `akm info`.
+  // Answers `info` from AKM_BUNDLE_DIR, as the real akm does: the hook takes the bundle root from `akm doctor info`.
   writeFileSync(fakeAkm, `#!/usr/bin/env sh\nif [ "$1" = "doctor" ] && [ "$2" = "info" ]; then printf '{"bundleDir":"%s"}\\n' "$AKM_BUNDLE_DIR"; fi\nexit 0\n`)
   chmodSync(fakeAkm, 0o755)
 

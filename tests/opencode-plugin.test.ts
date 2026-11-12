@@ -98,7 +98,7 @@ const mockExecFile = mock((_command: string, args: string[], options: any, callb
   execFileCalls.push({ args, env: options?.env ?? {}, cwd: options?.cwd })
   const decoded = decodeReadArgv(args)
   const run = async (): Promise<unknown> => {
-    if (decoded.verb === "doctor") return { ok: true }
+    if (decoded.verb === "doctor") return args[1] === "metrics" && args[2] === "assets" ? mockAkmSearch({ query: "--by-usage" }) : { ok: true }
     if (decoded.verb === "search") {
       const input = { ...decoded.input }
       if (options?.env?.AKM_EVENT_SOURCE === "audit") (input as any).skipLogging = true
@@ -359,7 +359,7 @@ describe("akm-opencode plugin", () => {
         expect(mockSpawn).not.toHaveBeenCalled()
         const verbs = [...mockExecFileSync.mock.calls.map(([, args]) => args?.[0]), ...execFileCalls.map((call) => call.args[0])]
         // `config get` is the session bootstrap's read of the default bundle.
-        for (const verb of verbs) expect(["search", "show", "curate", "feedback", "config"]).toContain(verb as string)
+        for (const verb of verbs) expect(["search", "show", "curate", "feedback", "config", "doctor"]).toContain(verb as string)
         expect(ledgerSize()).toBe(ledgerBefore)
         expect(existsSync(path.join(__curatedDir(), "ro-1.md"))).toBe(false)
       })
@@ -427,7 +427,7 @@ describe("akm-opencode plugin", () => {
       const output = { parts: [{ type: "text", text: "no, use pnpm not npm for this repository" }] } as any
 
       await hooks["chat.message"]!(input, output)
-      await Bun.sleep(50) // the proposal is spawned after a background `akm info` check
+      await Bun.sleep(50) // the proposal is spawned after a background `akm doctor info` check
       const proposalCalls = () => mockSpawn.mock.calls.filter(([, args]: any[]) =>
         Array.isArray(args) && args[0] === "proposal" && args[1] === "new")
       expect(proposalCalls()).toHaveLength(1)
@@ -834,7 +834,7 @@ describe("akm-opencode plugin", () => {
 
     it("publishes the AKM 0.9 asset-type vocabulary on both type filters", async () => {
       const hooks = await AkmPlugin(createPluginInput())
-      // `akm info --format json` -> .assetTypes (singular, as `--type` accepts),
+      // `akm doctor info --format json` -> .assetTypes (singular, as `--type` accepts),
       // plus the plugin's own "any" = no-filter sentinel.
       const supported = [
         "agent",
@@ -931,7 +931,7 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("session bootstrap: rules and most used assets (#154)", () => {
-    const bootstrapSearches = () => execFileCalls.filter((c) => c.args[0] === "search" && (c.args.includes("--by-usage") || c.args.includes("rule")))
+    const bootstrapSearches = () => execFileCalls.filter((c) => (c.args[0] === "doctor" && c.args[1] === "metrics") || (c.args[0] === "search" && c.args.includes("rule")))
     beforeEach(() => {
       mockAkmSearch.mockImplementation(async (input: Record<string, unknown>) => ({
         schemaVersion: 1,
@@ -953,7 +953,7 @@ describe("akm-opencode plugin", () => {
       expect(injected).toContain("## rules/r1\n- Keep changes small")
       expect(injected).toContain("- skills/used-most — Used most")
       expect(injected.indexOf("# AKM assets used most here")).toBeLessThan(injected.indexOf("# AKM is available in this session"))
-      const calls = execFileCalls.filter((c) => ["search", "show"].includes(c.args[0]) && (c.args.includes("--by-usage") || c.args.includes("rule") || c.args[1] === "rules/r1"))
+      const calls = execFileCalls.filter((c) => ["search", "show", "doctor"].includes(c.args[0]) && (c.args[1] === "metrics" || c.args.includes("rule") || c.args[1] === "rules/r1"))
       expect(calls.length).toBeGreaterThan(2)
       for (const call of calls) {
         expect(call.env.AKM_EVENT_SOURCE).toBe("unknown")
@@ -1178,7 +1178,7 @@ describe("akm-opencode plugin", () => {
     })
 
     it("rides the missing-bundle warning into the system transform", async () => {
-      // The bundle root is `akm info`'s answer; the beforeEach mock is restored for the next test.
+      // The bundle root is `akm doctor info`'s answer; the beforeEach mock is restored for the next test.
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
         if (args?.[0] === "doctor" && args[1] === "info") return JSON.stringify({ bundleDir: "/nonexistent-akm-opencode-bundle" })
         return "mock output"
@@ -1411,7 +1411,7 @@ describe("akm-opencode plugin", () => {
 
       expect(mockSpawn).toHaveBeenCalledWith(
         akmBin,
-        ["proposal", "extract", "--type", "opencode", "--session-id", "idle-extract-1", "--format", "json", "-q"],
+        ["proposal", "extract", "--sessions", "opencode", "--session-id", "idle-extract-1", "--format", "json", "-q"],
         expect.objectContaining({ detached: true, stdio: ["ignore", "pipe", "pipe"] }),
       )
 

@@ -6,9 +6,9 @@ allowed-tools: Bash(bun *akm-cli/dist/cli.js* curate *)
 
 `${CLAUDE_PLUGIN_ROOT}` is this plugin's directory, which carries the AKM CLI; Codex leaves it unfilled, so use the directory this plugin is installed in. Run every AKM command through it, as written below.
 
-The task is the text the user gave with this command (in Claude Code it follows below as `ARGUMENTS:`; in Codex it is the user's request). Run `bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" curate "<task>" --limit 5 --pack 8000 --format json -q` and report the packed matches back to the user, grouped by asset type.
+The task is the text the user gave with this command (in Claude Code it follows below as `ARGUMENTS:`; in Codex it is the user's request). Run `bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" curate "<task>" --limit 5 --max-tokens 8000 --format json -q` and report the packed matches back to the user, grouped by asset type.
 
-The 0.9.14 `--pack` response already contains the selected local assets' full payloads within one shared token budget. Registry hits are deliberately omitted from packed output. If the packed array is empty, rerun `bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" curate "<task>" --from all --limit 5 --format json -q` without `--pack` and report its refs or install guidance instead of inventing content. For each packed match, summarize:
+The `--max-tokens` response already contains the selected local assets' full payloads within one shared token budget. Registry hits are deliberately omitted from packed output. If the packed array is empty, rerun `bun "${CLAUDE_PLUGIN_ROOT}/node_modules/akm-cli/dist/cli.js" curate "<task>" --from all --limit 5 --format json -q` without `--max-tokens` and report its refs or install guidance instead of inventing content. For each packed match, summarize:
 - what the asset does
 - when it fits this task
 - how it should be applied
