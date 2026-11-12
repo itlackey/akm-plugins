@@ -404,11 +404,14 @@ if (${hangsWhen}) {
     const sandbox = makeSandbox({ withAkm: false })
     const pids = installHangingAkm(sandbox, 'args[0] === "curate"')
 
+    // 10 s, not 3: the runner's clock starts when it spawns akm, and as the first test here this one pays the cold
+    // start of the whole chain, which on a Windows runner can take longer than 3 s (bun-akm up, node-launcher not).
+    const config = makeConfigDir({ ...LEARNING_OFF, plugins: { curateTimeoutSeconds: 10 } })
     const started = Date.now()
-    const result = runHandler(handlerFor("curate-prompt"), sandbox, payloadFor("curate-prompt", sandbox), { AKM_CONFIG_DIR: THREE_SECOND_CONFIG_DIR })
+    const result = runHandler(handlerFor("curate-prompt"), sandbox, payloadFor("curate-prompt", sandbox), { AKM_CONFIG_DIR: config })
 
     expect(result.exitCode).toBe(0)
-    // The hook gave up after its 3 s, not after akm's 90.
+    // The hook gave up after its 10 s, not after akm's 90.
     expect(Date.now() - started).toBeLessThan(30_000)
     expect(readLines(path.join(sandbox.stateDir, "session.log")).some((line) => line.includes("akm_failed"))).toBe(true)
     await expectNothingLeftRunning(pids)
