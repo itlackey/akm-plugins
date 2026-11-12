@@ -109,3 +109,20 @@ describe("opencode-shared read-only option", () => {
     expect(AKM_READONLY_HINTS_PREFIX).not.toContain("akm help")
   })
 })
+
+
+describe("additive include selectors", () => {
+  it("forwards repeatable include selectors on search and curate while preserving the session project", () => {
+    for (const operation of ["search", "curate"] as const) {
+      const args = buildReadArgs(operation, { query: "deploy nginx proxy", project: "acme", include: ["quality=proposed", "type=session"] })
+      expect(args).toContain("--project")
+      expect(args.slice(-6)).toEqual(["--include", "quality=proposed", "--include", "type=session", "--format", "json"])
+      expect(args).not.toContain("--include-proposed")
+    }
+  })
+  it("rejects malformed selectors at the tool boundary", () => {
+    for (const include of ["quality=proposed", ["quality=curated"], ["project=other"], ["type="], [null]]) {
+      expect(() => buildReadArgs("search", { include })).toThrow("include must be an array")
+    }
+  })
+})

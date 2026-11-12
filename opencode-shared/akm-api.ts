@@ -20,7 +20,7 @@
 // rather than stop the plugin from loading, and tests substitute the function
 // here instead of mocking a module (module mocks are process-global in bun).
 
-export type CurateOptions = { limit?: number; type?: string; format?: "text" | "json"; cwd?: string; project?: string }
+export type CurateOptions = { include?: { quality?: "proposed" | "proposed"[]; type?: string | string[] }; limit?: number; type?: string; format?: "text" | "json"; cwd?: string; project?: string }
 export type CurateFn = (query: string, options?: CurateOptions) => Promise<string>
 
 const API_SPECIFIER = "akm-cli/api"
