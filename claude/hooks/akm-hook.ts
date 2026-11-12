@@ -384,7 +384,7 @@ function capturePromptLearning(rawInput: string, text: string, sid: string): voi
 }
 
 /**
- * Resolve the bundle root used for ref validation: `akm info`'s `bundleDir`.
+ * Resolve the bundle root used for ref validation: `akm doctor info`'s `bundleDir`.
  *
  * Returns an array because future work may surface multiple roots; today
  * the array has at most one entry.
@@ -719,10 +719,10 @@ function extractPostToolFields(raw: string, mode: string): { toolName: string; c
   const rawOutputText = getText(parsed.output) || getText(parsed.tool_output) || getText(parsed.response) || ""
   const commandText = sanitize(rawCommandText)
   const outputText = sanitize(rawOutputText)
-  // Extract BEFORE resolving. resolveStashRoots() shells out to `akm info`
+  // Extract BEFORE resolving. resolveStashRoots() shells out to `akm doctor info`
   // on every call, and validateRefCandidates() throws the
   // roots away outright on an empty candidate list — so resolving first meant
-  // an `akm info` spawn on every ref-free tool event, which is nearly all of
+  // an `akm doctor info` spawn on every ref-free tool event, which is nearly all of
   // them. Memoization cannot help: each Claude hook invocation is a fresh
   // sh+bun process. Reordering is the only fix that works.
   const commandCandidates = extractAllRefs(rawCommandText)
@@ -776,7 +776,7 @@ function userPromptExpansion(): string {
   if (!expanded) return ""
   // Extract only — no bundle validation. UserPromptExpansion is an interactive
   // path with a 10 s hook budget that currently spawns no subprocess at all;
-  // resolveStashRoots() would add an `akm info` spawn to every slash-command
+  // resolveStashRoots() would add an `akm doctor info` spawn to every slash-command
   // expansion. The shared extractor's concept-root allowlist already removes
   // the false positives that matter here (src/index.ts, node_modules/foo), and
   // these refs are observational only — they never drive auto-feedback.
@@ -811,7 +811,7 @@ function postToolBatch(): string {
   // tool-observation refs. Candidates come from the *raw* text (heredocs,
   // fenced code, JSON values) for the same reason extractPostToolFields() does
   // it, and — also for the same reason — they are extracted BEFORE the roots
-  // are resolved, so a ref-free batch never pays for an `akm info` spawn whose
+  // are resolved, so a ref-free batch never pays for an `akm doctor info` spawn whose
   // result validateRefCandidates() would discard anyway.
   const candidates = extractAllRefs(rawFlattened)
   const refs = candidates.length > 0 ? validateRefCandidates(candidates, resolveStashRoots()) : []
@@ -1200,7 +1200,7 @@ function lastExtractFailureWarning(): string {
 
 // `bundleRoots` is passed in rather than resolved here: sessionStart() needs
 // the same roots to validate the refs it records, and resolveStashRoots() can
-// spawn `akm info`. Resolving once per SessionStart and threading the result
+// spawn `akm doctor info`. Resolving once per SessionStart and threading the result
 // keeps the subprocess count at one.
 function gatherSessionStartWarnings(bundleRoots: readonly string[]): string[] {
   const warnings: string[] = []
@@ -1280,7 +1280,7 @@ const AKM_READ_ONLY_VERBS = new Set(["show", "search", "curate"])
 const AKM_VALUE_FLAGS = new Set(["--format", "--detail", "--limit"])
 
 // Only the FIRST akm invocation in the command text is inspected, so a
-// compound `akm show workflows/x && akm workflow run workflows/x` resolves to
+// compound `akm show workflows/x && akm run workflows/x` resolves to
 // `show` and the whole event is skipped — the use is thrown away along with
 // the lookup. Deliberate: the alternative is scanning every invocation and
 // taking the most use-shaped one, which turns a lookup that merely PRECEDED an
@@ -1531,7 +1531,7 @@ function curatePrompt(): string {
     // Extract only — no bundle validation. `curated` is the stdout of `akm
     // curate`, so the refs in it were produced by AKM against the live stash
     // and are authoritative by construction. Validating would add a second
-    // `akm info` spawn to a UserPromptSubmit hook that has already spent up to
+    // `akm doctor info` spawn to a UserPromptSubmit hook that has already spent up to
     // CURATE_TIMEOUT seconds on the curate call itself.
     refs: akmOutputRefs(curated),
     outcome: { status: curated.trim() ? "ok" : "skipped" },
@@ -1650,7 +1650,7 @@ async function sessionStart(): Promise<string> {
 
   // Resolve the bundle roots exactly once for this SessionStart: the
   // missing-bundle warning and the ref validation below both need them, and
-  // resolveStashRoots() may spawn `akm info`.
+  // resolveStashRoots() may spawn `akm doctor info`.
   const bundleRoots = resolveStashRoots()
   const sessionWarnings = gatherSessionStartWarnings(bundleRoots)
   const extractWarning = lastExtractFailureWarning()
@@ -1811,7 +1811,7 @@ function extractSession(): string {
     logFd = undefined
   }
 
-  // `--type claude` is a literal, not discovered via `--auto` — akm-cli's only
+  // `--sessions claude` is a literal, not discovered via `--auto` — akm-cli's only
   // harness-discovery flag (#106). `--auto` iterates every *available* harness
   // (session-log directory present on disk, independent of which plugin is
   // installed) and folds the per-harness results into one envelope whose
@@ -1836,7 +1836,7 @@ function extractSession(): string {
   try {
     const child = spawnDetachedAkm(
       akm.command,
-      [...akm.argsPrefix, "proposal", "extract", "--type", "claude", "--session-id", sid],
+      [...akm.argsPrefix, "proposal", "extract", "--sessions", "claude", "--session-id", sid],
       ["ignore", logFd ?? "ignore", logFd ?? "ignore"],
     )
     child.unref()

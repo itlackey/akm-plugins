@@ -182,7 +182,7 @@ describe("fake-akm envelope contract", () => {
       ]
       for (const [label, env] of shapes) {
         const full = { ...base, ...env }
-        const result = spawnSync(process.execPath, [REAL_AKM, "--format", "json", "-q", "info"], full)
+        const result = spawnSync(process.execPath, [REAL_AKM, "--format", "json", "-q", "doctor", "info"], full)
         expect({ label, exit: result.exitCode, stderr: result.exitCode === 0 ? "" : result.stderr }).toEqual({ label, exit: 0, stderr: "" })
         const configDir = (JSON.parse(result.stdout) as { configDir: string }).configDir
         expect({ label, path: akmConfigPath(full, "linux") }).toEqual({ label, path: path.join(configDir, "config.json") })
@@ -207,7 +207,7 @@ describe("fake-akm envelope contract", () => {
   }, REAL_AKM_TIMEOUT_MS)
 
   // `info` gates ALL ref validation on both plugins: they resolve their
-  // bundle root from $AKM_BUNDLE_DIR, else `akm info --format json` →
+  // bundle root from $AKM_BUNDLE_DIR, else `akm doctor info --format json` →
   // .bundleDir (claude/hooks/akm-hook.ts resolveStashRoots(),
   // opencode/index.ts getAkmBundleDir()). With no bundle root,
   // validateRefCandidates() early-returns [] and auto-feedback silently
@@ -217,8 +217,8 @@ describe("fake-akm envelope contract", () => {
     const real = makeRealEnv()
     const fake = makeFakeEnv()
     try {
-      const realEnvelope = runReal(real, ["--format", "json", "-q", "info"]) as Record<string, unknown>
-      const fakeEnvelope = runFake(fake.akmPath, ["--format", "json", "-q", "info"]) as Record<string, unknown>
+      const realEnvelope = runReal(real, ["--format", "json", "-q", "doctor", "info"]) as Record<string, unknown>
+      const fakeEnvelope = runFake(fake.akmPath, ["--format", "json", "-q", "doctor", "info"]) as Record<string, unknown>
       expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
       // The two fields the plugins actually consume: .bundleDir (the bundle
       // root every ref resolves against) and .assetTypes (the 0.9 asset-type
@@ -524,7 +524,7 @@ describe("fake-akm envelope contract", () => {
         "-q",
         "proposal",
         "extract",
-        "--type",
+        extractSelector,
         "opencode",
         "--session-id",
         "contract-test",
@@ -657,9 +657,11 @@ describe("format-guidance gate search selects by the project's sources", () => {
 })
 
 // #154: the rules listing, the usage list and the rule read the session bootstrap makes (akm#1512).
-// A real akm that does not have them yet (`--by-usage` unknown) skips this until the pin moves past it.
-const supportsProjectRules =
-  akmAvailable && spawnSync(process.execPath, [REAL_AKM, "search", "--help"]).stdout.includes("--by-usage")
+// A real akm that does not have them yet (`doctor metrics assets` unknown) skips this until the pin moves past it.
+const realHelp = (...args: string[]) => (akmAvailable ? spawnSync(process.execPath, [REAL_AKM, ...args, "--help"]).stdout.toString() : "")
+const supportsProjectRules = akmAvailable && /\bassets\b/.test(realHelp("doctor", "metrics"))
+// `proposal extract --sessions` is akm 0.10.261120; the pinned build before it only knows `--type`.
+const extractSelector = realHelp("proposal", "extract").includes("--sessions") ? "--sessions" : "--type"
 
 describe("session bootstrap calls match the project-rules contract", () => {
   test.skipIf(!supportsProjectRules)("rules listing, usage list and rule read have the real envelopes, with and without a project", () => {
@@ -691,7 +693,7 @@ describe("session bootstrap calls match the project-rules contract", () => {
         return result.stdout.toString()
       }
       const rules = ["search", "", "--type", "rule", "--limit", "200", "--detail", "normal", "--format", "json", "-q"]
-      const usage = ["search", "--by-usage", "--limit", "10", "--detail", "normal", "--format", "json", "-q"]
+      const usage = ["doctor", "metrics", "assets", "--limit", "10", "--detail", "normal", "--format", "json", "-q"]
       const noProject = ["--project", "none"]
       // One shown skill in the project, so the usage list has a hit to shape.
       run(projectDir, ["show", "skills/deploy", "--format", "json", "-q"])

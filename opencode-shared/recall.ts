@@ -274,7 +274,7 @@ export type ExtractOutcome =
 
 /**
  * Hand a native OpenCode session to the public `akm proposal extract` flow:
- * `akm proposal extract --type opencode --session-id <id>`. Fire-and-forget
+ * `akm proposal extract --sessions opencode --session-id <id>`. Fire-and-forget
  * (detached, unref'd) so it never stalls a turn; `onDone` receives the
  * outcome. `ok:false` in the printed envelope counts as failure regardless of
  * exit status. Never throws.
@@ -291,7 +291,7 @@ export function spawnSessionExtract(
     const child = spawn(
       command.command,
       [
-        ...command.argsPrefix, "proposal", "extract", "--type", "opencode", "--session-id", sessionID,
+        ...command.argsPrefix, "proposal", "extract", "--sessions", "opencode", "--session-id", sessionID,
         ...(where.project ? ["--project", where.project] : []),
         "--format", "json", "-q",
       ],

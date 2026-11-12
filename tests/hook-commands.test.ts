@@ -291,7 +291,7 @@ describe("Claude hooks through the manifest commands", () => {
     // Both children outlive the hook, so the fake akm runs after it has returned.
     await settle(sandbox, { index: 1, extract: true })
     const extract = readFileSync(path.join(sandbox.stateDir, "extract.log"), "utf8")
-    expect(readCallLog(sandbox.callLog).some((call) => call.argv.join(" ") === `proposal extract --type claude --session-id ${SESSION_ID}`)).toBe(true)
+    expect(readCallLog(sandbox.callLog).some((call) => call.argv.join(" ") === `proposal extract --sessions claude --session-id ${SESSION_ID}`)).toBe(true)
     // akm wrote that to its stderr, which the hook pointed at the log file.
     expect(extract).toContain("proposal_extract\t" + SESSION_ID)
   })

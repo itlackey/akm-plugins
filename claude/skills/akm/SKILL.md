@@ -27,7 +27,7 @@ agents, or ask a hook to intercept the `Agent` tool.
 
 ## Agent Dispatch
 
-Use `akm agent <agent-ref>` when the task should be delegated to a configured
+Use `akm run <agent-ref>` when the task should be delegated to a configured
 AKM agent asset, especially when the agent's system prompt, model, or tool
 policy is part of the requested behavior. Use the returned agent ref from
 `akm search` or `akm curate`; do not invent one. For ordinary local work, keep
@@ -38,7 +38,7 @@ Pass the current working directory explicitly and request the machine-readable
 result envelope:
 
 ```sh
-akm agent "agents/code-reviewer" \
+akm run "agents/code-reviewer" \
   --prompt-stdin \
   --cwd "$PWD" --format json -q <<'TASK'
 Review the current changes for correctness and missing tests.
@@ -89,10 +89,10 @@ When the selected local assets' full content is needed immediately, pack it in
 one call instead of following every ref with a separate show:
 
 ```sh
-akm curate "<specific task description>" --limit 5 --pack 8000 --format json -q
+akm curate "<specific task description>" --limit 5 --max-tokens 8000 --format json -q
 ```
 
-`--pack` is a shared token budget, not a per-item limit. AKM drops lower-ranked
+`--max-tokens` is a shared token budget, not a per-item limit. AKM drops lower-ranked
 whole assets before truncating, and never packs registry-only hits.
 
 Use search when you know a concept exists and need its exact ID:
@@ -111,16 +111,16 @@ Inspect a selected concept before relying on it:
 akm show "<ref>" --format json
 ```
 
-The default `--context exact` preserves the narrow selected-fragment response.
+The default (no `--lead`) preserves the narrow selected-fragment response.
 When a memory fragment needs its document lead for usability, request bounded
 indexed-safe context while keeping the labelled selected match last:
 
 ```sh
-akm show "<fragment-ref>" --context lead --max-tokens 800 --format json -q
+akm show "<fragment-ref>" --lead --max-tokens 800 --format json -q
 ```
 
-Use at most one of `--max-tokens` and `--max-chars`; both require `--context
-lead`. The lead default is 3,200 characters. Prefer exact mode when older lead
+Use at most one of `--max-tokens` and `--max-chars`; `--max-chars` requires
+`--lead`. The lead default is 3,200 characters. Prefer exact mode when older lead
 text could conflict with a temporal update, and preserve `selectedRef`,
 `parentRef`, neighbor refs, token estimates, and `contextTruncated` when
 summarizing a contextual response.

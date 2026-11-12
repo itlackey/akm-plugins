@@ -304,7 +304,7 @@ describe("Codex plugin metadata", () => {
       ["akm-x.md", command('Run `akm search "$ARGUMENTS"`.')],
       ["akm-x.md", command("Run `akm show $1`.")],
       ["akm-x.md", command("Run {{query}}.")],
-      ["akm-x.md", command("Run !`akm info`.")],
+      ["akm-x.md", command("Run !`akm doctor info`.")],
       ["akm-x.md", command("Read @notes.md first.")],
       [`${"a".repeat(60)}.md`, command("Run it.")],
       ["akm-x.md", command("x".repeat(4000))],
