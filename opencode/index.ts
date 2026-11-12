@@ -404,12 +404,12 @@ const bundleDirResolver = createBundleDirResolver()
 async function getAkmBundleDir(client?: LogCapableClient): Promise<string | undefined> {
   return bundleDirResolver.get(async () =>
     client
-      ? runCliSyncBestEffort(client, ["info", "--format", "json", "-q"], curateTimeoutMs(), {
+      ? runCliSyncBestEffort(client, ["doctor", "info", "--format", "json", "-q"], curateTimeoutMs(), {
         toolName: "shell.env",
         subsystem: "info",
         operation: "get-bundle-dir",
       })
-      : runCurate(["info", "--format", "json", "-q"]))
+      : runCurate(["doctor", "info", "--format", "json", "-q"]))
 }
 
 // getAkmBundleDir() caches "" on failure and neither of its consumers checks,

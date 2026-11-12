@@ -120,7 +120,7 @@ describe("akm-opencode-v2 plugin", () => {
 
     const argv = fake.calls()
     const searchArgv = argv.find((a) => a[0] === "search")!
-    expect(searchArgv).toEqual(expect.arrayContaining(["search", "nginx", "--limit", "3", "--include-proposed", "--detail", "full", "--format", "json"]))
+    expect(searchArgv).toEqual(expect.arrayContaining(["search", "nginx", "--limit", "3", "--include", "quality=proposed", "--detail", "full", "--format", "json"]))
     expect(searchArgv).not.toContain("--type") // "any" is a sentinel, never sent
     expect(argv.find((a) => a[0] === "show")).toEqual(["show", "skills/nginx-proxy", "--detail", "full", "--format", "json"])
     expect(argv.find((a) => a[0] === "curate" && a.includes("--limit") && a.includes("2"))).toBeTruthy()

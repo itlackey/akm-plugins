@@ -545,7 +545,7 @@ function xdgDir(akmVar, xdgVar, fallback) {
   return require("node:path").join(root, "akm")
 }
 
-if (verb === "info") {
+if (verb === "info" || (verb === "doctor" && tail[0] === "info")) {
   const bundleDir = (process.env.AKM_BUNDLE_DIR || idx.bundleDir || "").trim()
   const byType = {}
   for (const a of idx.assets) byType[a.type] = (byType[a.type] || 0) + 1

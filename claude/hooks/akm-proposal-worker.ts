@@ -102,7 +102,7 @@ function run(): void {
       "--format",
       "json",
       "-q",
-      "--timeout-ms",
+      "--timeout",
       String(timeout),
     ], timeout)
     const child = spawnSync(plan.command, plan.args, {

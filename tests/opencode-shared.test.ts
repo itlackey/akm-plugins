@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { buildReadArgs } from "../opencode-shared/akm-cli"
+import { buildReadArgs, runAkm } from "../opencode-shared/akm-cli"
 import { formatPendingProposalContext } from "../opencode-shared/learning"
 import { AKM_HINTS_PREFIX, AKM_READONLY_HINTS_PREFIX, formatRunAge, formatWorkflowContext, summarizeActiveWorkflows } from "../opencode-shared/recall"
 import { ASSET_TYPES, TOOL_SPECS, buildFeedbackArgs, readonlyOption, toJsonSchema, withProposedWarnings } from "../opencode-shared/tools"
@@ -8,20 +8,21 @@ import { ASSET_TYPES, TOOL_SPECS, buildFeedbackArgs, readonlyOption, toJsonSchem
 describe("opencode-shared read argv", () => {
   it("search maps tool fields to public CLI flags and asks for full JSON", () => {
     expect(buildReadArgs("search", { query: "review", type: "skill", limit: 3, source: "all", includeProposed: true })).toEqual([
-      "search", "review", "--type", "skill", "--limit", "3", "--from", "all", "--include-proposed", "--detail", "full", "--format", "json",
+      "search", "review", "--type", "skill", "--limit", "3", "--from", "all", "--include", "quality=proposed", "--detail", "full", "--format", "json",
     ])
     expect(buildReadArgs("search", {})).toEqual(["search", "", "--detail", "full", "--format", "json"])
   })
 
-  it("show puts the ref first and maps summary to --detail brief", () => {
+  it("show puts the ref first and maps summary and brief to --outline", () => {
     expect(buildReadArgs("show", { ref: "knowledge/deploy#rollback", detail: "full" })).toEqual(["show", "knowledge/deploy#rollback", "--detail", "full", "--format", "json"])
-    expect(buildReadArgs("show", { ref: "skills/a", detail: "summary" })).toEqual(["show", "skills/a", "--detail", "brief", "--format", "json"])
+    expect(buildReadArgs("show", { ref: "skills/a", detail: "summary" })).toEqual(["show", "skills/a", "--outline", "--format", "json"])
+    expect(buildReadArgs("show", { ref: "skills/a", detail: "brief" })).toEqual(["show", "skills/a", "--outline", "--format", "json"])
     expect(() => buildReadArgs("show", { ref: "--format" })).toThrow("must not start with '-'")
     expect(() => buildReadArgs("show", {})).toThrow("ref is required")
   })
 
   it("curate validates the pack budget before anything runs", () => {
-    expect(buildReadArgs("curate", { query: "deploy", pack: 4096, source: "local" })).toEqual(["curate", "deploy", "--from", "local", "--pack", "4096", "--format", "json"])
+    expect(buildReadArgs("curate", { query: "deploy", pack: 4096, source: "local" })).toEqual(["curate", "deploy", "--from", "local", "--max-tokens", "4096", "--format", "json"])
     for (const pack of [0, -1, 1.5, "9"]) expect(() => buildReadArgs("curate", { query: "x", pack })).toThrow("pack must be a positive integer token budget")
   })
 })
@@ -124,5 +125,18 @@ describe("additive include selectors", () => {
     for (const include of ["quality=proposed", ["quality=curated"], ["project=other"], ["type="], [null]]) {
       expect(() => buildReadArgs("search", { include })).toThrow("include must be an array")
     }
+  })
+})
+
+describe("opencode-shared stderr error", () => {
+  const fail = (stderr: string) => runAkm({ command: "sh", argsPrefix: ["-c", `printf '%s\\n' "$0" >&2; exit 1`, stderr] } as never, [])
+  it("reads the multi-line error JSON after a deprecation notice", async () => {
+    const result = await fail(`[deprecated] --pack is deprecated and is removed in 0.11: use \`--max-tokens\`. See STABILITY.md.\n{\n  "ok": false,\n  "error": "Asset not found",\n  "code": "ASSET_NOT_FOUND"\n}`)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toBe("Asset not found")
+  })
+  it("still returns raw text when stderr is not JSON", async () => {
+    const result = await fail("boom")
+    if (!result.ok) expect(result.error).toBe("boom")
   })
 })

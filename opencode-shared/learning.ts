@@ -168,7 +168,7 @@ export function createLearning(host: LearningHost) {
           "--format",
           "json",
           "-q",
-          "--timeout-ms",
+          "--timeout",
           String(timeoutMs),
         ],
         {

@@ -110,7 +110,7 @@ function answerInfoFromBundleEnv(env: Record<string, string> | undefined) {
   const text = readFileSync(stub, "utf8")
   if (!text.startsWith("#!") || text.includes(INFO_MARKER)) return
   const [shebang, ...rest] = text.split("\n")
-  const handler = `${INFO_MARKER}\nif [ "$1" = "info" ]; then printf '{"bundleDir":"%s"}\\n' "$AKM_BUNDLE_DIR"; exit 0; fi`
+  const handler = `${INFO_MARKER}\nif [ "$1" = "doctor" ] && [ "$2" = "info" ]; then printf '{"bundleDir":"%s"}\\n' "$AKM_BUNDLE_DIR"; exit 0; fi`
   writeFileSync(stub, [shebang, handler, ...rest].join("\n"))
 }
 
@@ -118,7 +118,7 @@ function answerInfoFromBundleEnv(env: Record<string, string> | undefined) {
 // runs the hook with no other akm. Returns the PATH to run with.
 function bundleAnsweringAkmPath(tempDir: string) {
   const binDir = makeBinDir(tempDir)
-  installScriptedAkm(binDir, `if (args[0] === "info") console.log(JSON.stringify({ bundleDir: process.env.AKM_BUNDLE_DIR }))\n`)
+  installScriptedAkm(binDir, `if (args[0] === "doctor" && args[1] === "info") console.log(JSON.stringify({ bundleDir: process.env.AKM_BUNDLE_DIR }))\n`)
   return sandboxPath(binDir)
 }
 
