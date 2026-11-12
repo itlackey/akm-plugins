@@ -122,8 +122,10 @@ export function runAkm(command: ResolvedAkmCommand, args: string[], options: Akm
 function stderrMessage(stderr: string): string | undefined {
   const trimmed = stderr.trim()
   if (!trimmed) return undefined
+  // A deprecation notice is a plain line before the error JSON, so only the last line is parsed.
+  const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1)
   try {
-    const parsed = JSON.parse(trimmed) as { error?: unknown }
+    const parsed = JSON.parse(lastLine) as { error?: unknown }
     if (typeof parsed.error === "string" && parsed.error) return parsed.error
   } catch {
     // not JSON: fall through to the raw text
@@ -140,7 +142,7 @@ export type ReadOperation = "search" | "show" | "curate"
  * Every verb is asked for `--format json`. `search` asks for `--detail full`
  * so a hit carries `description`/`tags` exactly as the in-process library
  * return did; `show` maps its `detail` (brief|normal|full, or `summary`, which
- * akm 0.10 folds into `--detail brief`).
+ * akm 0.10 folds into `--outline`; `brief` is the same).
  */
 export function buildReadArgs(operation: ReadOperation, input: Record<string, unknown>): string[] {
   const str = (key: string): string | undefined => {
@@ -162,7 +164,7 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (source) args.push("--from", source)
     const project = str("project")
     if (project) args.push("--project", project)
-    if (input.includeProposed === true) args.push("--include-proposed")
+    if (input.includeProposed === true) args.push("--include", "quality=proposed")
     args.push("--detail", "full")
   } else if (operation === "show") {
     const ref = str("ref")
@@ -171,7 +173,7 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (ref.startsWith("-")) throw new Error("ref must not start with '-'")
     args.push("show", ref)
     const detail = str("detail")
-    if (detail === "summary") args.push("--detail", "brief")
+    if (detail === "summary" || detail === "brief") args.push("--outline")
     else if (detail) args.push("--detail", detail)
   } else {
     const query = str("query")
@@ -189,7 +191,7 @@ export function buildReadArgs(operation: ReadOperation, input: Record<string, un
     if (source) args.push("--from", source)
     const project = str("project")
     if (project) args.push("--project", project)
-    if (typeof pack === "number") args.push("--pack", String(pack))
+    if (typeof pack === "number") args.push("--max-tokens", String(pack))
   }
   if (operation !== "show" && input.include !== undefined) {
     if (!Array.isArray(input.include) || !input.include.every((value) => typeof value === "string" && /^(quality=proposed|type=\S+)$/.test(value))) {

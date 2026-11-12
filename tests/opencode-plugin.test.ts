@@ -84,20 +84,21 @@ function decodeReadArgv(args: string[]): { verb: string; input: Record<string, u
     input.ref = args[1]
     const detail = flag("--detail")
     if (detail) input.detail = detail
+    if (args.includes("--outline")) input.detail = "brief"
     return { verb, input }
   }
   input.query = args[1]
   if (flag("--type")) input.type = flag("--type")
   if (flag("--limit")) input.limit = Number(flag("--limit"))
   if (flag("--from")) input.source = flag("--from")
-  if (args.includes("--include-proposed")) input.includeProposed = true
-  return { verb, input, pack: flag("--pack") ? Number(flag("--pack")) : undefined }
+  if (args.includes("quality=proposed")) input.includeProposed = true
+  return { verb, input, pack: flag("--max-tokens") ? Number(flag("--max-tokens")) : undefined }
 }
 const mockExecFile = mock((_command: string, args: string[], options: any, callback: (...cb: any[]) => void) => {
   execFileCalls.push({ args, env: options?.env ?? {}, cwd: options?.cwd })
   const decoded = decodeReadArgv(args)
   const run = async (): Promise<unknown> => {
-    if (decoded.verb === "info") return { ok: true }
+    if (decoded.verb === "doctor") return { ok: true }
     if (decoded.verb === "search") {
       const input = { ...decoded.input }
       if (options?.env?.AKM_EVENT_SOURCE === "audit") (input as any).skipLogging = true
@@ -432,7 +433,7 @@ describe("akm-opencode plugin", () => {
       expect(proposalCalls()).toHaveLength(1)
       const args = proposalCalls()[0]?.[1] as string[]
       expect(args).toEqual(expect.arrayContaining([
-        "proposal", "new", "instruction", "--file", "--format", "json", "-q", "--timeout-ms", "600000",
+        "proposal", "new", "instruction", "--file", "--format", "json", "-q", "--timeout", "600000",
       ]))
       const taskFile = args[args.indexOf("--file") + 1]
       expect(readFileSync(taskFile, "utf8")).toContain("no, use pnpm not npm for this repository")
@@ -1179,7 +1180,7 @@ describe("akm-opencode plugin", () => {
     it("rides the missing-bundle warning into the system transform", async () => {
       // The bundle root is `akm info`'s answer; the beforeEach mock is restored for the next test.
       mockExecFileSync.mockImplementation((_command: string, args?: string[]) => {
-        if (args?.[0] === "info") return JSON.stringify({ bundleDir: "/nonexistent-akm-opencode-bundle" })
+        if (args?.[0] === "doctor" && args[1] === "info") return JSON.stringify({ bundleDir: "/nonexistent-akm-opencode-bundle" })
         return "mock output"
       })
       try {

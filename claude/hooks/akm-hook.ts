@@ -391,7 +391,7 @@ function capturePromptLearning(rawInput: string, text: string, sid: string): voi
  */
 function resolveStashRoots(): string[] {
   if (akmAvailable()) {
-    const raw = akmRun(["info", "--format", "json", "-q"]).trim()
+    const raw = akmRun(["doctor", "info", "--format", "json", "-q"]).trim()
     if (raw) {
       const parsed = safeJsonParse<unknown>(raw)
       if (parsed && typeof parsed === "object") {

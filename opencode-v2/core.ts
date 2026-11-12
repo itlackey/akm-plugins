@@ -550,7 +550,7 @@ export function createCore(options: CoreOptions) {
 
   /** `akm info`'s bundle directory, cached; undefined when akm cannot say. */
   function getBundleDir(): Promise<string | undefined> {
-    return bundleDir.get(() => runBestEffort(undefined, ["info", "--format", "json", "-q"], { operation: "get-bundle-dir" }))
+    return bundleDir.get(() => runBestEffort(undefined, ["doctor", "info", "--format", "json", "-q"], { operation: "get-bundle-dir" }))
   }
 
   /**
