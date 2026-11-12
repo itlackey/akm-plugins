@@ -122,10 +122,10 @@ export function runAkm(command: ResolvedAkmCommand, args: string[], options: Akm
 function stderrMessage(stderr: string): string | undefined {
   const trimmed = stderr.trim()
   if (!trimmed) return undefined
-  // A deprecation notice is a plain line before the error JSON, so only the last line is parsed.
-  const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1)
+  // A deprecation notice is a plain line before the (multi-line) error JSON, so parsing starts at the first line opening with `{`.
+  const start = trimmed.search(/^\{/m)
   try {
-    const parsed = JSON.parse(lastLine) as { error?: unknown }
+    const parsed = JSON.parse(start < 0 ? trimmed : trimmed.slice(start)) as { error?: unknown }
     if (typeof parsed.error === "string" && parsed.error) return parsed.error
   } catch {
     // not JSON: fall through to the raw text

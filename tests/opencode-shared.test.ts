@@ -130,8 +130,8 @@ describe("additive include selectors", () => {
 
 describe("opencode-shared stderr error", () => {
   const fail = (stderr: string) => runAkm({ command: "sh", argsPrefix: ["-c", `printf '%s\\n' "$0" >&2; exit 1`, stderr] } as never, [])
-  it("reads the error text from the last stderr line, after a deprecation notice", async () => {
-    const result = await fail(`[deprecated] --pack is deprecated and is removed in 0.11: use \`--max-tokens\`. See STABILITY.md.\n{"ok":false,"error":"Asset not found","code":"ASSET_NOT_FOUND"}`)
+  it("reads the multi-line error JSON after a deprecation notice", async () => {
+    const result = await fail(`[deprecated] --pack is deprecated and is removed in 0.11: use \`--max-tokens\`. See STABILITY.md.\n{\n  "ok": false,\n  "error": "Asset not found",\n  "code": "ASSET_NOT_FOUND"\n}`)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toBe("Asset not found")
   })
