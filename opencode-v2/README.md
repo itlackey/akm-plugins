@@ -85,6 +85,23 @@ Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. P
 
 The plugin does not deny `bash` or file edits. Do that with OpenCode's own `permission` config.
 
+## Automatic recall and learning (tools-only)
+
+An application that embeds OpenCode through the SDK and owns its own instructions, retrieval timing and memory lifecycle can switch the plugin's automatic behaviour off per plugin instance. Two options, both default `true`; only a literal `false` turns one off, any other non-boolean value is warned about once and ignored. They are plugin options (`ctx.options`), fixed when the instance is created: no environment variable, no akm setting, so two embedded hosts in one process can differ.
+
+```jsonc
+{ "plugins": [{ "package": "akm-opencode-v2", "options": { "recall": false, "learning": false } }] }
+```
+
+With both off the instance is tools-only: the five tools work as usual and the plugin starts no akm process and injects nothing on its own. `readonly` is independent and keeps its meaning (and a read-only instance never learns, whatever `learning` says).
+
+| Option | Off means | Covers |
+| --- | --- | --- |
+| `recall` | nothing is read from akm or added to the model's context unasked | session-start curation, per-prompt curation, the project's rules and most-used assets (loaded at session start and after each compaction), the injected AKM guidance, the recalled block and the pending-proposal note. The `context` hook is not registered. |
+| `learning` | nothing is written to akm unasked | learning proposals and auto-feedback from the user's messages, the tool-ref tracking and event ledger entries behind auto-feedback, session extraction after each turn. |
+
+The prompt hook serves both and stays while either is on. The write gate, the shell environment (`AKM_PLUGIN_VERSION`) and the session-state cleanup are controlled by neither option (only by `readonly`).
+
 ## Settings
 
 The settings are the `plugins` section of akm's own `config.json` (`AKM_CONFIG_DIR`, else `$XDG_CONFIG_HOME/akm`, else `~/.config/akm`), read when the plugin starts, the same keys and rules as [`akm-opencode`](../opencode/README.md#settings): `autoFeedback`, `indexOnSessionEnd` (unused here), `curateLimit`, `curateTimeoutSeconds`, `pendingProposalTimeoutSeconds` and `redact.pii` / `redact.highEntropy`, with learning on akm's `improve.enabled`. A wrong value is ignored with a warning in the host's log; redaction fails closed. The rest are constants: the prompt hook waits up to 3 seconds for curation before the request proceeds without it, a prompt needs 16 characters, injected text is capped at 4000 characters (the rules and most-used assets lead, ahead of the recalled block; they take what the guidance, the note blocks and the recalled block leave; a rule is shown whole or left out, and a note says how many were left out; the most-used list names at most 10 assets and says when it was cut or left out to fit), a tool call may take 60 seconds, extraction runs at most once per 10 minutes per session.

@@ -1125,4 +1125,123 @@ console.log(JSON.stringify({ hits: [] }))`,
     })
   })
 
+  describe("per-instance recall and learning switches (akm-plugins#166)", () => {
+    const stateDir = () => path.join(process.env.XDG_STATE_HOME!, "akm-opencode")
+    const loc = () => ({ directory: project })
+    const REMEMBER = "Remember that we always deploy the staging stack with docker compose on port 8443"
+    const shown = (sessionID: string) => ({
+      tool: "akm_show",
+      sessionID,
+      id: "call_1",
+      input: { ref: "skills/nginx-proxy" },
+      status: "completed",
+      result: { content: JSON.stringify({ type: "skill", ref: "skills/nginx-proxy", content: "how to" }) },
+    })
+    const verbs = () => fake.calls().map((a) => a.slice(0, 2).join(" "))
+    const emit = (h: HostFake, type: string, sessionID: string, where: { directory: string } = loc()) =>
+      h.emit({ type, data: { sessionID, location: where }, location: where })
+
+    /** Everything the plugin does for a session: create, prompts, a tool result, a turn, compaction, completion, delete. */
+    async function drive(h: HostFake, sessionID: string, where: { directory: string } = loc()) {
+      await h.subscribed
+      await emit(h, "session.created", sessionID, where)
+      await settle(300)
+      // Tools-only registers no prompt hook at all: the host has nothing to call.
+      const prompt = (text: string) => (h.sessionHooks.has("prompt") ? h.runPrompt(sessionID, text) : undefined)
+      await prompt(PROMPT)
+      await prompt(REMEMBER)
+      if (h.toolHooks.has("execute.after")) await h.runToolHook("execute.after", shown(sessionID))
+      await prompt("thanks, that worked perfectly")
+      await emit(h, "session.compaction.ended", sessionID, where)
+      await emit(h, "session.execution.succeeded", sessionID, where)
+      await settle(600)
+      await emit(h, "session.deleted", sessionID, where)
+      await settle(100)
+    }
+
+    it("recall: false starts no akm read and injects nothing, while learning still happens", async () => {
+      host = await startPlugin(project, { recall: false })
+      expect([...host.tools.keys()]).toHaveLength(5)
+      expect(host.sessionHooks.has("context")).toBe(false)
+      expect(host.sessionHooks.has("prompt")).toBe(true)
+      await drive(host, "ses_norecall")
+      await host.unload()
+      host = undefined
+      await settle(100)
+      expect(curateCalls).toEqual([])
+      // Only the learning writes: a proposal, the positive feedback, the extraction. No search, show, curate, config, doctor or proposal list.
+      expect(new Set(verbs())).toEqual(new Set(["proposal new", "feedback skills/nginx-proxy", "proposal extract"]))
+    })
+
+    it("learning: false starts no akm write, ledger entry or extraction, while recall still happens", async () => {
+      host = await startPlugin(project, { learning: false })
+      await drive(host, "ses_nolearn")
+      const text = (await host.runContext("ses_nolearn", []))[0].text
+      await host.unload()
+      host = undefined
+      await settle(100)
+      expect(curateCalls.length).toBeGreaterThan(0)
+      expect(text).toContain("# AKM is available in this session")
+      // Only the bootstrap's reads (rules, most-used assets) and the pending-proposal note's list.
+      for (const verb of new Set(verbs())) expect(["search", "doctor metrics", "config get", "proposal list"]).toContain(verb.trim())
+      expect(verbs().some((v) => /^(proposal (new|extract)|feedback|remember)/.test(v))).toBe(false)
+      expect(existsSync(stateDir())).toBe(false)
+    })
+
+    it("both false is tools-only: no automatic akm call, and each of the five tools still works", async () => {
+      host = await startPlugin(project, { recall: false, learning: false })
+      expect(host.sessionHooks.size).toBe(0)
+      await drive(host, "ses_toolsonly")
+      expect(curateCalls).toEqual([])
+      expect(fake.calls()).toEqual([])
+      expect(existsSync(stateDir())).toBe(false)
+
+      expect(JSON.parse((await host.callTool("akm_search", { query: "nginx" })).content).results[0].ref).toBe("skills/nginx-proxy")
+      expect(JSON.parse((await host.callTool("akm_show", { ref: "skills/nginx-proxy" })).content).ref).toBe("skills/nginx-proxy")
+      expect(JSON.parse((await host.callTool("akm_curate", { query: "configure nginx proxy" })).content).results[0].ref).toBe("skills/nginx-proxy")
+      expect(JSON.parse((await host.callTool("akm_remember", { content: "use port 8443", name: "port-note" })).content).ok).toBe(true)
+      expect(JSON.parse((await host.callTool("akm_feedback", { ref: "skills/nginx-proxy", sentiment: "positive" })).content).ok).toBe(true)
+    })
+
+    it("two instances in one process: the off one starts nothing, the default one behaves as today", async () => {
+      const other = path.join(root, `off-${++counter}`)
+      mkdirSync(other, { recursive: true })
+      writeFileSync(path.join(other, "package.json"), JSON.stringify({ name: "off-project", description: "nginx reverse proxy deployment" }))
+      const off = await startPlugin(other, { recall: false, learning: false })
+      host = await startPlugin(project)
+      try {
+        expect(off.sessionHooks.size).toBe(0)
+        // Concurrent: the process-wide cold-start gate is taken by the default instance's first read and must not touch the other.
+        await Promise.all([drive(host, "ses_on"), drive(off, "ses_off", { directory: other })])
+        expect(curateCalls.length).toBeGreaterThan(0)
+        expect(curateCalls.every((c) => c.options?.cwd === project)).toBe(true)
+        expect(fake.calls().flat().some((arg) => arg.includes("ses_off"))).toBe(false)
+        // Exactly one instance's worth of learning: one extraction, one proposal, one feedback.
+        const count = (prefix: string) => verbs().filter((v) => v.startsWith(prefix)).length
+        expect(count("proposal extract")).toBe(1)
+        expect(count("proposal new")).toBe(1)
+        expect(count("feedback")).toBe(1)
+        expect(fake.calls().find((a) => a[1] === "extract")).toEqual(expect.arrayContaining(["--session-id", "ses_on"]))
+        // The default instance still injects; the off one never does and keeps no session state.
+        expect((await host.runContext("ses_on2", []))[0].text).toContain("# AKM is available in this session")
+        expect(off.sessionHooks.has("context")).toBe(false)
+        expect(off.logs.some((line) => line.level === "Warn")).toBe(false)
+      } finally {
+        await off.unload()
+      }
+    })
+
+    it("a non-boolean value is warned about once and leaves that switch on", async () => {
+      host = await startPlugin(project, { recall: "no", learning: 0 })
+      await settle(100)
+      const warnings = (name: string) => host!.logs.filter((line) => line.level === "Warn" && line.message.includes(`\`${name}\``))
+      expect(warnings("recall")).toHaveLength(1)
+      expect(warnings("learning")).toHaveLength(1)
+      expect(host.sessionHooks.has("context")).toBe(true)
+      expect(host.sessionHooks.has("prompt")).toBe(true)
+      await host.runPrompt("ses_bad", PROMPT)
+      expect(curateCalls.length).toBeGreaterThan(0)
+    })
+  })
+
 })
