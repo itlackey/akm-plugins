@@ -93,7 +93,7 @@ An application that embeds OpenCode through the SDK and owns its own instruction
 { "plugins": [{ "package": "akm-opencode-v2", "options": { "recall": false, "learning": false } }] }
 ```
 
-With both off the instance is tools-only: the five tools work as usual and the plugin starts no akm process and injects nothing on its own. `readonly` is independent and keeps its meaning (and a read-only instance never learns, whatever `learning` says).
+With both off the instance is tools-only: the five tools work as usual and the plugin injects nothing and learns nothing on its own. The write gate is separate (see below): it still runs an akm search the first time the model edits a watched file. `readonly` is independent and keeps its meaning (and a read-only instance never learns, whatever `learning` says).
 
 | Option | Off means | Covers |
 | --- | --- | --- |
