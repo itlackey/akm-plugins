@@ -28,6 +28,7 @@ import { loadSettings, type PluginSettings } from "../claude/shared/settings"
 import { loadSessionBootstrap } from "../claude/shared/session-bootstrap"
 import { createBundleDirResolver } from "../opencode-shared/bundle"
 import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
+import { afterFirstRead } from "../opencode-shared/cold-start"
 import { type EventWriter, writeOpencodeEvent } from "../opencode-shared/events"
 import {
   type NegativeFeedback,
@@ -208,7 +209,7 @@ export function createCore(options: CoreOptions) {
     if (isCliError(command)) return ""
     return loadSessionBootstrap(
       async (args, env) => {
-        const result = await runAkm(command, args, { timeoutMs: curateTimeoutMs, cwd: options.directory, env, packageName: PACKAGE_NAME })
+        const result = await afterFirstRead(() => runAkm(command, args, { timeoutMs: curateTimeoutMs, cwd: options.directory, env, packageName: PACKAGE_NAME }))
         if (result.ok) return result.stdout
         log("warn", "AKM session bootstrap lookup failed", { operation: "session-bootstrap", sessionID, args, error: result.error })
         return ""
@@ -331,13 +332,14 @@ export function createCore(options: CoreOptions) {
     const owner = sessions.get(sessionID)
     owner?.controllers.add(controller)
     try {
-      const outcome = await recallCurate(query, {
+      const project = await projectFor(sessionID)
+      const outcome = await afterFirstRead(() => recallCurate(query, {
         timeoutMs: curateTimeoutMs,
         limit: settings.curateLimit,
         signal: controller.signal,
         cwd: options.directory,
-        project: await projectFor(sessionID),
-      })
+        project,
+      }))
       if (outcome.ok) return outcome.text
       if (!outcome.aborted) log("warn", "AKM recall failed", { operation, sessionID, subsystem: "curation", error: outcome.error })
       return null

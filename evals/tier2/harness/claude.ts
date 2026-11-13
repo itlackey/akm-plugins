@@ -4,7 +4,7 @@
 // framework exercise the hook through the same entrypoint.
 
 import path from "node:path"
-import { writeFileSync } from "node:fs"
+import { rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { mkdtempSync } from "node:fs"
 import { existsSync, readFileSync } from "node:fs"
@@ -27,18 +27,25 @@ export function runClaudeHook(
   options: { input?: string; env: Record<string, string> },
 ): RunHookResult {
   let stdin: "ignore" | Blob = "ignore"
+  let tmp: string | undefined
   if (options.input !== undefined) {
-    const tmp = mkdtempSync(path.join(tmpdir(), "akm-eval-stdin-"))
+    tmp = mkdtempSync(path.join(tmpdir(), "akm-eval-stdin-"))
     const inputPath = path.join(tmp, "stdin.txt")
     writeFileSync(inputPath, options.input)
     stdin = Bun.file(inputPath)
   }
   const start = performance.now()
-  const result = Bun.spawnSync([process.execPath, HOOK_SCRIPT, ...args], {
-    cwd: REPO_ROOT,
-    env: { ...process.env, ...options.env },
-    stdio: [stdin, "pipe", "pipe"],
-  })
+  let result: ReturnType<typeof Bun.spawnSync>
+  try {
+    result = Bun.spawnSync([process.execPath, HOOK_SCRIPT, ...args], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, ...options.env },
+      stdio: [stdin, "pipe", "pipe"],
+    })
+  } finally {
+    // spawnSync has returned, so the child has read stdin; remove the per-call folder so a run leaves none behind.
+    if (tmp) rmSync(tmp, { recursive: true, force: true })
+  }
   const durationMs = performance.now() - start
   return {
     stdout: result.stdout.toString(),

@@ -5,6 +5,7 @@ import path from "node:path"
 import { type FakeAkmConfig, installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
 import { makeBinDir, installScriptedAkm } from "./host-runtime"
 import { type CurateFn, setCurateForTests } from "../opencode-shared/akm-api"
+import { resetColdStartForTests } from "../opencode-shared/cold-start"
 import { resetWriteGateForTests } from "../opencode-shared/write-gate"
 import { LEARNING_OFF, makeConfigDir } from "./host-runtime"
 import { startPlugin, type HostFake } from "../opencode-v2/testing"
@@ -62,6 +63,7 @@ beforeEach(() => {
   for (const key of ENV_KEYS) saved[key] = process.env[key]
   process.env.XDG_STATE_HOME = path.join(root, `state-${++counter}`)
   resetWriteGateForTests()
+  resetColdStartForTests()
   fake = freshFakeAkm()
   process.env.AKM_OPENCODE_CLI = fake.akmPath
 })
@@ -1080,6 +1082,46 @@ describe("akm-opencode-v2 plugin", () => {
       expect(text).toContain("AKM is available in this session")
       expect(text).not.toContain("# AKM rules")
       expect(host.logs.some((line) => line.message === "AKM session bootstrap lookup failed")).toBe(true)
+    })
+  })
+
+  describe("a cold index (akm-plugins#175)", () => {
+    // akm builds its index inline in the first read that finds none; a read that starts while another is
+    // building fails with exit 75 / INDEX_DB_CONTENDED. This fake does the same, in the CLI and in-process.
+    it("the first read of a new session goes alone, so the bootstrap and recall do not fail each other", async () => {
+      const state = path.join(root, `cold-${++counter}`)
+      mkdirSync(state, { recursive: true })
+      const bin = makeBinDir(root, `cold-${counter}`)
+      installScriptedAkm(
+        bin,
+        `import { existsSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs"
+if (args[0] === "--version") { console.log("akm 0.10.26101002"); process.exit(0) }
+const dir = ${JSON.stringify(state)}
+if (!existsSync(dir + "/built")) {
+  try { mkdirSync(dir + "/building") } catch { process.stderr.write(JSON.stringify({ ok: false, error: "busy", code: "INDEX_DB_CONTENDED" })); process.exit(75) }
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  writeFileSync(dir + "/built", "")
+  rmdirSync(dir + "/building")
+}
+console.log(JSON.stringify({ hits: [] }))`,
+      )
+      process.env.AKM_OPENCODE_CLI = path.join(bin, "akm")
+      const contended = Object.assign(new Error("akm's index database is busy"), { code: "INDEX_DB_CONTENDED" })
+      curateImpl = async () => {
+        if (existsSync(path.join(state, "built"))) return ""
+        if (existsSync(path.join(state, "building"))) throw contended
+        mkdirSync(path.join(state, "building"))
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        writeFileSync(path.join(state, "built"), "")
+        rmdirSync(path.join(state, "building"))
+        return ""
+      }
+      writeFileSync(path.join(project, "README.md"), "# Fixture\nNginx reverse proxy deployment notes for this service.\n")
+      host = await startPlugin(project)
+      await host.emit({ type: "session.created", data: { sessionID: "ses_cold" }, location: { directory: project } })
+      await settle(1500)
+      expect(host.logs.filter((line) => /recall failed|bootstrap lookup failed/.test(line.message))).toEqual([])
+      expect(curateCalls.length).toBe(1)
     })
   })
 

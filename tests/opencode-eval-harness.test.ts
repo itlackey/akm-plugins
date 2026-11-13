@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -113,6 +113,26 @@ describe("OpenCode eval harness", () => {
       expect(result.feedback.some((argv) => argv.includes("--negative"))).toBe(false)
     } finally {
       rmSync(resultDir, { recursive: true, force: true })
+    }
+  })
+
+  it("leaves no temp folder behind per tier-2 Claude hook call (akm-plugins#129)", () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), "akm-eval-claude-tmp-"))
+    try {
+      const harnessUrl = pathToFileURL(resolveFromTest("../evals/tier2/harness/claude.ts")).href
+      const script = `
+        const { runClaudeHook } = await import(${JSON.stringify(harnessUrl)})
+        for (let i = 0; i < 3; i++) runClaudeHook(["curate-prompt"], { input: JSON.stringify({ session_id: "s", prompt: "hello" }), env: {} })
+      `
+      // TMPDIR points the child's tmpdir() at a folder this test owns, so only its own leftovers are counted.
+      const proc = Bun.spawnSync([process.execPath, "--eval", script], {
+        cwd: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+        env: { ...process.env, TMPDIR: tmp },
+      })
+      expect(proc.exitCode, proc.stderr.toString()).toBe(0)
+      expect(readdirSync(tmp).filter((name) => name.startsWith("akm-eval-stdin-"))).toEqual([])
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
     }
   })
 })
