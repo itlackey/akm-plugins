@@ -7,7 +7,6 @@
 import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { runAge } from "../claude/shared/run-age"
 import { type CurateOptions, loadCurate } from "./akm-api"
 import type { ResolvedAkmCommand } from "./akm-cli"
 
@@ -129,7 +128,7 @@ function apiErrorMessage(error: unknown): string {
 export const AKM_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
-  "- Assets for this project (skills, knowledge, memories, lessons, workflows) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
+  "- Assets for this project (skills, knowledge, memories, lessons) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
   "- Record `akm_feedback` on an asset when it helped, or when its content proved wrong or stale; keep durable project knowledge with `akm_remember`.",
   "- `akm help` has the CLI.",
 ].join("\n")
@@ -138,7 +137,7 @@ export const AKM_HINTS_PREFIX = [
 export const AKM_READONLY_HINTS_PREFIX = [
   "# AKM is available in this session",
   "",
-  "- Assets for this project (skills, knowledge, memories, lessons, workflows) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
+  "- Assets for this project (skills, knowledge, memories, lessons) live in the AKM bundle. Before writing or editing a file whose format or keys you are not sure of, find them with `akm_curate` (by task) or `akm_search` (by name), and read one with `akm_show` before relying on it.",
   "- Record `akm_feedback` on an asset when it helped, or when its content proved wrong or stale.",
 ].join("\n")
 
@@ -148,7 +147,7 @@ const AKM_CONTEXT_TRUNCATED_MARKER = "\n\n[truncated for context]"
 /** The most characters the plugin injects as context. */
 export const CONTEXT_BUDGET_CHARS = 4000
 
-/** Room kept for the active-workflow and pending-proposal blocks that ride after the guidance. */
+/** Room kept for the pending-proposal block that ride after the guidance. */
 const AKM_NOTE_BLOCKS_RESERVE = 600
 
 /**
@@ -338,51 +337,6 @@ export function spawnSessionExtract(
 
 export function truncateLogText(value: string, limit = 1_000): string {
   return value.length > limit ? `${value.slice(0, limit)}…` : value
-}
-
-// --- active workflows -----------------------------------------------------------
-
-/** Bounded age of a run's last update; anything that is not a past ISO timestamp reads as unknown. */
-export function formatRunAge(updatedAt: unknown, now: number = Date.now()): string {
-  const age = runAge(updatedAt, now)
-  return age === "unknown" ? "update time unknown" : `updated ${age}`
-}
-
-export function summarizeWorkflowList(value: unknown): string | null {
-  if (Array.isArray(value)) {
-    const lines = value
-      .map((item) => {
-        if (!item || typeof item !== "object") return null
-        const record = item as Record<string, unknown>
-        const id = typeof record.id === "string" ? record.id : null
-        const ref = typeof record.workflowRef === "string" ? record.workflowRef : null
-        const state = typeof record.status === "string" ? record.status : null
-        const step = typeof record.currentStepId === "string" ? record.currentStepId : null
-        if (!id && !ref && !state && !step) return null
-        return `- ${ref ?? "workflow"} (${id ?? "run"})${state ? ` — ${state}` : ""}${step ? ` — next: ${step}` : ""} — ${formatRunAge(record.updatedAt)}`
-      })
-      .filter((line): line is string => !!line)
-    return lines.length > 0 ? lines.join("\n") : null
-  }
-  return null
-}
-
-/** Summarize `akm workflow list --active --format json` output, or null when nothing is active. */
-export function summarizeActiveWorkflows(raw: string): string | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return null
-  }
-  const runs = parsed && typeof parsed === "object" && Array.isArray((parsed as { runs?: unknown }).runs)
-    ? (parsed as { runs: unknown[] }).runs
-    : []
-  return summarizeWorkflowList(runs)
-}
-
-export function formatWorkflowContext(summary: string): string {
-  return `# AKM active workflows (whether one applies to this task is unknown)\n${summary}`
 }
 
 /**

@@ -9,7 +9,7 @@
 // shell script as a static lookup table). It also implements the subset of
 // `akm` verbs the hooks actually call: `curate`, `feedback`, `remember`,
 // `index`, `doctor info`, `doctor metrics assets`, `search`, `config get`/`config set`,
-// `workflow list`, `proposal list`/`new`, `extract`, `--version`. Non-agent
+// `proposal list`/`new`, `extract`, `--version`. Non-agent
 // envelope shapes are pinned against a real `akm` binary by
 // tests/fake-akm-contract.test.ts; `proposal new` is an authoring-agent boundary
 // and the fake only acknowledges it deterministically. Any other verb still exits 0 (never breaks
@@ -681,16 +681,6 @@ if (verb === "config") {
     process.exit(0)
   }
   // Any other config subcommand (list/unset/path/...): ack and move on.
-  process.exit(0)
-}
-
-// --- workflow list --active ------------------------------------------------
-// SessionStart / subagentStart summarize active workflow runs from this. The
-// fake stash never has live workflow runs, so an empty-but-real-shaped
-// envelope exercises the parse path without inventing fixture state.
-if (verb === "workflow" && tail[0] === "list") {
-  const runs = []
-  process.stdout.write(JSON.stringify({ ok: true, runs, shape: "workflow-list", schemaVersion: 1 }))
   process.exit(0)
 }
 

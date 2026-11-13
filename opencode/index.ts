@@ -25,11 +25,9 @@ import {
   bootstrapBudgetChars,
   createCuratedFileStore,
   gatherCwdContext,
-  formatWorkflowContext,
   EXTRACT_MIN_INTERVAL_MS,
   recallCurate,
   spawnSessionExtract,
-  summarizeActiveWorkflows,
   truncateLogText,
   unwrapJsonStringPrompt,
 } from "../opencode-shared/recall"
@@ -95,7 +93,6 @@ const BUNDLED_AKM_API_VERSION = readBundledAkmVersion()
 // These maps are keyed by OpenCode sessionID.
 const sessionBundleWarning = new Map<string, string>()
 const sessionCurated = new Map<string, string>()
-const sessionWorkflow = new Map<string, string>()
 const sessionCuratedFile = new Map<string, string>()
 const sessionCuratedVersion = new Map<string, number>()
 const sessionCuratedInjectedVersion = new Map<string, number>()
@@ -275,7 +272,7 @@ function writeCuratedFile(sessionID: string, content: string): string | null {
 }
 
 // 13: "Memory leaks" — session.deleted cleanup only cleared the bundle-warning map,
-// sessionCurated, sessionWorkflow, the curated-version tracking pair, and
+// sessionCurated, the curated-version tracking pair, and
 // sessionBuffer. It missed retrospectiveState and the per-session
 // pendingProposalSummaryCache entry
 // (cacheKey is the sessionID — see getPendingProposalCount), and never
@@ -288,7 +285,6 @@ function clearSessionState(sessionID: string): void {
   sessionCurated.delete(sessionID)
   curatedFiles.remove(sessionCuratedFile.get(sessionID))
   sessionCuratedFile.delete(sessionID)
-  sessionWorkflow.delete(sessionID)
   sessionCuratedVersion.delete(sessionID)
   sessionCuratedInjectedVersion.delete(sessionID)
   feedbackTracker.clear(sessionID)
@@ -386,18 +382,6 @@ async function runCurateForSession(client: LogCapableClient, sessionID: string, 
   if (!trimmed) return null
   return runRecall(client, trimmed, { toolName: "session.start", sessionID, directory, operation: "session-curate" })
 }
-
-async function runWorkflowSummaryForSession(client: LogCapableClient, sessionID?: string): Promise<string | null> {
-  const raw = await runCliSyncBestEffort(client, ["--format", "json", "-q", "workflow", "list", "--active"], curateTimeoutMs(), {
-    toolName: "session.start",
-    sessionID,
-    subsystem: "workflow",
-    operation: "active-workflow-summary",
-  })
-  if (!raw) return null
-  return summarizeActiveWorkflows(raw)
-}
-
 
 const bundleDirResolver = createBundleDirResolver()
 
@@ -1038,9 +1022,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
             const bundleWarning = await getAkmBundleWarning(logClient)
             if (bundleWarning) sessionBundleWarning.set(sid, bundleWarning)
           }
-          if (!sessionWorkflow.has(sid)) {
-            sessionWorkflow.set(sid, await runWorkflowSummaryForSession(logClient, sid) ?? "")
-          }
         } else if (type === "session.compacted" || type === "session.idle" || type === "session.deleted") {
           if (!sid) return
           // 03-R1/06-M1: the session_checkpoint `remember --force` write is
@@ -1149,7 +1130,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
             : "",
           // The rules go in with or without a bundle warning.
           bundleWarning ? `${AKM_HINTS_PREFIX}\n\n${bundleWarning}` : AKM_HINTS_PREFIX,
-          sessionWorkflow.get(sid) ? formatWorkflowContext(sessionWorkflow.get(sid)!) : "",
           pendingBlock,
         ]
         // ONE entry, not N (#96), and merged into the host's LAST existing
@@ -1200,7 +1180,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
         learning.capturePromptLearning(text, input.sessionID, directory || worktree, directory)
 
         if (input.sessionID) {
-          const decision = shouldRecall(text, { activeWorkflow: !!sessionWorkflow.get(input.sessionID), recentAssetFailure: feedbackTracker.hasRecentNegativeSignal(input.sessionID) })
+          const decision = shouldRecall(text, { recentAssetFailure: feedbackTracker.hasRecentNegativeSignal(input.sessionID) })
           if (decision.shouldRecall) {
             // Do NOT block the model on `akm curate` — previously this awaited
             // an 8s-timeout sync curate on every user message, adding up to 8s
@@ -1633,7 +1613,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
         const text = extractText(output.parts).trim()
         const sessionID = input.sessionID
         if (!text || !sessionID) return
-        const decision = shouldRecall(text, { activeWorkflow: false, recentAssetFailure: false })
+        const decision = shouldRecall(text, { recentAssetFailure: false })
         if (!decision.shouldRecall) return
         // Not awaited: the curation lands in the next request's context, as in normal mode.
         void runCurateForPrompt(logClient, decision.query, sessionID, directory).then((curated) => {

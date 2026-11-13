@@ -65,11 +65,9 @@ import {
   bootstrapBudgetChars,
   curatedTextChars,
   EXTRACT_MIN_INTERVAL_MS,
-  formatWorkflowContext,
   gatherCwdContext,
   recallCurate,
   spawnSessionExtract,
-  summarizeActiveWorkflows,
   truncateLogText,
   unwrapJsonStringPrompt,
 } from "../opencode-shared/recall"
@@ -131,7 +129,6 @@ export type ToolDefinition = {
 
 type SessionState = {
   curated?: string
-  workflow?: string
   lastQuery?: string
   generation: number
   lastExtractAt: number
@@ -418,7 +415,7 @@ export function createCore(options: CoreOptions) {
       const recentAssetFailure = tracker.hasRecentNegativeSignal(sessionID)
       if (!readonly) observeUserMessage(sessionID, text)
       const st = state(sessionID)
-      const decision = shouldRecall(text, { activeWorkflow: !!st.workflow, recentAssetFailure })
+      const decision = shouldRecall(text, { recentAssetFailure })
       if (!decision.shouldRecall) {
         if (!(st.curated ?? "").includes(NEED_MORE_CONTEXT_HINT)) {
           st.curated = st.curated ? `${st.curated}\n\n${NEED_MORE_CONTEXT_HINT}` : NEED_MORE_CONTEXT_HINT
@@ -473,7 +470,6 @@ export function createCore(options: CoreOptions) {
         childSessions.has(sessionID) ? "" : await bootstrap.text(sessionID),
         st?.curated ? `${RECALLED_CONTENT_PROVENANCE}${st.curated}${AKM_CURATED_TAIL}` : "",
         readonly ? AKM_READONLY_HINTS_PREFIX : AKM_HINTS_PREFIX,
-        st?.workflow ? formatWorkflowContext(st.workflow) : "",
         // The pending-proposal nag: only when something awaits review (cached for a minute).
         readonly ? "" : await pendingProposals.contextBlock(sessionID),
       ]
@@ -488,13 +484,9 @@ export function createCore(options: CoreOptions) {
     const st = state(sessionID)
     void bootstrap.ensure(sessionID)
     const cwdContext = gatherCwdContext(options.directory)
-    const [curated, workflowRaw] = await Promise.all([
-      cwdContext && !st.curated ? curate(sessionID, cwdContext, "session-curate") : Promise.resolve(null),
-      readonly ? Promise.resolve(null) : runBestEffort(sessionID, ["--format", "json", "-q", "workflow", "list", "--active"], { operation: "active-workflow-summary" }),
-    ])
+    const curated = cwdContext && !st.curated ? await curate(sessionID, cwdContext, "session-curate") : null
     if (disposed || sessions.get(sessionID) !== st) return
     if (curated && !st.curated) st.curated = curated
-    st.workflow = (workflowRaw && summarizeActiveWorkflows(workflowRaw)) || undefined
   }
 
   /** Min-interval-gated, fire-and-forget extraction of a native session into the proposal queue. */

@@ -8,7 +8,7 @@ import { akmResultList } from "../claude/shared/result-list"
 import { akmConfigPath } from "../claude/shared/settings"
 
 // Pins evals/lib/fake-akm.ts's envelopes for the verbs the plugin hooks
-// actually invoke (search, curate, info, workflow list --active, proposal
+// actually invoke (search, curate, info, proposal
 // list, proposal extract) against a REAL akm binary, so a real 0.9 envelope shape change
 // would fail this test instead of passing every eval/unit test silently
 // (the failure mode called out in docs/reviews/release-0.9.0-plugin-review.md
@@ -470,19 +470,6 @@ describe("fake-akm envelope contract", () => {
       expect(unknown.fake.exitCode).toBe(unknown.real.exitCode)
       expect(unknown.real.stdout.trim()).toBe("")
       expect(unknown.fake.stdout.trim()).toBe("")
-    } finally {
-      cleanup(real)
-      cleanup(fake)
-    }
-  }, REAL_AKM_TIMEOUT_MS)
-
-  test.skipIf(!akmAvailable)("workflow list --active envelope matches real akm", () => {
-    const real = makeRealEnv()
-    const fake = makeFakeEnv()
-    try {
-      const realEnvelope = runReal(real, ["--format", "json", "-q", "workflow", "list", "--active"])
-      const fakeEnvelope = runFake(fake.akmPath, ["--format", "json", "-q", "workflow", "list", "--active"])
-      expect(envelopeShape(fakeEnvelope)).toEqual(envelopeShape(realEnvelope))
     } finally {
       cleanup(real)
       cleanup(fake)

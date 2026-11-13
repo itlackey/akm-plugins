@@ -892,7 +892,7 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("session directory", () => {
-    it("runs remember, feedback and the helpers in the session directory", async () => {
+    it("runs remember and feedback in the session directory", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.tool!.akm_remember.execute({ content: "x" } as any, createToolContext())
       await hooks.tool!.akm_feedback.execute({ ref: "skills/review", sentiment: "positive" } as any, createToolContext())
@@ -901,8 +901,6 @@ describe("akm-opencode plugin", () => {
         expect(call?.[2]).toMatchObject({ cwd: "/tmp/project" })
       }
       await hooks.event!({ event: { type: "session.created", properties: { sessionID: "cwd-helpers-1" } } } as any)
-      const helper = mockExecFileSync.mock.calls.find(([, args]) => Array.isArray(args) && args.includes("workflow"))
-      expect(helper?.[2]).toMatchObject({ cwd: projectDir })
       // #155: session start never runs `akm hints`.
       expect(mockExecFileSync.mock.calls.some(([, args]) => Array.isArray(args) && args.includes("hints"))).toBe(false)
     })
