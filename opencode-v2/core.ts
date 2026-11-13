@@ -180,8 +180,7 @@ export function createCore(options: CoreOptions) {
   const readonly = options.readonly === true
   const recallOn = options.recall !== false
   const learningOn = options.learning !== false && !readonly
-  const noEvent: EventWriter = () => ({ ok: true, redacted: false, categories: [] })
-  const writeEvent: EventWriter = readonly ? noEvent : (options.writeEvent ?? writeOpencodeEvent)
+  const writeEvent: EventWriter = readonly ? () => ({ ok: true, redacted: false, categories: [] }) : (options.writeEvent ?? writeOpencodeEvent)
   const tracker = createFeedbackTracker({ autoFeedback: () => settings.autoFeedback })
   const bundleDir = createBundleDirResolver()
 
@@ -574,9 +573,8 @@ export function createCore(options: CoreOptions) {
     try {
       if (disposed) return
       const args = call.args && typeof call.args === "object" ? (call.args as Record<string, unknown>) : {}
-      // With learning off the tracker records nothing and asks akm nothing; the write gate below still reads its refs.
-      const common = { sessionID: call.sessionID, tool: call.tool, callID: call.callID, args, directory: options.directory, writeEvent: learningOn ? writeEvent : noEvent }
-      const { refs } = await tracker.observeToolRefs({ ...common, outputText: call.text, getBundleDir: learningOn ? getBundleDir : async () => undefined })
+      const common = { sessionID: call.sessionID, tool: call.tool, callID: call.callID, args, directory: options.directory, writeEvent }
+      const { refs } = await tracker.observeToolRefs({ ...common, outputText: call.text, getBundleDir })
       // Write gate, read side: what the file declares about its own format.
       if (call.tool === "read" && call.status !== "error") {
         observeFileIdentity(gateHost, call.sessionID, options.directory, args.path, call.readContent, call.readContent !== undefined)
@@ -634,7 +632,7 @@ export function createCore(options: CoreOptions) {
           break
         case "session.deleted":
           // The gate is the one feature whose total failure looks exactly like normal operation.
-          if (!readonly) warnIfWriteGateInert(gateHost)
+          if (learningOn) warnIfWriteGateInert(gateHost)
           dropSession(sessionID)
           break
         default:

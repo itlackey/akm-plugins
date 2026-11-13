@@ -136,7 +136,8 @@ const plugin = Plugin.define({
       }
 
       // Read-only mode registers neither the write gate, the auto-feedback tracking nor the shell hook.
-      if (!mode.readonly) {
+      // The write gate and the tool-ref tracking record in the background, so they follow `learning`.
+      if (!mode.readonly && automatic.learning) {
         // The write gate: records what it would have blocked; it never fails the call.
         yield* ctx.tool.hook("execute.before", (input) =>
           Effect.promise(() =>
@@ -159,7 +160,9 @@ const plugin = Plugin.define({
             }),
           ),
         )
+      }
 
+      if (!mode.readonly) {
         // Shell environment: the V2 analogue of V1's `shell.env`. `env` is the full environment
         // the host is about to spawn the shell with, mutated in place.
         yield* ctx.shell.hook("create.before", (input) => Effect.promise(() => core.shellEnv(input.env)))
@@ -187,20 +190,23 @@ const plugin = Plugin.define({
         }
         return sameDirectory(owner, directory)
       }
-      yield* Effect.forkScoped(
-        Stream.runForEach(ctx.event.subscribe(), (event) =>
-          Effect.promise(async () => {
-            const mine = await ownsEvent(event as { location?: { directory?: string }; data?: unknown })
-            const data = (event as { type?: string; data?: { sessionID?: unknown } })
-            if (data.type === "session.deleted" && typeof data.data?.sessionID === "string") sessionDirectory.delete(data.data.sessionID)
-            if (mine) await core.onEvent(event as { type?: string; data?: unknown })
-          }),
-        ).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => core.log("error", "AKM event subscription ended", { error: String(cause).slice(0, 400) })),
+      // Recall starts and reloads on session events and learning extracts on them; with both off nothing is left to do.
+      if (automatic.recall || (automatic.learning && !mode.readonly)) {
+        yield* Effect.forkScoped(
+          Stream.runForEach(ctx.event.subscribe(), (event) =>
+            Effect.promise(async () => {
+              const mine = await ownsEvent(event as { location?: { directory?: string }; data?: unknown })
+              const data = (event as { type?: string; data?: { sessionID?: unknown } })
+              if (data.type === "session.deleted" && typeof data.data?.sessionID === "string") sessionDirectory.delete(data.data.sessionID)
+              if (mine) await core.onEvent(event as { type?: string; data?: unknown })
+            }),
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => core.log("error", "AKM event subscription ended", { error: String(cause).slice(0, 400) })),
+            ),
           ),
-        ),
-      )
+        )
+      }
     }),
 })
 

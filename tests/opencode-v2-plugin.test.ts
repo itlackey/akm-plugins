@@ -1141,9 +1141,34 @@ console.log(JSON.stringify({ hits: [] }))`,
     const emit = (h: HostFake, type: string, sessionID: string, where: { directory: string } = loc()) =>
       h.emit({ type, data: { sessionID, location: where }, location: where })
 
+
+    const manifest = path.join(project, "service.yaml")
+    const gateRecords = () => {
+      try {
+        return readFileSync(path.join(stateDir(), "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.event === "write_gate")
+      } catch {
+        return []
+      }
+    }
+    // The gate's identity search is the only akm call that names the declared format.
+    const gateSearches = () => fake.calls().filter((a) => a[0] === "search" && a.includes("inkwell/v2"))
+    /** Read a file that declares a documented format, then edit it, as the host would call the registered hooks. */
+    async function readThenEdit(h: HostFake, sessionID: string) {
+      writeFileSync(manifest, "apiVersion: inkwell/v2\nkind: Service\n")
+      if (h.toolHooks.has("execute.after")) {
+        await h.runToolHook("execute.after", {
+          tool: "read", sessionID, id: "read_1", input: { path: "service.yaml" }, status: "completed",
+          result: { output: { type: "file", content: "apiVersion: inkwell/v2\nkind: Service\n" }, content: [{ type: "text", text: "1: apiVersion: inkwell/v2" }] },
+        })
+        await settle(1200)
+      }
+      if (h.toolHooks.has("execute.before")) await h.runToolHook("execute.before", { tool: "edit", sessionID, id: "call_e", input: { path: "service.yaml", oldString: "kind: Service", newString: "kind: Svc" } })
+    }
+
     /** Everything the plugin does for a session: create, prompts, a tool result, a turn, compaction, completion, delete. */
     async function drive(h: HostFake, sessionID: string, where: { directory: string } = loc()) {
-      await h.subscribed
+      // With both switches off nothing subscribes to events.
+      await Promise.race([h.subscribed, settle(50)])
       await emit(h, "session.created", sessionID, where)
       await settle(300)
       // Tools-only registers no prompt hook at all: the host has nothing to call.
@@ -1192,6 +1217,8 @@ console.log(JSON.stringify({ hits: [] }))`,
       host = await startPlugin(project, { recall: false, learning: false })
       expect(host.sessionHooks.size).toBe(0)
       await drive(host, "ses_toolsonly")
+      await readThenEdit(host, "ses_toolsonly")
+      expect(host.toolHooks.size).toBe(0)
       expect(curateCalls).toEqual([])
       expect(fake.calls()).toEqual([])
       expect(existsSync(stateDir())).toBe(false)
@@ -1229,6 +1256,33 @@ console.log(JSON.stringify({ hits: [] }))`,
       } finally {
         await off.unload()
       }
+    })
+
+    it("learning: false leaves the write gate off: no search, no ledger record, no inert warning", async () => {
+      // A default instance has watched a `patch` it cannot resolve, so the process-wide gate counters say "watched, never acted".
+      const on = await startPlugin(project)
+      try {
+        await on.runToolHook("execute.before", { tool: "patch", sessionID: "ses_p", id: "p1", input: { patchText: "*** Begin Patch" } })
+      } finally {
+        await on.unload()
+      }
+      host = await startPlugin(project, { learning: false })
+      expect(host.toolHooks.size).toBe(0)
+      const before = gateSearches().length
+      await readThenEdit(host, "ses_gate_off")
+      await emit(host, "session.deleted", "ses_gate_off")
+      await settle(200)
+      expect(gateSearches().length).toBe(before)
+      expect(gateRecords().filter((e) => e.sessionId === "ses_gate_off")).toEqual([])
+      expect(host.logs.some((line) => line.message.includes("write gate"))).toBe(false)
+    })
+
+    it("recall: false still runs the write gate", async () => {
+      host = await startPlugin(project, { recall: false })
+      expect(host.toolHooks.has("execute.before")).toBe(true)
+      await readThenEdit(host, "ses_gate_on")
+      expect(gateRecords()).toHaveLength(1)
+      expect(gateRecords()[0].input.reason).toBe("observe")
     })
 
     it("a non-boolean value is warned about once and leaves that switch on", async () => {
