@@ -13,7 +13,7 @@ import { Effect, Stream } from "effect"
 import { realpathSync } from "node:fs"
 import path from "node:path"
 import { readPluginVersion } from "../opencode-shared/bundle"
-import { readonlyOption } from "../opencode-shared/tools"
+import { automaticOptions, readonlyOption } from "../opencode-shared/tools"
 import { type LogLevel, PLUGIN_ID, createCore } from "./core"
 
 /** Same directory despite a trailing slash or a symlink; falls back to the resolved path when it cannot be resolved. */
@@ -62,9 +62,13 @@ const plugin = Plugin.define({
       const runPromise = Effect.runPromiseWith(services)
 
       // `{ "package": "akm-opencode-v2", "options": { "readonly": true } }` in the host's `plugins`.
+      // `"options": { "recall": false, "learning": false }` turns the automatic recall / learning off for this instance (tools-only with both).
       const mode = readonlyOption(ctx.options)
+      const automatic = automaticOptions(ctx.options)
       const core = createCore({
         readonly: mode.readonly,
+        recall: automatic.recall,
+        learning: automatic.learning,
         directory: ctx.location.directory,
         pluginVersion: readPluginVersion(import.meta.url, PLUGIN_ID),
         moduleUrl: import.meta.url,
@@ -77,6 +81,7 @@ const plugin = Plugin.define({
       })
 
       if (mode.warning) core.log("warn", mode.warning, { subsystem: "settings" })
+      for (const warning of automatic.warnings) core.log("warn", warning, { subsystem: "settings" })
 
       // Cleanup: unregistering hooks/tools/subscriptions is scoped to the plugin
       // (they are released when the scope closes); this also cancels in-flight akm
@@ -106,26 +111,33 @@ const plugin = Plugin.define({
       })
 
       // Automatic recall, step 1: the prompt the user just sent.
-      yield* ctx.session.hook("prompt", (input) =>
-        Effect.promise(() => core.onPrompt(String(input.sessionID), String(input.prompt.text ?? ""))),
-      )
+      // The prompt hook serves both switches (recall, and the learning signals), so it stays while either is on and
+      // `onPrompt` skips the off part. Read-only mode never learns.
+      if (automatic.recall || (automatic.learning && !mode.readonly)) {
+        yield* ctx.session.hook("prompt", (input) =>
+          Effect.promise(() => core.onPrompt(String(input.sessionID), String(input.prompt.text ?? ""))),
+        )
+      }
 
-      // Automatic recall, step 2: inject the recalled block into this request's system context.
-      yield* ctx.session.hook("context", (input) =>
-        Effect.promise(async () => {
-          const text = await core.contextText(String(input.sessionID))
-          if (!text) return
-          const last = input.system.length - 1
-          // Merge into the last existing part rather than adding a new one, as the V1
-          // plugin does for its single system entry: some chat templates reject more
-          // than one system message, and the host's leading part stays a stable cache prefix.
-          if (last >= 0) input.system[last] = { ...input.system[last], text: `${input.system[last].text}\n\n${text}` }
-          else input.system.push({ type: "text", text } as (typeof input.system)[number])
-        }),
-      )
+      if (automatic.recall) {
+        // Automatic recall, step 2: inject the recalled block into this request's system context.
+        yield* ctx.session.hook("context", (input) =>
+          Effect.promise(async () => {
+            const text = await core.contextText(String(input.sessionID))
+            if (!text) return
+            const last = input.system.length - 1
+            // Merge into the last existing part rather than adding a new one, as the V1
+            // plugin does for its single system entry: some chat templates reject more
+            // than one system message, and the host's leading part stays a stable cache prefix.
+            if (last >= 0) input.system[last] = { ...input.system[last], text: `${input.system[last].text}\n\n${text}` }
+            else input.system.push({ type: "text", text } as (typeof input.system)[number])
+          }),
+        )
+      }
 
       // Read-only mode registers neither the write gate, the auto-feedback tracking nor the shell hook.
-      if (!mode.readonly) {
+      // The write gate and the tool-ref tracking record in the background, so they follow `learning`.
+      if (!mode.readonly && automatic.learning) {
         // The write gate: records what it would have blocked; it never fails the call.
         yield* ctx.tool.hook("execute.before", (input) =>
           Effect.promise(() =>
@@ -148,7 +160,9 @@ const plugin = Plugin.define({
             }),
           ),
         )
+      }
 
+      if (!mode.readonly) {
         // Shell environment: the V2 analogue of V1's `shell.env`. `env` is the full environment
         // the host is about to spawn the shell with, mutated in place.
         yield* ctx.shell.hook("create.before", (input) => Effect.promise(() => core.shellEnv(input.env)))
@@ -176,20 +190,23 @@ const plugin = Plugin.define({
         }
         return sameDirectory(owner, directory)
       }
-      yield* Effect.forkScoped(
-        Stream.runForEach(ctx.event.subscribe(), (event) =>
-          Effect.promise(async () => {
-            const mine = await ownsEvent(event as { location?: { directory?: string }; data?: unknown })
-            const data = (event as { type?: string; data?: { sessionID?: unknown } })
-            if (data.type === "session.deleted" && typeof data.data?.sessionID === "string") sessionDirectory.delete(data.data.sessionID)
-            if (mine) await core.onEvent(event as { type?: string; data?: unknown })
-          }),
-        ).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => core.log("error", "AKM event subscription ended", { error: String(cause).slice(0, 400) })),
+      // Recall starts and reloads on session events and learning extracts on them; with both off nothing is left to do.
+      if (automatic.recall || (automatic.learning && !mode.readonly)) {
+        yield* Effect.forkScoped(
+          Stream.runForEach(ctx.event.subscribe(), (event) =>
+            Effect.promise(async () => {
+              const mine = await ownsEvent(event as { location?: { directory?: string }; data?: unknown })
+              const data = (event as { type?: string; data?: { sessionID?: unknown } })
+              if (data.type === "session.deleted" && typeof data.data?.sessionID === "string") sessionDirectory.delete(data.data.sessionID)
+              if (mine) await core.onEvent(event as { type?: string; data?: unknown })
+            }),
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => core.log("error", "AKM event subscription ended", { error: String(cause).slice(0, 400) })),
+            ),
           ),
-        ),
-      )
+        )
+      }
     }),
 })
 

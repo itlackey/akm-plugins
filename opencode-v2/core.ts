@@ -102,6 +102,10 @@ export type CoreOptions = {
    * The entrypoint must also leave the tool and shell hooks unregistered: `onToolBefore`, `onToolResult` and `shellEnv` do not check this flag.
    */
   readonly?: boolean
+  /** Automatic recall (session bootstrap, prompt and session-start curation, context and compaction reload): off only when `false`. */
+  recall?: boolean
+  /** Automatic learning (prompt signals, auto-feedback, tool-ref tracking, session extraction): off only when `false`. Read-only mode never learns. */
+  learning?: boolean
   /** The plugin's own version, exported to shell environments as AKM_PLUGIN_VERSION. */
   pluginVersion?: string
   /** Test seam: where structured memory events go. Defaults to the shared `opencode` ledger. */
@@ -174,6 +178,8 @@ export function createCore(options: CoreOptions) {
   const extractSession = options.extract ?? spawnSessionExtract
   let disposed = false
   const readonly = options.readonly === true
+  const recallOn = options.recall !== false
+  const learningOn = options.learning !== false && !readonly
   const writeEvent: EventWriter = readonly ? () => ({ ok: true, redacted: false, categories: [] }) : (options.writeEvent ?? writeOpencodeEvent)
   const tracker = createFeedbackTracker({ autoFeedback: () => settings.autoFeedback })
   const bundleDir = createBundleDirResolver()
@@ -415,7 +421,8 @@ export function createCore(options: CoreOptions) {
       if (!text) return
       // Read before the feedback plan updates the window, as the V1 hook does.
       const recentAssetFailure = tracker.hasRecentNegativeSignal(sessionID)
-      if (!readonly) observeUserMessage(sessionID, text)
+      if (learningOn) observeUserMessage(sessionID, text)
+      if (!recallOn) return
       const st = state(sessionID)
       const decision = shouldRecall(text, { recentAssetFailure })
       if (!decision.shouldRecall) {
@@ -614,18 +621,18 @@ export function createCore(options: CoreOptions) {
       switch (event.type) {
         case "session.created":
           if (typeof data.parentID === "string") childSessions.add(sessionID)
-          else await onSessionCreated(sessionID)
+          else if (recallOn) await onSessionCreated(sessionID)
           break
         case "session.compaction.ended":
-          if (!childSessions.has(sessionID)) void bootstrap.compacted(sessionID)
+          if (recallOn && !childSessions.has(sessionID)) void bootstrap.compacted(sessionID)
           break
         case "session.execution.succeeded":
           // A turn finished: the V2 analogue of V1's per-turn `session.idle`.
-          if (!readonly) maybeExtract(sessionID)
+          if (learningOn) maybeExtract(sessionID)
           break
         case "session.deleted":
           // The gate is the one feature whose total failure looks exactly like normal operation.
-          if (!readonly) warnIfWriteGateInert(gateHost)
+          if (learningOn) warnIfWriteGateInert(gateHost)
           dropSession(sessionID)
           break
         default:

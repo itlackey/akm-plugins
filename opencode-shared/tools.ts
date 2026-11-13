@@ -111,6 +111,23 @@ export function readonlyOption(options: unknown): { readonly: boolean; warning?:
   return { readonly: false, warning: "AKM plugin option `readonly` must be the boolean true to turn read-only mode on; ignoring it and running normally." }
 }
 
+/**
+ * The plugin options `recall` and `learning` (OpenCode 2 only): each switches one family of automatic behaviour off
+ * for this plugin instance. Only a literal `false` turns one off; any other non-boolean value is ignored with a
+ * warning (the caller says each once in the host's log) and the default, on, applies.
+ */
+export function automaticOptions(options: unknown): { recall: boolean; learning: boolean; warnings: string[] } {
+  const raw = options && typeof options === "object" ? (options as Record<string, unknown>) : {}
+  const warnings: string[] = []
+  const read = (name: "recall" | "learning"): boolean => {
+    const value = raw[name]
+    if (value === undefined || typeof value === "boolean") return value !== false
+    warnings.push(`AKM plugin option \`${name}\` must be a boolean; ignoring it and leaving ${name} on.`)
+    return true
+  }
+  return { recall: read("recall"), learning: read("learning"), warnings }
+}
+
 /** JSON Schema (draft 2020-12 subset) for one tool's arguments. */
 export function toJsonSchema(spec: ToolSpec): Record<string, unknown> {
   const properties: Record<string, unknown> = {}
