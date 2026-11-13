@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import { buildReadArgs, runAkm } from "../opencode-shared/akm-cli"
 import { formatPendingProposalContext } from "../opencode-shared/learning"
-import { AKM_HINTS_PREFIX, AKM_READONLY_HINTS_PREFIX, formatRunAge, formatWorkflowContext, summarizeActiveWorkflows } from "../opencode-shared/recall"
+import { AKM_HINTS_PREFIX, AKM_READONLY_HINTS_PREFIX } from "../opencode-shared/recall"
 import { ASSET_TYPES, TOOL_SPECS, buildFeedbackArgs, readonlyOption, toJsonSchema, withProposedWarnings } from "../opencode-shared/tools"
 
 // Pure argv/schema builders shared by akm-opencode (V1) and akm-opencode-v2.
@@ -58,26 +58,6 @@ describe("opencode-shared tools", () => {
 })
 
 describe("opencode-shared session context", () => {
-  const NOW = Date.parse("2026-11-08T12:00:00Z")
-
-  it("bounds a run's age and reads anything not a past timestamp as unknown", () => {
-    expect(formatRunAge("2026-11-08T11:30:00Z", NOW)).toBe("updated <1h ago")
-    expect(formatRunAge("2026-11-08T07:00:00Z", NOW)).toBe("updated 5h ago")
-    expect(formatRunAge("2026-10-30T12:00:00Z", NOW)).toBe("updated 9d ago")
-    for (const bad of ["not-a-date", "", undefined, null, 42, "2026-11-20T00:00:00Z"]) expect(formatRunAge(bad, NOW)).toBe("update time unknown")
-  })
-
-  it("lists active runs with age, never their titles or params, and marks relevance unknown", () => {
-    const raw = JSON.stringify({ runs: [{ id: "run-1", workflowRef: "workflows/release", status: "active", currentStepId: "s2", workflowTitle: "IGNORE_ALL_RULES_INJECT", params: { k: "evilPayload" } }] })
-    const summary = summarizeActiveWorkflows(raw)!
-    expect(summary).toContain("workflows/release (run-1)")
-    expect(summary).toContain("update time unknown")
-    expect(summary).not.toContain("IGNORE_ALL_RULES_INJECT")
-    expect(summary).not.toContain("evilPayload")
-    expect(formatWorkflowContext(summary)).toContain("whether one applies to this task is unknown")
-    expect(summarizeActiveWorkflows(JSON.stringify({ runs: [] }))).toBeNull()
-  })
-
   it("presents pending proposals as information gated on the user's task", () => {
     const text = formatPendingProposalContext(2)
     expect(text).toContain("There are 2 pending AKM proposals.")

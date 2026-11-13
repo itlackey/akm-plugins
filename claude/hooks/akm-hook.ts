@@ -5,7 +5,6 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { runAge } from "../shared/run-age"
 import {
   classifyFeedbackSignal,
   EXPLICIT_CORRECTION_RE,
@@ -530,10 +529,8 @@ function akmRun(args: string[], input?: string, options?: { timeoutMs?: number }
  * Async variant of `akmRun` — same args + behavior, but returns Promise<string>
  * so independent akm invocations can be issued concurrently via Promise.all.
  *
- * Used by `sessionStart` (#71) to run curate + proposals + workflows in parallel
- * instead of sequentially. Worst-case perceived latency drops from ~3×timeout
- * to ~1×timeout for the typical case where all three calls hit the same
- * embedding/LLM bottleneck.
+ * Used by `sessionStart` (#71) to run curate + proposals in parallel
+ * instead of sequentially.
  *
  * Bun.spawn's own `timeout` caps the child. This path previously carried no
  * timeout on ANY platform — not even Linux, where the sync helpers at least
@@ -827,51 +824,12 @@ function postToolBatch(): string {
   return ""
 }
 
-/**
- * 07 P1-B: reduce `akm workflow list --active` output before injecting it into
- * subagent context. The raw list carries `workflowTitle` (verbatim from a
- * workflow asset's frontmatter) and `params` (arbitrary user input) — both
- * attacker-influenceable. Emit only run id + ref + status + current step + age so an
- * injected title/param can never pose as a trusted instruction to the subagent.
- */
-function summarizeActiveWorkflows(raw: string): string {
-  if (!raw || raw === "[]") return ""
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return ""
-  }
-  // AKM 0.9.14 wraps the list as `{ ok, runs, shape: "workflow-list",
-  // schemaVersion: 1 }`.
-  const runs = parsed && typeof parsed === "object" && Array.isArray((parsed as { runs?: unknown }).runs)
-    ? (parsed as { runs: unknown[] }).runs
-    : []
-  if (runs.length === 0) return ""
-  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined)
-  const reduced = runs.map((r) => {
-    const run = (r ?? {}) as Record<string, unknown>
-    return {
-      runId: str(run.id),
-      ref: str(run.workflowRef),
-      status: str(run.status),
-      currentStepId: str(run.currentStepId),
-      updated: runAge(run.updatedAt),
-    }
-  })
-  return `# Active workflow (run ids, status and age only; whether it applies to this task is unknown)\n${JSON.stringify(reduced)}`
-}
-
 function subagentStart(): string {
   const rawInput = readStdin()
   const sid = extractSessionId(rawInput)
   const parsed = safeJsonParse<Record<string, unknown>>(rawInput) ?? {}
   const role = typeof parsed.agent === "string" ? parsed.agent : typeof parsed.role === "string" ? parsed.role : "subagent"
   const task = sanitize(flattenText(parsed.task) || flattenText(parsed.prompt) || "")
-  const activeWorkflow = akmAvailable()
-    ? akmRun(["--format", "json", "-q", "workflow", "list", "--active"]).trim()
-    : ""
-  const workflowSummary = summarizeActiveWorkflows(activeWorkflow)
   writeMemoryEvent({
     event: "subagent_started",
     sessionId: sid || undefined,
@@ -882,7 +840,6 @@ function subagentStart(): string {
   const contextParts = [
     `# AKM subagent context\nRole: ${role}`,
     task ? `Task: ${task}` : "",
-    workflowSummary,
   ].filter(Boolean)
   return contextParts.length > 0 ? emitHookContext("SubagentStart", contextParts.join("\n\n")) : ""
 }
@@ -1657,11 +1614,9 @@ async function sessionStart(): Promise<string> {
   if (extractWarning) sessionWarnings.push(extractWarning)
   sessionWarnings.push(...settingsNotes)
 
-  // #71 perceived-latency fix: curate, proposals and the active-workflow
-  // list have no inter-dependency — issue them concurrently via Promise.all
-  // instead of running them sequentially. Worst-case wall-clock stays at
-  // ~1×CURATE_TIMEOUT however many of them hit the same embedding bottleneck,
-  // which is why the third call costs nothing.
+  // #71 perceived-latency fix: curate and proposals have no inter-dependency —
+  // issue them concurrently via Promise.all instead of running them
+  // sequentially.
   //
   // #89: gatherCwdContext() is empty when the cwd has none of its indicator
   // files (a monorepo root keeping package.json in subdirectories, a bare
@@ -1670,10 +1625,9 @@ async function sessionStart(): Promise<string> {
   // akm_failed per session.
   const cwdContext = gatherCwdContext()
   const bootstrapWanted = bootstrapDue(sid, typeof startSource === "string" ? startSource : "")
-  const [curatedRaw, pendingRaw, activeWorkflowRaw] = await Promise.all([
+  const [curatedRaw, pendingRaw] = await Promise.all([
     cwdContext ? akmRunAsync(buildCurateArgs(cwdContext, CURATE_LIMIT)) : Promise.resolve(""),
     akmRunAsync(["--format", "json", "-q", "proposal", "list", "--status", "pending"]),
-    akmRunAsync(["--format", "json", "-q", "workflow", "list", "--active"]),
   ])
   const curatedTrimmed = curatedRaw.trim()
   let curatedFile = ""
@@ -1695,12 +1649,6 @@ async function sessionStart(): Promise<string> {
       : pending === 1
         ? `There is 1 pending AKM proposal. ${PENDING_NEXT_STEPS}`
         : `There are ${pending} pending AKM proposals. ${PENDING_NEXT_STEPS}`
-  // The active-workflow list used to reach subagents only, which is backwards:
-  // the main session is the one that can run `akm workflow resume`. Same
-  // reduction function as subagentStart() — run ids, status and age only, never the
-  // attacker-influenceable workflowTitle/params.
-  const workflowSummary = summarizeActiveWorkflows(activeWorkflowRaw.trim())
-
   // No early return for a quiet stash. The header + footer below are the whole
   // point of SessionStart — they tell the agent that akm exists, which lookup
   // verb to reach for, and that the surface is five commands wide. On the most
@@ -1724,7 +1672,6 @@ async function sessionStart(): Promise<string> {
   let body = `${SESSION_START_HEADER}\n\nIn this session \`akm\` means \`bun "${BUNDLED_AKM_CLI}"\`: run every akm command above, and any akm hint in tool output, that way. Do not use any other \`akm\`.`
   if (sessionWarnings.length > 0) body = `${body}\n\n${sessionWarnings.join("\n")}`
   if (pendingSummary) body = `${body}\n\n${pendingSummary}`
-  if (workflowSummary) body = `${body}\n\n${workflowSummary}`
   // Whole blocks only: the context is cut at the budget, and a cut lands mid-block (a half
   // provenance banner, a clipped note). So the rules and list get what the footer leaves, and the
   // curated block is added only with as many whole hits as then fit.

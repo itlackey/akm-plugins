@@ -41,8 +41,8 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 
 | Event | Behavior |
 | --- | --- |
-| `session.created` | Warms local data in the background, and prepares a bundle warning (when needed), an active-workflow summary, curated context, and the project's rules and most-used assets for the session. |
-| `session.updated` | Backfills the bundle warning and the workflow summary for a session the plugin has not prepared yet. It does not re-run session-created work. |
+| `session.created` | Warms local data in the background, and prepares a bundle warning (when needed), curated context, and the project's rules and most-used assets for the session. |
+| `session.updated` | Backfills the bundle warning for a session the plugin has not prepared yet. It does not re-run session-created work. |
 | `chat.message` | Records feedback/memory intent, captures corrections, guardrails, preferences, explicit memories, and positive feedback, and can schedule non-blocking curation. High-confidence durable signals submit asynchronous AKM proposals; recurring task intent across distinct sessions can submit a skill proposal. Only the text you typed counts; the synthetic parts OpenCode adds (an attached file's contents, the Read call that fetched it) are ignored. |
 | `experimental.chat.system.transform` | Injects the project's rules and most-used assets, the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. A session the plugin first sees here (a resumed one) has its rules and list loaded at that request. |
 | `tool.execute.before` | The format-declaration write gate: records, in the ledger, the first `edit`/`write` to an existing file that declares a format your bundle documents. It never blocks ([Write gate](#write-gate)). |
@@ -78,7 +78,7 @@ For restricted sessions, set the plugin option `readonly` (a per-plugin OpenCode
 { "plugin": [["akm-opencode", { "readonly": true }]] }
 ```
 
-Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. Prompt and session-start recall and the injected context still work (the recalled text is injected inline, with hints that do not mention `akm_remember`, and the rules text names the `akm_search` and `akm_show` tools instead of CLI commands). Everything that records is off: session extraction, learning proposals and signals, the pending-proposal, active-workflow and bundle-missing notes, the "Need more AKM context?" hint, the write gate, automatic feedback, `shell.env`, index-on-session-end, and the plugin's event ledger. Usage akm itself records for the read tools, and explicit `akm_feedback` calls, are unchanged.
+Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. Prompt and session-start recall and the injected context still work (the recalled text is injected inline, with hints that do not mention `akm_remember`, and the rules text names the `akm_search` and `akm_show` tools instead of CLI commands). Everything that records is off: session extraction, learning proposals and signals, the pending-proposal and bundle-missing notes, the "Need more AKM context?" hint, the write gate, automatic feedback, `shell.env`, index-on-session-end, and the plugin's event ledger. Usage akm itself records for the read tools, and explicit `akm_feedback` calls, are unchanged.
 
 The plugin does not deny `bash` or file edits. Do that with OpenCode's own `permission` config.
 

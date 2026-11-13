@@ -195,13 +195,12 @@ describe("akm-opencode-v2 plugin", () => {
     }
   })
 
-  it("session start curates for the project, lists active workflows, never runs hints, and cleans up on delete", async () => {
+  it("session start curates for the project, never runs hints, and cleans up on delete", async () => {
     host = await startPlugin(project)
     await host.subscribed
     await host.emit({ type: "session.created", data: { sessionID: "ses_s", location: { directory: project } }, location: { directory: project } })
     await settle(400)
     const argv = fake.calls()
-    expect(argv.some((a) => a.includes("workflow"))).toBe(true)
     expect(argv.some((a) => a.includes("hints"))).toBe(false)
     expect(curateCalls.some((c) => c.query.includes("fixture-project"))).toBe(true)
     const withState = await host.runContext("ses_s", [])
@@ -241,7 +240,6 @@ describe("akm-opencode-v2 plugin", () => {
     await host.runPrompt("ses_child", PROMPT)
     await host.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_child" }, ...at })
     await settle(400)
-    expect(fake.calls().some((a) => a.includes("workflow"))).toBe(false)
     expect(curateCalls).toHaveLength(0)
     expect(fake.calls().some((a) => a[1] === "extract")).toBe(false)
 
@@ -280,7 +278,6 @@ describe("akm-opencode-v2 plugin", () => {
     const errors = host.logs.filter((line) => line.level === "Error")
     expect(errors.length).toBeGreaterThan(0)
     expect(errors[0].annotations).toMatchObject({ service: "akm-opencode-v2", toolName: "akm_search" })
-    expect(host.logs.some((line) => line.message === "AKM helper failed")).toBe(true)
   })
 
   it("redacts secrets in what it logs", async () => {
@@ -593,7 +590,7 @@ describe("akm-opencode-v2 plugin", () => {
       expect(text).not.toContain("akm_remember")
     })
 
-    it("starts no extraction, learning proposal, workflow listing, auto-feedback or ledger write", async () => {
+    it("starts no extraction, learning proposal, auto-feedback or ledger write", async () => {
       host = await startPlugin(project, { readonly: true })
       await host.subscribed
       const loc = { directory: project }

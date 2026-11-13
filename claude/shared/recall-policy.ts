@@ -11,7 +11,6 @@ export type RecallDecision = {
     | "proposal-intent"
     | "release-intent"
     | "coding-task"
-    | "active-workflow"
     | "recent-asset-failure"
     | "skip-short"
     | "skip-chitchat"
@@ -86,7 +85,7 @@ export function isNonTaskPrompt(text: string): boolean {
   return typed === "" ? text.trim() !== "" : typed.startsWith("<") && typed.includes("</")
 }
 
-export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolean; recentAssetFailure?: boolean }): RecallDecision {
+export function shouldRecall(prompt: string, options?: { recentAssetFailure?: boolean }): RecallDecision {
   // What was typed, not the blocks that lead it: they would otherwise drive the
   // keyword rules below and ride into the curate query. A prompt that is nothing
   // but blocks keeps its whole text and is skipped as a non-task.
@@ -95,7 +94,6 @@ export function shouldRecall(prompt: string, options?: { activeWorkflow?: boolea
   const lower = text.toLowerCase()
   const scopeHints: string[] = []
   if (!text) return { shouldRecall: false, reason: "skip-low-signal", query: "", scopeHints }
-  if (options?.activeWorkflow) return { shouldRecall: true, reason: "active-workflow", query: text, scopeHints: ["workflow"] }
   if (options?.recentAssetFailure) return { shouldRecall: true, reason: "recent-asset-failure", query: text, scopeHints }
   if (isNonTaskPrompt(text)) return { shouldRecall: false, reason: "skip-nontask", query: text, scopeHints }
   if (text.length < 4 || /^(ok|thanks|thank you|yes|no|continue|go ahead|sure|cool)$/i.test(lower)) {

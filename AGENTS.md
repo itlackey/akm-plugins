@@ -62,7 +62,7 @@ What you get back depends on the asset type:
 - **instruction** — Standing guidance an agent should follow for a domain or repo
 - **fact** — A single atomic assertion. A new bundle ships a `facts/conventions/...` set describing the bundle's own asset conventions
 - **session** — A captured agent session, the raw material `akm proposal extract` mines for durable insights
-- **workflow** — A stateful multi-step procedure started with `akm run <ref>` and driven by `akm workflow status|resume`
+- **workflow** — Deprecated in akm 0.10.261121 and removed in 0.11; use tasks for ordered steps
 - **env** — A `.env`-style configuration store. **Only key names surface** — values never appear in JSON, logs, or search indexes. Use `akm env run <ref> -- $SHELL` to load into a shell (never `eval`/`source` raw values).
 - **secret** — One standalone sensitive value per file (an API token, a PEM key, a TLS cert). Values never surface
 
@@ -90,9 +90,8 @@ These requirements apply to all code in this repo, especially plugin runtime cod
 - `akm setup` — interactive first-run configuration wizard for humans. Agents should not invoke it directly; use `akm bundle create --dir <path> --set-default` for agent-safe bundle initialization.
 - `akm search ... --include quality=proposed` — merge `quality:"proposed"` drafts into hits.
 
-**Store, workflow, and sync verbs:**
+**Store and sync verbs:**
 - `akm env list|path|export|run|create|remove` / `akm secret list|run|set` — manage configuration/secret stores (values never echoed)
-- `akm run <workflow-ref>` and `akm workflow status|list|create|resume|abandon` — drive stateful runs
 - `akm sync [-m "msg"]` — commit (and push, when writable; `--no-push` to skip) a git-backed bundle
 - `akm import <file|-> [--name <slug>]` — promote a file into the indexed bundle
 - `akm help migrate <version>` — release notes / migration guidance

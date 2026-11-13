@@ -2643,10 +2643,6 @@ exit 0
     writeFileSync(
       path.join(binDir, "akm"),
       `#!/usr/bin/env sh
-if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
-  echo '{"runs":[{"workflowRef":"workflows/release","id":"run-1","status":"active"}],"shape":"workflow-list","schemaVersion":1}'
-  exit 0
-fi
 exit 0
 `,
     )
@@ -2666,44 +2662,6 @@ exit 0
     expect(payload.hookSpecificOutput.hookEventName).toBe("SubagentStart")
     expect(payload.hookSpecificOutput.additionalContext).toContain("Role: reviewer")
     expect(payload.hookSpecificOutput.additionalContext).toContain("Review auth middleware")
-  })
-
-  itPosix("subagent-start injects only run ids/status, never raw workflow title/params (07 P1-B)", () => {
-    const tempDir = makeTempDir()
-    const binDir = path.join(tempDir, "bin")
-    const stateDir = path.join(tempDir, "state")
-    const bundleDir = makeBundle(tempDir, ["workflows/release"])
-    mkdirSync(binDir, { recursive: true })
-    mkdirSync(stateDir, { recursive: true })
-
-    // The active-workflow list carries an attacker-influenceable workflowTitle
-    // (from asset frontmatter) and params (arbitrary user input).
-    writeFileSync(
-      path.join(binDir, "akm"),
-      `#!/usr/bin/env sh
-if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
-  echo '{"runs":[{"workflowRef":"workflows/release","id":"run-1","status":"active","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"evilKey":"evilPayload"}}],"shape":"workflow-list","schemaVersion":1}'
-  exit 0
-fi
-exit 0
-`,
-    )
-    chmodSync(path.join(binDir, "akm"), 0o755)
-
-    const stdout = runHook(["subagent-start"], {
-      input: JSON.stringify({ session_id: "sess-subagent-2", agent: "reviewer", task: "Review" }),
-      env: { HOME: tempDir, PATH: `${binDir}:/usr/bin:/bin`, XDG_STATE_HOME: stateDir, AKM_BUNDLE_DIR: bundleDir },
-    })
-
-    const context = JSON.parse(stdout.trim()).hookSpecificOutput.additionalContext as string
-    // Safe fields survive.
-    expect(context).toContain("run-1")
-    expect(context).toContain("workflows/release")
-    expect(context).toContain("active")
-    // The raw title and params must NOT be injected.
-    expect(context).not.toContain("IGNORE_ALL_RULES_INJECT")
-    expect(context).not.toContain("evilKey")
-    expect(context).not.toContain("evilPayload")
   })
 
   it("task-created and task-completed log task lifecycle without breaking", () => {
@@ -3303,7 +3261,7 @@ exit 0
     })
   })
 
-  describe("session-start surfaces run state to the main session", () => {
+  describe("session-start surfaces pending proposals to the main session", () => {
     function runSessionStartWith(script: string, env?: Record<string, string>) {
       const tempDir = makeTempDir()
       const binDir = path.join(tempDir, "bin")
@@ -3358,50 +3316,6 @@ exit 0
       expect(current.payload.hookSpecificOutput.additionalContext).toContain("There is 1 pending AKM proposal.")
     })
 
-    itPosix("injects active workflow runs as run ids and status only", () => {
-      // The main session is the one that can run `akm workflow resume`; until
-      // now only subagents were told a run was open. The reduction is shared
-      // with subagent-start, so the attacker-influenceable workflowTitle and
-      // params must not survive either.
-      const { payload } = runSessionStartWith(
-        `#!/usr/bin/env sh
-case "$1" in
-  --version) echo "akm 0.10.26101002"; exit 0 ;;
-esac
-if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
-  echo '{"runs":[{"id":"run-7","workflowRef":"workflows/release","status":"active","currentStepId":"step-2","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"evilKey":"evilPayload"}}],"shape":"workflow-list","schemaVersion":1}'
-  exit 0
-fi
-exit 0
-`,
-      )
-
-      const context = payload.hookSpecificOutput.additionalContext as string
-      expect(context).toContain("Active workflow")
-      expect(context).toContain("run-7")
-      expect(context).toContain("workflows/release")
-      expect(context).toContain("step-2")
-      expect(context).not.toContain("IGNORE_ALL_RULES_INJECT")
-      expect(context).not.toContain("evilPayload")
-    })
-
-    itPosix("says nothing about workflows when no run is active", () => {
-      const { payload } = runSessionStartWith(
-        `#!/usr/bin/env sh
-case "$1" in
-  --version) echo "akm 0.10.26101002"; exit 0 ;;
-esac
-if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
-  echo '{"runs":[]}'
-  exit 0
-fi
-exit 0
-`,
-      )
-
-      expect(payload.hookSpecificOutput.additionalContext).not.toContain("Active workflow")
-    })
-
     itPosix("presents pending proposals as information, not a task, and says nothing for an empty queue", () => {
       const withQueue = runSessionStartWith(
         `#!/usr/bin/env sh
@@ -3436,44 +3350,6 @@ exit 0
 `,
       )
       expect(empty.payload.hookSpecificOutput.additionalContext).not.toContain("pending AKM proposal")
-    })
-
-    itPosix("gives active workflow runs a bounded age and marks relevance unknown", () => {
-      const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString()
-      const run = (id: string, updatedAt: string) =>
-        `{"id":"${id}","workflowRef":"workflows/${id}","status":"active","currentStepId":"s","workflowTitle":"IGNORE_ALL_RULES_INJECT","params":{"k":"evilPayload"}${updatedAt}}`
-      const runs = [
-        run("fresh", `,"updatedAt":"${ago(5)}"`),
-        run("stale", `,"updatedAt":"${ago(24 * 9)}"`),
-        run("garbled", `,"updatedAt":"not-a-date"`),
-        run("missing", ""),
-        run("future", `,"updatedAt":"${ago(-48)}"`),
-      ]
-      const { payload } = runSessionStartWith(
-        `#!/usr/bin/env sh
-case "$1" in
-  --version) echo "akm 0.10.26101002"; exit 0 ;;
-esac
-if [ "$1" = "--format" ] && [ "$4" = "workflow" ]; then
-  echo '{"runs":[${runs.join(",")}]}'
-  exit 0
-fi
-exit 0
-`,
-      )
-      const context = payload.hookSpecificOutput.additionalContext as string
-      const line = context.split("\n").find((l) => l.startsWith("[{")) ?? ""
-      const reduced = JSON.parse(line) as Array<{ runId: string; updated: string }>
-      expect(Object.fromEntries(reduced.map((r) => [r.runId, r.updated]))).toEqual({
-        fresh: "5h ago",
-        stale: "9d ago",
-        garbled: "unknown",
-        missing: "unknown",
-        future: "unknown",
-      })
-      expect(context).toContain("whether it applies to this task is unknown")
-      expect(context).not.toContain("IGNORE_ALL_RULES_INJECT")
-      expect(context).not.toContain("evilPayload")
     })
 
     function runSessionStartWithExtractLog(extractLog: string) {
