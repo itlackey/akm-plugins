@@ -327,7 +327,8 @@ describe("fake-akm envelope contract", () => {
       // One ref per type, in the spelling akm itself prints (plus `.md` where akm
       // tolerates it), a derived memory by its own ID, and the refs of files kept
       // outside their type's directory (a skill's script and reference page, a
-      // page under wikis/), which akm names by their path from the bundle root.
+      // page under wikis/, a file at the bundle root), which akm names by their path from the bundle root
+      // (a bundle-root file also with the type folder akm once put in front, akm#1440).
       const canonical = [
         "agents/reviewer",
         "commands/ship",
@@ -348,24 +349,25 @@ describe("fake-akm envelope contract", () => {
         "sessions/retro",
         "skills/rollout",
         "tasks/nightly",
+        "top",
+        "topscript.sh",
+        "knowledge/top",
+        "scripts/topscript.sh",
         "workflows/release",
         "workflows/release.md",
       ]
       // Each of these names a file akm has, and akm refuses it: `show` fails, or
-      // answers without a ref, or `feedback` fails. A .yml workflow is not indexed at all since 0.10. Files at
-      // the bundle root are not indexed.
+      // answers without a ref, or `feedback` fails. A .yml workflow is not indexed at all since 0.10.
       const refused = [
         "env/.env",
         "env/staging.env",
         "env/team/.env",
         "knowledge/guide.md.bak",
         "knowledge/missing",
-        "knowledge/top",
         "memories/solo",
         "scripts/data.json",
         "scripts/deploy",
         "scripts/page.html",
-        "scripts/topscript.sh",
         "secrets/old.lock",
         "skills/rollout/SKILL.md",
         "tasks/legacy",

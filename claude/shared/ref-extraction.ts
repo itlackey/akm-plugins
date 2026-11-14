@@ -192,7 +192,7 @@ function conceptExistsInAnyBundle(conceptId: string, bundleRoots: readonly strin
     const directPath = path.resolve(resolvedRoot, conceptId);
     if (inside(directPath) && isAsset(directPath, conceptId)) return true;
 
-    if (LEGACY_PREFIXES.has(head) && rest.includes("/")) {
+    if (LEGACY_PREFIXES.has(head) && rest) {
       const legacyPath = path.resolve(resolvedRoot, rest);
       if (inside(legacyPath) && isAsset(legacyPath, rest)) return true;
     }
