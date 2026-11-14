@@ -567,6 +567,8 @@ function makeRealEnv(): RealEnv {
   if (init.exitCode !== 0) {
     throw new Error(`akm bundle create failed: exit ${init.exitCode}\nstdout: ${init.stdout}\nstderr: ${init.stderr}`)
   }
+  // The fake models an indexed library; a read on one never indexed adds a `warnings` key (akm 0.10.261122).
+  runReal(env, ["--format", "json", "-q", "index"])
   return env
 }
 
