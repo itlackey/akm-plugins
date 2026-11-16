@@ -22,6 +22,12 @@ describe("akm 0.10: monthly release numbers", () => {
     expect(derive("0.10.260501", "2026-10-12T04:00:00Z").version).toBe("0.10.261001")
   })
 
+  test("a numbered akm prerelease (-beta.1) gives the plugins' own unnumbered stage and the next NN", () => {
+    const published = ["0.10.261116-beta", "0.10.261130"]
+    expect(derive("0.10.261130-beta.1", "2026-11-17T00:00:00Z", published)).toEqual({ akmVersion: "0.10.261130-beta.1", next: true, version: "0.10.261131-beta" })
+    expect(derive("0.10.261130-rc.2", "2026-11-17T00:00:00Z", published).version).toBe("0.10.261131-rc")
+  })
+
   test("NN is one above the highest 6-digit akm-opencode version published for the current UTC month on that line", () => {
     const published = ["0.9.30202610090106", "0.10.260999", "0.10.261001-beta", "0.10.261002", "0.11.261005", "0.10.261103"]
     expect(derive("0.10.261001", "2026-10-31T23:59:00Z", published).version).toBe("0.10.261003")
@@ -102,7 +108,8 @@ describe("akm 0.10: monthly release numbers", () => {
       "0.10.261000",
       "0.10.261301",
       "0.10.260001",
-      "0.10.261001-alpha.1",
+      "0.10.261001-alpha.",
+      "0.10.261001-alpha.x",
       "0.10.261001-gamma",
       "0.10.261001+build",
       "0.10.01091",
