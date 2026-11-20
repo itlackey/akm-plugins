@@ -228,6 +228,23 @@ async function writePluginLog(client: LogCapableClient, level: LogLevel, message
 const curatedFiles = createCuratedFileStore(path.join(os.tmpdir(), "akm-opencode", "curated"))
 const CURATED_DIR = curatedFiles.dir
 
+// The system prompt tells the model to read the curated file, which lives outside the project. OpenCode asks
+// before reading outside it, and a run with nobody to answer (`opencode run`, a scheduled task) rejects the
+// read and ends the turn. So the plugin allows reads of its own curated folder, and nothing else: in the
+// global rules, and in every agent that sets its own `external_directory` rules, since those replace the global ones.
+type PermissionRules = { external_directory?: string | Record<string, string> }
+function allowCuratedReads(config: { permission?: PermissionRules; agent?: Record<string, { permission?: PermissionRules } | undefined> }): void {
+  const rule = path.join(CURATED_DIR, "*")
+  const allow = (rules: PermissionRules) => {
+    const current = rules.external_directory
+    rules.external_directory = typeof current === "string" ? { "*": current, [rule]: "allow" } : { ...current, [rule]: "allow" }
+  }
+  allow((config.permission ??= {}))
+  for (const agent of Object.values(config.agent ?? {})) {
+    if (agent?.permission?.external_directory !== undefined) allow(agent.permission)
+  }
+}
+
 
 async function logHookFailure(
   client: LogCapableClient,
@@ -985,6 +1002,13 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
     onSubmitted: (sessionID) => pendingProposals.invalidate(sessionID),
   })
   const hooks: Hooks = {
+    config: async (config) => {
+      try {
+        allowCuratedReads(config as Parameters<typeof allowCuratedReads>[0])
+      } catch (error: unknown) {
+        await logHookFailure(logClient, "config", error)
+      }
+    },
     // Events cover the lifecycle boundaries that Claude Code exposes as
     // SessionStart / Stop / PreCompact. We use them to warm the stash, capture
     // the bundle warning for the next system transform, and flush per-session memories.
