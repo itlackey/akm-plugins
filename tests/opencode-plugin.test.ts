@@ -50,6 +50,8 @@ const mockAkmSearch = mock(async (input: Record<string, unknown>) => ({
   source: input.source ?? "local",
   results: [{ type: "skill", ref: "skills/review", quality: input.includeProposed ? "proposed" : "curated" }],
 }))
+const noRules = async () => ({ ok: true, shape: "rules", bundles: ["main"], rules: [] as Array<Record<string, unknown>> })
+const mockAkmRules = mock(noRules)
 const mockAkmShowUnified = mock(async (input: Record<string, unknown>) => ({
   type: "knowledge",
   ref: input.ref,
@@ -105,6 +107,7 @@ const mockExecFile = mock((_command: string, args: string[], options: any, callb
       return mockAkmSearch(input)
     }
     if (decoded.verb === "show") return mockAkmShowUnified(decoded.input)
+    if (decoded.verb === "rules") return mockAkmRules()
     if (decoded.verb === "curate") {
       const curated = await mockAkmCurate(decoded.input)
       return decoded.pack !== undefined ? mockPackCuratedHits(curated as any, decoded.pack) : curated
@@ -237,6 +240,8 @@ describe("akm-opencode plugin", () => {
     execFileCalls.length = 0
     mockAkmSearch.mockClear()
     mockAkmShowUnified.mockClear()
+    mockAkmRules.mockClear()
+    mockAkmRules.mockImplementation(noRules)
     mockAkmCurate.mockClear()
     mockPackCuratedHits.mockClear()
     mockAkmSearch.mockImplementation(async (input: Record<string, unknown>) => ({
@@ -381,8 +386,7 @@ describe("akm-opencode plugin", () => {
         await Bun.sleep(100)
         expect(mockSpawn).not.toHaveBeenCalled()
         const verbs = [...mockExecFileSync.mock.calls.map(([, args]) => args?.[0]), ...execFileCalls.map((call) => call.args[0])]
-        // `config get` is the session bootstrap's read of the default bundle.
-        for (const verb of verbs) expect(["search", "show", "curate", "feedback", "config", "doctor"]).toContain(verb as string)
+        for (const verb of verbs) expect(["search", "show", "curate", "feedback", "rules", "doctor"]).toContain(verb as string)
         expect(ledgerSize()).toBe(ledgerBefore)
         expect(existsSync(path.join(__curatedDir(), "ro-1.md"))).toBe(false)
       })
@@ -952,14 +956,13 @@ describe("akm-opencode plugin", () => {
   })
 
   describe("session bootstrap: rules and most used assets (#154)", () => {
-    const bootstrapSearches = () => execFileCalls.filter((c) => (c.args[0] === "doctor" && c.args[1] === "metrics") || (c.args[0] === "search" && c.args.includes("rule")))
+    const bootstrapCalls = () => execFileCalls.filter((c) => c.args[0] === "rules" || (c.args[0] === "doctor" && c.args[1] === "metrics"))
     beforeEach(() => {
       mockAkmSearch.mockImplementation(async (input: Record<string, unknown>) => ({
         schemaVersion: 1,
-        project: { name: "acme" }, // a project applies, so no default-bundle fallback
-        results: input.query === "--by-usage" ? [{ type: "skill", ref: "skills/used-most", description: "Used most" }] : input.query === "" ? [{ type: "rule", ref: "rules/r1", description: "R1" }] : [],
+        results: input.query === "--by-usage" ? [{ type: "skill", ref: "skills/used-most", description: "Used most" }] : [],
       }))
-      mockAkmShowUnified.mockImplementation(async (input: Record<string, unknown>) => ({ type: "rule", ref: input.ref, content: "---\ndescription: R1\n---\n- Keep changes small\n" }))
+      mockAkmRules.mockImplementation(async () => ({ ok: true, shape: "rules", project: { name: "acme" }, bundles: ["main"], rules: [{ ref: "rules/r1", description: "R1", content: "- Keep changes small" }] }))
     })
     const transform = async (hooks: any, sessionID: string) => {
       const output: { system: string[] } = { system: [] }
@@ -967,17 +970,17 @@ describe("akm-opencode plugin", () => {
       return output.system.join("\n")
     }
 
-    it("a new session gets the rules and the most used list ahead of the guidance, read as no demand, in the session directory", async () => {
+    it("a new session gets the rules and the most used list ahead of the guidance, in the session directory, with no event-source override", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       await hooks.event!({ event: { type: "session.created", properties: { sessionID: "boot-1" } } } as any)
       const injected = await transform(hooks, "boot-1")
       expect(injected).toContain("## rules/r1\n- Keep changes small")
       expect(injected).toContain("- skills/used-most — Used most")
       expect(injected.indexOf("# AKM assets used most here")).toBeLessThan(injected.indexOf("# AKM is available in this session"))
-      const calls = execFileCalls.filter((c) => ["search", "show", "doctor"].includes(c.args[0]) && (c.args[1] === "metrics" || c.args.includes("rule") || c.args[1] === "rules/r1"))
-      expect(calls.length).toBeGreaterThan(2)
+      const calls = bootstrapCalls()
+      expect(calls.map((c) => c.args[0])).toEqual(["rules", "doctor"])
       for (const call of calls) {
-        expect(call.env.AKM_EVENT_SOURCE).toBe("unknown")
+        expect(call.env.AKM_EVENT_SOURCE).toBeUndefined()
         expect(call.cwd).toBe(projectDir)
       }
     })
@@ -987,23 +990,23 @@ describe("akm-opencode plugin", () => {
       await hooks.event!({ event: { type: "session.created", properties: { sessionID: "boot-2" } } } as any)
       await transform(hooks, "boot-2")
       await transform(hooks, "boot-2")
-      expect(bootstrapSearches()).toHaveLength(2) // the rules listing and the usage list
+      expect(bootstrapCalls()).toHaveLength(2) // the rules call and the usage list
       const compacted = { event: { type: "session.compacted", properties: { sessionID: "boot-2" } } } as any
       await hooks.event!(compacted)
       await hooks.event!(compacted)
       expect(await transform(hooks, "boot-2")).toContain("## rules/r1")
-      expect(bootstrapSearches()).toHaveLength(4)
+      expect(bootstrapCalls()).toHaveLength(4)
     })
 
     it("a session first seen at a request (a resumed one) is loaded then", async () => {
       const hooks = await AkmPlugin(createPluginInput())
       expect(await transform(hooks, "boot-resumed")).toContain("## rules/r1")
       await transform(hooks, "boot-resumed")
-      expect(bootstrapSearches()).toHaveLength(2)
+      expect(bootstrapCalls()).toHaveLength(2)
     })
 
     it("a failing lookup leaves the guidance in place and is logged", async () => {
-      mockAkmSearch.mockImplementation(async () => {
+      mockAkmRules.mockImplementation(async () => {
         throw new Error("boom")
       })
       const client = createMockClient()

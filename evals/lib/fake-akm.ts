@@ -8,7 +8,7 @@
 // keyword match (computed in the shim's parent process and baked into the
 // shell script as a static lookup table). It also implements the subset of
 // `akm` verbs the hooks actually call: `curate`, `feedback`, `remember`,
-// `index`, `doctor info`, `doctor metrics assets`, `search`, `config get`/`config set`,
+// `index`, `doctor info`, `doctor metrics assets`, `rules`, `search`, `config get`/`config set`,
 // `proposal list`/`new`, `extract`, `--version`. Non-agent
 // envelope shapes are pinned against a real `akm` binary by
 // tests/fake-akm-contract.test.ts; `proposal new` is an authoring-agent boundary
@@ -439,7 +439,8 @@ function nonFlagArgs() {
 // Mirrors akm's project-rules contract: a call runs under the project \`--project\` names
 // (\`none\`: no project), else the one whose configured path contains the working directory,
 // else none, and a response says which in a top-level \`project\`. An unknown \`--project\` name
-// is accepted here (real akm rejects it). A rule applies when it names that project or no project.
+// is accepted here (real akm rejects it). \`rules\` answers the rules that apply: those naming that
+// project or none, from the \`--from\` bundle (else the default bundle, named "bundle"), with their bodies.
 // \`doctor metrics assets\` (formerly \`search --by-usage\`) lists the eligible assets shown by a user, most shown first.
 function flagValue(name) {
   const i = argv.indexOf(name)
@@ -471,11 +472,6 @@ function inFrom(a) {
   const from = flagValue("--from")
   return !from || from === "local" || from === "all" || a.bundle === undefined || a.bundle === from
 }
-function applicableRules(project) {
-  return idx.assets
-    .filter((a) => inFrom(a) && a.type === "rule" && (a.project === undefined || (project && a.project === project.name)))
-    .sort((a, b) => a.ref.localeCompare(b.ref))
-}
 function toHit(a) {
   return { ref: a.ref, type: a.type, name: a.name, description: a.description, score: 1 }
 }
@@ -503,12 +499,20 @@ function usageList(project, limit) {
     .map(([ref]) => toHit(idx.assets.find((a) => a.ref === ref)))
 }
 
-const byUsage = (verb === "doctor" && tail[0] === "metrics" && tail[1] === "assets") || (verb === "search" && argv.includes("--by-usage"))
-if (byUsage || (verb === "search" && flagValue("--type") === "rule")) {
+if (verb === "rules") {
   const project = resolveProject()
-  const limit = getLimit()
-  const hits = byUsage ? usageList(project, limit) : applicableRules(project).slice(0, limit).map(toHit)
-  process.stdout.write(JSON.stringify({ results: hits, searchMode: "keyword", ...(project ? { project } : {}) }))
+  const bundle = flagValue("--from") || "bundle"
+  const rules = idx.assets
+    .filter((a) => a.type === "rule" && (a.bundle === undefined || a.bundle === bundle) && (a.project === undefined || (project && a.project === project.name)))
+    .sort((a, b) => (a.project === undefined) - (b.project === undefined) || a.ref.localeCompare(b.ref))
+    .map((a) => ({ ref: a.ref, description: a.description, ...(a.project !== undefined ? { project: a.project } : {}), content: (a.body || "").replace(/^---\\r?\\n[\\s\\S]*?\\r?\\n---[ \\t]*(?:\\r?\\n|$)/, "").trim() }))
+  process.stdout.write(JSON.stringify({ ok: true, shape: "rules", ...(project ? { project } : {}), bundles: [bundle], rules }))
+  process.exit(0)
+}
+
+if ((verb === "doctor" && tail[0] === "metrics" && tail[1] === "assets") || (verb === "search" && argv.includes("--by-usage"))) {
+  const project = resolveProject()
+  process.stdout.write(JSON.stringify({ results: usageList(project, getLimit()), searchMode: "keyword", ...(project ? { project } : {}) }))
   process.exit(0)
 }
 
@@ -781,7 +785,7 @@ if (verb === "show") {
     process.exit(1)
   }
   // A show by a user is demand: it is recorded with the project it ran under. The plugins' own
-  // reads run with AKM_EVENT_SOURCE=unknown (or audit), which is not.
+  // reads run with AKM_EVENT_SOURCE=audit (or unknown), which is not.
   const eventSource = process.env.AKM_EVENT_SOURCE || "user"
   if (eventSource !== "unknown" && eventSource !== "audit") {
     const project = resolveProject()

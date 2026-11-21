@@ -6,10 +6,11 @@
 // 0.<minor>.<P> (1 if none). A stage is alpha, beta or rc; an akm_version outside that shape is rejected.
 //
 // akm 0.10 versions its releases as 0.10.YYMMNN: YY the UTC year, MM the month and NN the release number within
-// that month (01 to 99), two digits each, with -alpha, -beta or -rc for a prerelease and no ".N". Every release, whatever
-// its stage, consumes a new NN. The plugins use the same scheme with their own counter: for akm_version 0.10.261001 or
-// 0.10.261001-beta the plugins release as 0.10.<this UTC month's YYMM><NN>[-<the same stage>], NN being one above the
-// highest 6-digit build of that month already on npm as akm-opencode (the stage of a published build is ignored).
+// that month (01 to 99), two digits each, with -alpha, -beta or -rc for a prerelease, which akm numbers (-beta.1,
+// -beta.2). The plugins use the same scheme with their own counter and no ".N", because every plugin release,
+// whatever its stage, consumes a new NN: for akm_version 0.10.261001, 0.10.261001-beta or 0.10.261001-beta.2 the
+// plugins release as 0.10.<this UTC month's YYMM><NN>[-<the same stage>], NN being one above the highest 6-digit
+// build of that month already on npm as akm-opencode (the stage of a published build is ignored).
 //
 // The earlier daily scheme, 0.10.YYMMDDNN (8-digit patch), is retired: such an akm_version is rejected, and published
 // 8-digit builds are ignored when counting. Semver compares the patch numerically, so every 6-digit build sorts below
@@ -25,7 +26,7 @@ import { execFileSync } from "node:child_process"
 
 const MONTHLY_MINOR = 10
 const SEMVER_0 = /^0\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?$/
-const MONTHLY = /^0\.(\d+)\.(\d{2})(\d{2})(\d{2})(?:-(alpha|beta|rc))?$/
+const MONTHLY = /^0\.(\d+)\.(\d{2})(\d{2})(\d{2})(?:-(alpha|beta|rc)(?:\.\d+)?)?$/
 
 const pad2 = (n: number): string => String(n).padStart(2, "0")
 
@@ -34,11 +35,11 @@ const minorOf = (version: string): number | undefined => {
   return m === undefined ? undefined : Number(m)
 }
 
-/** An error message when `version` is not a valid monthly-build version (0.<minor>.YYMMNN[-stage]), else undefined. */
+/** An error message when `version` is not a valid monthly-build version (0.<minor>.YYMMNN[-stage[.N]]), else undefined. */
 export function validateMonthly(version: string): string | undefined {
   const m = MONTHLY.exec(version)
   if (!m) {
-    return `"${version}" is not 0.<minor>.YYMMNN with an optional -alpha, -beta or -rc (two digits each for YY, MM, NN)`
+    return `"${version}" is not 0.<minor>.YYMMNN with an optional -alpha, -beta or -rc, numbered or not (two digits each for YY, MM, NN)`
   }
   const [, , yy, mm, nn] = m
   if (Number(mm) < 1 || Number(mm) > 12) return `"${version}": ${mm} is not a month (YYMMNN)`

@@ -54,18 +54,10 @@ describe("every reader accepts all three key names and an empty list", () => {
       expect(withProposedWarnings(none)).toBe(none)
     })
 
-    it(`the session bootstrap lists rules from ${key}`, async () => {
-      const calls: string[][] = []
-      const run = async (args: string[]) => {
-        calls.push(args)
-        if (args[0] === "search" && args.includes("rule")) return JSON.stringify({ [key]: [{ ref: "rules/r1", description: "R1" }], project: "acme" })
-        if (args[0] === "search") return JSON.stringify({ [key]: [], project: "acme" })
-        if (args[0] === "show") return JSON.stringify({ content: "- be careful" })
-        return ""
-      }
-      const block = await loadSessionBootstrap(run, { budgetChars: 4000 })
-      expect(block).toContain("be careful")
-      expect(calls.some((args) => args[0] === "show" && args[1] === "rules/r1")).toBe(true)
+    it(`the session bootstrap lists the most used assets from ${key}`, async () => {
+      const run = async (args: string[]) =>
+        args[0] === "rules" ? JSON.stringify({ project: { name: "acme" }, bundles: ["b"], rules: [] }) : JSON.stringify({ [key]: [{ ref: "skills/s1", description: "S1" }] })
+      expect(await loadSessionBootstrap(run, { budgetChars: 4000 })).toContain("- skills/s1 — S1")
     })
   }
 })

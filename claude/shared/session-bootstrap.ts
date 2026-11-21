@@ -4,28 +4,21 @@
  * Claude/Codex hook and both OpenCode plugins; the host supplies `run`, which
  * invokes the public `akm` CLI and returns its stdout ("" when the call failed).
  *
- * akm is the only source: `akm search --type rule` and `akm show` for the rules,
- * `akm doctor metrics assets` for the list. Nothing here keeps a popularity store or
- * opens a database. Every call carries AKM_EVENT_SOURCE=unknown so reading the
- * rules or the list never counts as demand and never raises their own ranking.
+ * akm is the only source: `akm rules` for the rules (akm decides which apply and
+ * which bundles supply them), `akm doctor metrics assets` for the list. Nothing
+ * here keeps a popularity store or opens a database.
  *
  * Zero third-party imports: the Claude hook runs as a bare Bun script.
  */
 
 import { akmResultList } from "./result-list"
 
-/** Rules the listing may return; exactly this many means the list was cut. */
-export const RULES_LIST_LIMIT = 200
 /** How many most-used assets the list names. */
 export const USAGE_LIST_SIZE = 10
 
 const DESCRIPTION_MAX_CHARS = 160
-const SHOW_BATCH = 8
-// Room kept for the left-out note after the last rule that fits.
-const NOTE_RESERVE = 220
 const USAGE_LEFT_OUT_NOTE = "(The list of most-used assets was left out to fit the context budget.)"
 const USAGE_CUT_NOTE = "(The list was cut to fit the context budget.)"
-const READ_ENV = { AKM_EVENT_SOURCE: "unknown" }
 
 /** Callbacks for one start or compaction event arrive together; one load serves them all. */
 export const DUPLICATE_WINDOW_MS = 10_000
@@ -45,34 +38,24 @@ export function claimBootstrap(seen: Record<string, number>, key: string, now: n
   return true
 }
 
-export type BootstrapRun = (args: string[], env: Record<string, string>) => Promise<string>
+export type BootstrapRun = (args: string[]) => Promise<string>
 
+type Rule = { ref: string; content: string }
 type Hit = { ref: string; description: string }
-type Listing = { ok: boolean; hits: Hit[]; project: boolean }
 
-function parseListing(raw: string): Listing {
+function parseJson(raw: string): Record<string, unknown> | undefined {
   try {
-    const parsed = JSON.parse(raw) as { project?: unknown }
-    const hits: Hit[] = []
-    for (const hit of akmResultList(parsed)) {
-      const record = hit as { ref?: unknown; description?: unknown } | null
-      if (typeof record?.ref !== "string" || !record.ref) continue
-      hits.push({ ref: record.ref, description: typeof record.description === "string" ? record.description : "" })
-    }
-    return { ok: true, hits, project: !!parsed.project }
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined
   } catch {
-    return { ok: false, hits: [], project: false }
+    return undefined
   }
-}
-
-function frontmatterFree(content: string): string {
-  return content.replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "").trim()
 }
 
 export type BootstrapOptions = {
   /** The host's explicit project override (`--project`), when it set one. */
   project?: string
-  /** Read-only OpenCode sessions have no CLI: the text names the `akm_search` / `akm_show` tools instead of commands. */
+  /** Read-only OpenCode sessions have no CLI: the text names the `akm_show` tool instead of commands. */
   readonly?: boolean
   /** Characters this block may use; rule text comes first, then the list. */
   budgetChars: number
@@ -82,11 +65,10 @@ export type BootstrapOptions = {
 
 /**
  * The rendered bootstrap block, or "" when there is nothing to say: no rules and no
- * usage history, a failed lookup, or no budget.
+ * usage history, a failed `akm rules` call, or no budget.
  *
- * With a project (the session directory selects one, or `options.project` names
- * it) both listings run as akm resolves it. With none, both read only the user's
- * default bundle, with no selection filters or preferences.
+ * The list is read for the project `akm rules` reports; with none, from the first
+ * bundle it read, with no selection filters or preferences.
  */
 export async function loadSessionBootstrap(run: BootstrapRun, options: BootstrapOptions): Promise<string> {
   try {
@@ -96,85 +78,63 @@ export async function loadSessionBootstrap(run: BootstrapRun, options: Bootstrap
   }
 }
 
-const rulesArgs = (scope: string[]) => ["search", "", "--type", "rule", "--limit", String(RULES_LIST_LIMIT), "--detail", "normal", "--format", "json", "-q", ...scope]
-const usageArgs = (scope: string[]) => ["doctor", "metrics", "assets", "--limit", String(USAGE_LIST_SIZE), "--detail", "normal", "--format", "json", "-q", ...scope]
-
 async function load(run: BootstrapRun, options: BootstrapOptions): Promise<string> {
   if (options.budgetChars <= 0) return ""
   const deadline = Date.now() + (options.deadlineMs ?? LOAD_DEADLINE_MS)
-  const list = async (build: (scope: string[]) => string[], scope: string[]) => parseListing(await run(build(scope), READ_ENV))
   const override = options.project ? ["--project", options.project] : []
-  let [rules, usage] = await Promise.all([list(rulesArgs, override), list(usageArgs, override)])
-  if (!rules.project && !usage.project) {
-    // A lookup that failed says nothing about the project: do not guess one (or none).
-    if (!rules.ok || !usage.ok) return ""
-    // No project applies: the default bundle alone, never every configured bundle.
-    const configured = await run(["config", "get", "defaultBundle", "-q"], READ_ENV)
-    let name = ""
-    try {
-      const value = JSON.parse(configured) as unknown
-      if (typeof value === "string") name = value.trim()
-    } catch {}
-    const scope = ["--project", "none", ...(name ? ["--from", name] : [])]
-    ;[rules, usage] = await Promise.all([list(rulesArgs, scope), list(usageArgs, scope)])
+  const response = parseJson(await run(["rules", "--format", "json", "-q", ...override]))
+  if (!response || !Array.isArray(response.rules)) return ""
+  const rules: Rule[] = []
+  for (const entry of response.rules as Array<{ ref?: unknown; content?: unknown } | null>) {
+    if (typeof entry?.ref !== "string" || !entry.ref || typeof entry.content !== "string" || !entry.content.trim()) continue
+    rules.push({ ref: entry.ref, content: entry.content.trim() })
   }
 
   let remaining = options.budgetChars
   const sections: string[] = []
 
-  if (rules.hits.length > 0) {
+  if (rules.length > 0) {
     const heading = "# AKM rules for this session\nStanding rules from the AKM bundle. Each is under its source ref."
-    const total = rules.hits.length
+    const leftOutNote = (left: Rule[]) =>
+      left.length === 0
+        ? ""
+        : `Not every rule is shown: ${left.length} of ${rules.length} left out to fit the context budget. ${options.readonly ? `Read them with \`akm_show\`: ${left.map((rule) => rule.ref).join(", ")}.` : "List them all with `akm rules`."}`
     const bodies: string[] = []
-    let used = heading.length + NOTE_RESERVE
-    let full = false
-    for (let start = 0; start < total && !full && Date.now() < deadline; start += SHOW_BATCH) {
-      const batch = rules.hits.slice(start, start + SHOW_BATCH)
-      const shown = await Promise.all(batch.map((hit) => run(["show", hit.ref, "--format", "json", "-q", ...override], READ_ENV)))
-      // A whole batch that reads nothing means akm is not answering: stop rather than try every rule.
-      if (shown.every((out) => !out)) break
-      for (let i = 0; i < batch.length; i++) {
-        let body = ""
-        try {
-          const content = (JSON.parse(shown[i]) as { content?: unknown }).content
-          if (typeof content === "string") body = frontmatterFree(content)
-        } catch {}
-        if (!body) continue
-        const section = `## ${batch[i].ref}\n${body}`
-        // A rule is whole or left out; a clipped rule would read as the full rule.
-        if (used + section.length + 2 > remaining) {
-          full = true
-          break
-        }
-        bodies.push(section)
-        used += section.length + 2
-      }
+    let used = heading.length
+    for (const [i, rule] of rules.entries()) {
+      const section = `## ${rule.ref}\n${rule.content}`
+      // A rule is whole or left out (a clipped rule would read as the full rule); the note for the rest must still fit.
+      if (used + section.length + 2 + leftOutNote(rules.slice(i + 1)).length + 2 > remaining) break
+      bodies.push(section)
+      used += section.length + 2
     }
-    const leftOut = total - bodies.length
-    const cut = total >= RULES_LIST_LIMIT
-    const note =
-      leftOut > 0 || cut
-        ? `Not every rule is shown: ${leftOut} of ${cut ? `the first ${total}` : total} left out (context budget or unreadable)${cut ? `, and akm listed no more than ${RULES_LIST_LIMIT}` : ""}. List them with ${options.readonly ? "`akm_search` (type rule, limit 200)" : '`akm search "" --type rule --limit 200`'}.`
-        : ""
-    if (bodies.length > 0 || note) {
-      const text = [heading, ...bodies, ...(note ? [note] : [])].join("\n\n")
-      sections.push(text)
-      remaining -= text.length + 2
-    }
+    const note = leftOutNote(rules.slice(bodies.length))
+    const text = [heading, ...bodies, ...(note ? [note] : [])].join("\n\n")
+    sections.push(text)
+    remaining -= text.length + 2
   }
 
-  if (usage.hits.length > 0 && remaining > 0) {
+  const usageScope = response.project ? override : ["--project", "none", ...(Array.isArray(response.bundles) && typeof response.bundles[0] === "string" ? ["--from", response.bundles[0]] : [])]
+  const usage: Hit[] =
+    remaining > 0 && Date.now() < deadline
+      ? akmResultList(parseJson(await run(["doctor", "metrics", "assets", "--limit", String(USAGE_LIST_SIZE), "--detail", "normal", "--format", "json", "-q", ...usageScope])) ?? {}).flatMap((hit) => {
+          const record = hit as { ref?: unknown; description?: unknown } | null
+          return typeof record?.ref === "string" && record.ref ? [{ ref: record.ref, description: typeof record.description === "string" ? record.description : "" }] : []
+        })
+      : []
+
+  if (usage.length > 0) {
     const heading = `# AKM assets used most here\nMost used first. Read one with ${options.readonly ? "`akm_show`" : "`akm show <ref>`"} before relying on it.`
     const lines: string[] = []
     let used = heading.length + 1 + USAGE_CUT_NOTE.length
-    for (const hit of usage.hits) {
+    for (const hit of usage) {
       const description = hit.description.replace(/\s+/g, " ").trim().slice(0, DESCRIPTION_MAX_CHARS)
       const line = description ? `- ${hit.ref} — ${description}` : `- ${hit.ref}`
       if (used + line.length + 1 > remaining) break
       lines.push(line)
       used += line.length + 1
     }
-    if (lines.length > 0) sections.push([heading, ...lines, ...(lines.length < usage.hits.length ? [USAGE_CUT_NOTE] : [])].join("\n"))
+    if (lines.length > 0) sections.push([heading, ...lines, ...(lines.length < usage.length ? [USAGE_CUT_NOTE] : [])].join("\n"))
     else if (remaining >= USAGE_LEFT_OUT_NOTE.length) sections.push(USAGE_LEFT_OUT_NOTE)
   }
 

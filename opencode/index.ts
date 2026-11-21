@@ -974,10 +974,10 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
   // session, and sent with every request (the host rebuilds the system prompt each time).
   const bootstrap = createSessionBootstrap((sessionID) =>
     loadSessionBootstrap(
-      async (args, env) => {
+      async (args) => {
         const command = resolveAkmCommand()
         if (isCliError(command)) return ""
-        const result = await runAkm(command, args, { cwd: directory, timeoutMs: curateTimeoutMs(), env, packageName: "akm-opencode" })
+        const result = await runAkm(command, args, { cwd: directory, timeoutMs: curateTimeoutMs(), packageName: "akm-opencode" })
         if (result.ok) return result.stdout
         await writePluginLog(logClient, "warn", "AKM session bootstrap lookup failed", {
           subsystem: "bootstrap",

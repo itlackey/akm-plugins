@@ -603,8 +603,7 @@ describe("akm-opencode-v2 plugin", () => {
       await host.emit({ type: "session.deleted", data: { sessionID: "ses_ro2" }, location: loc })
       await settle(600)
       const verbs = new Set(fake.calls().map((a) => a[0]))
-      // `config get` is the session bootstrap's read of the default bundle.
-      for (const verb of verbs) expect(["search", "show", "curate", "feedback", "config", "doctor"]).toContain(verb)
+      for (const verb of verbs) expect(["search", "show", "curate", "feedback", "rules", "doctor"]).toContain(verb)
       // An explicit feedback call still goes through, and is not recording.
       expect(JSON.parse((await host.callTool("akm_feedback", { ref: "skills/nginx-proxy", sentiment: "positive" })).content).ok).toBe(true)
       expect(fake.calls().some((a) => a[0] === "feedback")).toBe(true)
@@ -1069,7 +1068,9 @@ describe("akm-opencode-v2 plugin", () => {
       host.sessions.set("ses_o", { metadata: { akm: { project: "acme" } } })
       await host.emit({ type: "session.created", data: { sessionID: "ses_o" }, location: { directory: project } })
       expect(await request("ses_o")).toContain("## rules/acme")
-      expect(fake.calls().filter((a) => a[0] === "doctor" && a[1] === "metrics" && a[2] === "assets").every((a) => a.includes("--project") && a.includes("acme"))).toBe(true)
+      const bootstrap = fake.calls().filter((a) => a[0] === "rules" || (a[0] === "doctor" && a[1] === "metrics" && a[2] === "assets"))
+      expect(bootstrap).toHaveLength(2)
+      expect(bootstrap.every((a) => a.includes("--project") && a.includes("acme"))).toBe(true)
     })
 
     it("a failing akm leaves the guidance in place and logs the lookup", async () => {
@@ -1208,7 +1209,7 @@ console.log(JSON.stringify({ hits: [] }))`,
       expect(curateCalls.length).toBeGreaterThan(0)
       expect(text).toContain("# AKM is available in this session")
       // Only the bootstrap's reads (rules, most-used assets) and the pending-proposal note's list.
-      for (const verb of new Set(verbs())) expect(["search", "doctor metrics", "config get", "proposal list"]).toContain(verb.trim())
+      for (const verb of new Set(verbs())) expect(["search", "rules --format", "doctor metrics", "proposal list"]).toContain(verb.trim())
       expect(verbs().some((v) => /^(proposal (new|extract)|feedback|remember)/.test(v))).toBe(false)
       expect(existsSync(stateDir())).toBe(false)
     })

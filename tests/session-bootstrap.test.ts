@@ -3,14 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { type FakeAkmAsset, installFakeAkm, readCallLog } from "../evals/lib/fake-akm"
-import { type BootstrapRun, DUPLICATE_WINDOW_MS, RULES_LIST_LIMIT, USAGE_LIST_SIZE, claimBootstrap, loadSessionBootstrap } from "../claude/shared/session-bootstrap"
+import { type BootstrapRun, DUPLICATE_WINDOW_MS, USAGE_LIST_SIZE, claimBootstrap, loadSessionBootstrap } from "../claude/shared/session-bootstrap"
 import { createSessionBootstrap } from "../opencode-shared/session-bootstrap"
 import { PLUGIN_DIR, hostEnv, installScriptedAkm, makeBinDir, runClaudeHandler, sandboxPath, itPosix, type ClaudeHandler } from "./host-runtime"
 
 // The session bootstrap (#154): the project's rules and the assets used most in it, loaded at session
 // start and after each compaction. The loader runs against the repo's fake akm, which models akm's
-// project, rule and usage contract (akm#1512): `search --type rule`, `doctor metrics assets`, `show`
-// recording a usage event unless AKM_EVENT_SOURCE says the read is not demand.
+// project, rule and usage contract: `rules` and `doctor metrics assets`.
 
 const repoRoot = path.resolve(import.meta.dir, "..")
 const pluginDir = path.join(repoRoot, "claude")
@@ -46,10 +45,10 @@ const asset = (type: string, name: string, description = `${name} description`):
   keywords: [],
 })
 
-type World = { root: string; acme: string; beta: string; elsewhere: string; binDir: string; callLog: string; akm: string; run: (cwd: string) => BootstrapRun; usageFile: string }
+type World = { root: string; acme: string; beta: string; elsewhere: string; binDir: string; callLog: string; run: (cwd: string) => BootstrapRun; usageFile: string }
 
 /** A fake akm with two projects (acme, beta) and a default bundle named "bundle". */
-function makeWorld(options: { assets?: FakeAkmAsset[]; usage?: Array<{ ref: string; project?: string; source?: string }>; defaultBundle?: string | null } = {}): World {
+function makeWorld(options: { assets?: FakeAkmAsset[]; usage?: Array<{ ref: string; project?: string; source?: string }> } = {}): World {
   const root = makeTempDir()
   const acme = path.join(root, "work", "acme")
   const beta = path.join(root, "work", "beta")
@@ -84,13 +83,12 @@ function makeWorld(options: { assets?: FakeAkmAsset[]; usage?: Array<{ ref: stri
     projects: { acme: { paths: [acme] }, beta: { paths: [beta] } },
   })
   mkdirSync(path.dirname(callLog), { recursive: true })
-  if (options.defaultBundle !== null) writeFileSync(path.join(path.dirname(callLog), "akm-config-store.json"), JSON.stringify({ defaultBundle: options.defaultBundle ?? "bundle" }))
-  const run = (cwd: string): BootstrapRun => async (args, env) => {
-    const child = Bun.spawn([fake.akmPath, ...args], { cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" })
+  const run = (cwd: string): BootstrapRun => async (args) => {
+    const child = Bun.spawn([fake.akmPath, ...args], { cwd, stdout: "pipe", stderr: "pipe" })
     const [stdout] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
     return (await child.exited) === 0 ? stdout : ""
   }
-  return { root, acme, beta, elsewhere, binDir, callLog, akm: fake.akmPath, run, usageFile: path.join(path.dirname(callLog), "akm-usage-events.json") }
+  return { root, acme, beta, elsewhere, binDir, callLog, run, usageFile: path.join(path.dirname(callLog), "akm-usage-events.json") }
 }
 
 const calls = (world: World) => readCallLog(world.callLog).map((call) => call.argv)
@@ -118,10 +116,8 @@ describe("loadSessionBootstrap", () => {
     const byDirectory = await loadSessionBootstrap(world.run(world.acme), { budgetChars: BIG })
     const byOverride = await loadSessionBootstrap(world.run(world.elsewhere), { project: "acme", budgetChars: BIG })
     expect(byOverride).toBe(byDirectory)
-    // The override is passed to akm as `--project`, on the reads too.
-    const argv = calls(world)
-    expect(argv.some((a) => a[0] === "doctor" && a[1] === "metrics" && a[2] === "assets" && a.join(" ").endsWith("--project acme"))).toBe(true)
-    expect(argv.some((a) => a[0] === "show" && a.includes("--project") && a.includes("acme"))).toBe(true)
+    // The override is passed to akm as `--project`, on both calls.
+    for (const verb of ["rules", "doctor"]) expect(calls(world).some((a) => a[0] === verb && a.join(" ").includes("--project acme"))).toBe(true)
   })
 
   it("two projects with different usage get different lists and their own rules", async () => {
@@ -135,7 +131,7 @@ describe("loadSessionBootstrap", () => {
     expect(beta).not.toContain("skills/deploy")
   })
 
-  it("with no project, reads only the default bundle, with no selection filters or preferences", async () => {
+  it("with no project, takes the shared rules and reads the list from the bundle akm read, with no selection filters or preferences", async () => {
     const world = makeWorld()
     const text = await loadSessionBootstrap(world.run(world.elsewhere), { budgetChars: BIG })
     expect(text).toContain("rules/shared")
@@ -143,23 +139,23 @@ describe("loadSessionBootstrap", () => {
     expect(text).not.toContain("beta-only")
     // Every show counts without a project, so review (5) leads deploy (2) and runbook (2).
     expect(text.indexOf("skills/review")).toBeLessThan(text.indexOf("skills/deploy"))
-    const fallbacks = calls(world).filter((a) => (a[0] === "search" || a[0] === "doctor") && a.includes("--project") && a.includes("none"))
-    expect(fallbacks).toHaveLength(2) // the rules listing and the usage list
-    for (const argv of fallbacks) {
-      expect(argv.join(" ")).toContain("--project none --from bundle")
-      expect(argv).not.toContain("--filter")
-      expect(argv).not.toContain("--prefer")
-    }
-    expect(calls(world).some((a) => a[0] === "config" && a.includes("defaultBundle"))).toBe(true)
+    const argv = calls(world)
+    expect(argv.map((a) => a[0])).toEqual(["rules", "doctor"])
+    expect(argv[0]).not.toContain("--project")
+    expect(argv[1].join(" ")).toContain("--project none --from bundle")
+    expect(argv[1]).not.toContain("--filter")
+    expect(argv[1]).not.toContain("--prefer")
   })
 
-  it("with no project and no default bundle configured, passes `--project none` and no `--from`", async () => {
-    const world = makeWorld({ defaultBundle: null })
-    const text = await loadSessionBootstrap(world.run(world.elsewhere), { budgetChars: BIG })
-    expect(text).toContain("rules/shared")
-    const fallbacks = calls(world).filter((a) => (a[0] === "search" || a[0] === "doctor") && a.includes("none"))
-    expect(fallbacks).toHaveLength(2)
-    for (const argv of fallbacks) expect(argv).not.toContain("--from")
+  it("with no project and no bundle read, passes `--project none` and no `--from`", async () => {
+    const argv: string[][] = []
+    const run: BootstrapRun = async (args) => {
+      argv.push(args)
+      return args[0] === "rules" ? JSON.stringify({ ok: true, bundles: [], rules: [{ ref: "rules/r", content: "- x" }] }) : JSON.stringify({ results: [] })
+    }
+    expect(await loadSessionBootstrap(run, { budgetChars: BIG })).toContain("## rules/r")
+    expect(argv[1].slice(-2)).toEqual(["--project", "none"])
+    expect(argv[1]).not.toContain("--from")
   })
 
   it("a project with rules and no usage history still gets its rules, and no list that implies a history", async () => {
@@ -181,16 +177,11 @@ describe("loadSessionBootstrap", () => {
     expect(await loadSessionBootstrap(world.run(world.acme), { budgetChars: BIG })).toBe("")
   })
 
-  it("reading the rules and the list does not count as demand", async () => {
+  it("makes one `rules` call and one list call, and no search or show", async () => {
     const world = makeWorld()
     await loadSessionBootstrap(world.run(world.acme), { budgetChars: BIG })
-    await loadSessionBootstrap(world.run(world.acme), { budgetChars: BIG })
-    // The `show`s ran (the rule bodies) and recorded nothing.
-    expect(calls(world).filter((a) => a[0] === "show").length).toBeGreaterThan(0)
+    expect(calls(world).map((a) => a.slice(0, a[0] === "doctor" ? 3 : 1).join(" "))).toEqual(["rules", "doctor metrics assets"])
     expect(existsSync(world.usageFile)).toBe(false)
-    // A user's own show does count, so the fake would have caught a missing AKM_EVENT_SOURCE.
-    Bun.spawnSync([world.akm, "show", "skills/review", "--format", "json"], { cwd: world.acme })
-    expect(existsSync(world.usageFile)).toBe(true)
   })
 
   it("leaves out whole rules that do not fit and says how many, never clipping one", async () => {
@@ -201,17 +192,13 @@ describe("loadSessionBootstrap", () => {
     expect(shown.length).toBeGreaterThan(0)
     expect(shown.length).toBeLessThan(6)
     expect(text).toContain(`Not every rule is shown: ${6 - shown.length} of 6 left out`)
-    expect(text).toContain('akm search "" --type rule')
+    expect(text).toContain("List them all with `akm rules`.")
     expect(text.length).toBeLessThanOrEqual(700)
   })
 
-  it("a full rule list is not annotated, and one cut at akm's limit says so", async () => {
-    const few = makeWorld({ assets: [rule("a", "- one"), rule("b", "- two")], usage: [] })
-    expect(await loadSessionBootstrap(few.run(few.acme), { budgetChars: BIG })).not.toContain("Not every rule")
-
-    const many = makeWorld({ assets: Array.from({ length: RULES_LIST_LIMIT + 5 }, (_, n) => rule(`r${String(n).padStart(3, "0")}`, "- x")), usage: [] })
-    const text = await loadSessionBootstrap(many.run(many.acme), { budgetChars: BIG })
-    expect(text).toContain(`akm listed no more than ${RULES_LIST_LIMIT}`)
+  it("a full rule list is not annotated", async () => {
+    const world = makeWorld({ assets: [rule("a", "- one"), rule("b", "- two")], usage: [] })
+    expect(await loadSessionBootstrap(world.run(world.acme), { budgetChars: BIG })).not.toContain("Not every rule")
   })
 
   it("puts rule text before the list and cuts the list to what is left, saying so", async () => {
@@ -241,7 +228,7 @@ describe("loadSessionBootstrap", () => {
   it("keeps the other half when one lookup fails", async () => {
     const world = makeWorld()
     const real = world.run(world.acme)
-    const noList: BootstrapRun = async (args, env) => (args[0] === "doctor" && args[1] === "metrics" ? "" : real(args, env))
+    const noList: BootstrapRun = async (args) => (args[0] === "doctor" ? "" : real(args))
     const text = await loadSessionBootstrap(noList, { budgetChars: BIG })
     expect(text).toContain("## rules/acme-only")
     expect(text).not.toContain("used most")
@@ -440,7 +427,7 @@ describe("session-start hook", () => {
     installScriptedAkm(
       world.binDir,
       `if (args[0] === "--version") { console.log("akm 0.10.26101002"); process.exit(0) }
-if (args[0] === "search" || args[0] === "show" || args[0] === "config") { process.stderr.write(JSON.stringify({ ok: false, error: "boom" })); process.exit(1) }
+if (args[0] === "rules") { process.stderr.write(JSON.stringify({ ok: false, error: "boom" })); process.exit(1) }
 process.exit(0)`,
     )
     const { context, stateDir } = startHook(world, { source: "startup" })
@@ -452,21 +439,20 @@ process.exit(0)`,
 })
 
 describe("loadSessionBootstrap: failures, sources and time", () => {
-  it("a failed listing in a project is not read as 'no project': nothing is loaded rather than the default bundle's", async () => {
+  it("a failed `akm rules` call gives no block and no list call", async () => {
     const world = makeWorld()
     const real = world.run(world.acme)
-    // The project listings fail (a locked database); the later `--project none` calls would work.
-    const flaky: BootstrapRun = async (args, env) => ((args[0] === "search" || args[0] === "doctor") && !args.includes("none") ? "" : real(args, env))
+    const flaky: BootstrapRun = async (args) => (args[0] === "rules" ? "" : real(args))
     expect(await loadSessionBootstrap(flaky, { budgetChars: BIG })).toBe("")
-    expect(calls(world).some((a) => a.includes("none"))).toBe(false)
+    expect(calls(world).map((a) => a[0])).toEqual([])
   })
 
   it("an explicit override akm rejects takes the same path", async () => {
     const world = makeWorld()
     const real = world.run(world.elsewhere)
-    const rejecting: BootstrapRun = async (args, env) => (args.includes("bogus") ? "" : real(args, env))
+    const rejecting: BootstrapRun = async (args) => (args.includes("bogus") ? "" : real(args))
     expect(await loadSessionBootstrap(rejecting, { project: "bogus", budgetChars: BIG })).toBe("")
-    expect(calls(world).some((a) => a.includes("none"))).toBe(false)
+    expect(calls(world)).toEqual([])
   })
 
   it("with no project, assets of other bundles are not read, only the default bundle's", async () => {
@@ -482,20 +468,12 @@ describe("loadSessionBootstrap: failures, sources and time", () => {
     expect(text).not.toContain("skills/theirs")
   })
 
-  it("stops after a batch in which no rule can be read, instead of trying all of them", async () => {
-    const world = makeWorld({ assets: Array.from({ length: 200 }, (_, n) => rule(`r${String(n).padStart(3, "0")}`, "- x")), usage: [] })
-    const real = world.run(world.acme)
-    const noShow: BootstrapRun = async (args, env) => (args[0] === "show" ? "" : real(args, env))
-    const text = await loadSessionBootstrap(noShow, { budgetChars: BIG })
-    expect(calls(world).filter((a) => a[0] === "show").length).toBeLessThanOrEqual(8)
-    expect(text).toContain("200 of the first 200 left out")
-  })
-
-  it("reads no more rules once its deadline has passed", async () => {
+  it("reads no list once its deadline has passed", async () => {
     const world = makeWorld()
     const text = await loadSessionBootstrap(world.run(world.acme), { budgetChars: BIG, deadlineMs: 0 })
-    expect(calls(world).filter((a) => a[0] === "show")).toHaveLength(0)
-    expect(text).toContain("Not every rule is shown")
+    expect(calls(world).map((a) => a[0])).toEqual(["rules"])
+    expect(text).toContain("## rules/acme-only")
+    expect(text).not.toContain("used most")
   })
 
   it("says when the list was left out because no line fit", async () => {
@@ -505,17 +483,12 @@ describe("loadSessionBootstrap: failures, sources and time", () => {
     expect(tight).toContain("The list of most-used assets was left out")
   })
 
-  it("lists rules with the command that returns all of them", async () => {
-    const world = makeWorld({ assets: Array.from({ length: 4 }, (_, n) => rule(`r${n}`, `- ${"x".repeat(200)}`)), usage: [] })
-    const text = await loadSessionBootstrap(world.run(world.acme), { budgetChars: 500 })
-    expect(text).toContain('akm search "" --type rule --limit 200')
-  })
-
-  it("read-only sessions are pointed at the akm tools, not the CLI", async () => {
+  it("read-only sessions are pointed at the akm tool, naming the rules left out, not at the CLI", async () => {
     const cut = makeWorld({ assets: Array.from({ length: 4 }, (_, n) => rule(`r${n}`, `- ${"x".repeat(200)}`)), usage: [] })
     const rules = await loadSessionBootstrap(cut.run(cut.acme), { budgetChars: 500, readonly: true })
-    expect(rules).toContain("List them with `akm_search` (type rule, limit 200).")
-    expect(rules).not.toContain("akm search")
+    expect(rules).toMatch(/Read them with `akm_show`: rules\/r\d(, rules\/r\d)*\./)
+    expect(rules).not.toContain("akm rules")
+    expect(rules.length).toBeLessThanOrEqual(500)
 
     const world = makeWorld()
     const text = await loadSessionBootstrap(world.run(world.acme), { budgetChars: BIG, readonly: true })

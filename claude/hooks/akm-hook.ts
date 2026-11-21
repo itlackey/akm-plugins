@@ -537,7 +537,7 @@ function akmRun(args: string[], input?: string, options?: { timeoutMs?: number }
  * had `timeout(1)` — so SessionStart's three parallel calls were unbounded
  * everywhere.
  */
-async function akmRunAsync(args: string[], input?: string, env?: Record<string, string>): Promise<string> {
+async function akmRunAsync(args: string[], input?: string): Promise<string> {
   const akm = resolveAkmCommandSpec()
   if (!akm) return ""
   const fullArgs = [...akm.argsPrefix, ...args]
@@ -548,7 +548,6 @@ async function akmRunAsync(args: string[], input?: string, env?: Record<string, 
       stdout: "pipe",
       stderr: "pipe",
       cwd: akmCwd,
-      ...(env ? { env: { ...process.env, ...env } } : {}),
       timeout: plan.timeoutMs,
       windowsHide: true,
     })
@@ -1677,7 +1676,7 @@ async function sessionStart(): Promise<string> {
   // curated block is added only with as many whole hits as then fit.
   const footerRoom = SESSION_START_FOOTER.length + 2
   if (bootstrapWanted) {
-    const bootstrap = await loadSessionBootstrap((args, env) => akmRunAsync(args, undefined, env), {
+    const bootstrap = await loadSessionBootstrap((args) => akmRunAsync(args), {
       budgetChars: CONTEXT_BUDGET_CHARS - body.length - 2 - footerRoom,
     })
     if (bootstrap) body = `${body}\n\n${bootstrap}`

@@ -214,8 +214,8 @@ export function createCore(options: CoreOptions) {
     const command = resolveCommand()
     if (isCliError(command)) return ""
     return loadSessionBootstrap(
-      async (args, env) => {
-        const result = await afterFirstRead(() => runAkm(command, args, { timeoutMs: curateTimeoutMs, cwd: options.directory, env, packageName: PACKAGE_NAME }))
+      async (args) => {
+        const result = await afterFirstRead(() => runAkm(command, args, { timeoutMs: curateTimeoutMs, cwd: options.directory, packageName: PACKAGE_NAME }))
         if (result.ok) return result.stdout
         log("warn", "AKM session bootstrap lookup failed", { operation: "session-bootstrap", sessionID, args, error: result.error })
         return ""
