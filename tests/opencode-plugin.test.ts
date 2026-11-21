@@ -321,6 +321,29 @@ describe("akm-opencode plugin", () => {
       expect((hooks as Record<string, unknown>).stop).toBeUndefined()
     })
 
+    it("allows reads of its curated folder, which a run with nobody to approve them would reject", async () => {
+      const hooks = await AkmPlugin(createPluginInput())
+      const rule = path.join(__curatedDir(), "*")
+      const config: any = {
+        permission: { external_directory: "ask" },
+        agent: {
+          strict: { permission: { external_directory: { "*": "deny", "/srv/project/**": "allow" } } },
+          closed: { permission: { external_directory: "deny" } },
+          plain: { permission: { read: "allow" } },
+        },
+      }
+      await hooks.config!(config)
+      expect(config.permission.external_directory).toEqual({ "*": "ask", [rule]: "allow" })
+      // An agent's own rules replace the global ones, so the folder is allowed there too, last so it wins.
+      expect(Object.entries(config.agent.strict.permission.external_directory)).toEqual([
+        ["*", "deny"],
+        ["/srv/project/**", "allow"],
+        [rule, "allow"],
+      ])
+      expect(config.agent.closed.permission.external_directory).toEqual({ "*": "deny", [rule]: "allow" })
+      expect(config.agent.plain.permission).toEqual({ read: "allow" })
+    })
+
     describe("read-only mode", () => {
       const sizeOf = (file: string) => (existsSync(file) ? readFileSync(file, "utf8").length : 0)
       // The ledger and the learning stores, all under the plugin's state dir.
