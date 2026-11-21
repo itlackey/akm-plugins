@@ -43,8 +43,7 @@ export function parseToolOutput(raw: string): unknown {
 /**
  * The outcome of an akm tool call: "positive" when it returned a result,
  * "negative" when it failed (a CLI error, `ok: false`, an `error` string). It
- * gates the write gate's already-shown credit and labels the observation
- * events; it is NOT feedback on the asset.
+ * labels the observation events; it is NOT feedback on the asset.
  */
 export function classifyToolFeedback(value: unknown): "positive" | "negative" | undefined {
   if (!value || typeof value !== "object") return undefined
@@ -213,7 +212,7 @@ export function createFeedbackTracker(options: {
     getBundleDir: () => Promise<string | undefined>
     directory?: string
     writeEvent: EventWriter
-  }): Promise<{ refs: string[]; failedCall: boolean }> {
+  }): Promise<{ refs: string[] }> {
     const isAkmTool = input.tool.startsWith("akm_")
     const candidateRefs = [...new Set([...extractAkmRefsFromAllArgs(input.args), ...extractAkmRefsFromString(input.outputText)])]
     const parsed = isAkmTool ? parseToolOutput(input.outputText) : null
@@ -234,7 +233,7 @@ export function createFeedbackTracker(options: {
         for (const ref of refs) addBufferEntry(input.sessionID, { kind: "tool-ref", toolName: input.tool, ref, status: "unknown" })
       }
     }
-    return { refs, failedCall }
+    return { refs }
   }
 
   /**
@@ -251,7 +250,7 @@ export function createFeedbackTracker(options: {
     parsed: object
     directory?: string
     writeEvent: EventWriter
-  }): { outcome: "positive" | "negative" | undefined; refs: string[]; failedCall: boolean } {
+  }): { outcome: "positive" | "negative" | undefined; refs: string[] } {
     const outcome = classifyToolFeedback(input.parsed)
     const refs = extractToolRefs(input.args, input.parsed)
     const failedCall = outcome === "negative"
@@ -267,7 +266,7 @@ export function createFeedbackTracker(options: {
     if (refs.length > 0 && input.sessionID && !failedCall) {
       for (const ref of refs) addBufferEntry(input.sessionID, { kind: "tool-ref", toolName: input.tool, ref, status: outcome ?? "unknown" })
     }
-    return { outcome, refs, failedCall }
+    return { outcome, refs }
   }
 
   return {

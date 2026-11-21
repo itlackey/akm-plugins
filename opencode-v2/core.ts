@@ -17,7 +17,6 @@
 //     starts and again when a compaction ends.
 //   - event stream            -> onEvent(): session lifecycle; the compaction
 //     reload, the extraction checkpoint and state cleanup.
-//   - `tool.execute.before`   -> onToolBefore(): the write gate.
 //   - `tool.execute.after`    -> onToolResult(): touched refs for auto-feedback.
 //   - `session.prompt` also feeds auto-feedback and learning proposals.
 //   - `shell.create.before`   -> shellEnv(): AKM_* variables for shells.
@@ -37,15 +36,6 @@ import {
   spawnPositiveFeedback,
   submitNegativeFeedback,
 } from "../opencode-shared/feedback"
-import {
-  type GateHost,
-  type GateSearchResponse,
-  clearGateSession,
-    gateDecision,
-  noteShownRefs,
-  observeFileIdentity,
-  warnIfWriteGateInert,
-} from "../opencode-shared/write-gate"
 import { createLearning, createPendingProposals } from "../opencode-shared/learning"
 import {
   type CliError,
@@ -99,7 +89,7 @@ export type CoreOptions = {
   session?: (sessionID: string) => Promise<{ parentID?: string; metadata?: Record<string, unknown> } | undefined>
   /**
    * Read-only mode: only the four read tools, recall and its context, and no memory, learning, extraction or ledger writes.
-   * The entrypoint must also leave the tool and shell hooks unregistered: `onToolBefore`, `onToolResult` and `shellEnv` do not check this flag.
+   * The entrypoint must also leave the tool and shell hooks unregistered: `onToolResult` and `shellEnv` do not check this flag.
    */
   readonly?: boolean
   /** Automatic recall (session bootstrap, prompt and session-start curation, context and compaction reload): off only when `false`. */
@@ -143,11 +133,6 @@ type SessionState = {
 const RECALL_WAIT_MS = 3000
 const CURATE_MIN_CHARS = 16
 const READ_TOOL_TIMEOUT_MS = 60_000
-// The write gate watches the OpenCode 2 write-path tools: `edit` {path, oldString, newString},
-// `write` {path, content}, and `patch` {patchText} on gpt-* models, where it replaces both
-// (the gate cannot resolve a file from a patch envelope and records that, as V1 does).
-const WATCHED_WRITE_TOOLS = new Set(["edit", "write", "patch"])
-const WRITE_GATE_SEARCH_TIMEOUT_MS = 8_000
 const NEED_MORE_CONTEXT_HINT =
   "Need more AKM context? Use `akm_search` or `akm_curate` before writing or editing a file whose exact syntax you are not certain of."
 
@@ -223,28 +208,6 @@ export function createCore(options: CoreOptions) {
       { readonly, project: await projectFor(sessionID), budgetChars: bootstrapBudgetChars(curatedTextChars(settings.curateLimit)) },
     )
   })
-  const gateHost: GateHost = {
-    log,
-    writeEvent,
-    formatError,
-    pathKey: "path",
-    patchTool: "patch",
-    scope: async (sessionID) => `${options.directory}\0${(await projectFor(sessionID)) ?? ""}`,
-    search: async (token, sessionID) => {
-      const command = resolveCommand()
-      if (isCliError(command)) throw new Error(command.error)
-      const project = await projectFor(sessionID)
-      // The PLUGIN's search, not the model's: a non-user event source keeps it out of akm's demand signals.
-      const result = await runAkm(command, ["search", token, "--limit", "5", ...(project ? ["--project", project] : []), "--detail", "normal", "--format", "json"], {
-        cwd: options.directory,
-        timeoutMs: WRITE_GATE_SEARCH_TIMEOUT_MS,
-        env: { AKM_EVENT_SOURCE: "audit" },
-        packageName: PACKAGE_NAME,
-      })
-      if (!result.ok) throw new Error(result.error)
-      return parseToolOutput(result.stdout) as GateSearchResponse | undefined
-    },
-  }
   const learning = createLearning({
     log,
     writeEvent,
@@ -289,7 +252,6 @@ export function createCore(options: CoreOptions) {
   function dropSession(sessionID: string): void {
     childSessions.delete(sessionID)
     const existing = sessions.get(sessionID)
-    clearGateSession(sessionID)
     tracker.clear(sessionID)
     pendingProposals.invalidate(sessionID)
     bootstrap.clear(sessionID)
@@ -530,25 +492,6 @@ export function createCore(options: CoreOptions) {
     ))
   }
 
-  /**
-   * `tool.execute.before` body: the format-declaration write gate. It only records what it
-   * would have blocked and never blocks the call; a plugin-internal fault never disturbs the
-   * user's write. Never throws.
-   */
-  async function onToolBefore(call: { tool: string; sessionID: string; callID: string; input: unknown }): Promise<void> {
-    try {
-      if (disposed || !WATCHED_WRITE_TOOLS.has(call.tool)) return
-      const args = call.input && typeof call.input === "object" ? call.input : {}
-      await gateDecision(
-        gateHost,
-        { tool: call.tool, sessionID: call.sessionID, callID: call.callID, directory: options.directory } as { tool: string; sessionID: string; callID: string },
-        { args },
-      )
-    } catch (error: unknown) {
-      log("error", "AKM tool.execute.before hook failed", { hook: "tool.execute.before", toolName: call.tool, sessionID: call.sessionID, error: formatError(error) })
-    }
-  }
-
   /** `akm doctor info`'s bundle directory, cached; undefined when akm cannot say. */
   function getBundleDir(): Promise<string | undefined> {
     return bundleDir.get(() => runBestEffort(undefined, ["doctor", "info", "--format", "json", "-q"], { operation: "get-bundle-dir" }))
@@ -567,18 +510,12 @@ export function createCore(options: CoreOptions) {
     status: string
     /** The tool's text output, or the error message when it failed. */
     text: string
-    /** For `read`: the file's own text (not the numbered, framed rendering the model sees), when the host gave it. */
-    readContent?: string
   }): Promise<void> {
     try {
       if (disposed) return
       const args = call.args && typeof call.args === "object" ? (call.args as Record<string, unknown>) : {}
       const common = { sessionID: call.sessionID, tool: call.tool, callID: call.callID, args, directory: options.directory, writeEvent }
       const { refs } = await tracker.observeToolRefs({ ...common, outputText: call.text, getBundleDir })
-      // Write gate, read side: what the file declares about its own format.
-      if (call.tool === "read" && call.status !== "error") {
-        observeFileIdentity(gateHost, call.sessionID, options.directory, args.path, call.readContent, call.readContent !== undefined)
-      }
       if (!call.tool.startsWith("akm_")) return
       log(call.status === "error" ? "warn" : "debug", "AKM tool result observed", {
         toolName: call.tool,
@@ -588,11 +525,7 @@ export function createCore(options: CoreOptions) {
         refs,
       })
       const parsed = parseToolOutput(call.text)
-      if (parsed && typeof parsed === "object") {
-        const observed = tracker.observeAkmToolResult({ ...common, parsed })
-        // A ref the model has already opened must never buy it a blocked edit.
-        if ((call.tool === "akm_show" || call.tool === "akm_curate") && !observed.failedCall) noteShownRefs(call.sessionID, observed.refs)
-      }
+      if (parsed && typeof parsed === "object") tracker.observeAkmToolResult({ ...common, parsed })
     } catch (error: unknown) {
       log("error", "AKM tool.execute.after hook failed", { hook: "tool.execute.after", toolName: call.tool, sessionID: call.sessionID, error: formatError(error) })
     }
@@ -631,8 +564,6 @@ export function createCore(options: CoreOptions) {
           if (learningOn) maybeExtract(sessionID)
           break
         case "session.deleted":
-          // The gate is the one feature whose total failure looks exactly like normal operation.
-          if (learningOn) warnIfWriteGateInert(gateHost)
           dropSession(sessionID)
           break
         default:
@@ -720,7 +651,6 @@ export function createCore(options: CoreOptions) {
     tools,
     onPrompt,
     contextText,
-    onToolBefore,
     onToolResult,
     shellEnv,
     onEvent,

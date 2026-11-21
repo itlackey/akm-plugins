@@ -45,13 +45,12 @@ The plugin subscribes to OpenCode lifecycle events. Hook failures are logged thr
 | `session.updated` | Backfills the bundle warning for a session the plugin has not prepared yet. It does not re-run session-created work. |
 | `chat.message` | Records feedback/memory intent, captures corrections, guardrails, preferences, explicit memories, and positive feedback, and can schedule non-blocking curation. High-confidence durable signals submit asynchronous AKM proposals; recurring task intent across distinct sessions can submit a skill proposal. Only the text you typed counts; the synthetic parts OpenCode adds (an attached file's contents, the Read call that fetched it) are ignored. |
 | `experimental.chat.system.transform` | Injects the project's rules and most-used assets, the AKM guidance and cached curated context into the system prompt. The host rebuilds the system prompt on every request, so these blocks are re-injected each turn — including after a compaction — rather than once per session. A session the plugin first sees here (a resumed one) has its rules and list loaded at that request. |
-| `tool.execute.before` | The format-declaration write gate: records, in the ledger, the first `edit`/`write` to an existing file that declares a format your bundle documents. It never blocks ([Write gate](#write-gate)). |
-| `tool.execute.after` | Tracks concepts used by AKM tools and checkpoints session observations. It also records what a file the session `read` declares about its own format, which is what the write gate above keys on. `write` is deliberately not a source: a file the session created is not one it needs the bundle to explain. The create itself is recorded on the write's `tool.execute.before` pass, so a later read-back of that file cannot re-arm the gate. |
+| `tool.execute.after` | Tracks concepts used by AKM tools and checkpoints session observations. |
 | `config` | Allows reads of the plugin's curated folder (`<tmp>/akm-opencode/curated/*`, the file the system prompt points at), in the global permission rules and in every agent that sets its own `external_directory` rules. Without it OpenCode asks before the read, and a run with nobody to answer (`opencode run`, a scheduled task) rejects it and ends the turn. It allows nothing else. |
 | `shell.env` | Exposes `AKM_PLUGIN_VERSION` and the resolved `AKM_BUNDLE_DIR` to shell tools. |
 | `session.idle` | Runs interval-gated memory extraction. Fires after every turn, so it is rate-limited. |
 | `session.compacted` | Records a post-compaction event and reloads the project's rules and most-used assets from akm (duplicate events within 10 seconds load once), so the next request carries the current ones. |
-| `session.deleted` | Refreshes the local AKM index, warns once if the write gate saw write-path tool calls but never acted on any, then drops all per-session state and the temporary curation file. |
+| `session.deleted` | Refreshes the local AKM index, then drops all per-session state and the temporary curation file. |
 
 The session observation buffer that retrospective feedback reads from survives every non-terminal event: it is bounded (200 entries) and dropped only on `session.deleted`. Discarding it at `session.idle` would empty it between turns, so "thanks, that worked" would credit nothing in exactly the sessions that used the most assets.
 
@@ -79,7 +78,7 @@ For restricted sessions, set the plugin option `readonly` (a per-plugin OpenCode
 { "plugin": [["akm-opencode", { "readonly": true }]] }
 ```
 
-Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. Prompt and session-start recall and the injected context still work (the recalled text is injected inline, with hints that do not mention `akm_remember`, and the rules text names the `akm_show` tool instead of CLI commands). Everything that records is off: session extraction, learning proposals and signals, the pending-proposal and bundle-missing notes, the "Need more AKM context?" hint, the write gate, automatic feedback, `shell.env`, index-on-session-end, and the plugin's event ledger. Usage akm itself records for the read tools, and explicit `akm_feedback` calls, are unchanged.
+Only `akm_curate`, `akm_search`, `akm_show` and `akm_feedback` are registered. Prompt and session-start recall and the injected context still work (the recalled text is injected inline, with hints that do not mention `akm_remember`, and the rules text names the `akm_show` tool instead of CLI commands). Everything that records is off: session extraction, learning proposals and signals, the pending-proposal and bundle-missing notes, the "Need more AKM context?" hint, automatic feedback, `shell.env`, index-on-session-end, and the plugin's event ledger. Usage akm itself records for the read tools, and explicit `akm_feedback` calls, are unchanged.
 
 The plugin does not deny `bash` or file edits. Do that with OpenCode's own `permission` config.
 
@@ -111,10 +110,6 @@ The variables that remain are not settings:
 | `AKM_CONFIG_DIR` | Where akm's `config.json` is (akm's own location variable). |
 | `AKM_BUNDLE_DIR` | Absolute path to the AKM bundle root (akm's own variable). When unset the plugin discovers it once per process by running `akm doctor info`. The resolved value is exported to shell tools. |
 | `AKM_OPENCODE_CLI` | Absolute path to an `akm` executable to run instead of the `akm-cli` dependency, exec'd as-is. Set by akm and by the eval harness. |
-
-### Write gate
-
-The format-declaration write gate (#99) watches `edit`/`write` (and is inert on `apply_patch`, which carries no file path: one warning per process). When a file the session **read** declares a format your bundle documents — an `apiVersion:` namespace, a `yaml-language-server` pragma, a `$schema` key, an XML root namespace — and that asset has not been opened this session, the first `edit`/`write` to that file is recorded in the memory-event ledger as it would have been blocked (ledger reason `observe`). The gate only records: it never blocks a call and has no setting. It never records a file this session created: the create is noted when it happens — a `write` to a path this session has not read, or an `edit` with an empty `oldString` — and that path stays insulated for the rest of the session (ledger reason `session-created`).
 
 ## Usage
 
