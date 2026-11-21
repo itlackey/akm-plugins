@@ -44,18 +44,6 @@ import {
   parseToolOutput,
   spawnPositiveFeedback,
 } from "../opencode-shared/feedback"
-import {
-  type GateHost,
-  type GateSearchResponse,
-  clearGateSession,
-  assetDeclaresFormat,
-  extractFormatIdentity,
-  gateDecision,
-  noteShownRefs,
-  observeFileIdentity,
-  resetWriteGateForTests,
-  warnIfWriteGateInert,
-} from "../opencode-shared/write-gate"
 import { createLearning, createPendingProposals } from "../opencode-shared/learning"
 import { READONLY_TOOLS, TOOL_SPECS, type ToolSpec, buildFeedbackArgs, buildRememberArgs, readonlyOption, withProposedWarnings } from "../opencode-shared/tools"
 import { shouldRecall } from "../claude/shared/recall-policy"
@@ -71,15 +59,6 @@ const CURATE_MIN_CHARS = 16
 const READ_TOOL_TIMEOUT_MS = 60_000
 const curateTimeoutMs = () => Math.max(1_000, SETTINGS.curateTimeoutSeconds * 1_000)
 const pendingProposalTimeoutMs = () => Math.max(500, SETTINGS.pendingProposalTimeoutSeconds * 1_000)
-// Exactly the opencode 1.18 write-path tool ids, verified against the installed
-// binary's tool schemas: edit -> {filePath, oldString, newString},
-// write -> {content, filePath}, apply_patch -> {patchText}. `patch` and
-// `multiedit` are NOT opencode tool ids (they are Claude Code's) and listing
-// them would be dead weight; apply_patch replaces edit+write on `gpt-*`
-// non-oss non-gpt-4 models, so omitting it would make the gate dark for a
-// whole model family rather than merely inert.
-// The write gate itself is opencode-shared/write-gate.ts; this is the V1 tool vocabulary it is wired to.
-const WATCHED_WRITE_TOOLS = new Set(["edit", "write", "apply_patch"])
 // 13: "Memory leaks" — the session buffer previously grew without bound for the
 // life of a session (a long-running session accumulates one entry per
 // observed tool ref / memory intent). The tracker caps it drop-oldest.
@@ -307,12 +286,6 @@ function clearSessionState(sessionID: string): void {
   feedbackTracker.clear(sessionID)
   sessionLastExtractAt.delete(sessionID)
   pendingProposals.invalidate(sessionID)
-  // #99 write gate: four more session-keyed maps, torn down here for the same
-  // reason as the rest — a re-created session must not inherit a stale latch
-  // (which would silently disable the gate) or a stale file identity, and must
-  // not inherit a create record either: a NEW session editing that same path is
-  // editing a file it did not write.
-  clearGateSession(sessionID)
 }
 
 // Test-only: expose the curated tmp-file directory so tests can assert file
@@ -946,30 +919,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
   SETTINGS = loaded.settings
   configureRedaction(SETTINGS.redact)
   for (const warning of loaded.warnings) void writePluginLog(logClient, "warn", `AKM plugin settings: ${warning}`, { subsystem: "settings" })
-  const gateHost: GateHost = {
-    log: (level, message, extra) => void writePluginLog(logClient, level, message, extra),
-    writeEvent: writeStructuredEvent,
-    formatError: formatCliError,
-    pathKey: "filePath",
-    patchTool: "apply_patch",
-    // OpenCode 1 builds one plugin instance per directory (the hook inputs carry no directory of their own),
-    // so the directory this plugin was loaded for is the session's directory.
-    scope: async () => directory,
-    search: async (token) => {
-      const command = resolveAkmCommand()
-      if (isCliError(command)) throw new Error(command.error)
-      // This search is the PLUGIN's, not the model's: attribute it to a non-user event
-      // source so akm's utility scores and feedback ranking do not count it as demand.
-      const result = await runAkm(command, ["search", token, "--limit", "5", "--detail", "normal", "--format", "json"], {
-        cwd: directory,
-        timeoutMs: 8_000,
-        env: { AKM_EVENT_SOURCE: "audit" },
-        packageName: "akm-opencode",
-      })
-      if (!result.ok) throw new Error(result.error)
-      return safeJsonParse<GateSearchResponse>(result.stdout)
-    },
-  }
   // The rules and most-used list: loaded at session start and after each compaction, held per
   // session, and sent with every request (the host rebuilds the system prompt each time).
   const bootstrap = createSessionBootstrap((sessionID) =>
@@ -1095,9 +1044,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
           // tmp file) so a re-created session does not inherit stale
           // bundle-warning/curation and the tmp file does not leak (13: "Memory leaks").
           if (type === "session.deleted") {
-            // #99: the gate is the one akm feature whose total failure looks
-            // exactly like normal operation in the ledger, so say so out loud.
-            warnIfWriteGateInert(gateHost)
             clearSessionState(sid)
             bootstrap.clear(sid)
           }
@@ -1303,44 +1249,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
         })
       }
     },
-    // #99: the format-declaration write gate. This is the first akm hook that
-    // changes what the agent DOES rather than only what it knows, and the
-    // structure below is the load-bearing part.
-    //
-    // Facts re-verified here against the installed opencode 1.18 binary, banked
-    // so nobody re-derives them:
-    //   - `Plugin.trigger` is `for (const h of hooks) yield* Effect.promise(async () => h(input, output))`,
-    //     called from inside the tool's own `Effect.runPromise(Effect.gen(...))`.
-    //     A rejection therefore reaches the model as a `tool-error` part
-    //     (`case"tool-error":{yield*N(c.id,c.error??Error(c.message))}`), with
-    //     `error.message` intact — reproduced end to end against effect
-    //     4.0.0-beta.83. "A plugin hook cannot block a tool call" is FALSE.
-    //   - Arg names: edit `{filePath, oldString, newString}`, write
-    //     `{content, filePath}`, read `{filePath, offset, limit}`, apply_patch
-    //     `{patchText}`. It is `filePath`, never `path`.
-    //   - The tool registry filter is
-    //     `k = modelID.includes("gpt-") && !includes("oss") && !includes("gpt-4")`;
-    //     apply_patch is registered when `k`, edit and write when `!k`. So on
-    //     that model family apply_patch is the ONLY write tool.
-    //   - `read` returns `<path>…</path>\n<type>file</type>\n<content>\n` with
-    //     every line prefixed `N: `.
-    //   - The CLI's default `search` shape drops `description` and `tags`;
-    //     `--detail normal` keeps `description`, which the gate quotes; it reads `name`, `ref` and `description` only.
-    //
-    // The gate only records (see opencode-shared/write-gate.ts): it never blocks the call, and a
-    // plugin-internal fault must not disturb the user's edit.
-    "tool.execute.before": async (input, output) => {
-      try {
-        if (!WATCHED_WRITE_TOOLS.has(input.tool)) return
-        await gateDecision(gateHost, input, output)
-      } catch (error: unknown) {
-        await logHookFailure(logClient, "tool.execute.before", error, {
-          toolName: input?.tool,
-          sessionID: input?.sessionID,
-          callID: input?.callID,
-        })
-      }
-    },
     "tool.execute.after": async (input, output) => {
       try {
         const isAkmTool = input.tool.startsWith("akm_")
@@ -1362,22 +1270,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
           directory,
           writeEvent: writeStructuredEvent,
         })
-
-        // #99 write gate, read side. `read` is the tool that precedes every
-        // trajectory in the failing cell: the model reads /app/service.yaml,
-        // then edits it from guesswork. Recording what the file declares about
-        // itself here is what lets the gate on the NEXT edit be file-anchored
-        // instead of another sentence asking the model to go looking.
-        if (input.tool === "read") {
-          observeFileIdentity(gateHost, input.sessionID, directory, (input.args as Record<string, unknown>)?.filePath, output.output)
-        }
-        // `write` is deliberately NOT an identity source. It used to be, on a
-        // "write a file, then edit it" argument, and that shape is a CREATE: the
-        // content the model would be gated on is content it just invented, so
-        // the gate would have reached into the two create cells (#99 review).
-        // See observeFileIdentity() for the full reasoning. The create is
-        // instead RECORDED on the write's `tool.execute.before` pass, which the
-        // runtime always runs for a watched tool — see isSessionCreate().
 
         if (!isAkmTool) return
 
@@ -1409,7 +1301,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
           })
         }
 
-        const observed = feedbackTracker.observeAkmToolResult({
+        feedbackTracker.observeAkmToolResult({
           sessionID: input.sessionID,
           tool: input.tool,
           callID: input.callID,
@@ -1418,30 +1310,6 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
           directory,
           writeEvent: writeStructuredEvent,
         })
-        // #99: a ref the model has already opened must never buy it a blocked
-        // edit. Without this the compliant model gets re-blocked for doing
-        // exactly what the gate asked.
-        //
-        // akm_curate counts as well as akm_show (#99 review). Curate is the
-        // PRIMARY lookup command this plugin's own guidance tells the model to
-        // reach for, and its result carries the ref and the one-line
-        // description the gate message would have handed over — a model that
-        // curated has already done the lookup. Crediting only akm_show made the
-        // gate fire on the compliant create-shaped trajectory, which is one of
-        // the cells whose movement has to stay readable as noise.
-        //
-        // ...and only when the lookup SUCCEEDED. extractToolRefs() reads
-        // `args.ref` as well as the output, so an akm_show for a ref that does
-        // not exist — `{ok:false,error:"not found"}` — used to credit the model
-        // with having opened it. That put a row in the ledger asserting an
-        // outcome that did not happen, and it is precisely the row an analyst
-        // reads as "the model complied" (#99 review). classifyToolFeedback()
-        // already types a failed akm call as negative; reuse it rather than
-        // inventing a second notion of failure.
-        if ((input.tool === "akm_show" || input.tool === "akm_curate") && !observed.failedCall) {
-          noteShownRefs(input.sessionID, observed.refs)
-        }
-
         // No feedback is submitted from a tool outcome. A successful akm_show /
         // akm_search / akm_curate only inspected a concept (viewing is not
         // using), the other akm tools write memories or are feedback themselves,
@@ -1587,7 +1455,7 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
   if (!mode.readonly) return hooks
 
   // Read-only: the four read tools, prompt and session-start recall, and the context built from it
-  // (curated text inline, since no file tool is assumed). No memory, extraction, learning, write gate,
+  // (curated text inline, since no file tool is assumed). No memory, extraction, learning,
   // auto-feedback, shell environment, index, ledger or tmp-file writes.
   return {
     event: async ({ event }: { event: { type: string; properties?: unknown } }) => {
@@ -1671,8 +1539,4 @@ const akmPlugin: Plugin = async ({ client, worktree, directory }, options) => {
 // denylist of names that have already burned us once.
 export const AkmPlugin = Object.assign(akmPlugin, {
   __curatedDirForTests,
-  __resetWriteGateForTests: resetWriteGateForTests,
-  __extractFormatIdentity: extractFormatIdentity,
-  __assetDeclaresFormat: assetDeclaresFormat,
-  __watchedWriteTools: WATCHED_WRITE_TOOLS,
 })

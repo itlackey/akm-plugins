@@ -46,12 +46,6 @@ function resultText(result: { content?: string | ReadonlyArray<{ type: string; t
   return typeof result?.output === "string" ? result.output : ""
 }
 
-/** A completed `read`'s file text: the structured `output.content` of a file result, not the framed rendering. */
-function readFileText(result: { output?: unknown } | undefined): string | undefined {
-  const output = result?.output as { type?: unknown; content?: unknown } | undefined
-  return output?.type === "file" && typeof output.content === "string" ? output.content : undefined
-}
-
 const plugin = Plugin.define({
   id: PLUGIN_ID,
   effect: (ctx: EffectContext) =>
@@ -135,16 +129,9 @@ const plugin = Plugin.define({
         )
       }
 
-      // Read-only mode registers neither the write gate, the auto-feedback tracking nor the shell hook.
-      // The write gate and the tool-ref tracking record in the background, so they follow `learning`.
+      // Read-only mode registers neither the auto-feedback tracking nor the shell hook.
+      // The tool-ref tracking records in the background, so it follows `learning`.
       if (!mode.readonly && automatic.learning) {
-        // The write gate: records what it would have blocked; it never fails the call.
-        yield* ctx.tool.hook("execute.before", (input) =>
-          Effect.promise(() =>
-            core.onToolBefore({ tool: input.tool, sessionID: String(input.sessionID), callID: String(input.id), input: input.input }),
-          ),
-        )
-
         // Tool post-processing, for every tool: note the akm refs it touched (what a later
         // "thanks, that worked" credits) and record the plugin's own tools' results.
         yield* ctx.tool.hook("execute.after", (input) =>
@@ -156,7 +143,6 @@ const plugin = Plugin.define({
               args: input.input,
               status: input.status,
               text: input.status === "error" ? String(input.error?.message ?? "") : resultText(input.result),
-              readContent: input.status === "completed" ? readFileText(input.result) : undefined,
             }),
           ),
         )
