@@ -10,7 +10,7 @@
         "source": "git-subdir",
         "url": "https://github.com/itlackey/akm-plugins.git",
         "path": "./claude",
-        "ref": "v0.10.261136"
+        "ref": "v0.10.261137"
       },
       "policy": {
         "installation": "AVAILABLE",
