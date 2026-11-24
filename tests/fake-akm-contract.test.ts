@@ -234,10 +234,12 @@ describe("fake-akm envelope contract", () => {
 
   // The hook's quality probe (`akm show <ref>`) and the validator in front of it
   // (claude/shared/ref-extraction.ts) both assume real akm's ref grammar, so it
-  // is pinned here instead of inferred from logs: a concept ID resolves, a file
-  // path that merely exists does not, and a refusal leaves stdout empty, which
-  // is how autoFeedback() reads "akm cannot resolve this ref".
-  test.skipIf(!akmAvailable)("show and feedback resolve concept IDs, not file paths, and refuse with an empty stdout", async () => {
+  // is pinned here instead of inferred from logs: a concept ID resolves, a ref
+  // that names nothing does not, and a refusal leaves stdout empty, which is how
+  // autoFeedback() reads "akm cannot resolve this ref". The path of a file that
+  // holds a concept is refused before 0.10.261131 and reads that concept from it
+  // on; the validator keeps such paths away from akm either way.
+  test.skipIf(!akmAvailable)("show and feedback resolve concept IDs, and refuse what names nothing with an empty stdout", async () => {
     const real = makeRealEnv()
     try {
       const write = (file: string, body: string) => {
@@ -252,10 +254,16 @@ describe("fake-akm envelope contract", () => {
 
       // Every call is independent of the others, so they overlap.
       const concepts = ["knowledge/guide", "knowledge/guide.md", "tasks/nightly", "skills/rollout"]
-      const files = ["tasks/nightly.yml", "skills/rollout/SKILL.md"]
+      // Each file's path, the concept it holds, and the missing ref last.
+      const files = [
+        ["tasks/nightly.yml", "tasks/nightly"],
+        ["skills/rollout/SKILL.md", "skills/rollout"],
+        ["knowledge/missing", undefined],
+      ] as const
+      const filesReadTheirConcept = akmAtLeast(261131)
       const calls = [
         ...concepts.map((ref) => ["--format", "json", "-q", "show", ref]),
-        ...files.flatMap((ref) => [["--format", "json", "-q", "show", ref], ["feedback", ref, "--positive", "--format", "json", "-q"]]),
+        ...files.flatMap(([ref]) => [["--format", "json", "-q", "show", ref], ["feedback", ref, "--positive", "--format", "json", "-q"]]),
       ]
       const results = await mapLimit(calls, REAL_AKM_CONCURRENCY, (args) => runAsync(process.execPath, [REAL_AKM, ...args], realAkmEnv(real)))
 
@@ -263,11 +271,18 @@ describe("fake-akm envelope contract", () => {
         expect(results[index]?.exitCode).toBe(0)
         expect(typeof (JSON.parse(results[index]?.stdout ?? "") as { ref?: unknown }).ref).toBe("string")
       })
-      files.forEach((_ref, index) => {
+      files.forEach(([_ref, concept], index) => {
         const shown = results[concepts.length + 2 * index]
-        expect(shown?.exitCode).not.toBe(0)
-        expect(shown?.stdout.trim()).toBe("")
-        expect(results[concepts.length + 2 * index + 1]?.exitCode).not.toBe(0)
+        const feedback = results[concepts.length + 2 * index + 1]
+        if (concept !== undefined && filesReadTheirConcept) {
+          expect(shown?.exitCode).toBe(0)
+          expect((JSON.parse(shown?.stdout ?? "") as { ref?: unknown }).ref).toBe(concept)
+          expect(feedback?.exitCode).toBe(0)
+        } else {
+          expect(shown?.exitCode).not.toBe(0)
+          expect(shown?.stdout.trim()).toBe("")
+          expect(feedback?.exitCode).not.toBe(0)
+        }
       })
     } finally {
       cleanup(real)
@@ -279,7 +294,9 @@ describe("fake-akm envelope contract", () => {
   // of truth is akm, so it is pinned here type by type against the real binary:
   // `show` and `feedback` accept the canonical ref of every asset type, both
   // refuse the spellings that merely name a file, and the validator says the same
-  // about every one of them (checked against the pinned akm-cli).
+  // about every one of them (checked against the pinned akm-cli). From 0.10.261131
+  // akm also accepts the path of a file that holds a concept, and reads that
+  // concept; the validator still keeps only the canonical ref.
   // It probes 38 refs: 9.7 s on GitHub's Linux runner, so a run 2.8x slower would reach 27 s of the 30 s default; it gets 60 s.
   test.skipIf(!akmAvailable)("show and feedback accept the canonical ref of every asset type, and the validator agrees", async () => {
     const real = makeRealEnv()
@@ -391,6 +408,10 @@ describe("fake-akm envelope contract", () => {
       ]
       if (akmAtLeast(261107)) canonical.push(...pathRefs)
       if (akmAtLeast(261108)) canonical.push(...oldSpellings)
+      // The paths of files that hold a concept, which akm reads as that concept from 0.10.261131.
+      const filePaths = ["env/.env", "env/staging.env", "env/team/.env", "skills/rollout/SKILL.md", "tasks/nightly.yml"]
+      const acceptedPaths = akmAtLeast(261131) ? filePaths : []
+      const stillRefused = refused.filter((ref) => !acceptedPaths.includes(ref))
 
       const accepts = async (ref: string) => {
         const show = await runAsync(process.execPath, [REAL_AKM, "--format", "json", "-q", "show", ref], realAkmEnv(real))
@@ -403,7 +424,8 @@ describe("fake-akm envelope contract", () => {
       const accepted = new Map(refs.map((ref, index) => [ref, answers[index]] as const))
 
       expect(canonical.filter((ref) => !accepted.get(ref))).toEqual([])
-      expect(refused.filter((ref) => accepted.get(ref))).toEqual([])
+      expect(acceptedPaths.filter((ref) => !accepted.get(ref))).toEqual([])
+      expect(stillRefused.filter((ref) => accepted.get(ref))).toEqual([])
       expect(validateRefCandidates([...canonical, ...refused], [bundle])).toEqual([...canonical].sort())
     } finally {
       cleanup(real)
