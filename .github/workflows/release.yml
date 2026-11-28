@@ -25,6 +25,7 @@ jobs:
     outputs:
       version: ${{ steps.derive.outputs.version }}
       next: ${{ steps.derive.outputs.next }}
+      next_follows: ${{ steps.validate.outputs.next_follows }}
       akm_version: ${{ steps.derive.outputs.akm_version }}
       tag: ${{ steps.tag.outputs.tag }}
       tag_exists: ${{ steps.tag.outputs.tag_exists }}
@@ -92,6 +93,7 @@ jobs:
       # (the step waits up to 10 minutes for npm to serve it), and the version
       # must sort above whatever npm calls `next`.
       - name: Validate release version
+        id: validate
         env:
           AKM_VERSION: ${{ steps.derive.outputs.akm_version }}
           VERSION: ${{ steps.derive.outputs.version }}
@@ -109,6 +111,24 @@ jobs:
           const opencodeV2Package = JSON.parse(fs.readFileSync('opencode-v2/package.json', 'utf8'))
 
           const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
+          // Semver order: a prerelease sorts below its core, identifiers compared in turn.
+          const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+          const compare = (a, b) => {
+            for (const i of [1, 2, 3]) {
+              if (Number(a[i]) !== Number(b[i])) return cmp(Number(a[i]), Number(b[i]))
+            }
+            const pa = a[4]?.split('.')
+            const pb = b[4]?.split('.')
+            if (!pa || !pb) return pa ? -1 : pb ? 1 : 0
+            for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+              const [x, y] = [pa[i], pb[i]]
+              if (x === undefined || y === undefined) return x === undefined ? -1 : 1
+              const numeric = /^\d+$/.test(x) && /^\d+$/.test(y)
+              const order = numeric ? cmp(Number(x), Number(y)) : /^\d+$/.test(x) ? -1 : /^\d+$/.test(y) ? 1 : cmp(x, y)
+              if (order !== 0) return order
+            }
+            return 0
+          }
           const parsedAkm = SEMVER.exec(akmVersion)
           if (!parsedAkm) {
             console.error(`akm_version "${akmVersion}" is not valid semver (MAJOR.MINOR.PATCH).`)
@@ -203,29 +223,25 @@ jobs:
           }
           if (published) {
             const prev = SEMVER.exec(published)
-            const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
-            const compare = (a, b) => {
-              for (const i of [1, 2, 3]) {
-                if (Number(a[i]) !== Number(b[i])) return cmp(Number(a[i]), Number(b[i]))
-              }
-              const pa = a[4]?.split('.')
-              const pb = b[4]?.split('.')
-              if (!pa || !pb) return pa ? -1 : pb ? 1 : 0
-              for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-                const [x, y] = [pa[i], pb[i]]
-                if (x === undefined || y === undefined) return x === undefined ? -1 : 1
-                const numeric = /^\d+$/.test(x) && /^\d+$/.test(y)
-                const order = numeric ? cmp(Number(x), Number(y)) : /^\d+$/.test(x) ? -1 : /^\d+$/.test(y) ? 1 : cmp(x, y)
-                if (order !== 0) return order
-              }
-              return 0
-            }
             if (compare(parsed, prev) <= 0) {
               console.error(`Derived version "${version}" does NOT sort above the published ${channel} "${published}".`)
               console.error(`npm would accept the publish and leave \`${channel}\` on the older release. Refusing.`)
               process.exit(1)
             }
             console.log(`${version} sorts above the published ${channel} ${published}.`)
+          }
+
+          // A stable at or above `next` moves `next` to it too (the npm tag of both OpenCode packages and the `next`
+          // branch), so the prerelease channel never trails `latest`; a newer line's prerelease keeps `next`.
+          if (!next) {
+            let current = ''
+            try {
+              current = execFileSync('npm', ['view', 'akm-opencode', 'dist-tags.next'], { encoding: 'utf8' }).trim()
+            } catch {}
+            const nextParsed = SEMVER.exec(current)
+            const follows = !nextParsed || compare(parsed, nextParsed) >= 0
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `next_follows=${follows}\n`)
+            console.log(follows ? `next follows ${version}.` : `next stays on ${current}, above ${version}.`)
           }
 
           console.log(`Version ${version} is valid semver; the Claude/Codex plugin and both OpenCode packages exact-pin akm-cli ${next ? akmVersion : opencodeAkm}.`)
@@ -367,7 +383,7 @@ jobs:
             git push origin "$MAIN_SHA:${{ github.ref }}"
           fi
 
-          # `next` only: move the `next` branch to the tagged commit. A marketplace pinned to a
+          # `next`, or a stable that `next` follows: move the `next` branch to the tagged commit. A marketplace pinned to a
           # tag never changes, so `claude plugin update` and `codex plugin marketplace upgrade`
           # find nothing; one that follows a branch sees each new commit. Users on the prerelease
           # channel follow `next` (Claude `#next`, Codex `--ref next`) and stable users the default
@@ -376,7 +392,7 @@ jobs:
           # build commit hangs off the release branch and the
           # previous one is not its ancestor. The tag's own commit, so a re-run of an existing tag
           # puts `next` on that tag and not on a fresh rebuild.
-          if [ "${{ steps.derive.outputs.next }}" = "true" ]; then
+          if [ "${{ steps.derive.outputs.next }}" = "true" ] || [ "${{ steps.validate.outputs.next_follows }}" = "true" ]; then
             git fetch --quiet --depth=1 origin "refs/tags/v${{ steps.derive.outputs.version }}"
             SHA="$(git rev-parse FETCH_HEAD)"
             git push --force origin "$SHA:refs/heads/next"
@@ -440,6 +456,15 @@ jobs:
         working-directory: opencode
         run: npm publish ${{ steps.publish_args.outputs.publish_args }}
 
+      # A stable that `next` follows (the version job decides): npm `next` moves to it too. Trusted publishing
+      # authenticates `npm dist-tag` only when the package's trusted publisher has "Allow npm dist-tag" on; a refusal
+      # shows on the run and does not stop the release.
+      - name: Point akm-opencode's next at the stable
+        if: ${{ needs.version.outputs.next_follows == 'true' }}
+        continue-on-error: true
+        working-directory: opencode
+        run: npm dist-tag add "akm-opencode@$(node -p "require('./package.json').version")" next
+
   publish-opencode-v2:
     needs: version
     runs-on: ubuntu-latest
@@ -495,6 +520,15 @@ jobs:
         if: ${{ steps.npm_version.outputs.exists != 'true' }}
         working-directory: opencode-v2
         run: npm publish ${{ steps.publish_args.outputs.publish_args }}
+
+      # A stable that `next` follows (the version job decides): npm `next` moves to it too. Trusted publishing
+      # authenticates `npm dist-tag` only when the package's trusted publisher has "Allow npm dist-tag" on; a refusal
+      # shows on the run and does not stop the release.
+      - name: Point akm-opencode-v2's next at the stable
+        if: ${{ needs.version.outputs.next_follows == 'true' }}
+        continue-on-error: true
+        working-directory: opencode-v2
+        run: npm dist-tag add "akm-opencode-v2@$(node -p "require('./package.json').version")" next
 
   github-release:
     needs: [version, publish-opencode, publish-opencode-v2]

@@ -189,6 +189,29 @@ describe("version policy", () => {
     expect(workflow).toContain("--prerelease")
   })
 
+  test("a stable release at or above `next` moves npm `next` and the `next` branch to it", () => {
+    const workflow = readText(".github/workflows/release.yml")
+
+    // The version job decides once, against akm-opencode's `next`, with the same semver order as the guard.
+    expect(workflow).toContain("next_follows: ${{ steps.validate.outputs.next_follows }}")
+    expect(workflow).toContain("['view', 'akm-opencode', 'dist-tags.next']")
+    expect(workflow).toContain("const follows = !nextParsed || compare(parsed, nextParsed) >= 0")
+
+    // The `next` branch follows the stable's tag, as it follows a `next` release's.
+    expect(workflow).toContain(
+      'if [ "${{ steps.derive.outputs.next }}" = "true" ] || [ "${{ steps.validate.outputs.next_follows }}" = "true" ]; then',
+    )
+
+    // Both OpenCode packages move npm `next` after their publish, without stopping the release.
+    for (const pkg of ["akm-opencode", "akm-opencode-v2"]) {
+      const step = workflow.slice(workflow.indexOf(`- name: Point ${pkg}'s next at the stable`))
+      expect(workflow.indexOf(`- name: Publish ${pkg}\n`)).toBeLessThan(workflow.indexOf(`- name: Point ${pkg}'s next`))
+      expect(step).toContain("if: ${{ needs.version.outputs.next_follows == 'true' }}")
+      expect(step).toContain("continue-on-error: true")
+      expect(step).toContain(`npm dist-tag add "${pkg}@$(node -p "require('./package.json').version")" next`)
+    }
+  })
+
   test("the release workflow tests the pin it publishes: pin, install, typecheck and test come before the commit and tag", () => {
     // The publish jobs check out the tag, so the tree that is tested has to be the one that is tagged. A test job ahead
     // of the version job (or a pin written after the tests) tests a different akm-cli than the one published.
